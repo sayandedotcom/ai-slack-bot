@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "firefighter-spike-sandbox",
+  "main": "src/index.ts",
+
+  // Global constraint from 00-roadmap.md — do not drift these two.
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      // standard-4 = 4 vCPU / 12 GiB / 20 GB, the largest predefined type.
+      // Confirmed against containers/platform-details/limits on 2026-08-11.
+      "instance_type": "standard-4",
+      "max_instances": 1
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
+  },
+
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }],
+
+  "observability": { "enabled": true }
+}
