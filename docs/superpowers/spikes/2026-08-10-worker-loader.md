@@ -8,7 +8,7 @@
 
 ## Verdict
 
-> **GO on D1, conditional.** Every property the design depends on holds: the isolate is network-isolated by a first-class field, capabilities inject cleanly via `ctx.exports`, parent credentials are unreachable, identity cannot be spoofed, and cold load costs ~4ms. **Two conditions remain open** — the spike has not run on a deployed Worker, and account-level beta availability is unconfirmed because the account is not authenticated. Neither is expected to fail; both are cheap to close and must be closed before Phase 09 writes production code.
+> **GO on D1, conditional.** Every property the design depends on holds: the isolate is network-isolated by a first-class field, capabilities inject cleanly via `ctx.exports`, parent credentials are unreachable, identity cannot be spoofed, and cold load costs ~4ms. **One condition remains** — the account must be on Workers Paid before anything can deploy, and every result below should then be re-confirmed in production. The feared beta-allowlist lead time **does not exist**; the gate is billing, and clearing it also unblocks the Sandbox spike.
 
 Two corrections to the plan came out of this, both listed under [What the plan got wrong](#what-the-plan-got-wrong). One of them — where an `RpcTarget` may be placed — would have broken Phase 09 Task 1 as written.
 
@@ -20,9 +20,20 @@ Two corrections to the plan came out of this, both listed under [What the plan g
 |---|---|
 | Binding config | `"worker_loaders": [{ "binding": "LOADER" }]` — one line, exactly as `inspired-from-ronit.md` §9 records |
 | Local (`wrangler dev`) | **Available.** No flag, no allowlist, no experimental opt-in. `env.LOADER` resolves with both `load` and `get`. |
-| **This account** | **UNVERIFIED — `wrangler whoami` reports not authenticated.** |
+| **This account** (`cdf27b54…`, sayandeten@gmail.com) | **Gated on BILLING, not on a beta allowlist.** |
 
-**This is the phase's one remaining lead-time risk.** The plan calls it out for exactly this reason: if the binding is gated on the account, the access request has to go in immediately. Local availability says nothing about it. `GET /available` answers it in one request once deployed.
+`wrangler deploy` on 2026-08-11 returned:
+
+```
+In order to use Dynamic Workers, you must switch to a paid plan at
+https://dash.cloudflare.com/<account>/workers/plans.  [code: 10195]
+```
+
+**This retires the phase's headline risk.** The plan treated account gating as *the* lead-time danger — "if gated, request access immediately; that lead time is the entire risk." There is **no allowlist and no waiting list**: Worker Loader ships to any Workers Paid account. The gate is a $5/month plan change that also unblocks Containers for the Sandbox half, so one upgrade clears both spikes.
+
+Note the product name in the error — Worker Loader is **"Dynamic Workers"** in the billing surface. Searching the dashboard for "Worker Loader" finds nothing.
+
+Everything in §2–§7 below was measured on local `workerd`, which does **not** enforce the plan gate. Local availability said nothing about the account, exactly as suspected.
 
 ---
 
@@ -226,7 +237,8 @@ Kept for the README's AI-tool notes.
 
 ## Open — must close before Phase 09
 
-- [ ] **Account beta availability.** `GET /available` on a deployed Worker. The one genuine lead-time risk.
+- [ ] **Upgrade the account to Workers Paid.** The only thing standing between here and a deployed run, for both spikes. No lead time — it is a billing change, not an access request.
+- [ ] **`GET /available` on the deployed Worker**, once paid, to confirm nothing else gates the binding.
 - [ ] **Re-run every result deployed.** agent-os hit a binding `wrangler dev` accepted and production rejected; any binding validated only locally is unvalidated. Highest-value targets: the `RpcTarget`-on-`env` failure (§3) and `limits.cpuMs` (§7), where local and production could plausibly differ.
 - [ ] **Confirm the isolation error text in production** before quoting it verbatim in the README.
 
