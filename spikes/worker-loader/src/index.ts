@@ -10,7 +10,9 @@
 // Both must be exported from the Worker entrypoint for the DO and the
 // ctx.exports loopback binding to resolve.
 export { SpikeDO, SecretBinding } from "./run-do";
+export { LogCollector } from "./timings";
 import type { ProbeResult } from "./run-do";
+import { measure } from "./timings";
 
 /**
  * The compatibility date the LOADED isolate runs under. Independent of the
@@ -118,7 +120,7 @@ function runnable(stub: WorkerStub): RunnableStub {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     try {
@@ -252,9 +254,18 @@ export default {
           return json({ ...result, secretReachableByAnyNonControlPath: leaked });
         }
 
+        /** Task 9 — /timings?mode=latency|logs|ceiling */
+        case "/timings": {
+          return json(
+            await measure(env.LOADER, ctx.exports, url.searchParams.get("mode") ?? "", url.searchParams),
+          );
+        }
+
         default:
           return json(
-            { routes: ["/available", "/const", "/cache", "/isolation", "/bindings"] },
+            {
+              routes: ["/available", "/const", "/cache", "/isolation", "/bindings", "/timings"],
+            },
             404,
           );
       }
