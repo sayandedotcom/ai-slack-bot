@@ -37,6 +37,11 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# wrangler local secrets — NOT covered by .env*
+.dev.vars
+.dev.vars.*
+.wrangler
+
 # vercel
 .vercel
 
