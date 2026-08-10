@@ -7,7 +7,11 @@
   "observability": { "enabled": true },
   "assets": {
     "directory": "./public",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    // Without this the asset worker runs first and the Worker only sees requests
+    // that miss an asset. src/index.ts owns the routing instead: it answers /api/*
+    // and explicitly falls through to ASSETS for everything else.
+    "run_worker_first": true
   },
   "d1_databases": [
     {
