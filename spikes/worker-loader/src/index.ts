@@ -47,6 +47,68 @@ function bundle(code: string, extra: Partial<WorkerLoaderWorkerCode> = {}): Work
   };
 }
 
+/**
+ * Task 8 — the escape-attempt probe, run INSIDE the isolate.
+ *
+ * Every attempt is individually caught so one throw does not mask the rest:
+ * the deliverable is a per-route verdict, not a single pass/fail. The exact
+ * error string is returned verbatim because the findings doc must quote it
+ * rather than paraphrase it.
+ *
+ * `parentOrigin` is injected rather than hardcoded so the "can it call back to
+ * the Worker that loaded it" case tests a real reachable hostname.
+ */
+function isolationModule(parentOrigin: string): string {
+  return `
+    import { WorkerEntrypoint } from "cloudflare:workers";
+
+    async function attempt(label, fn) {
+      const startedAt = Date.now();
+      try {
+        const value = await fn();
+        return { label, outcome: "SUCCEEDED", detail: String(value), ms: Date.now() - startedAt };
+      } catch (err) {
+        return {
+          label,
+          outcome: "threw",
+          error: String(err),
+          name: err && err.name,
+          ms: Date.now() - startedAt,
+        };
+      }
+    }
+
+    export default class extends WorkerEntrypoint {
+      async run() {
+        return await Promise.all([
+          attempt("fetch:public", async () => {
+            const r = await fetch("https://example.com");
+            return "status " + r.status;
+          }),
+          attempt("fetch:parent-worker", async () => {
+            const r = await fetch(${JSON.stringify(parentOrigin)} + "/available");
+            return "status " + r.status;
+          }),
+          attempt("fetch:cf-internal", async () => {
+            const r = await fetch("http://workers.cloudflare.com/");
+            return "status " + r.status;
+          }),
+          attempt("fetch:ip-literal", async () => {
+            const r = await fetch("http://1.1.1.1/");
+            return "status " + r.status;
+          }),
+          attempt("websocket", async () => {
+            const ws = new WebSocket("wss://example.com");
+            return "constructed, readyState " + ws.readyState;
+          }),
+          attempt("fetch:global-present", async () => typeof fetch),
+          attempt("websocket:global-present", async () => typeof WebSocket),
+        ]);
+      }
+    }
+  `;
+}
+
 /** RPC methods on a loaded isolate are untyped at the stub boundary. */
 type RunnableStub = Fetcher & { run(...args: unknown[]): Promise<unknown> };
 
@@ -112,8 +174,57 @@ export default {
           });
         }
 
+        /**
+         * Task 8 — decision D1's entire security story.
+         *
+         * `?outbound=inherit` re-runs the identical probe WITHOUT
+         * globalOutbound: null, to show the field is what does the work. If the
+         * two runs agree, the isolation is coming from somewhere else and the
+         * claim in spec §8.1 is not the one we think we are making.
+         */
+        case "/isolation": {
+          const inherit = url.searchParams.get("outbound") === "inherit";
+          const code = isolationModule(url.origin);
+
+          const stub = env.LOADER.load(
+            inherit
+              ? // Deliberately omit globalOutbound to get the default.
+                {
+                  compatibilityDate: ISOLATE_COMPAT_DATE,
+                  compatibilityFlags: ["nodejs_compat"],
+                  mainModule: "main.js",
+                  modules: { "main.js": code },
+                }
+              : bundle(code),
+          );
+
+          const results = (await runnable(stub).run()) as Array<{
+            label: string;
+            outcome: string;
+          }>;
+
+          const networkLabels = [
+            "fetch:public",
+            "fetch:parent-worker",
+            "fetch:cf-internal",
+            "fetch:ip-literal",
+            "websocket",
+          ];
+          const escaped = results.filter(
+            (r) => networkLabels.includes(r.label) && r.outcome === "SUCCEEDED",
+          );
+
+          return json({
+            globalOutbound: inherit ? "inherited (control run)" : "null",
+            results,
+            escaped: escaped.map((r) => r.label),
+            // The one line the findings doc quotes.
+            verdict: escaped.length === 0 ? "ISOLATED" : "ESCAPED",
+          });
+        }
+
         default:
-          return json({ routes: ["/available", "/const", "/cache"] }, 404);
+          return json({ routes: ["/available", "/const", "/cache", "/isolation"] }, 404);
       }
     } catch (err) {
       // The failure mode is the deliverable; do not prettify it.
