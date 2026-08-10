@@ -8,7 +8,9 @@
 
 ## Verdict
 
-> **GO on D1, conditional.** Every property the design depends on holds: the isolate is network-isolated by a first-class field, capabilities inject cleanly via `ctx.exports`, parent credentials are unreachable, identity cannot be spoofed, and cold load costs ~4ms. **One condition remains** — the account must be on Workers Paid before anything can deploy, and every result below should then be re-confirmed in production. The feared beta-allowlist lead time **does not exist**; the gate is billing, and clearing it also unblocks the Sandbox spike.
+> **GO on D1. Unconditional.** Every result below was re-run on a deployed Worker at `firefighter-spike-worker-loader.sayandeten.workers.dev` and reproduces. The isolate is network-isolated by a first-class field, capabilities inject cleanly via `ctx.exports`, parent credentials are unreachable, identity cannot be spoofed, and cold load costs ~8ms in production.
+
+**One local/production divergence was found, and it runs the opposite way to the one we were watching for:** `limits.cpuMs` does **not** fire under `wrangler dev` but **does** fire in production (§7). Local dev was the permissive environment. The lesson from agent-os still applies — validate deployed — but the failure direction is not predictable, so "it worked locally" and "it failed locally" are both uninformative.
 
 Two corrections to the plan came out of this, both listed under [What the plan got wrong](#what-the-plan-got-wrong). One of them — where an `RpcTarget` may be placed — would have broken Phase 09 Task 1 as written.
 
@@ -20,7 +22,7 @@ Two corrections to the plan came out of this, both listed under [What the plan g
 |---|---|
 | Binding config | `"worker_loaders": [{ "binding": "LOADER" }]` — one line, exactly as `inspired-from-ronit.md` §9 records |
 | Local (`wrangler dev`) | **Available.** No flag, no allowlist, no experimental opt-in. `env.LOADER` resolves with both `load` and `get`. |
-| **This account** (`cdf27b54…`, sayandeten@gmail.com) | **Gated on BILLING, not on a beta allowlist.** |
+| **This account** (`cdf27b54…`, sayandeten@gmail.com) | **AVAILABLE on Workers Paid.** Gated on BILLING, not on a beta allowlist. |
 
 `wrangler deploy` on 2026-08-11 returned:
 
@@ -29,17 +31,23 @@ In order to use Dynamic Workers, you must switch to a paid plan at
 https://dash.cloudflare.com/<account>/workers/plans.  [code: 10195]
 ```
 
+The account was upgraded and the spike deployed. `GET /available` on the deployed Worker:
+
+```json
+{ "bindingPresent": true, "hasLoad": true, "hasGet": true }
+```
+
 **This retires the phase's headline risk.** The plan treated account gating as *the* lead-time danger — "if gated, request access immediately; that lead time is the entire risk." There is **no allowlist and no waiting list**: Worker Loader ships to any Workers Paid account. The gate is a $5/month plan change that also unblocks Containers for the Sandbox half, so one upgrade clears both spikes.
 
 Note the product name in the error — Worker Loader is **"Dynamic Workers"** in the billing surface. Searching the dashboard for "Worker Loader" finds nothing.
 
-Everything in §2–§7 below was measured on local `workerd`, which does **not** enforce the plan gate. Local availability said nothing about the account, exactly as suspected.
+**Every section below reports the DEPLOYED result.** Where local and production differ, both are given.
 
 ---
 
 ## 2. Network isolation — the README's security section
 
-**Verdict: ISOLATED.** With `globalOutbound: null`, all five escape routes throw. The error is identical in every case, verbatim:
+**Verdict: ISOLATED, confirmed on the deployed Worker.** Local and production agree exactly. With `globalOutbound: null`, all five escape routes throw. The error is identical in every case, verbatim (quoted from the production run):
 
 ```
 Error: This worker is not permitted to access the internet via global functions
@@ -74,7 +82,7 @@ They throw on **invocation**. Spec §8.1 says the isolate "has no `fetch`" and P
 
 ## 3. What crosses into the isolate — corrects §4
 
-Bisected one `env` member at a time, because a single `DataCloneError` at `load()` aborts the whole run and attributes nothing.
+Bisected one `env` member at a time, because a single `DataCloneError` at `load()` aborts the whole run and attributes nothing. **The full matrix was re-run deployed and is identical to local** — including the raw DO stub crossing successfully and being callable.
 
 | Placement | Result |
 |---|---|
@@ -152,10 +160,12 @@ The real `WorkerLoaderWorkerCode` has fields the plan's quoted copy omits — `a
 
 | Path | min | median | mean | max |
 |---|---|---|---|---|
-| `load()`, unique code each time | 3ms | **4ms** | 4.2ms | 12ms |
-| `get()`, cached by name | 0ms | **0ms** | 0.4ms | 3ms |
+| **Deployed** — `load()`, unique code each time | 7ms | **8ms** | 8.9ms | 11ms |
+| **Deployed** — `get()`, cached by name | 0ms | **0ms** | 0.6ms | 9ms |
+| Local — `load()`, unique code | 3ms | 4ms | 4.2ms | 12ms |
+| Local — `get()`, cached | 0ms | 0ms | 0.4ms | 3ms |
 
-Covers `load()` + `getEntrypoint()` + `run()` round trip.
+Covers `load()` + `getEntrypoint()` + `run()` round trip. Production is ~2x local and still negligible.
 
 **Consequence:** cold load is cheap enough that Phase 09 can `load()` per execution without keeping isolates warm per run. The plan's contingency — "if cold load is expensive, add two or three flat primitives instead of one tool" (`inspired-from-ronit.md` §12.1) — **is not triggered**. One tool stands.
 
@@ -167,7 +177,7 @@ Reusing one name with different code: `get()` returned the **stale** bundle; `lo
 
 ## 6. `console.log` capture
 
-**Works**, via `tails` on the bundle — a `WorkerEntrypoint` with a `tail(events)` method, injected like any other binding:
+**Works, confirmed deployed**, via `tails` on the bundle — a `WorkerEntrypoint` with a `tail(events)` method, injected like any other binding:
 
 ```ts
 tails: [ctx.exports.LogCollector({ props: { runId } })]
@@ -177,14 +187,15 @@ tails: [ctx.exports.LogCollector({ props: { runId } })]
 
 ### Size ceiling — silent truncation
 
-| Emitted | Captured |
-|---|---|
-| 1000 lines × 100B (~100KB) | 1002 of 1002 |
-| 5000 lines × 200B (~1MB) | 1041 of 5002 |
-| 200 lines × 10KB (~2MB) | 27 of 202 |
-| 50 lines × 100KB (~5MB) | 3 of 52 |
+| Emitted | Captured (deployed) | Captured (local) |
+|---|---|---|
+| 100 lines × 100B | 102 of 102 | 102 of 102 |
+| 1000 lines × 100B (~100KB) | 1002 of 1002 | 1002 of 1002 |
+| 5000 lines × 200B (~1MB) | **899** of 5002 | 1041 of 5002 |
+| 200 lines × 10KB (~2MB) | **26** of 202 | 27 of 202 |
+| 50 lines × 100KB (~5MB) | — | 3 of 52 |
 
-Truncation is by **bytes, not lines**, landing around **200–300KB**, with **no error and no truncation marker**.
+Truncation is by **bytes, not lines**, landing around **200KB**, with **no error and no truncation marker**. Production truncates marginally earlier than local, so a local test cannot be used to calibrate the cap.
 
 > **Action for Phase 09 Task 4.** Cap and mark tool-result output explicitly. Silent upstream truncation is indistinguishable, to the model, from the code never having logged — which is a debugging trap for the agent itself, not just for us.
 
@@ -192,14 +203,26 @@ Truncation is by **bytes, not lines**, landing around **200–300KB**, with **no
 
 ## 7. The wall-clock ceiling — the important negative result
 
-| Configuration | Outcome |
-|---|---|
-| `limits: { cpuMs: 50 }`, burn 1000ms of CPU | **completed** (1004ms) |
-| `limits: { cpuMs: 200 }`, burn 1000ms of CPU | **completed** (1011ms) |
-| `limits: { cpuMs: 50 }`, sleep 2000ms | completed (2014ms) |
-| Race guard: 3000ms of work, 500ms budget | **threw at 502ms** — `exec_timeout: exceeded 500ms` |
+| Configuration | **Deployed** | Local (`wrangler dev`) |
+|---|---|---|
+| `limits: { cpuMs: 50 }`, burn 1000ms of CPU | **threw at 16ms** — `Worker exceeded CPU time limit.` | completed (1004ms) |
+| `limits: { cpuMs: 200 }`, burn 1000ms of CPU | **threw at 1519ms** — same error | completed (1011ms) |
+| `limits: { cpuMs: 50 }`, sleep 2000ms | completed (2010ms) | completed (2014ms) |
+| Race guard: 3000ms of work, 500ms budget | **threw at 500ms** — `exec_timeout: exceeded 500ms` | threw at 502ms |
 
-**`limits.cpuMs` did not fire at all.** `inspired-from-ronit.md` §6 warns it "may fire lower or later than expected"; here it did not fire whatsoever, at 50ms against a 1000ms burn. The wall-clock race is therefore **not** belt-and-braces — it is the only enforcement demonstrated to work.
+**This is the one local/production divergence in the whole spike, and local was the permissive side.** `limits.cpuMs` is not enforced under `wrangler dev` at all; in production it is. Anyone who tested only locally would conclude the field does nothing and design around its absence.
+
+**Both mechanisms are needed, and neither substitutes for the other:**
+
+- `limits.cpuMs` catches CPU burn, but its relationship to wall time is loose exactly as `inspired-from-ronit.md` §6 warns — a 50ms budget killed a burn after **16ms** of wall time, while a 200ms budget took **1519ms** to fire. It cannot be used to bound how long a user waits.
+- The race guard is the only thing that bounds **wall clock**, and it is the only thing that fires at all on non-CPU waits: a 2000ms sleep under a 50ms CPU budget completes untouched, because sleeping costs no CPU. An agent that awaits a slow binding is in exactly that state.
+
+```ts
+const timeout = new Promise<never>((_, reject) =>
+  setTimeout(() => reject(new Error(`exec_timeout: exceeded ${ms}ms`)), ms));
+timeout.catch(() => {});                      // swallow the late rejection
+return Promise.race([runPromise, timeout]);
+```
 
 ```ts
 const timeout = new Promise<never>((_, reject) =>
@@ -237,10 +260,16 @@ Kept for the README's AI-tool notes.
 
 ## Open — must close before Phase 09
 
-- [ ] **Upgrade the account to Workers Paid.** The only thing standing between here and a deployed run, for both spikes. No lead time — it is a billing change, not an access request.
-- [ ] **`GET /available` on the deployed Worker**, once paid, to confirm nothing else gates the binding.
-- [ ] **Re-run every result deployed.** agent-os hit a binding `wrangler dev` accepted and production rejected; any binding validated only locally is unvalidated. Highest-value targets: the `RpcTarget`-on-`env` failure (§3) and `limits.cpuMs` (§7), where local and production could plausibly differ.
-- [ ] **Confirm the isolation error text in production** before quoting it verbatim in the README.
+Nothing blocking. All of Phase 00's Worker Loader questions are answered.
+
+- [x] Account availability — **available on Workers Paid**, no allowlist.
+- [x] Every result re-run deployed. One divergence found (`limits.cpuMs`, §7), and it favoured production.
+- [x] Isolation error text confirmed in production, safe to quote verbatim in the README.
+- [ ] **Carry the two plan corrections into Phase 09** before writing code — the `RpcTarget` placement rule (§3) and the `fetch`-refuses-not-absent wording (§2). These are the only outputs of this spike that change what gets built.
+
+### Cost note
+
+The account is now on Workers Paid ($5/mo), which counts against the $500 ceiling and should appear in the README's cost reconciliation. It was not optional: it gates Worker Loader, Containers, and Queues, so Phases 00, 01 and 18 all require it.
 
 ## Reproducing
 
