@@ -10,7 +10,8 @@
     // Runtime types (D1Database, Queue, Fetcher, ExportedHandler, ...) come from
     // the generated worker-configuration.d.ts — wrangler types supersedes
     // @cloudflare/workers-types as of wrangler 4.
-    "types": ["@cloudflare/vitest-pool-workers"]
+    // The `cloudflare:test` module types moved to the /types subpath in v0.21.
+    "types": ["@cloudflare/vitest-pool-workers/types"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"]
 }
