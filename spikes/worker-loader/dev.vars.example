@@ -1,0 +1,4 @@
+# Copy to .dev.vars (gitignored; this file is not, hence the missing dot) before running the Task 7 binding probe.
+# The probe asserts this value is unreachable from inside the isolate, so the
+# sentinel must be distinctive enough to grep for.
+SPIKE_SECRET=SPIKE_SECRET_VALUE_do_not_leak_0e5f
