@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "firefighter-spike-worker-loader",
+  "main": "src/index.ts",
+
+  // Global constraint from 00-roadmap.md — do not drift these two.
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The entire Worker Loader config surface. Confirmed verbatim against
+  // inspired-from-ronit.md §9 and agent-os/apps/kernel/wrangler.jsonc.
+  "worker_loaders": [{ "binding": "LOADER" }],
+
+  "observability": { "enabled": true }
+}

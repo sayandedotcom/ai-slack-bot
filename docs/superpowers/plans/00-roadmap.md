@@ -8,7 +8,9 @@
 
 **Architecture:** One Worker, one origin. Slack events → queue → D1 (system of record) + Zep (recall). Triage wakes a thread-scoped Durable Object running one agent with one tool: write TypeScript. That code executes in a network-isolated Worker Loader isolate whose only reach is RPC bindings; when it needs a shell it boots a Cloudflare Sandbox that holds no write credentials and emits diffs, which the Worker turns into PRs.
 
-**Tech Stack:** TypeScript strict · Cloudflare Workers, Durable Objects, Queues, D1, R2, Workers Assets, Worker Loader, Sandbox · Hono · Vitest + `@cloudflare/vitest-pool-workers` · Vite + React + shadcn · Zep V3 · Claude Fable 5 (agent) / Haiku 4.5 (triage) · Playwright
+**Tech Stack:** TypeScript strict · Cloudflare Workers, Durable Objects, Queues, D1, R2, Workers Assets, Worker Loader, Sandbox, AI Gateway · Hono · Vercel AI SDK + `@ai-sdk/anthropic` · Vitest + `@cloudflare/vitest-pool-workers` · Vite + React + shadcn · Zep V3 · Claude Fable 5 (agent) / Haiku 4.5 (triage) · Playwright
+
+**Prior art:** `docs/inspired-from-ronit.md` records what was adopted from `rtpa25/agent-os` and `rtpa25/self-syncing-agent` — both run Worker Loader and `@cloudflare/sandbox` in production. Read it before Phases 00, 09 and 18.
 
 ---
 
@@ -39,8 +41,8 @@ Three surfaces have training data thin enough that a coding agent will confident
 
 | Surface | Phases | Why it bites |
 |---|---|---|
-| **Worker Loader** | 09, 10 | Beta. The `env.LOADER.get(id, async () => ({...}))` shape and the network-isolation guarantee are both unproven until Phase 00 Task 2. |
-| **Cloudflare Sandbox** | 18, 19 | Newest product in the stack. `interceptHttps` appears in a tutorial but not the API reference. |
+| **Worker Loader** | 09, 10 | Beta. Substantially de-risked by `docs/inspired-from-ronit.md` — the API shape, `globalOutbound: null`, the `ctx.exports`/`RpcTarget` marshalling rules and the cache semantics all come from working code. What remains unknown is whether *your* account has beta access. |
+| **Cloudflare Sandbox** | 18, 19 | `interceptHttps` and `outboundByHost` are confirmed real and in production use. The genuine unknown is whether a `standard-4` container can run **Zellify's** monorepo — nobody has tried. |
 | **Zep V3** | 06, 07, 21 | V2's "groups" became V3 "graphs"; the Feb 2026 deprecation wave removed `min_score` from `graph.search()`. V2-shaped code looks correct and fails. |
 
 Every invented API found during a phase goes into that phase's notes. The README's AI-tool notes are a graded deliverable, and this is the raw material.
@@ -207,9 +209,11 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Files:** `src/codemode/loader.ts`, `src/codemode/bindings/*.ts` (one per integration), `src/codemode/dts.ts` (generate the `.d.ts` injected into the prompt), `src/codemode/execute.ts`, `test/codemode-*.test.ts`
 
+**Read `docs/inspired-from-ronit.md` §1–§6 before starting.** Binding construction, boundary marshalling, cache semantics and the timeout race are all documented there from working code.
+
 **Tasks:**
-1. **Loader wrapper** over the verified Phase 00 shape.
-2. **Binding-by-binding, each its own TDD cycle:** `slack` (Phase 03 policy enforced *inside* it), `memory`, `linear` (team id pinned), `supabase` (read-only role), `langsmith`, `betterstack`, `files`. `github` and `sandbox` arrive in Phases 20 and 18.
+1. **Loader wrapper** over the verified Phase 00 shape: `LOADER.load(code)` with `globalOutbound: null`, capabilities on `env` (never on `globalOutbound`), constructed via `ctx.exports.X({ props })`, DO reach-back wrapped in `RpcTarget`, and the wall-clock race around `entrypoint.run()`.
+2. **Binding-by-binding, each its own TDD cycle:** `slack` (Phase 03 policy enforced *inside* it), `memory`, `linear` (team id pinned), `supabase` (read-only role), `langsmith`, `betterstack`, `files`. `github` and `sandbox` arrive in Phases 20 and 18. Identity travels in `props`, never in arguments — the agent cannot spoof who it is acting as if it never states it.
 3. **`.d.ts` generation** from the binding definitions, so the types the model sees cannot drift from the types that exist. This is the whole reason Code Mode beats flat schemas — the contract is generated, not maintained.
 4. **Result plumbing:** `console.log` output plus return value, serialized back as the tool result.
 5. **The security test that matters.** Assert from inside the isolate that `fetch` is unavailable, that `new WebSocket` fails, and that no binding leaks a raw credential. **This test is the README's security section.** If it cannot be written, decision D1 is wrong.

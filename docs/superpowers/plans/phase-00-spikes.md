@@ -159,19 +159,39 @@ git commit -m "spike(sandbox): preview urls, long-running processes, diff extrac
 **Interfaces:**
 - Produces: a verified-or-not verdict on the credential-swap primitive
 
-- [ ] **Step 1: Understand what is being tested**
+**This is now adaptation, not discovery.** `rtpa25/agent-os` runs it in production — see `docs/inspired-from-ronit.md` §7. The known-good shape:
 
-This appears in the Claude Code tutorial but **not** in the Sandbox API reference. Treat it as unverified. It is a nice-to-have, not load-bearing: D5 deliberately does not depend on it, because the container holds no write credentials at all.
+```ts
+import { Sandbox as BaseSandbox } from "@cloudflare/sandbox";
 
-The one place it would help is `git clone` of a private repo, which is the only unavoidable container-side credential.
+export const PD_PROXY_HOST = "proxy.firefighter.local";
 
-- [ ] **Step 2: Try it**
+export class Sandbox extends BaseSandbox<Env> {
+  sleepAfter = SLEEP_AFTER_MS;   // SDK default is '10m' — too short for a repro
+  interceptHttps = true;          // without this, only http:// routes through outbound
+}
 
-Subclass `Sandbox`, set `interceptHttps = true`, register an `outboundByHost` handler for a host you control, and confirm a placeholder header is swapped for a real value on egress.
+// STATIC field, set at module scope. The SDK reads it at construction time.
+Sandbox.outboundByHost = { [PD_PROXY_HOST]: async (request, env) => { /* ... */ } };
+```
 
-- [ ] **Step 3: Record the outcome either way**
+- [ ] **Step 1: Adopt the sentinel-host pattern, not a catch-all**
 
-If it does not exist as documented, write that down plainly and move on. The fallback ladder is spec §8.3: Worker-side git HTTP proxy via `http.proxy`, then a 1-hour read-only installation token.
+Configuring **only** `outboundByHost` — no static `outbound`, no `allowedHosts`/`deniedHosts` — puts the SDK in per-host mode. Hosts outside the registry (R2, GitHub, npm, apt mirrors) flow direct through the container's network namespace and never enter Worker fetch.
+
+That matters: **Worker fetch normalizes `Content-Length` on HEAD responses.** agent-os confirmed on a dedicated probe branch that the SDK overwrites it even when the handler sets it explicitly, which broke their s3fs-on-R2 mount. Route the minimum through interception.
+
+- [ ] **Step 2: Confirm the swap works**
+
+Register a handler for one sentinel host, send a request through it from inside the container with a placeholder credential, and confirm the real value is substituted on egress and never visible inside.
+
+- [ ] **Step 3: Set `sleepAfter` deliberately**
+
+The SDK default is 10 minutes. A container that naps mid-repro is a drill failure. Pick a value against the Task 2 timings.
+
+- [ ] **Step 4: Record the outcome**
+
+If the primitive behaves differently than agent-os found, write that down — it means a version drift worth knowing about. The fallback ladder remains spec §8.3: Worker-side git HTTP proxy via `http.proxy`, then a 1-hour read-only installation token.
 
 - [ ] **Step 4: Commit**
 
@@ -222,19 +242,46 @@ git commit -m "spike(sandbox): findings and go/no-go on tier 2 provider"
 **Interfaces:**
 - Produces: an isolate loaded from a string, returning a value
 
-- [ ] **Step 1: Read before writing**
+**Read `docs/inspired-from-ronit.md` first.** Ronit runs Worker Loader in production in both his repos, and §1–§6 there record the API shape and four failure modes already paid for. This task is now largely confirmation.
 
-- https://blog.cloudflare.com/code-mode/ — the `env.LOADER.get(id, async () => ({ mainModule, modules, env }))` shape
-- Worker Loader / Dynamic Worker Loader docs on developers.cloudflare.com
-- https://blog.cloudflare.com/project-think/ — for the execution-ladder framing this phase validates
+The real type, from `worker-configuration.d.ts`:
 
-- [ ] **Step 2: Confirm the binding is even available on the account**
+```ts
+interface WorkerLoader {
+  get(name: string | null, getCode: () => WorkerLoaderWorkerCode | Promise<WorkerLoaderWorkerCode>): WorkerStub;
+  load(code: WorkerLoaderWorkerCode): WorkerStub;
+}
 
-Worker Loader is beta. Check whether it needs a flag, an allowlist, or a specific wrangler version — **before** building anything on it. If it is gated, request access immediately; that lead time is the risk.
+interface WorkerLoaderWorkerCode {
+  compatibilityDate: string;
+  compatibilityFlags?: string[];
+  mainModule: string;
+  modules: Record<string, WorkerLoaderModule | string>;
+  env?: any;
+  globalOutbound?: Fetcher | null;
+  limits?: { cpuMs?: number; subRequests?: number };
+}
+```
 
-- [ ] **Step 3: Load an isolate that returns a constant**
+- [ ] **Step 1: Confirm the binding is available on YOUR account**
 
-Minimal proof the binding works: load a module from a string, call it, get a value back through the Worker.
+This is the one part Ronit's repos cannot answer — his account has beta access, yours may not. Worker Loader is beta; check whether it needs a flag or an allowlist **before** building on it. If gated, request access immediately; that lead time is the entire risk.
+
+Wrangler config is one line:
+
+```jsonc
+"worker_loaders": [{ "binding": "LOADER" }]
+```
+
+- [ ] **Step 2: Load an isolate that returns a constant**
+
+Minimal proof: load a module from a string, call it, get a value back through the Worker.
+
+- [ ] **Step 3: Use `load()`, not `get()`, and understand why**
+
+`get(name, cb)` caches by name and **only invokes the callback on a miss**. Reuse a name with different code and you silently execute the *old* bundle — which presents as "my edit didn't take effect," the worst symptom to debug under time pressure. Ronit's convention is a version-bumped key: `sync:<id>:v<version>`.
+
+Agent-authored code is unique per execution and has nothing to cache, so Phase 09 uses `load()`. Confirm both APIs behave as typed.
 
 - [ ] **Step 4: Commit**
 
@@ -252,13 +299,45 @@ git commit -m "spike(loader): scaffold and load an isolate from a string"
 **Interfaces:**
 - Produces: the confirmed `env` injection shape that Phase 09 generates `.d.ts` against
 
+Two rules from `docs/inspired-from-ronit.md` §2–§4, both paid for in someone else's debugging time:
+
+> **Stubs go on `env`, never on `globalOutbound`.** A service stub set as `globalOutbound` on a bundle invoked via `entrypoint.run()` trips workerd's result-marshalling — every call fails with *"This ServiceStub cannot be serialized"* before user code runs. The same stubs on the isolate's `env` are fine.
+
+> **Raw DO stubs cannot cross the boundary. `RpcTarget` subclasses can.** Passing a DO stub directly fails with an opaque `"internal error; reference = ..."`.
+
+And the canonical construction shape is `ctx.exports`, not raw service bindings:
+
+```ts
+env: {
+  SLACK: ctx.exports.SlackBinding({ props: { runId, onDutyUserId } }),
+}
+```
+
 - [ ] **Step 1: Hold a secret in the parent Worker**
 
-The parent has a secret. It exposes exactly one method that uses it — say, one that returns a value derived from the secret, never the secret.
+The parent has a secret. Expose one `WorkerEntrypoint` method that uses it and returns a derived value — never the secret.
 
-- [ ] **Step 2: Inject the binding and call it from inside the isolate**
+- [ ] **Step 2: Inject via `ctx.exports.X({ props })` and call it from inside the isolate**
 
-Confirm the isolate calls the method and receives the result.
+Confirm the isolate calls the method and receives the result. Note that props are how a binding learns *which engineer it acts as* — the agent never passes an identity, so it cannot spoof one.
+
+- [ ] **Step 3: Wrap a DO stub in an `RpcTarget` and cross the boundary with it**
+
+Phase 09's `memory` and `escalate` bindings reach back into `RunDO`. Prove the pattern now:
+
+```ts
+import { RpcTarget } from "cloudflare:workers";
+
+class RunBridge extends RpcTarget {
+  #run: DurableObjectStub;
+  constructor(run: DurableObjectStub) { super(); this.#run = run; }
+  async escalate(draft: unknown, why: string) { return this.#run.escalate(draft, why); }
+}
+```
+
+- [ ] **Step 4: Test against DEPLOYED, not just `wrangler dev`**
+
+agent-os hit a binding that **`wrangler dev` accepted and production rejected** — the raw `env.BROWSER` stub, which needed wrapping in a `WorkerEntrypoint` to survive marshalling. Any binding validated only locally is unvalidated. Deploy the spike and run it remotely before recording a pass.
 
 - [ ] **Step 3: Try to read the secret from inside the isolate**
 
@@ -284,9 +363,17 @@ git commit -m "spike(loader): rpc binding injection, secret unreachable from iso
 **Interfaces:**
 - Produces: the empirical basis for spec §8.1 — or its refutation
 
-This is the single most important step in Phase 00. Decision D1's entire security story is this property. Prove it; do not assume it.
+Decision D1's entire security story is this property. `docs/inspired-from-ronit.md` §1 found that it is **a first-class field**, not an emergent behavior:
 
-- [ ] **Step 1: Attempt an outbound fetch from inside the isolate**
+```ts
+globalOutbound: null,   // native fetch stays blocked
+```
+
+So this task is now "set one field and assert it," not "discover what happens." The assertion still gets written and still gets its own commit — **it is the README's security section**, and a security claim with no test behind it is a claim you cannot make.
+
+Note where our design is narrower than agent-os: theirs sets `globalOutbound: null` and then hands the isolate `env.PROXY`, a general credentialed fetch surface, because its agent needs arbitrary outbound HTTP. Ours gets typed per-integration bindings and **no general fetch surface at all**.
+
+- [ ] **Step 1: Set `globalOutbound: null` and attempt an outbound fetch from inside the isolate**
 
 ```js
 await fetch("https://example.com");
@@ -330,9 +417,22 @@ The agent may run several code blocks per turn. If cold load is slow, Phase 10 n
 
 Phase 09 feeds both logged output and the return value back to the model as the tool result. Confirm both can be captured, and note the size ceiling on each.
 
-- [ ] **Step 3: Find the wall-clock ceiling**
+- [ ] **Step 3: Find the wall-clock ceiling, using the race pattern**
 
-How long can an isolate run before it is killed? This is what makes a blocking `await escalate()` impossible and forces Phase 11's turn-injection design — confirm the number rather than assuming it.
+Worker Loader's own cap is **CPU time, not wall time**, so it can fire lower or later than expected. agent-os enforces wall-clock by racing `entrypoint.run()` against a `setTimeout` rejection — and swallows the late rejection so a lost race doesn't surface as an unhandled rejection in `wrangler tail` (`docs/inspired-from-ronit.md` §6). Their defaults: **30s default, 60s max**.
+
+```ts
+const runPromise = entrypoint.run();
+const timeoutPromise = new Promise<never>((_, reject) =>
+  setTimeout(() => reject(new Error(`exec_timeout: exceeded ${timeoutMs}ms`)), timeoutMs),
+);
+timeoutPromise.catch(() => {});          // belt and braces
+const res = await Promise.race([runPromise, timeoutPromise]);
+```
+
+Also set `limits: { cpuMs, subRequests }` on the bundle and record what each actually enforces.
+
+**This number is load-bearing for Phase 11.** It is why an isolate cannot be parked for hours waiting on a click, and therefore why `escalate()` returns immediately and approval resolution arrives as an injected turn. Write down the measured ceiling so that argument rests on a number rather than an assumption.
 
 - [ ] **Step 4: Commit**
 

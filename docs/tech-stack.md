@@ -2,6 +2,8 @@
 
 Every technology in the Fire-Fighter build, what it does, and why it was chosen over the alternative. Decisions trace back to `docs/superpowers/specs/2026-08-10-firefighter-agent-design.md`; phase numbers refer to `docs/superpowers/plans/00-roadmap.md`.
 
+Choices marked *adopted from `agent-os`* came from reading Ronit's own repos — see `docs/inspired-from-ronit.md` for full attribution.
+
 ---
 
 ## Cloudflare — the runtime, and almost everything else
@@ -16,6 +18,7 @@ Every technology in the Fire-Fighter build, what it does, and why it was chosen 
 | **Worker Loader** ⚠️ | **Tier 1 execution.** Runs model-authored TypeScript in an isolate with **no `fetch`** — its only reach is RPC bindings held by the parent Worker. This is the entire credential story at Tier 1. Beta. | 09 |
 | **Cloudflare Sandbox** ⚠️ | **Tier 2 execution.** A `standard-4` container (4 vCPU / 12 GiB / 20 GB) the agent boots *itself* to clone the monorepo, run the dev server, drive a browser, and emit a diff. Holds zero write credentials. | 18, 19 |
 | **R2** | Stores Playwright proof recordings. A public R2 link goes in both the PR body and the Slack reply — and needs no Slack `files:write` scope, sidestepping a scope that may not be grantable. | 19 |
+| **AI Gateway** | Sits in front of Anthropic. Near-free cost tracking, caching, rate limiting and observability — and a cost breakdown against the $500 ceiling is a graded README deliverable. Adopted from `agent-os`. | 07, 10 |
 | **Cloudflare Access** | The login gate. One self-hosted application, policy `@zellify.app` plus a temporary personal override. `/slack/*` and `/oauth/*` are bypassed, because Slack cannot authenticate to Access. | 05 |
 
 ⚠️ **Thin training data.** Phase 00 exists to verify these two empirically before any production code rests on them. A coding agent will confidently invent APIs for both.
@@ -52,6 +55,13 @@ The brief's instruction stands: spend tokens on the strongest model rather than 
 | **Vite + React 19** | The two-page dashboard. SSR buys nothing when every pixel is live socket state. |
 | **shadcn/ui + Tailwind 4** | Components, from the existing `packages/ui`. Nobody grades CSS, but loading, empty and error states have to exist. |
 | **Hono** | Routing inside the Worker — webhook, API, OAuth callbacks, WebSocket upgrade, and the asset fallback. |
+| **`packages/protocol`** | Wire types shared across the dashboard↔Worker WebSocket boundary, so the run protocol is typed on both ends. The one thing that genuinely justifies the monorepo. Adopted from `agent-os`. |
+
+## Agent runtime
+
+| Tech | What it does here |
+|---|---|
+| **Vercel AI SDK** + `@ai-sdk/anthropic` | The model client. Streaming, the tool loop, and structured output come free, and the Cloudflare Agents SDK expects it. Adopted from `agent-os`. |
 
 ---
 
