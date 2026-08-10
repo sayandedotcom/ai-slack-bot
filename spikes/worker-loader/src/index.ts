@@ -7,9 +7,10 @@
  * Throwaway code, committed as evidence.
  */
 
-type Env = {
-  LOADER: WorkerLoader;
-};
+// Both must be exported from the Worker entrypoint for the DO and the
+// ctx.exports loopback binding to resolve.
+export { SpikeDO, SecretBinding } from "./run-do";
+import type { ProbeResult } from "./run-do";
 
 /**
  * The compatibility date the LOADED isolate runs under. Independent of the
@@ -223,8 +224,39 @@ export default {
           });
         }
 
+        /**
+         * Task 7 — binding injection and the credential boundary.
+         * `?raw=1` additionally puts a RAW DurableObjectStub on env, which
+         * inspired-from-ronit.md §4 predicts fails at the marshalling boundary.
+         */
+        case "/bindings": {
+          const id = env.SPIKE_DO.idFromName("probe");
+          // See ProbeResult's doc comment for why this is annotated by hand.
+          const spike = env.SPIKE_DO.get(id) as unknown as {
+            probe(includeList: string[]): Promise<ProbeResult>;
+          };
+          // ?include=secret,run,raw — default exercises the two shapes Phase 09
+          // actually plans to use.
+          const include = (url.searchParams.get("include") ?? "secret,run")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+          const result = await spike.probe(include);
+
+          // The finding that matters, computed rather than eyeballed.
+          const leaked =
+            result.probe?.attempts.some(
+              (a) => a.label !== "leak-control" && a.detail?.includes("SPIKE_SECRET_VALUE"),
+            ) ?? false;
+
+          return json({ ...result, secretReachableByAnyNonControlPath: leaked });
+        }
+
         default:
-          return json({ routes: ["/available", "/const", "/cache", "/isolation"] }, 404);
+          return json(
+            { routes: ["/available", "/const", "/cache", "/isolation", "/bindings"] },
+            404,
+          );
       }
     } catch (err) {
       // The failure mode is the deliverable; do not prettify it.

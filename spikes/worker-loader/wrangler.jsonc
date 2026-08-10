@@ -11,5 +11,12 @@
   // inspired-from-ronit.md §9 and agent-os/apps/kernel/wrangler.jsonc.
   "worker_loaders": [{ "binding": "LOADER" }],
 
+  // Task 7 runs the injection from inside a DO, because ctx.exports lives on
+  // DurableObjectState and Phase 09 loads isolates from RunDO.
+  "durable_objects": {
+    "bindings": [{ "name": "SPIKE_DO", "class_name": "SpikeDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SpikeDO"] }],
+
   "observability": { "enabled": true }
 }

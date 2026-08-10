@@ -4,12 +4,16 @@
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["@cloudflare/workers-types"],
+    // Runtime types come from `wrangler types` (worker-configuration.d.ts),
+    // which supersedes @cloudflare/workers-types as of wrangler 4.120.
+    // It also generates Cloudflare.GlobalProps, which is what makes
+    // `ctx.exports.SecretBinding` typecheck at all.
+    "types": [],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "isolatedModules": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "worker-configuration.d.ts"]
 }
