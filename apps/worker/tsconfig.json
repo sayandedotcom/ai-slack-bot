@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    // Runtime types (D1Database, Queue, Fetcher, ExportedHandler, ...) come from
+    // the generated worker-configuration.d.ts — wrangler types supersedes
+    // @cloudflare/workers-types as of wrangler 4.
+    "types": ["@cloudflare/vitest-pool-workers"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"]
+}
