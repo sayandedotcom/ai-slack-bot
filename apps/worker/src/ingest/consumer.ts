@@ -1,6 +1,6 @@
 import type { Env } from "../index";
 import type { QueuedEvent } from "../slack/types";
-import { getChannelPolicy } from "../db/channels";
+import { getChannelPolicy, shouldTriage } from "../db/channels";
 import { insertMessage, recordEvent } from "../db/messages";
 import { getPermalink } from "../slack/client";
 import { classify } from "./rules";
@@ -47,6 +47,12 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
     try {
       await env.MEMORY_QUEUE.send({ event_id });
     } catch {}
+
+    if (shouldTriage(policy)) {
+      try {
+        await env.TRIAGE_QUEUE.send({ event_id });
+      } catch {}
+    }
 
     // Insert first, enrich second. A Slack API outage costs permalinks, never
     // messages — getPermalink swallows every failure and returns null.

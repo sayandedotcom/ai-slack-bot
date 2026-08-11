@@ -26,5 +26,9 @@ SLACK_BOT_TOKEN=
 # ingest to D1 is unaffected.
 ZEP_API_KEY=
 
-# Later phases add more (Anthropic, GitHub, Linear, Supabase, LangSmith,
+# Anthropic API key. Phase 07 uses Haiku 4.5 for triage (~$0.0003/message);
+# Phase 10 adds Fable 5 for the main agent on the same key.
+ANTHROPIC_API_KEY=
+
+# Later phases add more (GitHub, Linear, Supabase, LangSmith,
 # Better Stack). Add each here as its phase introduces it.

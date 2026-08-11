@@ -24,7 +24,8 @@
   "queues": {
     "producers": [
       { "binding": "INGEST_QUEUE", "queue": "firefighter-ingest" },
-      { "binding": "MEMORY_QUEUE", "queue": "firefighter-memory" }
+      { "binding": "MEMORY_QUEUE", "queue": "firefighter-memory" },
+      { "binding": "TRIAGE_QUEUE", "queue": "firefighter-triage" }
     ],
     "consumers": [
       {
@@ -40,6 +41,13 @@
         "max_batch_timeout": 5,
         "max_retries": 5,
         "dead_letter_queue": "firefighter-memory-dlq"
+      },
+      {
+        "queue": "firefighter-triage",
+        "max_batch_size": 5,
+        "max_batch_timeout": 3,
+        "max_retries": 3,
+        "dead_letter_queue": "firefighter-triage-dlq"
       }
     ]
   }

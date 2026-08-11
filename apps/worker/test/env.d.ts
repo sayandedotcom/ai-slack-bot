@@ -9,6 +9,11 @@ declare global {
       TEST_MIGRATIONS: D1Migration[];
       SLACK_SIGNING_SECRET: string;
       SLACK_BOT_TOKEN: string;
+      // `wrangler types` infers secrets from whatever .dev.vars happens to hold
+      // locally, so these are declared here instead — the type must not depend
+      // on which keys a given machine has filled in.
+      ZEP_API_KEY: string;
+      ANTHROPIC_API_KEY: string;
     }
   }
 }
