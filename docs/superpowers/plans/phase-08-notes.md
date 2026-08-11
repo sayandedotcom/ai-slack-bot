@@ -387,22 +387,46 @@ The automated proof is `evictDurableObject()`, used in four places:
   accepts a steer (exercising `webSocketMessage` after constructor re-entry),
   and keeps its per-socket cursor so nothing is resent.
 
+### Two tabs against local `wrangler dev` — done 2026-08-12
+
+The automated suite drives the Durable Object stub. This ran against
+`wrangler dev` on 8787 with local D1 (all four migrations applied), using the
+real HTTP routes and real browser-style `WebSocket`s. 13/13:
+
+| Check | Result |
+|---|---|
+| `POST /api/runs` → 201, body omits the origin key | keys are `id, origin, status, shadow, summary, channelId, threadTs, createdAt, updatedAt` |
+| Two tabs upgrade, both get a complete sync | cursor 1 on both; backlog carries the opening turn |
+| Steer from tab A, acked with the committed seq | ack 2 = event seq 2 |
+| Both tabs receive **byte-identical** events | `JSON.stringify` equal at seq 2 |
+| Refresh tab A with its last cursor | 0 events replayed, cursor still 2 |
+| Tab B, left open across the refresh, keeps streaming | seq 3 |
+| Unknown run id | `404`, and the socket upgrade is refused |
+| Non-WebSocket request to a real run | `426` |
+| `GET /api/runs` lists it from D1 | present |
+
+Harness note for whoever repeats this: Node's `fetch` (undici) forbids setting
+the `Upgrade` header, so the not-found case is checked without it — the route
+resolves the id in D1 before the upgrade, so the `404` is decided first — and
+the upgrade refusal is checked with a real `WebSocket` instead.
+
 ### Still outstanding — needs a deploy and a human
 
-These four steps cannot be done from the test suite. They are the only parts
+These three steps cannot be done from a local machine. They are the only parts
 of Phase 08 not yet proved:
 
-1. **Two tabs against local `wrangler dev`.** The automated two-tab test covers
-   the same behaviour through the DO stub, but not through the real `/ws/run/:id`
-   route and a browser.
-2. **A real Slack thread in `#test-firedrill`** — post an actionable root
+1. **A real Slack thread in `#test-firedrill`** — post an actionable root
    message, confirm one run row and one triage opening turn, reply, confirm the
    reply enters the same run with no second triage decision.
-3. **Deployed Access behaviour** — an authenticated dashboard origin upgrades
+2. **Deployed Access behaviour** — an authenticated dashboard origin upgrades
    the socket; an unauthenticated `/ws/run/:id` is blocked; `/slack/events`
    still bypasses Access and passes signature verification.
-4. **Deployed observability** — confirm an idle connected run is not kept
+3. **Deployed observability** — confirm an idle connected run is not kept
    active.
 
-Deploying is the owner's call, and step 2 posts into a real Slack workspace, so
-neither was done unprompted.
+Plus one that is not a Phase 08 step but blocks the same deploy:
+`wrangler secret put ANTHROPIC_API_KEY`, without which the deployed triage
+consumer fails on its first actionable message (see `phase-07-notes.md`).
+
+Deploying is the owner's call, and step 1 posts into a real Slack workspace, so
+none of these was done unprompted.
