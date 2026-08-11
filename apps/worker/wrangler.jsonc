@@ -22,7 +22,10 @@
     }
   ],
   "queues": {
-    "producers": [{ "binding": "INGEST_QUEUE", "queue": "firefighter-ingest" }],
+    "producers": [
+      { "binding": "INGEST_QUEUE", "queue": "firefighter-ingest" },
+      { "binding": "MEMORY_QUEUE", "queue": "firefighter-memory" }
+    ],
     "consumers": [
       {
         "queue": "firefighter-ingest",
@@ -30,6 +33,13 @@
         "max_batch_timeout": 5,
         "max_retries": 3,
         "dead_letter_queue": "firefighter-ingest-dlq"
+      },
+      {
+        "queue": "firefighter-memory",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "firefighter-memory-dlq"
       }
     ]
   }

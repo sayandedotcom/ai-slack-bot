@@ -42,6 +42,12 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
       received_at,
     });
 
+    // D1 is committed; everything downstream is a projection with its own
+    // retry budget. A queue send failing must not fail ingest.
+    try {
+      await env.MEMORY_QUEUE.send({ event_id });
+    } catch {}
+
     // Insert first, enrich second. A Slack API outage costs permalinks, never
     // messages — getPermalink swallows every failure and returns null.
     const permalink = await getPermalink(env.SLACK_BOT_TOKEN, event.channel, event.ts);

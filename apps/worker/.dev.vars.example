@@ -21,5 +21,10 @@ SLACK_SIGNING_SECRET=
 # chat.postMessage. Slack app settings → OAuth & Permissions.
 SLACK_BOT_TOKEN=
 
-# Later phases add more (Zep, Anthropic, GitHub, Linear, Supabase, LangSmith,
+# Zep Cloud API key (Zep dashboard -> Project -> API keys). Powers the org and
+# per-customer recall graphs. A missing key breaks memory projection only —
+# ingest to D1 is unaffected.
+ZEP_API_KEY=
+
+# Later phases add more (Anthropic, GitHub, Linear, Supabase, LangSmith,
 # Better Stack). Add each here as its phase introduces it.

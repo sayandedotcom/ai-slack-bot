@@ -2,14 +2,18 @@ import { Hono } from "hono";
 import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
 import { handleIngestBatch } from "./ingest/consumer";
+import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
+import { ZepMemory } from "./memory/zep";
 import type { QueuedEvent } from "./slack/types";
 
 export type Env = {
   DB: D1Database;
   INGEST_QUEUE: Queue;
+  MEMORY_QUEUE: Queue<MemoryJob>;
   ASSETS: Fetcher;
   SLACK_SIGNING_SECRET: string;
   SLACK_BOT_TOKEN: string;
+  ZEP_API_KEY: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -27,9 +31,16 @@ app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default {
   fetch: app.fetch,
-  async queue(batch: MessageBatch<QueuedEvent>, env: Env): Promise<void> {
-    await handleIngestBatch(batch, env);
+  // One handler serves every queue; `batch.queue` is the only thing that says
+  // which one delivered. A new queue that forgets a case here fails silently.
+  async queue(batch: MessageBatch<QueuedEvent | MemoryJob>, env: Env): Promise<void> {
+    switch (batch.queue) {
+      case "firefighter-ingest":
+        return handleIngestBatch(batch as MessageBatch<QueuedEvent>, env);
+      case "firefighter-memory":
+        return handleMemoryBatch(batch as MessageBatch<MemoryJob>, env, new ZepMemory(env.ZEP_API_KEY));
+    }
   },
   // The second type parameter is the queue message body. Without it,
   // ExportedHandler defaults to `unknown` and the queue handler will not typecheck.
-} satisfies ExportedHandler<Env, QueuedEvent>;
+} satisfies ExportedHandler<Env, QueuedEvent | MemoryJob>;
