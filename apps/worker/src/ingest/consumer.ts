@@ -2,6 +2,7 @@ import type { Env } from "../index";
 import type { QueuedEvent } from "../slack/types";
 import { getChannelPolicy } from "../db/channels";
 import { insertMessage, recordEvent } from "../db/messages";
+import { getPermalink } from "../slack/client";
 import { classify } from "./rules";
 
 /**
@@ -40,5 +41,14 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
       customer_slug: policy.customer_slug,
       received_at,
     });
+
+    // Insert first, enrich second. A Slack API outage costs permalinks, never
+    // messages — getPermalink swallows every failure and returns null.
+    const permalink = await getPermalink(env.SLACK_BOT_TOKEN, event.channel, event.ts);
+    if (permalink) {
+      await env.DB.prepare("UPDATE messages SET permalink = ? WHERE event_id = ?")
+        .bind(permalink, event_id)
+        .run();
+    }
   }
 }

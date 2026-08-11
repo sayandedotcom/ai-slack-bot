@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleIngestBatch } from "../src/ingest/consumer";
 import type { QueuedEvent } from "../src/slack/types";
 
@@ -34,6 +34,21 @@ function ev(overrides: Partial<QueuedEvent> = {}): QueuedEvent {
     ...overrides,
   };
 }
+
+// The consumer backfills permalinks via Slack. Without a stub these tests make
+// real requests to slack.com — slow, and flaky offline. `fetchMock` used to
+// block this; it was removed in vitest-pool-workers v0.21. Returning ok:false
+// exercises the path the plan intends: permalink resolution fails, the message
+// is still written.
+beforeEach(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+    Response.json({ ok: false, error: "message_not_found" }),
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 beforeEach(async () => {
   await env.DB.batch([
