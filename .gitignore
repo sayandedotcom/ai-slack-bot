@@ -50,3 +50,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# personal working notes — deliberately never committed
+docs/things-to-remember.md

@@ -5,6 +5,35 @@
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Non-secret pins for Phase 09 capabilities. These are IDs and hostnames, not
+  // credentials — they live here rather than in .dev.vars so that a reviewer can
+  // confirm what the capability layer is scoped to by reading the diff.
+  "vars": {
+    // Better Stack SQL API host. Region-scoped: this endpoint only resolves
+    // sources in eu-central-1a. Credentials are BETTERSTACK_SQL_* secrets.
+    "BETTERSTACK_SQL_ENDPOINT": "https://eu-central-1a-connect.betterstackdata.com",
+    // Allowlist of queryable log collections (Task 11 Step 1). Comma-separated
+    // collection prefixes; betterstack.logs() must reject anything not listed
+    // rather than interpolating a caller-supplied table name.
+    "BETTERSTACK_LOG_SOURCE_IDS": "t582255_firefighter_worker",
+    // Linear team the agent may file into (Task 8, decision D4). LINEAR_API_KEY
+    // is NOT scoped to this team -- it can reach all five workspace teams,
+    // including Development. This pin is the only thing that stops it, so the
+    // team id must never come from the caller. The name is here purely so a
+    // reviewer can confirm the pin without resolving the uuid.
+    "LINEAR_TEAM_ID": "3b7d3585-029d-4490-80ce-6a44c6d9f081",
+    "LINEAR_TEAM_NAME": "fire-fighter-testing",
+    // LangSmith read surface (Task 10 Step 1), pinned server-side for the same
+    // reason as the Linear team: LANGSMITH_API_KEY is workspace-wide, so the
+    // project must never come from the caller.
+    "LANGSMITH_ENDPOINT": "https://api.smith.langchain.com",
+    "LANGSMITH_WORKSPACE_ID": "d81d9ce6-2548-465e-bd56-72e2f97a1f19",
+    "LANGSMITH_PROJECT_ID": "647f1d2e-bb76-48b3-adad-1d196ca0debe",
+    "LANGSMITH_PROJECT_NAME": "tweakleaf",
+    // Supabase PostgREST origin (Task 9). Fixed server-side so the reader can
+    // never be pointed at another project. Credential is SUPABASE_KEY.
+    "SUPABASE_URL": "https://uahmoigkzsuwhheohitz.supabase.co"
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

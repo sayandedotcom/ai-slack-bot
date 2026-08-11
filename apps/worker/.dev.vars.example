@@ -30,5 +30,81 @@ ZEP_API_KEY=
 # Phase 10 adds Fable 5 for the main agent on the same key.
 ANTHROPIC_API_KEY=
 
-# Later phases add more (GitHub, Linear, Supabase, LangSmith,
-# Better Stack). Add each here as its phase introduces it.
+# Better Stack SQL API connection (Phase 09 Task 11, betterstack.logs()).
+# NOT a bearer token: the log query path is HTTP Basic auth against a
+# ClickHouse-compatible endpoint. Create at telemetry.betterstack.com ->
+# Integrations -> SQL API -> Create connection. The password is shown once.
+#
+# The connection is REGION-SCOPED. Ours is eu-central-1a and can only see
+# sources in that region; a source in another region resolves as
+# NAMED_COLLECTION_DOESNT_EXIST, not as an empty result.
+#
+# Non-secret companions (endpoint host, source allowlist) live in
+# wrangler.jsonc "vars" so the pinning is visible in a diff.
+BETTERSTACK_SQL_USERNAME=
+BETTERSTACK_SQL_PASSWORD=
+
+# Better Stack Uptime API token (Phase 09 Task 11, betterstack.monitors()).
+# A separate product and a separate credential from the SQL connection above:
+# bearer auth against https://uptime.betterstack.com/api/v2. Create at
+# uptime.betterstack.com -> Settings -> API tokens -> Team-based tokens.
+#
+# SECURITY: this token is read-WRITE (it can create, pause, and delete
+# monitors) and GET /monitors returns monitor secrets in each record --
+# auth_username, auth_password, request_headers, environment_variables,
+# playwright_script. monitors() must project an explicit field ALLOWLIST;
+# passing the API response through, or denylisting known-bad keys, leaks
+# credentials for whatever endpoints the monitors authenticate against.
+BETTERSTACK_UPTIME_TOKEN=
+
+# Linear personal API key, "lin_api_" prefixed (Phase 09 Task 8). Linear ->
+# Settings -> Security & access -> Personal API keys.
+#
+# Sent as a BARE Authorization header against https://api.linear.app/graphql --
+# `Authorization: lin_api_...`, with NO "Bearer " prefix. Verified 2026-08-12.
+#
+# SECURITY: a personal API key inherits the full access of the human who
+# minted it. Ours resolves all five workspace teams, including Development
+# (the live team) and Marketing -- it is NOT restricted to the pinned team.
+# The only thing keeping the agent out of real teams is the server-side pin
+# in wrangler.jsonc vars (LINEAR_TEAM_ID). Never let a caller-supplied team
+# id reach the GraphQL call.
+LINEAR_API_KEY=
+
+# LangSmith API key (Phase 09 Task 10). LangSmith -> Settings -> API keys.
+# Sent as the `x-api-key` header (NOT Authorization) against
+# https://api.smith.langchain.com. Verified 2026-08-12.
+#
+# Only the key belongs here. LangSmith's setup snippet also hands you
+# LANGSMITH_TRACING and LANGSMITH_PROJECT -- those configure an app to SEND
+# traces via the SDK. Firefighter only reads, so they are deliberately absent;
+# the project and workspace we read are pinned in wrangler.jsonc vars.
+#
+# SECURITY: an "lsv2_pt_" key is a personal token and inherits the creator's
+# workspace role. Ours is Admin: it can delete runs and projects, manage
+# workspace secrets, and exec sandboxes. Task 10 needs runs:read alone. This
+# is fixable -- mint the key in a second, read-only workspace -- and until
+# that happens the read-only guarantee lives only in the capability layer.
+LANGSMITH_API_KEY=
+
+# Supabase PostgREST key (Phase 09 Task 9). Supabase -> Project Settings ->
+# API keys. Sent as BOTH `apikey:` and `Authorization: Bearer` headers against
+# $SUPABASE_URL/rest/v1. SUPABASE_URL itself is in wrangler.jsonc vars.
+#
+# USE THE PUBLISHABLE KEY ("sb_publishable_"), NOT THE SECRET KEY.
+# The secret key ("sb_secret_") bypasses Row Level Security entirely: it can
+# read and write every table regardless of policy. The publishable key is
+# subject to RLS, so a SELECT-only policy makes read-only a guarantee the
+# DATABASE enforces -- not a promise the capability layer makes. This is the
+# second of the two layers spec'd in the plan ("Supabase is read-only twice"),
+# and the only vendor in this phase that offers a credential-level backstop.
+#
+# Consequence: with no RLS policy granting SELECT, reads return empty rather
+# than erroring. An empty result here means "no policy", not "no rows".
+#
+# Direct Postgres (DATABASE_URL / DIRECT_URL via the pooler) is deliberately
+# NOT used: it needs Hyperdrive or raw TCP sockets from the Worker, and grants
+# full SQL where the plan wants a bounded, allowlisted read surface.
+SUPABASE_KEY=
+
+# Later phases add more (GitHub). Add each here as its phase introduces it.
