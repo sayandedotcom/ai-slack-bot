@@ -113,3 +113,80 @@ Zero pre-existing failures. Any red after this point is Phase 09's doing.
 ### Go / no-go
 
 **GO.** No finding moved, no prerequisite is missing, and the baseline is clean.
+
+---
+
+## Task 1 — 2026-08-12
+
+The phase's de-risk gate. **PASS**, all three cases:
+
+1. `env.LOADER` exists and exposes `load` and `get`;
+2. a real Dynamic Worker loads and returns over RPC **inside the vitest
+   runtime** — pool-workers 0.21.0 / miniflare `5.20260804.0-alpha` does parse
+   `worker_loaders` into a `workerLoaders` record;
+3. `globalOutbound: null` refuses `fetch` on **invocation**, with `fetch` still
+   defined. Absence of the global would have been the wrong claim.
+
+Tasks 4b, 12, 13 and 14 therefore keep their test strategy. Nothing needs
+re-planning around `wrangler dev` or deployed-only probes on account of the
+runtime.
+
+`wrangler types` produced a one-line diff (`LOADER: WorkerLoader;`) plus the
+hash. No spurious secret drift, because `.dev.vars` is fully populated — the
+`phase-08-notes.md` item 7 trap did not fire here.
+
+---
+
+## Task 4b — 2026-08-12
+
+### The CPU-burn case cannot be verified locally, and running it wedges the suite
+
+Measured, not assumed. `while (true) {}` inside a Dynamic Worker under
+`@cloudflare/vitest-pool-workers`:
+
+- the **parent-side race behaves correctly** — `execute()` returns
+  `execution_timeout` on schedule, so the assertion in the plan's Task 4b Step 1
+  would pass;
+- but the isolate **is never killed**. `limits.cpuMs` is not enforced in the
+  vitest pool any more than under `wrangler dev`. Measured `workerd` at ~75% CPU
+  indefinitely after the race returned;
+- the spinning isolate then starves the workerd process, so every later test in
+  that runtime hangs — **including vitest's own `--testTimeout`**, which needs
+  that runtime to fire. Confirmed by running the single case in isolation with
+  `--testTimeout=20000`: still wedged.
+
+There is no host-side remedy. `DynamicWorkerExecutor.execute()` creates and owns
+the `WorkerStub` internally and returns only an `ExecuteResult`, so the parent
+has no handle to dispose. Only a real workerd CPU limit ends that isolate.
+
+**Resolution:** the case is `it.skip` in `test/codemode-executor.test.ts` with
+the reason inline, and the claim is verified **deployed** in Task 14 Step 7 —
+which is where the plan's own Task 4b Step 6 table already assigns it. A local
+replacement test covers the safe half: a busy loop that *yields* is bounded by
+the parent race and leaves nothing spinning.
+
+> **Plan inconsistency to fix:** Task 4b Step 1 asks for a local test of exactly
+> the claim Step 6 marks "deployed only". The two steps contradict each other;
+> Step 6 is the correct one.
+
+Three claims, three different proofs, still not interchangeable:
+
+| Claim | Proved by | Status |
+| --- | --- | --- |
+| the bundle carries `limits.cpuMs` | Task 4a unit test | PASS (local) |
+| a runaway program always returns to the caller | parent race | PASS (local, yielding case) |
+| workerd itself kills a CPU burn | Task 14 Step 7 | **NOT YET PROVEN** |
+
+Never report the parent race's success as evidence that `cpuMs` works.
+
+### The log cap is a context bound, not a memory bound
+
+Confirmed by reading the generated module (`dist/index.js:289–305`): `__logs` is
+an array built **inside** the sandbox and returned whole in the RPC value. Any
+host-side cap runs after the entire array has already crossed the boundary, so
+it bounds what reaches the model's context window and nothing else. A sandbox
+that logs 200MB still sends 200MB across RPC. Do not describe `maxConsoleChars`
+as protection against memory exhaustion.
+
+Console output does **not** travel through `tails`, so the Phase 00 spike's
+~200KB silent-tail ceiling does not apply here.
