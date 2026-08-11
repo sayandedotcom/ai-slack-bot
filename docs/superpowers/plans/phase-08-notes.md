@@ -266,10 +266,14 @@ Two consequences:
   change from a regeneration.
 - **A green suite is not evidence a credential works.** Phase 08 never touches
   Anthropic, and Phase 07's suites inject a fake `TriageRunner`, so
-  `makeTriageRunner(env)` and the real Haiku call have never run. `haikuCostUsd`
-  is unit-tested against synthetic usage numbers; the mapping from a real
-  response's token fields is still unverified, and cost telemetry is a graded
-  deliverable.
+  `makeTriageRunner(env)` and the real Haiku call had never run at the time this
+  was written — `haikuCostUsd` was unit-tested against synthetic usage numbers
+  only, while cost telemetry is a graded deliverable. **Resolved 2026-08-12**:
+  the key was filled in and the live path exercised once; the token→cost mapping
+  is real (~$0.0006–0.0009 per decision, non-zero and finite). See
+  `phase-07-notes.md`. The failure mode has now inverted — with a working key a
+  stray live call in a test would pass quietly and bill, where before it failed
+  loudly.
 
 Worth generalising for the README: an empty-but-declared secret is invisible to
 typecheck, invisible to tests that stub the client, and only fails on the first
