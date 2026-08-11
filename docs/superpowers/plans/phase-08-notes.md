@@ -244,13 +244,36 @@ and `exports.default.fetch()`. All 15 existing suites use the `cloudflare:test`
 spelling and it still works, so Phase 08 stays consistent rather than splitting
 the codebase across two idioms mid-build. Worth a sweep after the drill.
 
-**7. `pnpm cf-typegen` output is machine-dependent.**
+**7. `pnpm cf-typegen` types a secret that does not exist.**
 
-`wrangler types` infers secret names from whatever `.dev.vars` holds locally, so
-regenerating on this machine added `ANTHROPIC_API_KEY` to
-`worker-configuration.d.ts` relative to the committed version. This is why
-`test/env.d.ts` declares secrets by hand. Expect noise in the diff whenever
-Task 4 regenerates, and only commit the binding change.
+`wrangler types` reads the *declared names* in `.dev.vars`, not their values.
+A bare `ANTHROPIC_API_KEY=` with nothing after it is enough to emit
+
+```ts
+ANTHROPIC_API_KEY: string;
+```
+
+into `worker-configuration.d.ts`. The type system then promises a string that
+is `""` at runtime, and every call site typechecks. That is exactly what is in
+this repo right now: the name is declared, the value is empty.
+
+Two consequences:
+
+- **The output is machine-dependent.** Regenerating here added the line
+  relative to the committed copy, which predated Phase 07. A teammate with a
+  thinner `.dev.vars` generates a different file and sees a spurious diff. This
+  is why `test/env.d.ts` declares secrets by hand — only commit the binding
+  change from a regeneration.
+- **A green suite is not evidence a credential works.** Phase 08 never touches
+  Anthropic, and Phase 07's suites inject a fake `TriageRunner`, so
+  `makeTriageRunner(env)` and the real Haiku call have never run. `haikuCostUsd`
+  is unit-tested against synthetic usage numbers; the mapping from a real
+  response's token fields is still unverified, and cost telemetry is a graded
+  deliverable.
+
+Worth generalising for the README: an empty-but-declared secret is invisible to
+typecheck, invisible to tests that stub the client, and only fails on the first
+live call.
 
 **8. `Rpc` is a global ambient namespace, not a `cloudflare:workers` export.**
 
