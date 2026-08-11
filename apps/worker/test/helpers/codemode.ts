@@ -74,18 +74,26 @@ export const slackScope: CodeModeScope = {
  * which is the property that lets Tasks 6-12 be reviewed before any live
  * account is wired up.
  */
-export function fakeDeps(): CapabilityDependencies {
+export type FakeFixtures = {
+  slackThread?: Array<{ ts: string; userId: string | null; text: string; permalink: string | null }>;
+  memoryFacts?: Array<{ factId: string; fact: string; episodeUuids: string[] }>;
+  citations?: Array<{ factId: string; fact: string; permalink: string; ts: string }>;
+  supabaseRows?: Array<Record<string, string | number | boolean | null>>;
+  logLines?: Array<{ at: string; level: string; message: string }>;
+};
+
+export function fakeDeps(fixtures: FakeFixtures = {}): CapabilityDependencies {
   return {
     db: undefined as never, // no capability in Task 5 touches D1 directly
     slack: {
-      async thread() { return []; },
+      async thread() { return fixtures.slackThread ?? []; },
       async searchMessages() { return []; },
       async reply() { return { ts: "1.0", permalink: null }; },
     },
     memory: {
       async ensureGraph() {},
       async addMessage() { return { episodeUuid: "ep_0" }; },
-      async search() { return []; },
+      async search() { return fixtures.memoryFacts ?? []; },
     },
     linear: {
       async createIssue() { return { id: "iss_1", identifier: "FF-1", url: "https://x" }; },
@@ -94,7 +102,7 @@ export function fakeDeps(): CapabilityDependencies {
     },
     supabase: {
       async describe() { return []; },
-      async select() { return []; },
+      async select() { return fixtures.supabaseRows ?? []; },
     },
     langsmith: {
       async trace() {
@@ -103,7 +111,7 @@ export function fakeDeps(): CapabilityDependencies {
       async searchTraces() { return []; },
     },
     betterstack: {
-      async logs() { return []; },
+      async logs() { return fixtures.logLines ?? []; },
       async monitors() { return []; },
     },
     files: {

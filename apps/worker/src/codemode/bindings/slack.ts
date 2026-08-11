@@ -86,8 +86,8 @@ export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
  * reporting the first unanswerable one gives the model something it can act on:
  *
  *  1. is there anywhere to send?      → slack_context_required
- *  2. is this run allowed to act?     → shadow_write_denied
- *  3. does the destination accept?    → channel_read_only
+ *  2. does the destination accept?    → channel_read_only
+ *  3. is this run allowed to act?     → shadow_write_denied
  *  4. do we have a voice to use?      → identity_unavailable
  *
  * Policy is re-fetched here rather than captured when the run started: a
@@ -103,18 +103,6 @@ async function assertMayReply(ctx: BindingContext): Promise<void> {
     );
   }
 
-  // Read shadow from D1, NOT from the run descriptor. RunState has no `shadow`
-  // field; a check written against the descriptor reads undefined, which is
-  // falsy, and the run posts. This is the single most dangerous wrong
-  // assumption available in this phase, so it is a database read.
-  const record = await getRunById(ctx.deps.db, ctx.scope.runId);
-  if (record === null || record.shadow) {
-    throw new CapabilityError(
-      "shadow_write_denied",
-      "this run is observing only; nothing was sent. Report what you would have posted.",
-    );
-  }
-
   const policy = await getChannelPolicy(ctx.deps.db, target.channelId);
   if (!canPost(policy)) {
     // canPost is already `known && mode === "live"`, and an unmapped channel
@@ -123,6 +111,22 @@ async function assertMayReply(ctx: BindingContext): Promise<void> {
     throw new CapabilityError(
       "channel_read_only",
       `replies are disabled for this conversation (mode=${policy.mode}). Report the reply instead of sending it.`,
+    );
+  }
+
+  // Read shadow from D1, NOT from the run descriptor. RunState has no `shadow`
+  // field; a check written against the descriptor reads undefined, which is
+  // falsy, and the run posts. This is the single most dangerous wrong
+  // assumption available in this phase, so it is a database read.
+  //
+  // A missing row refuses too: an unconfirmable run is not a permitted one.
+  const record = await getRunById(ctx.deps.db, ctx.scope.runId);
+  if (record === null || record.shadow) {
+    throw new CapabilityError(
+      "shadow_write_denied",
+      record === null
+        ? "this run could not be confirmed as permitted to post; nothing was sent."
+        : "this run is observing only; nothing was sent. Report what you would have posted.",
     );
   }
 

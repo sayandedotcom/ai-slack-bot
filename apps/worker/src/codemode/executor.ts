@@ -10,7 +10,7 @@ import { toSafeJson, type CodeModeLimits } from "./contracts";
 import { CapabilityError, safeMessage } from "./errors";
 
 /** What a truncated result or log stream is marked with. Assert on this. */
-const TRUNCATION_MARK = "TRUNCATED";
+export const TRUNCATION_MARK = "TRUNCATED";
 
 /**
  * Substrings workerd and the package use for the three failure modes we can
@@ -26,6 +26,9 @@ const CPU_LIMIT_HINTS = [
 ];
 const IN_SANDBOX_TIMEOUT = "execution timed out";
 
+/** JS errors that mean the MODEL's program is wrong, not that we are broken. */
+const PROGRAM_FAULTS = /\b(SyntaxError|ReferenceError|TypeError|RangeError|EvalError)\b/;
+
 function classify(message: string): string {
   const lower = message.toLowerCase();
   if (CPU_LIMIT_HINTS.some((hint) => lower.includes(hint))) {
@@ -36,6 +39,25 @@ function classify(message: string): string {
   }
   // Already one of ours (`code: message`) — leave it alone.
   return message;
+}
+
+/**
+ * What an exception escaping the race becomes.
+ *
+ * Deliberately NOT routed through `safeMessage`. That collapses anything
+ * unrecognised to an opaque `upstream_unavailable`, which is right for an
+ * upstream vendor — its errors carry connection strings — and wrong here: this
+ * catch sees the sandbox failing to compile or start MODEL-AUTHORED code. That
+ * message is about the model's own program, contains no host credential, and is
+ * the only thing that lets the next turn fix a typo instead of retrying blind.
+ */
+function classifyThrow(err: unknown): string {
+  if (err instanceof CapabilityError) return err.message;
+  const raw = err instanceof Error ? err.message : String(err);
+  const classified = classify(raw);
+  if (classified !== raw) return classified;
+  if (PROGRAM_FAULTS.test(raw)) return `invalid_input: ${raw}`;
+  return safeMessage(err);
 }
 
 /* ------------------------------------------------------------- bounding -- */
@@ -203,7 +225,7 @@ export function makeGuardedExecutor(
         // that escapes the race becomes a value here.
         return {
           result: null,
-          error: classify(safeMessage(err)),
+          error: classifyThrow(err),
           logs: [],
         };
       }
