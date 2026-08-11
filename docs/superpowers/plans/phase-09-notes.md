@@ -322,6 +322,84 @@ database-level backstop the publishable key is supposed to provide.
 
 ---
 
+## Task 10 — 2026-08-12
+
+Endpoint shape verified live: `POST /runs/query` with `{ session: [projectId], … }`
+and the `x-api-key` header. An `Authorization: Bearer` is ignored and the
+request fails unauthenticated.
+
+`trace()` returns a **flat node list with `parentId` links**, per the plan's own
+warning — a nested tree cannot survive `RunDO.appendToolCallUpdate`, and that is
+a typecheck failure vitest cannot observe.
+
+> **OPEN GAP:** the pinned project `tweakleaf`
+> (`647f1d2e-bb76-48b3-adad-1d196ca0debe`) exists and is the workspace's only
+> project, but contains **zero runs**. Task 10 Step 4 — "verify against one
+> known trace, compare with the LangSmith UI" — therefore **could not be done**.
+> The normalization is built against LangSmith's documented run shape and is
+> covered by mocked-transport tests; it has never seen a real run. Re-run Step 4
+> once something traces into that project.
+
+---
+
+## Task 11 — 2026-08-12
+
+### The pinned log collection name was wrong
+
+`BETTERSTACK_LOG_SOURCE_IDS` was `t582255_firefighter_worker` — that is the
+**source** name, not a queryable collection, and it resolves as
+`CLUSTER_DOESNT_EXIST`. The source exposes three collections:
+
+| Collection | Contents |
+| --- | --- |
+| `remote(t582255_firefighter_worker_logs)` | recent logs, hot storage |
+| `s3Cluster(primary, t582255_firefighter_worker_s3, …)` | historical logs |
+| `remote(t582255_firefighter_worker_metrics)` | aggregated metrics |
+
+Corrected to the `_logs` one. Source `firefighter-worker` (id 2670566) is
+active, in `eu-central-1a` — matching the SQL endpoint — with **3-day** log
+retention, which is why the query window caps at 7 days rather than 30.
+
+### ACTION REQUIRED: the SQL connection cannot see the source
+
+Diagnosed by elimination against the live endpoint:
+
+- `SELECT 1` → **works**, so the credentials authenticate and the endpoint and
+  region are right;
+- every collection for this source — `_logs`, `_metrics`, `_s3` — fails;
+- `system.named_collections` → `Not enough privileges`, so it cannot be
+  enumerated from this connection;
+- Better Stack's own tooling fails identically, so it is not a query-syntax
+  problem.
+
+The connection predates the source (source created 2026-08-11 20:34 UTC) and was
+never granted it. **Fix: create a new SQL connection at telemetry.betterstack.com
+→ Integrations → SQL API, then update `BETTERSTACK_SQL_USERNAME` and
+`BETTERSTACK_SQL_PASSWORD`.** The password is shown once. Until then
+`betterstack.logs()` returns `upstream_unavailable` — correctly, and without
+leaking the ClickHouse exception, which names internal collections and the
+connection user.
+
+### The monitor allowlist is not theoretical
+
+Confirmed against the live Uptime API: a monitor record really does carry
+`auth_username`, `auth_password`, `request_headers`, `request_body`,
+`environment_variables` and `playwright_script` — the credentials each monitor
+uses against whatever it watches. Passing the record through, or denylisting
+today's known-bad fields, would hand those to model code the first time upstream
+adds a field. `monitors()` builds its result field by field from a four-name
+allowlist and spreads nothing.
+
+### Credentials that appeared in tooling output
+
+While diagnosing, two values were echoed by Better Stack's own tooling into this
+session's transcript: the **source ingest token** for `firefighter-worker`, and
+the **SQL connection username** (in a privileges error). Neither is the SQL
+password. Rotate them if the transcript is shared; the SQL connection is being
+recreated anyway.
+
+---
+
 ### `generateTypes` cannot render an index signature
 
 `z.record`, `z.looseObject`, and `z.object().catchall()` all emit `{}`. So

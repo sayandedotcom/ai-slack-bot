@@ -13,9 +13,14 @@
     // sources in eu-central-1a. Credentials are BETTERSTACK_SQL_* secrets.
     "BETTERSTACK_SQL_ENDPOINT": "https://eu-central-1a-connect.betterstackdata.com",
     // Allowlist of queryable log collections (Task 11 Step 1). Comma-separated
-    // collection prefixes; betterstack.logs() must reject anything not listed
-    // rather than interpolating a caller-supplied table name.
-    "BETTERSTACK_LOG_SOURCE_IDS": "t582255_firefighter_worker",
+    // ClickHouse collection names; betterstack.logs() names one of these as a
+    // literal and binds everything else as a parameter.
+    //
+    // The `_logs` suffix is load-bearing: `t582255_firefighter_worker` is the
+    // SOURCE name, not a queryable collection, and resolves as
+    // CLUSTER_DOESNT_EXIST. The hot-storage collection is the one below;
+    // `_metrics` and `_s3` are the other two the source exposes.
+    "BETTERSTACK_LOG_SOURCE_IDS": "t582255_firefighter_worker_logs",
     // Linear team the agent may file into (Task 8, decision D4). LINEAR_API_KEY
     // is NOT scoped to this team -- it can reach all five workspace teams,
     // including Development. This pin is the only thing that stops it, so the
