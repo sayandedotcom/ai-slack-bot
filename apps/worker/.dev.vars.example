@@ -1,0 +1,23 @@
+# Template for apps/worker/.dev.vars — copy, then fill in real values:
+#
+#   cp .dev.vars.example .dev.vars
+#
+# .dev.vars is what `wrangler dev` reads for local secrets. It is gitignored
+# (.gitignore:41); this .example file is the only variant committed. In
+# production these are set with `wrangler secret put <NAME>` and never live in
+# a file. Never paste a real value into this file. See spec §15.8.
+#
+# The test harness does NOT read this file — vitest.config.ts injects its own
+# fixture values through miniflare bindings.
+
+# Slack app signing secret, used to verify the X-Slack-Signature HMAC on every
+# inbound event. Slack app settings → Basic Information → App Credentials.
+# Use the ROTATED secret (spec §15) — the originals leaked into a transcript.
+SLACK_SIGNING_SECRET=
+
+# Slack bot user OAuth token, "xoxb-" prefixed. Used for chat.getPermalink and
+# chat.postMessage. Slack app settings → OAuth & Permissions.
+SLACK_BOT_TOKEN=
+
+# Later phases add more (Zep, Anthropic, GitHub, Linear, Supabase, LangSmith,
+# Better Stack). Add each here as its phase introduces it.

@@ -40,6 +40,8 @@ yarn-error.log*
 # wrangler local secrets — NOT covered by .env*
 .dev.vars
 .dev.vars.*
+# the template is the one variant that is committed; it holds names, never values
+!.dev.vars.example
 .wrangler
 
 # vercel
