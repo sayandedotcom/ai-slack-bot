@@ -513,6 +513,100 @@ That catch now defaults to `invalid_input` with the real message.
 
 ---
 
+## Task 15 — handoff — 2026-08-12
+
+### Versions
+
+| Thing | Version |
+| --- | --- |
+| `@cloudflare/codemode` | `0.5.1` (exact, `--save-exact`) |
+| `wrangler` | 4.120.1 |
+| `@cloudflare/vitest-pool-workers` | 0.21.x → miniflare `5.20260804.0-alpha` |
+| workerd (test runtime) | 25.12.3.21 |
+| Worker `compatibility_date` | `2026-08-01`, flags `["nodejs_compat"]` |
+| **Loaded bundle** compat date | `2026-08-01`, forced by `guardLoader` over the package's hardcoded `2025-06-01` |
+| Dynamic Workers product status | **open beta** since 2026-03-24 — not GA |
+
+### Current network refusal wording
+
+```text
+This worker is not permitted to access the internet via global functions like
+fetch(). It must use capabilities (such as bindings in 'env') to talk to the
+outside world.
+```
+
+### Why dispatchers are call arguments, not loaded-Worker env
+
+`entrypoint.evaluate(dispatchers, connectorBindings)` — verified in shipped code
+at `dist/index.js:346`. The `RpcTarget` subclass crosses as an **argument**, and
+`env` is passed as `undefined` whenever empty. Placement, not type, is what
+decides: an `RpcTarget` put on `env` does not work, which is the correction the
+Phase 00 spike recorded and this phase confirmed against the real package.
+`guardLoader` asserts the env is empty on every load so this cannot drift.
+
+### Why the stateless path, not the durable approval runtime
+
+`@cloudflare/codemode` ships a `CodemodeRuntime` with durable pause/resume for
+approvals. Phase 09 deliberately uses only `runCode` + `DynamicWorkerExecutor`:
+
+- approval is a **model decision** here (Phase 11), not a tool annotation. The
+  package's resolver silently **drops** any tool carrying `needsApproval`, so
+  adopting that model would make a capability vanish with no error — there is a
+  test asserting no annotation exists;
+- the durable runtime owns its own storage and lifecycle, which would compete
+  with the Phase 08 `RunDO` that is already the system of record.
+
+### Limits as shipped
+
+| Limit | Value | Basis |
+| --- | --- | --- |
+| `maxCodeChars` | 24 000 | reviewed |
+| `wallTimeMs` | 20 000 (hard max 60 000) | parent-side race |
+| `cpuMs` | 500 | bundle limit; **enforcement unverified** (deployed only) |
+| `subRequests` | 32 | bundle limit |
+| `maxResultChars` | 24 000 | context bound |
+| `maxConsoleChars` | 32 000 | context bound, **not** a memory bound |
+| `maxCapabilityCalls` | 40 | per execution, shared across namespaces |
+| artifact size | 5 MiB | measured: 190 ms round trip |
+
+### Blocked on later phases or on data that does not exist yet
+
+| Capability | State |
+| --- | --- |
+| `slack.reply` | always `identity_unavailable`. Phase 12 supplies the per-engineer token; it must never fall back to `SLACK_BOT_TOKEN` |
+| `supabase.*` | correct but **answers nothing**: the project has no tables, so `PRODUCTION_ALLOWLIST` is empty |
+| `langsmith.*` | correct but the pinned project has **zero runs**; normalization has never seen a real trace |
+| `betterstack.logs` | correct but the **SQL connection cannot see the source** — recreate the connection (Task 11) |
+| `betterstack.monitors` | working against the live account |
+| `linear.*` | working; verified live including duplicate-id reconciliation |
+| `slack.thread` / `searchMessages` | working, but two of three channels have ingested **zero** messages — the bot is likely not a member |
+
+### Invented or corrected APIs encountered
+
+Nothing invented. Four plan statements were corrected against measured
+behaviour, each recorded in its own section above: the `/ai` resolver's error
+format, the CPU-burn test's local runnability, `generateTypes` silently blanking
+a capability, and the environment probe's false positives.
+
+### What the Phase 10 prompt must teach the agent
+
+- Errors are `code: message`; the code is stable and worth branching on.
+- There is no network. `fetch` exists and every call is refused.
+- `slack.reply` currently always refuses — draft the reply in the answer instead.
+- `supabase` and `langsmith` may legitimately return nothing; that is missing
+  data, not a bug to work around.
+- Only facts returned by `memory.recall` **in this execution** can be cited.
+
+### Remaining gate
+
+**Task 15 Step 3, the deployed smoke check, has not been run.** It needs a probe
+surface (decision D5: a separate smoke Worker, or an Access-protected staging
+route) and the Phase 09 secrets installed in production with
+`wrangler secret put`. It is the only place `limits.cpuMs` enforcement can be
+proven; every other exit-criterion claim is verified locally.
+
+---
+
 ### `generateTypes` cannot render an index signature
 
 `z.record`, `z.looseObject`, and `z.object().catchall()` all emit `{}`. So
