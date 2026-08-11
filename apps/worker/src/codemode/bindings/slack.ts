@@ -1,5 +1,9 @@
 import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
+import { canPost, getChannelPolicy } from "../../db/channels";
+import { getRunById } from "../../run/repository";
+import { CapabilityError } from "../errors";
+import { runEffect } from "../effects";
 import { auditedCapability, type BindingContext } from "../registry";
 
 const message = z.strictObject({
@@ -55,7 +59,77 @@ export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
         ts: z.string(),
         permalink: z.string().nullable(),
       }),
-      run: async (input) => ctx.deps.slack.reply(input.text, ctx.scope.turnId),
+      run: async (input) => {
+        await assertMayReply(ctx);
+        // Reserved before the send, so a retry after a transport error replays
+        // rather than posting to a customer twice.
+        return runEffect(
+          { db: ctx.deps.db, clock: ctx.deps.clock },
+          ctx.scope,
+          "slack",
+          "reply",
+          { text: input.text },
+          {
+            execute: (idempotencyKey) =>
+              ctx.deps.slack.reply(input.text, idempotencyKey),
+          },
+        );
+      },
     }),
   };
+}
+
+/**
+ * The write-policy matrix, in escalating order of how little we know.
+ *
+ * The order is the point. Each check answers a different question, and
+ * reporting the first unanswerable one gives the model something it can act on:
+ *
+ *  1. is there anywhere to send?      → slack_context_required
+ *  2. is this run allowed to act?     → shadow_write_denied
+ *  3. does the destination accept?    → channel_read_only
+ *  4. do we have a voice to use?      → identity_unavailable
+ *
+ * Policy is re-fetched here rather than captured when the run started: a
+ * channel switched to `observe` mid-run must stop accepting messages
+ * immediately, not at the end of the run.
+ */
+async function assertMayReply(ctx: BindingContext): Promise<void> {
+  const target = ctx.scope.slackThread;
+  if (target === null) {
+    throw new CapabilityError(
+      "slack_context_required",
+      "this run is not attached to a conversation, so there is nowhere to reply.",
+    );
+  }
+
+  // Read shadow from D1, NOT from the run descriptor. RunState has no `shadow`
+  // field; a check written against the descriptor reads undefined, which is
+  // falsy, and the run posts. This is the single most dangerous wrong
+  // assumption available in this phase, so it is a database read.
+  const record = await getRunById(ctx.deps.db, ctx.scope.runId);
+  if (record === null || record.shadow) {
+    throw new CapabilityError(
+      "shadow_write_denied",
+      "this run is observing only; nothing was sent. Report what you would have posted.",
+    );
+  }
+
+  const policy = await getChannelPolicy(ctx.deps.db, target.channelId);
+  if (!canPost(policy)) {
+    // canPost is already `known && mode === "live"`, and an unmapped channel
+    // resolves to `{ mode: "observe", known: false }`. The fail-closed default
+    // is inherited from the shipped policy code, not reimplemented here.
+    throw new CapabilityError(
+      "channel_read_only",
+      `replies are disabled for this conversation (mode=${policy.mode}). Report the reply instead of sending it.`,
+    );
+  }
+
+  if (ctx.scope.actor === null) {
+    throw new CapabilityError(
+      "identity_unavailable",
+      "no on-duty engineer is resolved, and this product never speaks to a customer without a human identity behind it.",
+    );
+  }
 }
