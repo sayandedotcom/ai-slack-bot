@@ -450,25 +450,28 @@ it("rowid alias increments monotonically and survives eviction", async () => {
   const key = `chat:${crypto.randomUUID()}`;
   const stub = env.RUNS.get(env.RUNS.idFromName(key));
 
-  const first = await runInDurableObject(stub, (instance) => {
-    instance.ctx.storage.sql.exec(
+  // The callback's SECOND argument is the DurableObjectState. `instance.ctx` is
+  // `protected` on the cloudflare:workers DurableObject base and does not
+  // typecheck from a test file.
+  const first = await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS spike (seq INTEGER PRIMARY KEY, v TEXT)",
     );
-    return instance.ctx.storage.transactionSync(() => {
-      instance.ctx.storage.sql.exec("INSERT INTO spike (v) VALUES ('a')");
-      return [
-        ...instance.ctx.storage.sql.exec("SELECT MAX(seq) AS seq FROM spike"),
-      ][0].seq as number;
+    return state.storage.transactionSync(() => {
+      state.storage.sql.exec("INSERT INTO spike (v) VALUES ('a')");
+      return state.storage.sql
+        .exec<{ seq: number }>("SELECT MAX(seq) AS seq FROM spike")
+        .one().seq;
     });
   });
 
   await evictDurableObject(stub);
 
-  const second = await runInDurableObject(stub, (instance) => {
-    instance.ctx.storage.sql.exec("INSERT INTO spike (v) VALUES ('b')");
-    return [
-      ...instance.ctx.storage.sql.exec("SELECT MAX(seq) AS seq FROM spike"),
-    ][0].seq as number;
+  const second = await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec("INSERT INTO spike (v) VALUES ('b')");
+    return state.storage.sql
+      .exec<{ seq: number }>("SELECT MAX(seq) AS seq FROM spike")
+      .one().seq;
   });
 
   expect(second).toBe(first + 1);
