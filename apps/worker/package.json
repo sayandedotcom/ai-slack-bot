@@ -12,8 +12,11 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.37",
     "@getzep/zep-cloud": "^3.27.0",
-    "hono": "^4.9.0"
+    "ai": "^7.0.59",
+    "hono": "^4.9.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.21.0",
