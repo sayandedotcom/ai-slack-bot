@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
+import { runEffect } from "../effects";
 import { auditedCapability, type BindingContext } from "../registry";
 
 const level = z.enum(["low", "medium", "high"]);
@@ -36,13 +37,33 @@ export function makeLinearTools(ctx: BindingContext): ToolDescriptors {
         identifier: z.string(),
         url: z.string(),
       }),
-      run: async (input) =>
-        ctx.deps.linear.createIssue({
-          title: input.title,
-          description: renderDescription(input.description, input.assessment),
-          labels: input.labels ?? [],
-          idempotencyKey: ctx.scope.turnId,
-        }),
+      run: async (input) => {
+        const description = renderDescription(input.description, input.assessment);
+        // Reserved through the ledger so the idempotency key handed to Linear
+        // IS the effect key. Linear accepts a client-supplied issue id and
+        // refuses a duplicate, so the two mechanisms agree on what "the same
+        // issue" means instead of each having its own opinion.
+        return runEffect(
+          { db: ctx.deps.db, clock: ctx.deps.clock },
+          ctx.scope,
+          "linear",
+          "createIssue",
+          { title: input.title, description },
+          {
+            execute: (idempotencyKey) =>
+              ctx.deps.linear.createIssue({
+                title: input.title,
+                description,
+                labels: input.labels ?? [],
+                idempotencyKey,
+              }),
+            // Turns an ambiguous 5xx into a decidable question. The create
+            // supplies its own id, so "did this get filed?" is an exact lookup
+            // rather than a guess at matching titles.
+            reconcile: (idempotencyKey) => ctx.deps.linear.findIssue(idempotencyKey),
+          },
+        );
+      },
     }),
 
     updateIssue: auditedCapability(ctx, "linear", "updateIssue", {

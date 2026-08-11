@@ -89,6 +89,7 @@ export function fakeDeps(): CapabilityDependencies {
     },
     linear: {
       async createIssue() { return { id: "iss_1", identifier: "FF-1", url: "https://x" }; },
+      async findIssue() { return null; },
       async updateIssue() { return { id: "iss_1", url: "https://x" }; },
     },
     supabase: {

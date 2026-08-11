@@ -119,6 +119,14 @@ export interface LinearGateway {
     labels: string[];
     idempotencyKey: string;
   }): Promise<IssueRef>;
+  /**
+   * Did the issue for this key actually get filed?
+   *
+   * Answerable precisely because the create supplies its own id, so this is an
+   * exact lookup rather than a guess. It is what turns an ambiguous 5xx into a
+   * decidable question instead of permanent doubt.
+   */
+  findIssue(idempotencyKey: string): Promise<IssueRef | null>;
   updateIssue(input: {
     issueId: string;
     title?: string;

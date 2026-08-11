@@ -1,0 +1,303 @@
+import { env } from "cloudflare:test";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildRegistry } from "../src/codemode/registry";
+import { issueIdFromEffectKey, makeLinearGateway } from "../src/linear/client";
+import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
+
+const TEAM_ID = "3b7d3585-029d-4490-80ce-6a44c6d9f081";
+const OTHER_TEAM = "4a4914d5-f940-4121-a014-171a84b8f8dc";
+
+const config = { apiKey: "lin_api_test", teamId: TEAM_ID, teamName: "fire-fighter-testing" };
+
+type Sent = { document: string; variables: Record<string, unknown>; headers: Headers };
+
+/** Captures the outgoing GraphQL operation and replies with a canned body. */
+function mockTransport(replies: unknown[]) {
+  const sent: Sent[] = [];
+  let i = 0;
+  vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)) as { query: string; variables: Record<string, unknown> };
+    sent.push({ document: body.query, variables: body.variables, headers: new Headers(init.headers) });
+    const reply = replies[Math.min(i++, replies.length - 1)];
+    return new Response(JSON.stringify(reply), { status: 200 });
+  });
+  return sent;
+}
+
+afterEach(() => { vi.unstubAllGlobals(); });
+
+const created = (identifier = "FIR-1") => ({
+  data: { issueCreate: { success: true, issue: { id: "iss-1", identifier, url: `https://linear.app/z/issue/${identifier}` } } },
+});
+
+/**
+ * A fresh run/turn per call. createIssue reserves through the effect ledger,
+ * so reusing one scope would make the second identical call REPLAY the first
+ * rather than reach the mocked transport — which is the ledger working, but
+ * would silently hollow out these assertions.
+ */
+function linearTools(gateway = makeLinearGateway(config)) {
+  const deps = { ...fakeDeps(), db: env.DB, linear: gateway };
+  const scope = {
+    ...slackScope,
+    runId: `run_${crypto.randomUUID()}`,
+    turnId: `turn_${crypto.randomUUID()}`,
+  };
+  return buildRegistry(scope, deps, TEST_LIMITS, fakeAuditSink())
+    .find((p) => p.name === "linear")!.tools;
+}
+
+const call = (tools: ReturnType<typeof linearTools>, method: string, args: unknown) =>
+  (tools[method] as { execute: (a: unknown) => Promise<unknown> }).execute(args);
+
+const validCreate = {
+  title: "Checkout times out for enterprise carts",
+  description: "Repros on carts above 200 lines.",
+  assessment: {
+    platformValue: "high" as const,
+    blocking: "medium" as const,
+    customerWeight: "high" as const,
+    evidence: "Three customers in two weeks.",
+  },
+};
+
+describe("linear.createIssue schema", () => {
+  it("requires every assessment axis", async () => {
+    const tools = linearTools();
+    for (const missing of ["platformValue", "blocking", "customerWeight", "evidence"]) {
+      const assessment = { ...validCreate.assessment } as Record<string, unknown>;
+      delete assessment[missing];
+      await expect(call(tools, "createIssue", { ...validCreate, assessment }))
+        .rejects.toThrow(/invalid_input/);
+    }
+  });
+
+  it.each([
+    ["a team", { teamId: OTHER_TEAM }],
+    ["a workspace", { workspace: "other" }],
+    ["a project", { projectId: "p1" }],
+    ["a customer", { customerSlug: "globex" }],
+    ["a token", { token: "lin_api_leak" }],
+    ["an endpoint", { url: "https://evil.example" }],
+  ])("rejects %s argument", async (_label, patch) => {
+    await expect(call(linearTools(), "createIssue", { ...validCreate, ...patch }))
+      .rejects.toThrow(/invalid_input/);
+  });
+
+  it.each([
+    ["an unknown assessment value", { assessment: { ...validCreate.assessment, blocking: "catastrophic" } }],
+    ["empty evidence", { assessment: { ...validCreate.assessment, evidence: "" } }],
+    ["an empty title", { title: "" }],
+    ["an oversized title", { title: "x".repeat(300) }],
+    ["an oversized description", { description: "x".repeat(21_000) }],
+    ["too many labels", { labels: Array.from({ length: 11 }, (_, i) => `l${i}`) }],
+  ])("rejects %s", async (_label, patch) => {
+    await expect(call(linearTools(), "createIssue", { ...validCreate, ...patch }))
+      .rejects.toThrow(/invalid_input/);
+  });
+});
+
+describe("linear.createIssue always uses the pinned team", () => {
+  it("sends the configured team and nothing the caller chose", async () => {
+    const sent = mockTransport([created()]);
+    await call(linearTools(), "createIssue", validCreate);
+    expect(sent[0].variables.teamId).toBe(TEAM_ID);
+  });
+
+  it("keeps the team fixed however the arguments vary", async () => {
+    for (const patch of [
+      { title: "another" },
+      { description: "different body" },
+      { labels: ["bug"] },
+      { assessment: { ...validCreate.assessment, blocking: "low" as const } },
+    ]) {
+      const sent = mockTransport([created()]);
+      await call(linearTools(), "createIssue", { ...validCreate, ...patch });
+      expect(sent[0].variables.teamId).toBe(TEAM_ID);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sends a bare authorization header with no Bearer prefix", async () => {
+    const sent = mockTransport([created()]);
+    await call(linearTools(), "createIssue", validCreate);
+    expect(sent[0].headers.get("authorization")).toBe("lin_api_test");
+    expect(sent[0].headers.get("authorization")).not.toMatch(/^Bearer /);
+  });
+
+  it("renders the assessment into the issue body so it cannot be omitted", async () => {
+    const sent = mockTransport([created()]);
+    await call(linearTools(), "createIssue", validCreate);
+    const description = String(sent[0].variables.description);
+    expect(description).toContain("Platform value: high");
+    expect(description).toContain("Blocking: medium");
+    expect(description).toContain("Customer weight: high");
+    expect(description).toContain("Three customers in two weeks.");
+  });
+
+  it("normalizes the response to identifiers only", async () => {
+    mockTransport([created("FIR-7")]);
+    const out = await call(linearTools(), "createIssue", validCreate) as Record<string, unknown>;
+    expect(Object.keys(out).sort()).toEqual(["id", "identifier", "url"]);
+  });
+});
+
+describe("linear.createIssue idempotency", () => {
+  it("derives a well-formed uuid from the effect key", () => {
+    const id = issueIdFromEffectKey("a".repeat(64));
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(issueIdFromEffectKey("a".repeat(64))).toBe(id); // stable
+    expect(issueIdFromEffectKey("b".repeat(64))).not.toBe(id);
+  });
+
+  it("sends that uuid as the client-supplied issue id", async () => {
+    const sent = mockTransport([created()]);
+    await makeLinearGateway(config).createIssue({
+      title: "t", description: "d", labels: [], idempotencyKey: "c".repeat(64),
+    });
+    expect(sent[0].variables.id).toBe(issueIdFromEffectKey("c".repeat(64)));
+  });
+
+  // The real behaviour, verified live 2026-08-12: a duplicate id is refused
+  // with `conflict on insert of Issue`. That refusal is the reconciliation
+  // signal, not an error — the retry must return the existing issue.
+  it("reconciles a duplicate rather than filing twice", async () => {
+    const conflict = {
+      errors: [{
+        message: "conflict on insert of Issue",
+        extensions: { code: "INPUT_ERROR", userPresentableMessage: "Entity Issue with id x already exists." },
+      }],
+      data: null,
+    };
+    const existing = { data: { issue: { id: "iss-1", identifier: "FIR-3", url: "https://linear.app/z/issue/FIR-3" } } };
+    mockTransport([conflict, existing]);
+    const out = await makeLinearGateway(config).createIssue({
+      title: "t", description: "d", labels: [], idempotencyKey: "d".repeat(64),
+    });
+    expect(out.identifier).toBe("FIR-3");
+  });
+
+  it("returns effect_in_doubt when the duplicate cannot be read back", async () => {
+    const conflict = {
+      errors: [{ message: "conflict on insert of Issue", extensions: { code: "INPUT_ERROR" } }],
+      data: null,
+    };
+    mockTransport([conflict, { data: { issue: null } }]);
+    await expect(makeLinearGateway(config).createIssue({
+      title: "t", description: "d", labels: [], idempotencyKey: "e".repeat(64),
+    })).rejects.toThrow(/effect_in_doubt/);
+  });
+});
+
+describe("linear.updateIssue authorization", () => {
+  it("refuses an issue belonging to another team", async () => {
+    mockTransport([{ data: { issue: { id: "iss-9", team: { id: OTHER_TEAM } } } }]);
+    await expect(call(linearTools(), "updateIssue", { issueId: "iss-9", title: "new" }))
+      .rejects.toThrow(/linear_team_denied/);
+  });
+
+  it("refuses an issue that does not exist", async () => {
+    mockTransport([{ data: { issue: null } }]);
+    await expect(call(linearTools(), "updateIssue", { issueId: "nope", title: "new" }))
+      .rejects.toThrow(/invalid_input/);
+  });
+
+  it("checks ownership before it mutates anything", async () => {
+    const sent = mockTransport([{ data: { issue: { id: "i", team: { id: OTHER_TEAM } } } }]);
+    await call(linearTools(), "updateIssue", { issueId: "i", title: "new" }).catch(() => {});
+    expect(sent).toHaveLength(1);                      // the mutation never ran
+    expect(sent[0].document).not.toContain("issueUpdate");
+  });
+
+  it("resolves a state name within the pinned team only", async () => {
+    const sent = mockTransport([
+      { data: { issue: { id: "i", team: { id: TEAM_ID } } } },
+      { data: { team: { states: { nodes: [{ id: "st-1", name: "Done" }] } } } },
+      { data: { issueUpdate: { success: true, issue: { id: "i", url: "https://x" } } } },
+    ]);
+    await call(linearTools(), "updateIssue", { issueId: "i", state: "done" });
+    expect(sent[1].variables.teamId).toBe(TEAM_ID);
+    expect(sent[2].variables.stateId).toBe("st-1");
+  });
+
+  it("names the available states when one is unknown", async () => {
+    mockTransport([
+      { data: { issue: { id: "i", team: { id: TEAM_ID } } } },
+      { data: { team: { states: { nodes: [{ id: "st-1", name: "Done" }] } } } },
+    ]);
+    await expect(call(linearTools(), "updateIssue", { issueId: "i", state: "Shipped" }))
+      .rejects.toThrow(/unknown state.*Done/s);
+  });
+
+  it.each([
+    ["a team", { teamId: OTHER_TEAM }],
+    ["an assignee", { assigneeId: "u1" }],
+    ["a priority", { priority: 1 }],
+  ])("rejects %s on update", async (_label, patch) => {
+    await expect(call(linearTools(), "updateIssue", { issueId: "i", ...patch }))
+      .rejects.toThrow(/invalid_input/);
+  });
+});
+
+describe("linear upstream failures stay safe", () => {
+  const failWith = (status: number) => {
+    vi.stubGlobal("fetch", async () => new Response("{}", { status }));
+  };
+
+  // The split is by one question: could the server have processed this?
+  // Rejected at the door => proven not filed, retry allowed. 5xx => unknown,
+  // so the ledger holds it in doubt rather than risking a second issue.
+  it.each([
+    [401, /capability_unavailable/],
+    [403, /capability_unavailable/],
+    [429, /capability_unavailable/],
+    [500, /effect_in_doubt/],
+  ])("maps HTTP %i to a safe code", async (status, pattern) => {
+    failWith(status);
+    await expect(call(linearTools(), "createIssue", validCreate)).rejects.toThrow(pattern);
+  });
+
+  it("resolves an in-doubt create through findIssue instead of filing twice", async () => {
+    const tools = linearTools();
+    failWith(500);
+    await expect(call(tools, "createIssue", validCreate)).rejects.toThrow(/effect_in_doubt/);
+
+    // The retry finds the issue really was filed, and returns it.
+    mockTransport([{ data: { issue: { id: "iss-1", identifier: "FIR-5", url: "https://x" } } }]);
+    const out = await call(tools, "createIssue", validCreate) as { identifier: string };
+    expect(out.identifier).toBe("FIR-5");
+  });
+
+  it("leaks neither the document nor the credential", async () => {
+    vi.stubGlobal("fetch", async () => new Response("secret body: lin_api_test", { status: 500 }));
+    const err = await call(linearTools(), "createIssue", validCreate)
+      .then(() => { throw new Error("should have failed"); }, (e: Error) => e);
+    expect(err.message).not.toContain("lin_api_test");
+    expect(err.message).not.toContain("issueCreate");
+    expect(err.message).not.toContain("secret body");
+  });
+
+  // A 200 with an unreadable body means the mutation may well have run.
+  it("survives an unreadable response body", async () => {
+    vi.stubGlobal("fetch", async () => new Response("<html>gateway</html>", { status: 200 }));
+    await expect(call(linearTools(), "createIssue", validCreate))
+      .rejects.toThrow(/effect_in_doubt/);
+  });
+
+  // Never reached the server, so nothing was filed and a retry is safe.
+  it("survives the network being gone", async () => {
+    vi.stubGlobal("fetch", async () => { throw new TypeError("network error"); });
+    await expect(call(linearTools(), "createIssue", validCreate))
+      .rejects.toThrow(/capability_unavailable/);
+  });
+});
+
+describe("linear carries no approval annotation", () => {
+  it("declares createIssue and updateIssue with no approval flag", () => {
+    const tools = linearTools();
+    expect(Object.keys(tools).sort()).toEqual(["createIssue", "updateIssue"]);
+    for (const tool of Object.values(tools)) {
+      expect(tool).not.toHaveProperty("needsApproval");
+    }
+  });
+});
