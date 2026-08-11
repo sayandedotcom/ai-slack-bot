@@ -440,6 +440,17 @@ https://firefighter.<subdomain>.workers.dev/slack/events
 
 Slack sends a `url_verification` challenge immediately. It must go green. If it does not, the signing secret in production does not match the app — check `wrangler secret list` and that the **rotated** secret was used.
 
+**Check the "Enable Events" master toggle first.** On 2026-08-11 this cost about an hour: the toggle was **off**, while every downstream setting was correct — verified Request URL, `message.channels` subscribed, socket mode off, scopes granted, bot in channel. Slack dispatches nothing at all when it is off, and *nothing* in `apps.manifest.export` reveals its state, so the config reads as perfect while being inert. Likely cause: the app was created with the placeholder URL `https://my.app.com/slack/action-endpoint`, Slack failed delivery against it and auto-disabled events. **Reinstalling does not clear this** — it is app config, not installation state; two reinstalls changed nothing.
+
+Diagnostic order that would have found it in minutes:
+
+1. `wrangler tail`, and **always send a control request** (`curl .../api/health`) inside the window. Without one you cannot tell "no delivery" from "tail never started" — a transient `Authentication error [code: 10000]` on the tails API silently voided one of our test windows.
+2. Post as the bot via `chat.postMessage` rather than by hand. It removes the did-they-post-in-time variable entirely.
+3. Bisect public vs private channel. Private channels emit `message.groups`, **not** `message.channels` — `conversations.info` returning `needed: groups:read` is how you identify a private channel without `channels:read`.
+4. Only then suspect the URL, scopes, or installation.
+
+`#test-firedrill` is **private**, so `message.groups` is subscribed alongside `message.channels`. This contradicts Step 3 below; `groups:history` was already granted, so it cost no new scope. Revisit if the reference customer channels turn out to be public.
+
 - [ ] **Step 3: Subscribe to the bot event**
 
 Subscribe to `message.channels`. Do **not** add `message.im` or `message.groups` — channels only, and the app should not ask for scopes it will not use.
