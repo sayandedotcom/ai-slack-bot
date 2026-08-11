@@ -37,7 +37,10 @@
     "LANGSMITH_PROJECT_NAME": "tweakleaf",
     // Supabase PostgREST origin (Task 9). Fixed server-side so the reader can
     // never be pointed at another project. Credential is SUPABASE_KEY.
-    "SUPABASE_URL": "https://uahmoigkzsuwhheohitz.supabase.co"
+    "SUPABASE_URL": "https://uahmoigkzsuwhheohitz.supabase.co",
+    // Where a published artifact is fetched from. The Worker's own origin, not
+    // an R2 public bucket URL -- see the r2_buckets comment below.
+    "ARTIFACTS_BASE_URL": "https://firefighter.sayandeten.workers.dev/api/artifacts"
   },
   "assets": {
     "directory": "./public",
@@ -47,6 +50,18 @@
     // and explicitly falls through to ASSETS for everything else.
     "run_worker_first": true
   },
+  // Artifact storage for files.publish (Phase 09 Task 12). PRIVATE: the bucket
+  // has no public origin, and objects are served only through the Worker's own
+  // /api/artifacts/ route, behind whatever guards the app. Customer and
+  // production debug output must not become world-readable by default.
+  //
+  // Phase 19's proof recordings, if they need public links, get their own
+  // prefix or bucket and a deliberate decision -- not this one widened.
+  //
+  // Access is a binding, never S3 REST keys, so there is no credential here.
+  "r2_buckets": [
+    { "binding": "ARTIFACTS", "bucket_name": "firefighter-artifacts" }
+  ],
   // Worker Loader (Dynamic Workers, open beta since 2026-03-24). Unlike most
   // bindings this points at no external resource -- it just exposes the loader
   // API as env.LOADER. Shape verified against this repo's

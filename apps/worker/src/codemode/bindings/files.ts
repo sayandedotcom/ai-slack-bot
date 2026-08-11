@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
+import { runEffect } from "../effects";
 import { auditedCapability, type BindingContext } from "../registry";
 
 /**
@@ -62,12 +63,25 @@ export function makeFilesTools(ctx: BindingContext): ToolDescriptors {
         sha256: z.string(),
       }),
       run: async (input) =>
-        ctx.deps.files.publish({
-          bytes: input.bytes,
-          contentType: input.contentType,
-          filename: input.filename,
-          idempotencyKey: ctx.scope.turnId,
-        }),
+        // Through the ledger so the object key IS the effect key: a retry
+        // writes the same object and returns the same URL rather than
+        // scattering near-duplicate artifacts.
+        runEffect(
+          { db: ctx.deps.db, clock: ctx.deps.clock },
+          ctx.scope,
+          "files",
+          "publish",
+          { contentType: input.contentType, filename: input.filename, size: input.bytes.byteLength },
+          {
+            execute: (idempotencyKey) =>
+              ctx.deps.files.publish({
+                bytes: input.bytes,
+                contentType: input.contentType,
+                filename: input.filename,
+                idempotencyKey,
+              }),
+          },
+        ),
     }),
   };
 }

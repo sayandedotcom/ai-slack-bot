@@ -400,6 +400,45 @@ recreated anyway.
 
 ---
 
+## Task 12 — 2026-08-12
+
+### Decision D3: artifacts are PRIVATE
+
+The R2 bucket `firefighter-artifacts` has no public origin. Objects are served
+only through the Worker's own `/api/artifacts/` path, which sits behind whatever
+guards the app — confirmed live: `https://firefighter.sayandeten.workers.dev`
+answers `302` to Cloudflare Access.
+
+Rationale: these artifacts are customer and production debug output. If one
+policy cannot serve both that and Phase 19's proof recordings, the recordings
+get their own prefix and a deliberate decision — this one is not widened.
+
+Objects are stored `Content-Disposition: attachment`, never inline. A file
+served from the app's own origin that renders in the browser is stored XSS, and
+`image/svg+xml` is excluded from the allowlist for the same reason.
+
+### The 5 MiB cap is measured, not assumed
+
+Task 12 Step 6 required timing a round trip before trusting the cap, because the
+codec base64-encodes bytes into a JSON string that crosses `ToolDispatcher`
+twice. Measured through a real Dynamic Worker in the vitest runtime:
+
+| Payload | Round trip |
+| --- | --- |
+| 256 KiB | 19 ms |
+| 1 MiB | 39 ms |
+| **5 MiB** | **190 ms** |
+
+Linear at roughly 38 ms/MiB, with no RPC size error at the cap. **5 MiB stands.**
+It is not raised: Phase 19's large recordings have a trusted non-Code-Mode path
+to R2 precisely so nobody is tempted.
+
+Also confirmed end to end, through a real isolate rather than a direct provider
+call: a `Uint8Array` written in sandbox code arrives host-side as a real
+`Uint8Array` with its bytes intact, including high values (250, 255).
+
+---
+
 ### `generateTypes` cannot render an index signature
 
 `z.record`, `z.looseObject`, and `z.object().catchall()` all emit `{}`. So
