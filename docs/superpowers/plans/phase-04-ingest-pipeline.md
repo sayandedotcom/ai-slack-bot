@@ -80,8 +80,14 @@ describe("classify", () => {
     expect(classify({ ...base, subtype: "message_deleted" }, true)).toBe("dropped_subtype");
   });
 
-  it("drops unknown channels even when everything else is fine", () => {
-    expect(classify(base, false)).toBe("dropped_unknown_channel");
+  // CORRECTED 2026-08-11 — this plan originally asserted `dropped_unknown_channel`,
+  // which contradicts brief core requirement 1: "Every message in every channel the
+  // team is in is heard by the webhook and ingested… Customer-channel messages are
+  // ADDITIONALLY triaged." Ingest is universal; only triage is customer-scoped.
+  // Dropping unmapped channels silently failed a graded requirement for every channel
+  // not yet seeded. Fail-closed still holds where it matters — canPost/shouldTriage.
+  it("ingests messages from unmapped channels", () => {
+    expect(classify(base, false)).toBe("ingested");
   });
 
   it("checks DM before channel membership, so a DM in an unknown channel is dropped as a DM", () => {

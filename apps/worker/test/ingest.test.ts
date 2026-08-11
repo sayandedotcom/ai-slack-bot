@@ -102,7 +102,7 @@ describe("handleIngestBatch", () => {
     expect(msgs?.n).toBe(0);
   });
 
-  it("drops an unknown channel", async () => {
+  it("ingests an unmapped channel with a null customer_slug", async () => {
     const unknown = ev({ event_id: "Ev_unknown" });
     unknown.event.channel = "C_NOT_MAPPED";
     await handleIngestBatch(batchOf([unknown]), env);
@@ -110,7 +110,15 @@ describe("handleIngestBatch", () => {
     const seen = await env.DB.prepare("SELECT outcome FROM events_seen WHERE event_id = ?")
       .bind("Ev_unknown")
       .first<{ outcome: string }>();
-    expect(seen?.outcome).toBe("dropped_unknown_channel");
+    expect(seen?.outcome).toBe("ingested");
+
+    // Heard and stored, but attributed to no customer — so shouldTriage() is
+    // false and canPost() is false. Core requirement 1 wants the message kept.
+    const msg = await env.DB.prepare("SELECT channel_id, customer_slug FROM messages WHERE event_id = ?")
+      .bind("Ev_unknown")
+      .first<{ channel_id: string; customer_slug: string | null }>();
+    expect(msg?.channel_id).toBe("C_NOT_MAPPED");
+    expect(msg?.customer_slug).toBeNull();
   });
 
   it("stores thread_ts when present", async () => {

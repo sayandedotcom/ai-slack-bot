@@ -21,7 +21,9 @@
 | `observe` | yes | yes | only on manual shadow-run | **throws `ChannelReadOnly`** |
 | `live` | yes | yes | yes | sends as on-duty engineer |
 | `internal` | yes | no | no | bot nudges only |
-| *(unmapped)* | yes | no | no | **throws** — fail closed |
+| *(unmapped)* | **yes** | no | no | **throws** — fail closed |
+
+The `yes` in the unmapped row is load-bearing and was violated by Phase 04 until 2026-08-11: brief core requirement 1 makes ingest universal across every channel the team is in, and restricts only *triage* to customer channels. An unmapped channel is heard and stored with a null `customer_slug`; that null is what makes `shouldTriage` and `canPost` false.
 
 Reference customer channels are `observe`. Own test channels and `#test-firedrill` are `live`. `#eng-firefighter` is `internal`. Anything unmapped fails closed.
 

@@ -36,12 +36,21 @@ describe("classify", () => {
     expect(classify({ ...base, subtype: "message_deleted" }, true)).toBe("dropped_subtype");
   });
 
-  it("drops unknown channels even when everything else is fine", () => {
-    expect(classify(base, false)).toBe("dropped_unknown_channel");
+  // Core requirement 1: "Every message in every channel the team is in is heard
+  // by the webhook and ingested." Only TRIAGE is restricted to customer
+  // channels — that gate is shouldTriage(), not this one. An unmapped channel
+  // is still ingested; it is simply never postable and never triaged.
+  it("ingests messages from unmapped channels", () => {
+    expect(classify(base, false)).toBe("ingested");
   });
 
-  it("checks DM before channel membership, so a DM in an unknown channel is dropped as a DM", () => {
+  it("checks DM before channel membership, so a DM in an unmapped channel is still dropped as a DM", () => {
     expect(classify({ ...base, channel_type: "im" }, false)).toBe("dropped_dm");
+  });
+
+  it("still drops bots and noise in unmapped channels", () => {
+    expect(classify({ ...base, bot_id: "B1" }, false)).toBe("dropped_bot");
+    expect(classify({ ...base, subtype: "channel_join" }, false)).toBe("dropped_subtype");
   });
 
   it("ingests a thread reply", () => {
