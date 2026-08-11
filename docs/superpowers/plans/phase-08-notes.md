@@ -322,4 +322,60 @@ and still needs its own `RUNS` entry.
 
 ## Task 8 results
 
-_Filled in at the end of the phase._
+### Automated gate — passing
+
+```
+pnpm test                        23 test files, 305 tests, 0 failures
+pnpm typecheck                   clean
+pnpm exec wrangler deploy --dry-run   env.RUNS (RunDO) resolves
+```
+
+Baseline at the start of the phase was 15 files / 82 tests, so Phase 08 added
+8 files and 223 tests. No pre-existing test was weakened to accommodate the
+new code; the only edit to an existing suite was renaming the `hasLiveRun`
+seam to `routeToOwnedRun` in `triage-consumer.test.ts`, in the same commit
+that changed it.
+
+No test depends on a `.dev.vars` secret value or reaches Zep or Anthropic.
+
+### Structural criteria — verified by grep, not by assertion
+
+| Criterion | Evidence |
+|---|---|
+| One `idFromName` call site | `src/run/keys.ts:90`, and nowhere else in `src/` |
+| No ticket type in the run layer | `bug\|feature\|question` appears twice in `src/run/`, both in comments explaining its absence. No `type`/`category` field on any run, turn or event; the only `type` is the stream-event discriminant (`turn`/`tool_call`/`status`) and the socket message kind |
+| No timers, intervals or alarms | `setInterval\|setTimeout\|setAlarm` — no matches in `src/run/` |
+| No `server.accept()` and no socket `addEventListener` | Both appear only in comments warning against them |
+
+### Hibernation evidence
+
+The automated proof is `evictDurableObject()`, used in four places:
+
+- `run-session.test.ts` — state, turns, tool calls and cursor identical across
+  eviction, and `seq` continues rather than restarting;
+- `run-do.test.ts` — same via the RPC surface, plus the run's storage alarm is
+  asserted `null` so nothing holds the object open;
+- `run-ws-live.test.ts` — an attached socket hibernated with
+  `{ webSockets: "hibernate" }` still receives a later RPC append, still
+  accepts a steer (exercising `webSocketMessage` after constructor re-entry),
+  and keeps its per-socket cursor so nothing is resent.
+
+### Still outstanding — needs a deploy and a human
+
+These four steps cannot be done from the test suite. They are the only parts
+of Phase 08 not yet proved:
+
+1. **Two tabs against local `wrangler dev`.** The automated two-tab test covers
+   the same behaviour through the DO stub, but not through the real `/ws/run/:id`
+   route and a browser.
+2. **A real Slack thread in `#test-firedrill`** — post an actionable root
+   message, confirm one run row and one triage opening turn, reply, confirm the
+   reply enters the same run with no second triage decision.
+3. **Deployed Access behaviour** — an authenticated dashboard origin upgrades
+   the socket; an unauthenticated `/ws/run/:id` is blocked; `/slack/events`
+   still bypasses Access and passes signature verification.
+4. **Deployed observability** — confirm an idle connected run is not kept
+   active.
+
+Deploying is the owner's call, and step 2 posts into a real Slack workspace, so
+neither was done unprompted.
