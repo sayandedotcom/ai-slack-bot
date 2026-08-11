@@ -252,7 +252,25 @@ regenerating on this machine added `ANTHROPIC_API_KEY` to
 `test/env.d.ts` declares secrets by hand. Expect noise in the diff whenever
 Task 4 regenerates, and only commit the binding change.
 
-**8. `wrangler types` infers the DO class generic for you.**
+**8. `Rpc` is a global ambient namespace, not a `cloudflare:workers` export.**
+
+`runStubForKey` is generic over the DO class so `keys.ts` never imports the
+Durable Object implementation. The constraint needs `Rpc.DurableObjectBranded`,
+and the natural spelling — copied from how
+`@cloudflare/vitest-pool-workers/types/cloudflare-test.d.ts` writes it —
+
+```ts
+import type * as Rpc from "cloudflare:workers";   // wrong in app code
+```
+
+fails with `Namespace 'CloudflareWorkersModule' has no exported member
+'DurableObjectBranded'`. `Rpc` is declared globally at
+`worker-configuration.d.ts:12945`; use it with no import at all.
+
+Caught by `pnpm typecheck` only — the whole test suite passed with the broken
+import, because vitest strips types. Typecheck is not optional on this phase.
+
+**9. `wrangler types` infers the DO class generic for you.**
 
 Adding the binding produced
 `RUNS: DurableObjectNamespace<import("./src/index").SpikeDO>` in the generated
