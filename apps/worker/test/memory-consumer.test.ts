@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleMemoryBatch, type MemoryJob } from "../src/memory/consumer";
+import { backfillMemory } from "../src/api/backfill";
 import { FakeMemoryStore } from "./helpers/fake-memory";
 
 function batchOf(eventIds: string[]) {
@@ -89,5 +90,22 @@ describe("handleMemoryBatch", () => {
 
     expect(store.episodes).toHaveLength(0);
     expect(acked).toEqual(["Ev9"]);
+  });
+});
+
+describe("backfillMemory", () => {
+  it("enqueues only unmapped messages, capped", async () => {
+    await seedMessage("EvA", "C1", "one");
+    await seedMessage("EvB", "C1", "two");
+    await env.DB.prepare(
+      "INSERT INTO zep_episodes (episode_uuid, event_id, graph_id, created_at) VALUES ('ep-a', 'EvA', 'customer:pulsefit', 1)",
+    ).run();
+    const sent: string[] = [];
+    const queue = { send: async (job: MemoryJob) => void sent.push(job.event_id) } as unknown as Queue<MemoryJob>;
+
+    const enqueued = await backfillMemory(env.DB, queue, 100);
+
+    expect(enqueued).toBe(1);
+    expect(sent).toEqual(["EvB"]);
   });
 });

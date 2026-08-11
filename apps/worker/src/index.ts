@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
+import { backfillApi } from "./api/backfill";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { ZepMemory } from "./memory/zep";
@@ -23,6 +24,7 @@ app.get("/api/health", (c) => c.json({ ok: true }));
 // Must stay above the catch-all below, which would otherwise swallow them.
 app.route("/slack", slackEvents);
 app.route("/api", countersApi);
+app.route("/api", backfillApi);
 
 // The Worker runs first on every request; anything unmatched falls through to
 // the static asset bundle. Explicit, rather than relying on route-ordering
