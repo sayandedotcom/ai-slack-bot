@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
 import { backfillApi } from "./api/backfill";
+import { runsApi, runsWs } from "./api/runs";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { ZepMemory } from "./memory/zep";
@@ -36,6 +37,10 @@ app.get("/api/health", (c) => c.json({ ok: true }));
 app.route("/slack", slackEvents);
 app.route("/api", countersApi);
 app.route("/api", backfillApi);
+app.route("/api", runsApi);
+// Not JSON, so it is mounted outside /api — but still above the asset
+// catch-all, and still behind the same Access application as the dashboard.
+app.route("/ws", runsWs);
 
 // The Worker runs first on every request; anything unmatched falls through to
 // the static asset bundle. Explicit, rather than relying on route-ordering
