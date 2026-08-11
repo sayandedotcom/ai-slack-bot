@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { slackEvents } from "./slack/events";
+import { countersApi } from "./api/counters";
 import { handleIngestBatch } from "./ingest/consumer";
 import type { QueuedEvent } from "./slack/types";
 
@@ -15,8 +16,9 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.get("/api/health", (c) => c.json({ ok: true }));
 
-// Must stay above the catch-all below, which would otherwise swallow it.
+// Must stay above the catch-all below, which would otherwise swallow them.
 app.route("/slack", slackEvents);
+app.route("/api", countersApi);
 
 // The Worker runs first on every request; anything unmatched falls through to
 // the static asset bundle. Explicit, rather than relying on route-ordering

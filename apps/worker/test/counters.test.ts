@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getCounters } from "../src/db/counters";
 
@@ -44,5 +44,15 @@ describe("getCounters", () => {
   it("returns all zeros for an empty window without throwing", async () => {
     const c = await getCounters(env.DB, NOW + DAY);
     expect(c).toEqual({ heard: 0, ingested: 0, triaged: 0, escalated: 0 });
+  });
+});
+
+describe("GET /api/counters", () => {
+  it("serves the counters as json", async () => {
+    const res = await SELF.fetch("https://example.com/api/counters");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { counters: Record<string, number>; since: number };
+    expect(Object.keys(body.counters).sort()).toEqual(["escalated", "heard", "ingested", "triaged"]);
+    expect(typeof body.since).toBe("number");
   });
 });
