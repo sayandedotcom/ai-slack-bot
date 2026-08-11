@@ -65,21 +65,35 @@ export type TraceRef = {
 };
 
 /**
- * Flattened on purpose. `JsonValue` bottoms out after four levels, so a freely
- * nested trace tree cannot be stored by `RunDO.appendToolCallUpdate`. Steps
- * carry their depth as a number instead of being nested.
+ * A FLAT node list with parent links, never a nested tree.
+ *
+ * `JsonValue` bottoms out after four levels, so a freely nested tree cannot
+ * survive `RunDO.appendToolCallUpdate({ output })` — and that failure is a
+ * typecheck error no test can observe, because vitest strips types. Flat is
+ * also cheaper to truncate and reconstructible in three lines of model code.
  */
+export type TraceNode = {
+  id: string;
+  parentId: string | null;
+  name: string;
+  runType: string;
+  status: string;
+  startedAt: string;
+  durationMs: number;
+  /** Bounded preview, not the full prompt. */
+  inputPreview: string;
+  outputPreview: string;
+  error: string | null;
+};
+
 export type Trace = {
   traceId: string;
   name: string;
   startedAt: string;
   status: string;
-  steps: Array<{
-    name: string;
-    depth: number;
-    status: string;
-    durationMs: number;
-  }>;
+  nodes: TraceNode[];
+  /** True when nodes were dropped to fit the caps. */
+  truncated: boolean;
 };
 
 export type LogLine = {

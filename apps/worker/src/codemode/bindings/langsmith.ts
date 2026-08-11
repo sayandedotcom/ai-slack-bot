@@ -10,24 +10,32 @@ const traceRef = z.strictObject({
 });
 
 /**
- * Steps are a flat list carrying their own depth rather than a nested tree.
- * `JsonValue` bottoms out after four levels, so a freely nested tree cannot be
- * stored by `RunDO.appendToolCallUpdate` — and that failure is a typecheck
- * error the test suite cannot see, because vitest strips types.
+ * A flat node list with parent links, never a nested tree. `JsonValue` bottoms
+ * out after four levels, so a nested tree cannot survive
+ * `RunDO.appendToolCallUpdate` — and that failure is a typecheck error the test
+ * suite cannot see, because vitest strips types. Model code rebuilds the tree
+ * from parentId in three lines if it wants one.
  */
 const trace = z.strictObject({
   traceId: z.string(),
   name: z.string(),
   startedAt: z.string(),
   status: z.string(),
-  steps: z.array(
+  nodes: z.array(
     z.strictObject({
+      id: z.string(),
+      parentId: z.string().nullable(),
       name: z.string(),
-      depth: z.number(),
+      runType: z.string(),
       status: z.string(),
+      startedAt: z.string(),
       durationMs: z.number(),
+      inputPreview: z.string(),
+      outputPreview: z.string(),
+      error: z.string().nullable(),
     }),
   ),
+  truncated: z.boolean(),
 });
 
 /**
@@ -39,7 +47,7 @@ export function makeLangSmithTools(ctx: BindingContext): ToolDescriptors {
   return {
     trace: auditedCapability(ctx, "langsmith", "trace", {
       description:
-        "Fetch one recorded run by its identifier, with its steps flattened into a list.",
+        "Fetch one recorded run by its identifier. Steps come back as a flat list; rebuild the tree from parentId if you need it.",
       input: z.strictObject({ traceId: z.string().min(1).max(200) }),
       output: trace,
       run: async (input) => ctx.deps.langsmith.trace(input.traceId),

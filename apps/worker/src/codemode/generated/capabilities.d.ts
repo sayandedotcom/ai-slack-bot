@@ -172,12 +172,19 @@ type TraceOutput = {
     name: string;
     startedAt: string;
     status: string;
-    steps: {
+    nodes: {
+        id: string;
+        parentId: string | null;
         name: string;
-        depth: number;
+        runType: string;
         status: string;
+        startedAt: string;
         durationMs: number;
+        inputPreview: string;
+        outputPreview: string;
+        error: string | null;
     }[];
+    truncated: boolean;
 }
 type SearchTracesInput = {
     query?: string;
@@ -193,7 +200,7 @@ type SearchTracesOutput = {
 
 declare const langsmith: {
 	/**
-	 * Fetch one recorded run by its identifier, with its steps flattened into a list.
+	 * Fetch one recorded run by its identifier. Steps come back as a flat list; rebuild the tree from parentId if you need it.
 	 */
 	trace: (input: TraceInput) => Promise<TraceOutput>;
 

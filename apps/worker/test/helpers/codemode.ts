@@ -98,7 +98,7 @@ export function fakeDeps(): CapabilityDependencies {
     },
     langsmith: {
       async trace() {
-        return { traceId: "t", name: "n", startedAt: "2026-08-12T00:00:00Z", status: "ok", steps: [] };
+        return { traceId: "t", name: "n", startedAt: "2026-08-12T00:00:00Z", status: "ok", nodes: [], truncated: false };
       },
       async searchTraces() { return []; },
     },
