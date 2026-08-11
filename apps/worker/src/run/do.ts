@@ -7,6 +7,7 @@ import type {
   RunTurnInput,
   ToolCallUpdateInput,
 } from "./protocol";
+import { parseClientMessage } from "./protocol";
 import { setRunStatus, touchRun } from "./repository";
 import {
   appendToolCallUpdate,
@@ -71,6 +72,69 @@ export class RunDO extends DurableObject<Env> {
     // Synchronous only. This runs again on every wake, so it must be cheap and
     // must not await.
     ensureSchema(ctx.storage);
+
+    // Answered by the runtime without waking a hibernating object, so the UI
+    // can hold a liveness check that costs nothing. setWebSocketAutoResponse is
+    // the method; WebSocketRequestResponsePair is only the payload.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+  }
+
+  /**
+   * Hibernation delivers socket messages here, as a class handler. An ordinary
+   * `addEventListener("message", ...)` on the server socket works right up
+   * until the object hibernates, at which point the listener is gone and
+   * messages route to a handler that was never written.
+   */
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const parsed = parseClientMessage(message);
+    if (!parsed.ok) {
+      // A malformed frame is that socket's problem. It must not crash the
+      // object or broadcast anything to the other tabs.
+      this.#sendError(ws, parsed.code, parsed.message);
+      return;
+    }
+
+    const { requestId, content } = parsed.message;
+    try {
+      // Steering a parked or finished run resumes it. Every status reaches
+      // `live` legally, so this needs no special-casing per source status.
+      const current = readState(this.ctx.storage)?.status;
+      if (current && current !== "live") await this.setStatus("live");
+
+      // The server assigns role and source. The parser has already refused any
+      // client-supplied value, so a browser cannot pose as the customer or as
+      // an approval decision.
+      const result = await this.appendTurn({
+        id: `steer:${requestId}`,
+        role: "user",
+        source: "human_steer",
+        content,
+      });
+
+      const ack: RunServerMessage = { type: "ack", requestId, seq: result.event.seq };
+      ws.send(JSON.stringify(ack));
+    } catch (error) {
+      this.#sendError(
+        ws,
+        "steer_failed",
+        error instanceof Error ? error.message : "could not commit the turn",
+        requestId,
+      );
+    }
+  }
+
+  #sendError(ws: WebSocket, code: string, message: string, requestId?: string): void {
+    const frame: RunServerMessage = {
+      type: "error",
+      code,
+      message,
+      ...(requestId ? { requestId } : {}),
+    };
+    try {
+      ws.send(JSON.stringify(frame));
+    } catch {
+      // Socket already gone; nothing to report it to.
+    }
   }
 
   /**
