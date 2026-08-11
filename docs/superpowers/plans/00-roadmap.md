@@ -4,6 +4,21 @@
 
 **Source spec:** `docs/superpowers/specs/2026-08-10-firefighter-agent-design.md`
 
+## Repos and access — the canonical list
+
+Two different GitHub repos are in play and confusing them wastes real time. **This is the only place they are defined; everything else points here.**
+
+| Repo | What it is | Role in the build |
+|---|---|---|
+| **[`Zellify/firefighter`](https://github.com/Zellify/firefighter)** | **This repo.** The deliverable. | Everything we write. Already `origin` locally. |
+| **[`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild)** | **The product monorepo.** Zellify's actual codebase — what customers use and what bugs live in. | The agent clones this in the sandbox, fixes bugs in it, and opens PRs **against its `staging` branch**. Read its root `AGENTS.md` first — the brief says so, and it documents local dev setup and PR conventions. |
+
+Private, so unauthenticated tooling gets a 404 on both. Confirm your invite to `web2app-rebuild` landed by opening it in a browser while signed in.
+
+**What depends on `web2app-rebuild`:** Phases 18, 19, 20 only — the sandbox, the ship loop, and the PR writes. Phases 00–17 need nothing from it. That separation is deliberate: if the invite is slow, the build runs out of order rather than stalling.
+
+**Reference repos** (read for prior art, not dependencies) — see `docs/inspired-from-ronit.md`: [`rtpa25/agent-os`](https://github.com/rtpa25/agent-os), [`rtpa25/self-syncing-agent`](https://github.com/rtpa25/self-syncing-agent).
+
 **Goal:** Twenty-four phases from empty repo to a system that hears every Slack message the team hears, wakes one generic agent on the ones that matter, lets it fix bugs on a cloud machine and open PRs under the on-duty engineer's name, and gates everything committal behind one dashboard click.
 
 **Architecture:** One Worker, one origin. Slack events → queue → D1 (system of record) + Zep (recall). Triage wakes a thread-scoped Durable Object running one agent with one tool: write TypeScript. That code executes in a network-isolated Worker Loader isolate whose only reach is RPC bindings; when it needs a shell it boots a Cloudflare Sandbox that holds no write credentials and emits diffs, which the Worker turns into PRs.
@@ -46,6 +61,49 @@ Three surfaces have training data thin enough that a coding agent will confident
 | **Zep V3** | 06, 07, 21 | V2's "groups" became V3 "graphs"; the Feb 2026 deprecation wave removed `min_score` from `graph.search()`. V2-shaped code looks correct and fails. |
 
 Every invented API found during a phase goes into that phase's notes. The README's AI-tool notes are a graded deliverable, and this is the raw material.
+
+---
+
+## Docs / API MCP servers — attach per phase
+
+**This is dev-time tooling for the engineer, not the product's tool surface.** The agent being built deliberately does **not** reach its integrations over MCP — it writes TypeScript against generated typed bindings (Code Mode, decision D1). These two uses of "MCP" must not get confused six days from now.
+
+The point of attaching a docs or API MCP server during a phase is to stop the coding agent writing plausible-looking APIs from memory. Every row below is a place where that failure is likely and expensive.
+
+Fill in the **Server** column as you find them.
+
+Cloudflare's own MCP servers and skills are already available in this workspace and cover most of the high-risk rows — noted below. The rest are yours to find.
+
+| Phase | What needs live docs / API access | Why it bites | Server |
+|---|---|---|---|
+| **00** | Cloudflare Workers — Worker Loader, `WorkerLoaderWorkerCode`, `ctx.exports`, `RpcTarget` | Beta surface. Partly de-risked by `inspired-from-ronit.md`, but the docs are the tiebreaker when his code and the types disagree. | `cloudflare-docs` · skill `cloudflare:workers-best-practices` |
+| **00** | Cloudflare Sandbox / Containers — SDK methods, instance types, `interceptHttps`, `outboundByHost`, `tunnels` | Newest product in the stack; the API reference and the tutorials already contradict each other. **Decide `@cloudflare/sandbox` stable vs `@next` (SDK 1.0 preview) in Task 1** — there is a skill for each, and picking wrong means reading the wrong docs all week. | skills `cloudflare:sandbox-stable` / `cloudflare:sandbox-next` |
+| **01** | Wrangler config schema — D1, Queues, Assets, migrations | Config keys move between wrangler minors and fail late, at deploy. | skill `cloudflare:wrangler` |
+| **01** | `@cloudflare/vitest-pool-workers` — `applyD1Migrations`, `readD1Migrations`, `SELF`, `fetchMock` | Exports genuinely move between minor versions. Named in Phase 01 Task 5 Step 4. | `cloudflare-docs` |
+| **02** | Slack Web API — Events API envelopes, signature scheme, `message.channels`, subtypes | Subtype list is long and undocumented in one place; getting it wrong silently ingests noise. | |
+| **04** | Slack Web API — `chat.getPermalink` | Small surface; low risk. | |
+| **05** | Cloudflare Access — self-hosted apps, policy ordering, bypass on paths, `Cf-Access-Jwt-Assertion` + JWKS | Policy **ordering** is the trap. A misordered bypass kills ingest silently. | skill `cloudflare:cloudflare-one` |
+| **06** | **Zep V3** — `graph.create` / `graph.add` / `graph.search`, episode metadata | Highest-risk docs dependency in the build. V2→V3 renamed groups→graphs; the Feb 2026 wave removed params. V2-shaped code looks right and fails. | |
+| **07** | Anthropic Messages API — structured output, Haiku 4.5 model id, token/cost fields | Model ids and cost accounting; cost is a graded deliverable. | |
+| **07, 10** | Cloudflare AI Gateway — routing, cost/observability | Adopted late (from `agent-os`); no plan detail written yet. | |
+| **08** | Durable Objects — WebSocket **hibernation** API, DO SQLite, `idFromName` | Hibernation handlers differ from plain WebSocket handling; getting it wrong burns duration cost silently. | skills `cloudflare:durable-objects`, `cloudflare:agents-sdk` |
+| **09** | Vercel AI SDK + `@ai-sdk/anthropic` — tool loop, streaming | Adopted late; the agent loop's whole shape depends on it. | |
+| **09** | Same Cloudflare Worker Loader surface as Phase 00, now in anger | | |
+| **10** | Anthropic — Fable 5 model id, streaming, prompt caching | Prompt caching matters against the $500 ceiling once voice few-shots and memory recall bloat the system prompt. | |
+| **12** | Slack OAuth v2 — `authed_user` scopes, install flow | | |
+| **12** | GitHub OAuth / GitHub Apps — user-to-server tokens | Two similar flows with different token semantics; easy to build the wrong one. | |
+| **13** | Slack Block Kit — URL buttons, `conversations.open`, `im:write` | Block Kit JSON is fiddly and fails at runtime, not build time. | |
+| **17, 09** | Supabase — read-only role, query surface | | |
+| **09** | LangSmith — trace fetch / search API | | |
+| **09** | Better Stack — logs query + monitors API | | |
+| **18** | **`Zellify/web2app-rebuild` root `AGENTS.md`** — local dev setup, PR conventions | Not an MCP server, but the same class of dependency: the ship loop has to follow conventions we cannot guess. The brief says read it first. | *(GitHub MCP, or just clone it)* |
+| **19** | Playwright — `recordVideo`, browser contexts, headless in container | | |
+| **20** | GitHub REST — blobs → tree → commit → ref → PR | Six chained calls with easy-to-get-wrong SHA plumbing. Worth live docs. | |
+| **20** | Linear API — issue create/update, team scoping | | |
+
+**Still to find:** Slack (02, 04, 12, 13), **Zep (06)**, Anthropic (07, 10), GitHub (12, 20), Linear (20), Supabase / LangSmith / Better Stack (09), Playwright (19).
+
+**If you only chase two:** **Zep** and **GitHub**. Cloudflare is already covered above, and those two are where an invented API costs the most hours — Zep because V2-shaped code compiles and fails, GitHub because the blobs→tree→commit→ref→PR chain has SHA plumbing that is easy to get subtly wrong.
 
 ---
 
@@ -98,7 +156,7 @@ Every invented API found during a phase goes into that phase's notes. The README
   └────────────────────────────────────┘
 ```
 
-**The critical insight in this ordering:** phases 01–17 are entirely unblocked by the monorepo invite. Only 18–20 need it. If Ronit is slow, the build does not stall — it runs out of order.
+**The critical insight in this ordering:** phases 01–17 are entirely unblocked by `Zellify/web2app-rebuild`. Only 18–20 need it. If the invite is slow, the build does not stall — it runs out of order.
 
 ---
 
@@ -126,7 +184,7 @@ Every invented API found during a phase goes into that phase's notes. The README
 | 17 | Chat page + citations | below | 06, 08, 14 | 5 |
 | 18 | Sandbox Tier 2 | below | 00·T1, **monorepo** | 5 |
 | 19 | Ship loop + proof capture | below | 18 | 6 |
-| 20 | PR + Linear writes | below | 19 | 6 |
+| 20 | PR + Linear writes → `web2app-rebuild` `staging` | below | 19 | 6 |
 | 21 | Voice, eval harness, shadow mode | below | 10, 07 | 6 |
 | 22 | Handoff summary + states polish | below | 15, 16, 17 | 7 |
 | 23 | Drill dry-run, README, Loom | below | all | 7 |
@@ -391,13 +449,13 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Goal:** The agent boots its own machine.
 
-**Depends on:** Phase 00 Task 1 **GO** and **the monorepo invite** · **Day 5**
+**Depends on:** Phase 00 Task 1 **GO** and access to **[`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild)** · **Day 5**
 
 **Files:** `sandbox/Dockerfile`, `src/codemode/bindings/sandbox.ts`, `src/sandbox/lifecycle.ts`, `test/sandbox-*.test.ts`
 
 **Tasks:**
-1. **Read the monorepo's root `AGENTS.md` first** — the brief says so, and local dev setup is documented there.
-2. **Baked image:** repo pre-cloned, pnpm store warm, Chromium preinstalled. This is the difference between a one-minute and an eight-minute repro, and the drill is timed by a human watching a thread.
+1. **Read `web2app-rebuild`'s root `AGENTS.md` first** — the brief says so, and local dev setup is documented there. Everything in this phase and the next two depends on conventions written down in that file.
+2. **Baked image:** `web2app-rebuild` pre-cloned, pnpm store warm, Chromium preinstalled. This is the difference between a one-minute and an eight-minute repro, and the drill is timed by a human watching a thread.
 3. **`sandbox` binding** exposing `boot`, `exec`, `read`, `write`, `preview`, `diff` — the Phase 09 surface.
 4. **Lifecycle tied to the run**, with idle teardown so a forgotten container does not eat the budget.
 5. **Private clone without a container-held write token**, following the spec §8.3 ladder in order.

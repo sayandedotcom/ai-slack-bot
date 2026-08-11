@@ -6,9 +6,11 @@
 
 **Depends on:** nothing · **Day 1** · **Gates:** Phases 09, 10 (Worker Loader) and 18, 19 (Sandbox)
 
+**Docs MCP:** Cloudflare Workers (Worker Loader, `ctx.exports`, `RpcTarget`) · Cloudflare Sandbox / Containers. See `00-roadmap.md` → *Docs / API MCP servers*. This phase is the single strongest case for attaching them — both surfaces are exactly where the model invents APIs.
+
 **Why first:** both surfaces have training data thin enough that a coding agent will confidently invent APIs for them. Discovering on day 5 that the Tier 1 isolate *can* reach the network, or that a container cannot run the monorepo, loses the week. Discovering it today costs half a day and produces a graded deliverable — the README's AI-tool notes are assembled from exactly this material.
 
-**Not blocked on the monorepo invite.** Spike against any mid-sized public pnpm monorepo. What is being measured is the platform's ceiling, not Zellify's code.
+**Not blocked on the monorepo invite.** If [`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild) isn't accessible yet, spike against any mid-sized public pnpm monorepo — what is being measured is the platform's ceiling, not Zellify's code. See `00-roadmap.md` → *Repos and access*.
 
 **Global constraints** from `00-roadmap.md` apply.
 
@@ -86,9 +88,11 @@ git commit -m "spike(sandbox): scaffold and first container boot"
 - Consumes: Task 1's booting container
 - Produces: six wall-clock measurements
 
-- [ ] **Step 1: Pick a stand-in repo**
+- [ ] **Step 1: Pick the repo to measure against**
 
-Any mid-sized public pnpm monorepo with a dev server. The monorepo invite has not landed; do not wait for it.
+The real target is **[`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild)** — the product monorepo the agent fixes bugs in. If your invite has landed, use it and the numbers are real.
+
+If it hasn't, **do not wait.** Use any mid-sized public pnpm monorepo with a dev server; what this task measures is the platform's ceiling, not Zellify's code. Re-run against the real repo in Phase 18 and record both numbers.
 
 - [ ] **Step 2: Measure cold, in order, recording wall-clock seconds for each**
 

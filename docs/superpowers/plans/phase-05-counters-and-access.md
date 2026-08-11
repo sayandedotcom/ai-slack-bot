@@ -6,6 +6,8 @@
 
 **Depends on:** Phase 04 · **Day 2** · **Gates:** Phases 08, 14
 
+**Docs MCP:** Cloudflare Access — self-hosted applications, **policy ordering**, path-based bypass. Policy ordering is the trap in Task 4, and it fails silently. See `00-roadmap.md` → *Docs / API MCP servers*.
+
 **The step that breaks everything if done wrong:** Access sits in front of the whole origin, and Slack cannot authenticate to it. A gated `/slack/events` silently drops every event — no error, no alert, just an ingest pipeline that goes quiet. Task 4 exists to make that failure impossible to ship unnoticed.
 
 **Global constraints** from `00-roadmap.md` apply.

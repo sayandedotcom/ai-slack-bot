@@ -585,10 +585,13 @@ loses the week.
 
 **Blocking — ask today:**
 
-1. **Monorepo access.** The `Zellify/firefighter` invite, the Linear team, and the reference
-   channels have landed, but not the product monorepo. Drill scenarios 2 and 3 both require
-   PRs against it, and the brief says to read its root `AGENTS.md` first. **Without this the
-   entire Tier 2 path is unbuildable.** One day of latency here costs one day of build.
+1. **Product monorepo access — [`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild).**
+   Not to be confused with `Zellify/firefighter`, which is this repo, the deliverable.
+   `web2app-rebuild` is Zellify's actual product codebase: the agent clones it in the sandbox,
+   fixes bugs in it, and opens PRs against its `staging` branch. Drill scenarios 2 and 3 both
+   require this, and the brief says to read its root `AGENTS.md` first.
+   **Without it the entire Tier 2 path is unbuildable.** Only Phases 18–20 depend on it, so a
+   slow invite reorders the build rather than stalling it.
 2. **Supabase prod read-only, LangSmith, Better Stack** credentials — not yet confirmed
    received.
 3. **`im:write` and `files:write`** grantability on the Slack app (§10, §11.1).

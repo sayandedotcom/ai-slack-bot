@@ -6,6 +6,8 @@
 
 **Depends on:** Phase 01 · **Day 1** · **Gates:** Phases 04, 07, 09
 
+**Docs MCP:** none needed. Pure D1 and pure functions — no external API surface to get wrong.
+
 **Why this phase exists, and why it comes before ingest:** Ronit gave read access to real customer channels for evaluation and said explicitly not to test in them. If that boundary lives in the system prompt, it holds until the one time it doesn't — and the failure mode is the agent posting to a real customer under an engineer's name. Building it before the ingest pipeline means no later phase can quietly bypass it, because there is never a moment when the unguarded path exists.
 
 **Global constraints** from `00-roadmap.md` apply.

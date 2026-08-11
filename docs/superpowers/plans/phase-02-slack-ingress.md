@@ -6,6 +6,8 @@
 
 **Depends on:** Phase 01 · **Day 1** · **Gates:** Phase 04
 
+**Docs MCP:** Slack Web API — Events API envelopes, the `v0` signature scheme, `message.channels`, and the message subtype list. See `00-roadmap.md` → *Docs / API MCP servers*.
+
 **Why the signature work gets seven tests:** this is the only thing standing between a public URL and anyone injecting fake customer messages into org memory. Memory is durable and shared across shifts, so a poisoned entry outlives the shift that received it.
 
 **Global constraints** from `00-roadmap.md` apply.

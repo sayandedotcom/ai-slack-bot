@@ -6,6 +6,8 @@
 
 **Depends on:** Phases 02, 03 · **Day 2** · **Gates:** Phases 05, 06, 07
 
+**Docs MCP:** Slack Web API — `chat.getPermalink` and the message subtype list (Task 1's `DROPPED_SUBTYPES` set is the part most likely to be incomplete). See `00-roadmap.md` → *Docs / API MCP servers*.
+
 **Global constraints** from `00-roadmap.md` apply. Two bear directly on this phase: **channels only, never DMs**, and **all ingest writes are idempotent on `event_id`** because Slack retries up to three times.
 
 ---

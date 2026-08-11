@@ -6,6 +6,8 @@
 
 **Depends on:** nothing · **Day 1** · **Gates:** Phases 02, 03, 12
 
+**Docs MCP:** Wrangler config schema · `@cloudflare/vitest-pool-workers` (its exports move between minor versions — see Task 5 Step 4). See `00-roadmap.md` → *Docs / API MCP servers*.
+
 **Global constraints** from `00-roadmap.md` apply.
 
 ---
