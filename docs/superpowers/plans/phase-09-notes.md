@@ -244,6 +244,84 @@ boundary**. `stringifyForCodemode` base64-tags `Uint8Array` as
 (`ToolDispatcher.call(name, argsJson)`), so this codec — not structured clone —
 is why `files.publish({ bytes })` works.
 
+## Task 8 — 2026-08-12
+
+### Linear has a real idempotency facility; the plan's fallback is unnecessary
+
+`IssueCreateInput` accepts a client-supplied `id`. Verified live in the
+project's own `fire-fighter-testing` team (probe issue created, then deleted —
+the team is empty again):
+
+- first create with a fresh UUID → `{ success: true, issue: { id, identifier: "FIR-1", url } }`;
+- second create with the **same** id → `conflict on insert of Issue`,
+  `extensions.code = "INPUT_ERROR"`, `"Entity Issue with id … already exists."`
+
+So the issue id is derived deterministically from the effect key, and the
+conflict is the **reconciliation signal**, not an error to surface. This is
+strictly better than Task 8 Step 5's fallback of a host-owned marker in the
+description: no marker to strip, no search that can match the wrong issue.
+
+`IssueFilter` does expose `description`, so the marker approach would have
+worked — it is simply not needed.
+
+### Upstream failures split by "could the server have processed this?"
+
+Not by HTTP class. Rejected at the door — 401, 403, 429, or no response at all
+— proves nothing was filed, so those map to `capability_unavailable`, which the
+ledger treats as proven and permits a retry. A 5xx, or a 200 with an unreadable
+body, might have been processed with the response lost, so those stay
+`upstream_unavailable` and become `effect_in_doubt`.
+
+`LinearGateway.findIssue` then makes that decidable: because the create supplies
+its own id, "did this get filed?" is an exact lookup rather than a guess.
+
+Also confirmed: `Authorization` is sent **bare**. With a `Bearer ` prefix every
+query silently returns `null` rather than erroring.
+
+---
+
+## Task 9 — 2026-08-12
+
+### The Supabase project is empty, and that changes the design
+
+Probed live: every plausible table (`users`, `invoices`, `orders`, `customers`,
+`profiles`, `tickets`, `events`, `subscriptions`) returns **404**. The PostgREST
+schema root returns `{"message":"Secret API key required","hint":"Only secret
+API keys can be used for this endpoint."}` — introspection needs the **secret**
+key, the one that bypasses row-level security entirely and which this project
+deliberately does not hold.
+
+Two consequences:
+
+1. **The allowlist is a reviewed constant, not runtime introspection.** That was
+   already the safer choice — a credential being able to see a table is not a
+   reason to show it to a model — and the credential shape now makes it the only
+   choice. `supabase.schema()` returns the allowlist.
+2. **`PRODUCTION_ALLOWLIST` is empty, accurately.** Naming tables that do not
+   exist would be a lie that typechecks. While empty, `schema()` returns `[]` and
+   every `select()` refuses with `invalid_input`. That is correct fail-closed
+   behaviour — but this capability answers nothing useful until real resources
+   are added.
+
+> **OPEN GAP, not a defect:** the four drill scenarios that need product data
+> have nothing to read. This is the same shape as the Better Stack question —
+> a capability is only as useful as the data behind it. Adding a product schema
+> is a decision outside Phase 09.
+
+### Task 9 Step 5 cannot be completed yet
+
+Step 5 asks for a live negative test proving the database role rejects insert,
+update, delete, DDL and writable RPC even if application validation were
+bypassed. With zero tables there is nothing to attempt it against: a write to a
+nonexistent table returns 404, which proves nothing about the role.
+
+**Not done, deliberately not faked.** Re-run it as written once a real resource
+exists. Until then the read-only guarantee rests on the reader exposing no write
+method and issuing only GET — both of which *are* tested — rather than on the
+database-level backstop the publishable key is supposed to provide.
+
+---
+
 ### `generateTypes` cannot render an index signature
 
 `z.record`, `z.looseObject`, and `z.object().catchall()` all emit `{}`. So
