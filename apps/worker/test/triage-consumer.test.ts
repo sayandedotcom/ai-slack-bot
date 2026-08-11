@@ -79,7 +79,7 @@ describe("handleTriageBatch", () => {
     expect(calls).toBe(1);
   });
 
-  it("skips triage entirely when a live run owns the thread", async () => {
+  it("skips triage entirely when a run already owns the thread", async () => {
     await seedMessage("Ev1", { thread_ts: "1.0" });
     let calls = 0;
     const triage = async () => (calls++, wakeOutcome);
@@ -88,7 +88,8 @@ describe("handleTriageBatch", () => {
     await handleTriageBatch(batch, env, {
       triage,
       memory: new FakeMemoryStore(),
-      hasLiveRun: async () => true,
+      // true means the callback has already COMMITTED the message as a turn.
+      routeToOwnedRun: async () => true,
     });
 
     expect(calls).toBe(0);

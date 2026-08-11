@@ -3,6 +3,7 @@ import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
 import { backfillApi } from "./api/backfill";
 import { runsApi, runsWs } from "./api/runs";
+import { routeSlackMessageToOwnedRun, wakeSlackRun } from "./run/coordinator";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { ZepMemory } from "./memory/zep";
@@ -61,6 +62,12 @@ export default {
         return handleTriageBatch(batch as MessageBatch<TriageJob>, env, {
           triage: makeTriageRunner(env),
           memory: new ZepMemory(env.ZEP_API_KEY),
+          // No HTTP self-call and no extra queue: the consumer and the
+          // coordinator both run in the trusted parent Worker.
+          routeToOwnedRun: (message) => routeSlackMessageToOwnedRun(env, message),
+          wakeRun: async (input) => {
+            await wakeSlackRun(env, input);
+          },
         });
     }
   },

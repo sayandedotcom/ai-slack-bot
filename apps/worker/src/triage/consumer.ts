@@ -4,6 +4,7 @@ import type { TriageInput } from "./prompt";
 import type { TriageRunner } from "./run";
 import { getChannelPolicy, shouldTriage } from "../db/channels";
 import { graphIdFor } from "../memory/graphs";
+import type { SlackRunMessage } from "../run/coordinator";
 
 export type TriageJob = { event_id: string };
 
@@ -11,11 +12,26 @@ export type TriageDeps = {
   triage: TriageRunner;
   memory: MemoryStore;
   /**
-   * Whether a live run already owns this thread — in that case the message
-   * becomes a turn, not a triage subject. Defaults to false until Phase 08
-   * wires the runs table in. Spec §4.3.
+   * Hand the message to a run that already owns this thread.
+   *
+   * Returns true only when the message has been COMMITTED as a turn. The
+   * earlier `hasLiveRun` seam could report ownership without storing anything,
+   * which silently dropped the customer's follow-up, and it split "check" from
+   * "append" into two steps that could race. One operation, one answer.
+   *
+   * Spec §4.3.
    */
-  hasLiveRun?: (channelId: string, threadTs: string) => Promise<boolean>;
+  routeToOwnedRun?: (message: SlackRunMessage) => Promise<boolean>;
+  /**
+   * Wake the thread's run with the stored opening prompt. Must be idempotent:
+   * it is replayed whenever a stored wake decision is found again.
+   */
+  wakeRun?: (input: {
+    eventId: string;
+    channelId: string;
+    threadTs: string;
+    openingPrompt: string;
+  }) => Promise<void>;
 };
 
 type MessageRow = {
@@ -33,10 +49,9 @@ export async function handleTriageBatch(
   env: Env,
   deps: TriageDeps,
 ): Promise<void> {
-  const hasLiveRun = deps.hasLiveRun ?? (async () => false);
   for (const message of batch.messages) {
     try {
-      await triageOne(message.body.event_id, env, deps, hasLiveRun);
+      await triageOne(message.body.event_id, env, deps);
       message.ack();
     } catch {
       message.retry();
@@ -44,22 +59,55 @@ export async function handleTriageBatch(
   }
 }
 
-async function triageOne(
-  eventId: string,
-  env: Env,
-  deps: TriageDeps,
-  hasLiveRun: NonNullable<TriageDeps["hasLiveRun"]>,
-): Promise<void> {
-  const decided = await env.DB.prepare("SELECT 1 FROM triage_decisions WHERE event_id = ?")
-    .bind(eventId)
-    .first();
-  if (decided) return;
-
-  const row = await env.DB.prepare(
+async function loadMessage(env: Env, eventId: string): Promise<MessageRow | null> {
+  return env.DB.prepare(
     "SELECT event_id, channel_id, ts, thread_ts, user_id, text, permalink FROM messages WHERE event_id = ?",
   )
     .bind(eventId)
     .first<MessageRow>();
+}
+
+/**
+ * Order matters here, and only one order is correct.
+ *
+ *   1. stored decision?  wake=0 -> done.  wake=1 -> replay the wake, done.
+ *   2. load the message
+ *   3. policy gate
+ *   4. does a run already own the thread? if so it now holds the message
+ *   5. ask the model, store the decision
+ *   6. wake, and throw on failure so the queue retries
+ *
+ * The decision check MUST stay above step 4. A wake that half-succeeded leaves
+ * a live run owning the thread; on retry, step 4 would otherwise append the
+ * triggering message as a `customer` turn even though the opening prompt
+ * already contains it. Keeping the decision check first means a retry always
+ * takes the replay branch and never reaches routeToOwnedRun.
+ */
+async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<void> {
+  const decided = await env.DB.prepare(
+    "SELECT wake, opening_prompt FROM triage_decisions WHERE event_id = ?",
+  )
+    .bind(eventId)
+    .first<{ wake: number; opening_prompt: string }>();
+
+  if (decided) {
+    if (decided.wake !== 1) return;
+
+    // The decision committed but the wake may not have. Replaying is safe:
+    // triage:{event_id} makes the opening turn idempotent, and the model is
+    // never called again.
+    const row = await loadMessage(env, eventId);
+    if (!row) return;
+    await deps.wakeRun?.({
+      eventId,
+      channelId: row.channel_id,
+      threadTs: row.thread_ts ?? row.ts,
+      openingPrompt: decided.opening_prompt,
+    });
+    return;
+  }
+
+  const row = await loadMessage(env, eventId);
   if (!row) return;
 
   // Belt and suspenders: the producer already filters on shouldTriage, but a
@@ -68,7 +116,21 @@ async function triageOne(
   if (!shouldTriage(policy) || policy.customer_slug === null) return;
 
   const threadTs = row.thread_ts ?? row.ts;
-  if (await hasLiveRun(row.channel_id, threadTs)) return;
+
+  // A message an existing run absorbs writes no triage_decisions row, so the
+  // `triaged` counter does not count it. That is correct: no decision was made.
+  if (deps.routeToOwnedRun) {
+    const routed = await deps.routeToOwnedRun({
+      eventId,
+      channelId: row.channel_id,
+      ts: row.ts,
+      threadTs: row.thread_ts,
+      text: row.text,
+      userId: row.user_id,
+      permalink: row.permalink,
+    });
+    if (routed) return;
+  }
 
   const { results: threadRows } = await env.DB.prepare(
     `SELECT user_id, text FROM messages
@@ -113,5 +175,16 @@ async function triageOne(
       Date.now(),
     )
     .run();
-  // Phase 08 adds here: if outcome.wake, wake the thread's RunDO with opening_prompt.
+
+  if (!outcome.wake) return;
+
+  // Throw on failure so the queue retries. Acknowledging a wake decision whose
+  // wake has not been durably delivered would strand an actionable message
+  // forever: the stored decision would make every later attempt return early.
+  await deps.wakeRun?.({
+    eventId,
+    channelId: row.channel_id,
+    threadTs,
+    openingPrompt: outcome.opening_prompt,
+  });
 }
