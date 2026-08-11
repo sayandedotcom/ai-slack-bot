@@ -410,6 +410,44 @@ the `Upgrade` header, so the not-found case is checked without it — the route
 resolves the id in D1 before the upgrade, so the `404` is decided first — and
 the upgrade refusal is checked with a real `WebSocket` instead.
 
+### Deployed — 2026-08-12
+
+Version `de9a5497-6aea-4955-b07c-3dc7267ce8fd` at
+`https://firefighter.sayandeten.workers.dev`. Sequence was: apply
+`0004_runs.sql` to remote D1 (it was the only pending migration), set
+`ANTHROPIC_API_KEY` as a production secret (the other three were already
+there), then `wrangler deploy`. The deploy reports `env.RUNS (RunDO)` bound and
+the `v1` SQLite class migration applied without error.
+
+**Access enforcement — the criterion that could most easily have been missed,
+since `/ws` was added this phase and sits outside `/api`:**
+
+| Request | Result |
+|---|---|
+| `GET /api/health` | `302` → `zellify-firefighter.cloudflareaccess.com` |
+| `GET /api/runs` | `302` → Access |
+| `GET /ws/run/:id` | `302` → Access ✅ |
+| `GET /slack/events` | `404` — **not** a redirect, so Access is bypassed |
+| `POST /slack/events` with a bogus signature | `401 invalid signature` |
+
+The last row is the one that proves the bypass properly: the request reached
+the Worker's own signature verification rather than being intercepted, so
+`/slack/events` is both exempt from Access *and* still authenticated by Slack's
+signing secret.
+
+**What a deploy alone cannot verify.** "An authenticated dashboard origin
+upgrades the socket successfully" needs a real Access session, which means a
+browser login — `curl` cannot obtain one without an Access service token, and
+creating one is a config change to the Access app. The same gate blocks
+deployed idle-run observability: with `/api/runs` behind Access there is no way
+to create a Chat run from the command line, and with no run there is nothing to
+observe. The Slack path is the way in, because it enters through the bypassed
+route and creates a run with no dashboard auth at all.
+
+Production state at handoff: `runs` table exists and is empty; channels are
+`test-firedrill` (`C0BPGUXG5RS`, slug `firedrill`, `live`), `ff-test`
+(`C0BPA2L4BBP`, `live`) and `ext-zellify-sidehop` (`observe`).
+
 ### Still outstanding — needs a deploy and a human
 
 These three steps cannot be done from a local machine. They are the only parts
