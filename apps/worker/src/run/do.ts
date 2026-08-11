@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../index";
 import type {
   RunEvent,
+  RunServerMessage,
   RunStatus,
   RunTurnInput,
   ToolCallUpdateInput,
@@ -13,6 +14,7 @@ import {
   ensureSchema,
   initializeSession,
   latestSeq,
+  listEvents,
   listToolCalls,
   listTurns,
   readState,
@@ -34,6 +36,20 @@ import {
  * list, no timer and no interval, so a wake from hibernation needs nothing but
  * the constructor's schema call.
  */
+/**
+ * Backlog page size. Bounded so a long run's replay is several ordered frames
+ * rather than one unbounded WebSocket message the dashboard cannot render
+ * incrementally.
+ */
+const SYNC_CHUNK = 200;
+
+function upgradeError(status: number, code: string, message: string): Response {
+  return new Response(JSON.stringify({ code, message }), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 export type SetStatusOutcome =
   | { ok: true; changed: boolean; status: RunStatus; event: RunEvent | null }
   | { ok: false; status: RunStatus | null; reason: string };
@@ -55,6 +71,66 @@ export class RunDO extends DurableObject<Env> {
     // Synchronous only. This runs again on every wake, so it must be cheap and
     // must not await.
     ensureSchema(ctx.storage);
+  }
+
+  /**
+   * The dashboard's live socket. Only `GET` with `Upgrade: websocket` — this
+   * object serves no other HTTP surface.
+   *
+   * Deliberately NOT async, and there is no `await` anywhere in the body. That
+   * is what closes the connect/append race: because the whole upgrade runs in
+   * one uninterrupted Durable Object event, an `appendTurn` is serialized
+   * either entirely before the cursor is captured (so the socket gets it in the
+   * backlog) or entirely after `acceptWebSocket` (so it gets it live). There is
+   * no window in which an event lands in neither path.
+   */
+  fetch(request: Request): Response {
+    if (request.method !== "GET") {
+      return upgradeError(405, "method_not_allowed", "run sockets accept GET only");
+    }
+    if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket") {
+      return upgradeError(426, "upgrade_required", "expected Upgrade: websocket");
+    }
+
+    const raw = new URL(request.url).searchParams.get("since");
+    let since = 0;
+    if (raw !== null) {
+      // `Number("")` is 0, so an empty `?since=` would silently mean "replay
+      // everything". A present-but-blank cursor is malformed input; say so.
+      const parsed = raw.trim() === "" ? Number.NaN : Number(raw);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        return upgradeError(400, "invalid_since", "since must be a non-negative integer");
+      }
+      since = parsed;
+    }
+
+    // Clamp to what actually exists. A cursor from the future — a stale tab, or
+    // a hand-edited query string — would otherwise sit above every seq the run
+    // will ever produce and silence the client permanently, because #broadcast
+    // skips anything at or below the socket's lastSeq.
+    let cursor = Math.min(since, latestSeq(this.ctx.storage));
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+
+    // acceptWebSocket, NOT server.accept(). The latter yields a working socket
+    // that pins the object in memory and burns duration cost silently.
+    this.ctx.acceptWebSocket(server);
+
+    const status = readState(this.ctx.storage)?.status ?? null;
+    for (;;) {
+      const events = listEvents(this.ctx.storage, cursor, SYNC_CHUNK);
+      const complete = events.length < SYNC_CHUNK;
+      if (events.length > 0) cursor = events[events.length - 1].seq;
+
+      const frame: RunServerMessage = { type: "sync", events, cursor, complete, status };
+      server.send(JSON.stringify(frame));
+      if (complete) break;
+    }
+
+    server.serializeAttachment({ lastSeq: cursor });
+    return new Response(null, { status: 101, webSocket: client });
   }
 
   initialize(descriptor: RunDescriptor): RunState {
