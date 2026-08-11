@@ -9,8 +9,14 @@ import { handleTriageBatch, type TriageJob } from "./triage/consumer";
 import { makeTriageRunner } from "./triage/run";
 import type { QueuedEvent } from "./slack/types";
 
+// The named export is what the RUNS binding resolves to. Keep it above Env:
+// src/run/do.ts imports Env from here, and that import must stay type-only or
+// the two modules form a real cycle.
+export { RunDO } from "./run/do";
+
 export type Env = {
   DB: D1Database;
+  RUNS: DurableObjectNamespace<import("./run/do").RunDO>;
   INGEST_QUEUE: Queue;
   MEMORY_QUEUE: Queue<MemoryJob>;
   TRIAGE_QUEUE: Queue<TriageJob>;

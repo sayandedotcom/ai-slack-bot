@@ -13,6 +13,15 @@
     // and explicitly falls through to ASSETS for everything else.
     "run_worker_first": true
   },
+  // One Durable Object class, keyed by the run's origin key. `new_sqlite_classes`
+  // (not `new_classes`) is what makes ctx.storage.sql available; the legacy
+  // `migrations` array is used over the newer declarative `exports` map because
+  // the official Vitest recipe and spikes/worker-loader both use it. See
+  // docs/superpowers/plans/phase-08-notes.md.
+  "durable_objects": {
+    "bindings": [{ "name": "RUNS", "class_name": "RunDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RunDO"] }],
   "d1_databases": [
     {
       "binding": "DB",
