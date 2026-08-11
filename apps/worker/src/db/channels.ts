@@ -25,3 +25,17 @@ export async function getChannelPolicy(db: D1Database, channelId: string): Promi
   }
   return { ...row, known: true };
 }
+
+/** Only `live` channels accept outbound messages. Everything else refuses. */
+export function canPost(policy: ChannelPolicy): boolean {
+  return policy.known && policy.mode === "live";
+}
+
+/**
+ * Triage runs on customer channels — both the live ones and the reference ones.
+ * Reference traffic is the eval set (spec §4.5); withholding it would mean
+ * tuning the triage prompt against messages we wrote ourselves.
+ */
+export function shouldTriage(policy: ChannelPolicy): boolean {
+  return policy.known && policy.customer_slug !== null && policy.mode !== "internal";
+}

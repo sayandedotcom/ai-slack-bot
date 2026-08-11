@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { getChannelPolicy } from "../src/db/channels";
+import { canPost, getChannelPolicy, shouldTriage } from "../src/db/channels";
 
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM channels").run();
@@ -32,5 +32,38 @@ describe("getChannelPolicy", () => {
     expect(p.mode).toBe("observe");
     expect(p.known).toBe(false);
     expect(p.customer_slug).toBeNull();
+  });
+});
+
+describe("canPost", () => {
+  it("permits live channels", async () => {
+    expect(canPost(await getChannelPolicy(env.DB, "C_TEST"))).toBe(true);
+  });
+
+  it("refuses reference customer channels", async () => {
+    expect(canPost(await getChannelPolicy(env.DB, "C_REF"))).toBe(false);
+  });
+
+  it("refuses internal channels", async () => {
+    expect(canPost(await getChannelPolicy(env.DB, "C_ENG"))).toBe(false);
+  });
+
+  it("refuses unmapped channels", async () => {
+    expect(canPost(await getChannelPolicy(env.DB, "C_UNKNOWN"))).toBe(false);
+  });
+});
+
+describe("shouldTriage", () => {
+  it("triages customer channels, live and reference alike", async () => {
+    expect(shouldTriage(await getChannelPolicy(env.DB, "C_REF"))).toBe(true);
+    expect(shouldTriage(await getChannelPolicy(env.DB, "C_TEST"))).toBe(true);
+  });
+
+  it("does not triage internal channels", async () => {
+    expect(shouldTriage(await getChannelPolicy(env.DB, "C_ENG"))).toBe(false);
+  });
+
+  it("does not triage unmapped channels", async () => {
+    expect(shouldTriage(await getChannelPolicy(env.DB, "C_UNKNOWN"))).toBe(false);
   });
 });
