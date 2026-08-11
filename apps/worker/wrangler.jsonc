@@ -42,6 +42,15 @@
     // and explicitly falls through to ASSETS for everything else.
     "run_worker_first": true
   },
+  // Worker Loader (Dynamic Workers, open beta since 2026-03-24). Unlike most
+  // bindings this points at no external resource -- it just exposes the loader
+  // API as env.LOADER. Shape verified against this repo's
+  // node_modules/wrangler/config-schema.json (RawConfig.properties.worker_loaders).
+  //
+  // Phase 09 loads model-authored code through it with globalOutbound: null.
+  // Deliberately no service binding, no outbound fetcher, no second Worker: the
+  // isolate's only reach is RPC capabilities passed as call arguments.
+  "worker_loaders": [{ "binding": "LOADER" }],
   // One Durable Object class, keyed by the run's origin key. `new_sqlite_classes`
   // (not `new_classes`) is what makes ctx.storage.sql available; the legacy
   // `migrations` array is used over the newer declarative `exports` map because

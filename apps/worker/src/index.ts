@@ -23,6 +23,9 @@ export type Env = {
   MEMORY_QUEUE: Queue<MemoryJob>;
   TRIAGE_QUEUE: Queue<TriageJob>;
   ASSETS: Fetcher;
+  // Worker Loader (Phase 09). WorkerLoader is a generated platform type from
+  // worker-configuration.d.ts -- never redeclare it by hand.
+  LOADER: WorkerLoader;
   SLACK_SIGNING_SECRET: string;
   SLACK_BOT_TOKEN: string;
   ZEP_API_KEY: string;
