@@ -1,3 +1,5 @@
+import type { MemoryStore } from "../memory/store";
+
 /**
  * The narrow interfaces the capability layer talks to, and the shapes it hands
  * back to model-authored code.
@@ -29,11 +31,16 @@ export type RecalledFact = {
   fact: string;
 };
 
+/**
+ * `channel_id` from the Phase 06 citation resolver is deliberately dropped on
+ * the way out: it is a destination identifier, and the model is never shown
+ * one. The permalink already points at the exact message.
+ */
 export type Citation = {
   factId: string;
   fact: string;
-  source: string;
-  permalink: string | null;
+  permalink: string;
+  ts: string;
 };
 
 export type IssueRef = {
@@ -104,10 +111,6 @@ export interface SlackGateway {
   reply(text: string, idempotencyKey: string): Promise<{ ts: string; permalink: string | null }>;
 }
 
-export interface MemoryStore {
-  recall(query: string, scope: "customer" | "org", limit: number): Promise<RecalledFact[]>;
-  cite(factIds: string[]): Promise<Citation[]>;
-}
 
 export interface LinearGateway {
   createIssue(input: {
@@ -170,6 +173,7 @@ export interface ArtifactPublisher {
 export type CapabilityDependencies = {
   db: D1Database;
   slack: SlackGateway;
+  /** The shipped Phase 06 seam, reused rather than paralleled. */
   memory: MemoryStore;
   linear: LinearGateway;
   supabase: SupabaseReader;

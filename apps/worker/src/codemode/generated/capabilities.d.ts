@@ -71,8 +71,8 @@ type CiteInput = {
 type CiteOutput = {
     factId: string;
     fact: string;
-    source: string;
-    permalink: string | null;
+    permalink: string;
+    ts: string;
 }[]
 
 declare const memory: {

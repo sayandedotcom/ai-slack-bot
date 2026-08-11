@@ -83,8 +83,9 @@ export function fakeDeps(): CapabilityDependencies {
       async reply() { return { ts: "1.0", permalink: null }; },
     },
     memory: {
-      async recall() { return []; },
-      async cite() { return []; },
+      async ensureGraph() {},
+      async addMessage() { return { episodeUuid: "ep_0" }; },
+      async search() { return []; },
     },
     linear: {
       async createIssue() { return { id: "iss_1", identifier: "FF-1", url: "https://x" }; },
