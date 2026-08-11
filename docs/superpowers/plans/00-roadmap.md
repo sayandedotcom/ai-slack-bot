@@ -172,7 +172,7 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | 05 | Counters and the Access gate | [full](phase-05-counters-and-access.md) | 04 | 2 |
 | 06 | Zep memory layer | [full](phase-06-zep-memory.md) | 04 | 2 |
 | 07 | Triage | [full](phase-07-triage.md) | 06 | 3 |
-| 08 | RunDO session core + streaming | below | 05 | 3 |
+| 08 | RunDO session core + streaming | [full](phase-08-run-session.md) | 05, 07 | 3 |
 | 09 | Code Mode Tier 1 | below | 00·T2, 08 | 3 |
 | 10 | Agent loop | below | 09 | 4 |
 | 11 | Approval | below | 10 | 4 |
@@ -223,7 +223,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Depends on:** Phase 06 · **Day 3**
 
-**Files:** `src/triage/prompt.ts`, `src/triage/run.ts`, `src/triage/consumer.ts`, `migrations/0002_triage.sql` (`triage_decisions` table), `src/db/counters.ts` (modify: real `triaged` count), `test/triage.test.ts`
+**Files:** `src/triage/prompt.ts`, `src/triage/run.ts`, `src/triage/consumer.ts`, `migrations/0003_triage.sql` (`triage_decisions` table), `src/db/counters.ts` (modify: real `triaged` count), `test/triage.test.ts`
 
 **Tasks:**
 1. **`triage_decisions` table:** `event_id` PK, `wake`, `why`, `opening_prompt`, `model`, `cost_usd`, `latency_ms`, `created_at`. Storing the decision is what makes the eval set possible.
@@ -242,9 +242,9 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Goal:** The one session shape, watchable live over WebSocket.
 
-**Depends on:** Phase 05 · **Day 3**
+**Depends on:** Phases 05 and 07 · **Day 3**
 
-**Files:** `src/run/do.ts` (the Durable Object), `src/run/session.ts` (turn storage in DO SQLite), `src/run/protocol.ts` (typed client events), `src/api/runs.ts`, `wrangler.jsonc` (modify: DO binding + migration), `migrations/0003_runs.sql`, `test/run-session.test.ts`, `test/run-ws.test.ts`
+**Files:** See [the full Phase 08 plan](phase-08-run-session.md). The D1 migration is `migrations/0004_runs.sql` because Phase 07 already owns `0003_triage.sql`.
 
 **Tasks:**
 1. **DO keyed by origin:** `slack:{channel}:{thread_ts}` or `chat:{uuid}`. One `idFromName` helper, tested for both shapes producing the same class.
@@ -309,7 +309,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Depends on:** Phase 10 · **Day 4**
 
-**Files:** `src/approval/escalate.ts`, `src/approval/transitions.ts`, `src/api/approvals.ts`, `migrations/0004_approvals.sql`, `src/db/counters.ts` (modify: real `escalated`), `test/approval-*.test.ts`
+**Files:** `src/approval/escalate.ts`, `src/approval/transitions.ts`, `src/api/approvals.ts`, `migrations/0005_approvals.sql`, `src/db/counters.ts` (modify: real `escalated`), `test/approval-*.test.ts`
 
 **Tasks:**
 1. **`approvals` table** per spec §9.
@@ -331,7 +331,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Depends on:** Phase 01 · **Day 4**
 
-**Files:** `src/identity/roster.ts`, `src/identity/rotation.ts`, `src/identity/crypto.ts`, `src/oauth/slack.ts`, `src/oauth/github.ts`, `src/db/identities.ts`, `migrations/0005_identities.sql`, `test/rotation.test.ts`, `test/oauth-*.test.ts`
+**Files:** `src/identity/roster.ts`, `src/identity/rotation.ts`, `src/identity/crypto.ts`, `src/oauth/slack.ts`, `src/oauth/github.ts`, `src/db/identities.ts`, `migrations/0006_identities.sql`, `test/rotation.test.ts`, `test/oauth-*.test.ts`
 
 **Tasks:**
 1. **Hardcoded roster:** four fire-fighters, three viewers, seven emails to roles.
