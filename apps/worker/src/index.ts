@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { slackEvents } from "./slack/events";
+import { handleIngestBatch } from "./ingest/consumer";
+import type { QueuedEvent } from "./slack/types";
 
 export type Env = {
   DB: D1Database;
@@ -23,9 +25,9 @@ app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default {
   fetch: app.fetch,
-  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    // Phase 04 fills this in.
-    void batch;
-    void env;
+  async queue(batch: MessageBatch<QueuedEvent>, env: Env): Promise<void> {
+    await handleIngestBatch(batch, env);
   },
-} satisfies ExportedHandler<Env>;
+  // The second type parameter is the queue message body. Without it,
+  // ExportedHandler defaults to `unknown` and the queue handler will not typecheck.
+} satisfies ExportedHandler<Env, QueuedEvent>;
