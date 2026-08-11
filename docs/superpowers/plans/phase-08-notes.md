@@ -270,7 +270,48 @@ fails with `Namespace 'CloudflareWorkersModule' has no exported member
 Caught by `pnpm typecheck` only — the whole test suite passed with the broken
 import, because vitest strips types. Typecheck is not optional on this phase.
 
-**9. `wrangler types` infers the DO class generic for you.**
+**9. A recursive JSON type cannot cross a Durable Object RPC boundary.**
+
+The obvious shape for opaque payloads —
+
+```ts
+type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
+```
+
+— compiles fine on its own and fails the moment it appears in an RPC method's
+parameter or return type:
+
+```
+TS2589: Type instantiation is excessively deep and possibly infinite.
+```
+
+workerd's `Rpc.Serializable<T>` machinery walks the type, and a
+self-referential union never bottoms out.
+
+The obvious fix is worse. Switching to `unknown` clears TS2589 and then fails
+`Rpc.Serializable` silently — the whole return type collapses to `never`, and
+the error surfaces somewhere unrelated as `Property 'appended' does not exist
+on type 'never'`.
+
+What works is a depth-bounded chain (`JsonScalar` → `JsonDepth1` → `…3`).
+Finite, so no TS2589; concrete, so still serializable.
+
+Both failures are invisible to `pnpm test`, because vitest strips types. This
+is the second finding this phase that only `pnpm typecheck` catches.
+
+**10. A rejecting RPC method leaves an unhandled rejection inside the object.**
+
+`await expect(stub.setStatus("idle")).rejects.toThrow()` passes, and vitest
+still reports `Unhandled Rejection … This might cause false positive tests`.
+The rejection is delivered to the caller AND surfaces inside the Durable
+Object under pool-workers 0.21.
+
+`RunDO.setStatus` therefore returns a `SetStatusOutcome` discriminated on `ok`
+rather than throwing. Phase 10 and 11 want to branch on a refused transition
+anyway rather than wrap every call in try/catch. The invariant is unchanged:
+`session.setStatus` still throws, and that is where it is unit-tested.
+
+**11. `wrangler types` infers the DO class generic for you.**
 
 Adding the binding produced
 `RUNS: DurableObjectNamespace<import("./src/index").SpikeDO>` in the generated

@@ -81,15 +81,32 @@ export type TurnSource =
   | "agent"
   | "system";
 
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+/**
+ * JSON payloads the run layer stores without inspecting: Slack metadata, tool
+ * arguments, tool results.
+ *
+ * Depth-bounded on purpose, squeezed between two constraints that a
+ * self-referential type cannot satisfy at once:
+ *
+ *  - a recursive `JsonValue = ... | JsonValue[] | { [k: string]: JsonValue }`
+ *    makes workerd's RPC serializer type machinery exceed TypeScript's
+ *    instantiation limit the moment it crosses a Durable Object stub —
+ *    `TS2589: Type instantiation is excessively deep and possibly infinite`;
+ *  - `unknown` escapes that, but fails workerd's `Rpc.Serializable` constraint,
+ *    which silently collapses the whole RPC return type to `never`.
+ *
+ * Four levels covers every payload this phase stores, and it is finite. Both
+ * failures are invisible to the test suite — vitest strips types — so only
+ * `pnpm typecheck` catches a regression here.
+ */
+type JsonScalar = string | number | boolean | null;
+type JsonDepth1 = JsonScalar | JsonScalar[] | { [key: string]: JsonScalar };
+type JsonDepth2 = JsonDepth1 | JsonDepth1[] | { [key: string]: JsonDepth1 };
+type JsonDepth3 = JsonDepth2 | JsonDepth2[] | { [key: string]: JsonDepth2 };
 
-export type JsonObject = { [key: string]: JsonValue };
+export type JsonValue = JsonDepth3;
+
+export type JsonObject = { [key: string]: JsonDepth2 };
 
 export type RunTurnInput = {
   /** Caller-stable idempotency key. See the stable-ID table in the plan. */
