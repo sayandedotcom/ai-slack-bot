@@ -439,6 +439,80 @@ call: a `Uint8Array` written in sandbox code arrives host-side as a real
 
 ---
 
+## Task 14 — 2026-08-12
+
+### The isolation claim, with its control
+
+Verbatim from the runtime, for the README to quote rather than paraphrase:
+
+```text
+This worker is not permitted to access the internet via global functions like
+fetch(). It must use capabilities (such as bindings in 'env') to talk to the
+outside world.
+```
+
+Inside a correctly isolated isolate `typeof fetch === "function"` and
+`typeof WebSocket === "function"`. **The claim is refusal, not absence.** A test
+or README sentence asserting the globals are missing is wrong and would fail
+against a correct configuration.
+
+The control makes it causal rather than observational. The same loader, the same
+compatibility date, one field removed:
+
+| Configuration | Result |
+| --- | --- |
+| `globalOutbound: null` | refused, message above |
+| field omitted | **`reached:200`** from `https://example.com` |
+
+`guardLoader` forces `null` and there is no call site that can opt out, so the
+right-hand row is unreachable from the deployed application.
+
+### The plan's enumeration probe reports 15 leaks that do not exist
+
+Task 14 Step 3's probe reads `await slack[n]` and treats any non-undefined value
+as a leak. Run as written it reports `DB:rpc`, `SLACK_BOT_TOKEN:rpc`,
+`ANTHROPIC_API_KEY:rpc` and twelve more.
+
+All false. `slack` in the sandbox is **not an RPC stub** — it is the package's
+`Proxy`, whose `get` trap returns a dispatch function for *every* string key
+(`dist/index.js`, `proxyInits`). So a property read yields a function for any
+name at all, and the probe's comment about "a lazy thenable" describes a
+different object than the one it is testing.
+
+The corrected probe **invokes**: `await slack[n]()` reaches `ToolDispatcher`,
+which answers `Tool "DB" not found`, and the call throws. With that change the
+found list is empty and the control still detects a genuine planted capability.
+
+This matters beyond the test: the probe as written would either alarm a reviewer
+into thinking credentials leak, or get "fixed" by weakening the assertion. The
+shape of the true claim is the same as the outbound one — **the handle exists,
+the call is refused.**
+
+### A throwing getter is the model's bug, not an upstream failure
+
+`safeMessage` collapses anything unrecognised to `upstream_unavailable`, which is
+right for a vendor whose errors carry connection strings. It was wrong at the
+executor's catch site, which only ever sees the sandbox failing to compile,
+start, or serialise **model-authored** code — provider failures arrive through
+`ExecuteResult.error`, not as a throw. Telling the model "the upstream service
+failed" when it wrote a throwing accessor sends it debugging the wrong system.
+That catch now defaults to `invalid_input` with the real message.
+
+### What is proven locally vs deployed
+
+| Claim | Where |
+| --- | --- |
+| outbound refused through the production path | local ✅ |
+| omitting `globalOutbound` reaches the internet (control) | local ✅ |
+| no credential, binding or host env reachable | local ✅ |
+| policy cannot be argued out of (11 attacks) | local ✅ |
+| serialization fails safely (10 shapes) | local ✅ |
+| one effect for a duplicated call inside one program | local ✅ |
+| wall-clock and never-resolving-capability timeouts | local ✅ |
+| **workerd terminates a CPU burn** | **deployed only — still unproven** |
+
+---
+
 ### `generateTypes` cannot render an index signature
 
 `z.record`, `z.looseObject`, and `z.object().catchall()` all emit `{}`. So

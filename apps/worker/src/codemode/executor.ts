@@ -26,9 +26,6 @@ const CPU_LIMIT_HINTS = [
 ];
 const IN_SANDBOX_TIMEOUT = "execution timed out";
 
-/** JS errors that mean the MODEL's program is wrong, not that we are broken. */
-const PROGRAM_FAULTS = /\b(SyntaxError|ReferenceError|TypeError|RangeError|EvalError)\b/;
-
 function classify(message: string): string {
   const lower = message.toLowerCase();
   if (CPU_LIMIT_HINTS.some((hint) => lower.includes(hint))) {
@@ -56,8 +53,12 @@ function classifyThrow(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   const classified = classify(raw);
   if (classified !== raw) return classified;
-  if (PROGRAM_FAULTS.test(raw)) return `invalid_input: ${raw}`;
-  return safeMessage(err);
+  // Everything reaching here failed while compiling, starting, or serialising
+  // the result of MODEL-AUTHORED code — provider failures come back through
+  // ExecuteResult.error, not as a throw. So the default is invalid_input, not
+  // upstream_unavailable: a throwing getter is the model's bug, and telling it
+  // "the upstream service failed" sends it debugging the wrong system.
+  return `invalid_input: ${raw.slice(0, 500)}`;
 }
 
 /* ------------------------------------------------------------- bounding -- */
