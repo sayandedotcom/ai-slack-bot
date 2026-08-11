@@ -170,8 +170,8 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | 03 | Channel policy | [full](phase-03-channel-policy.md) | 01 | 1 |
 | 04 | Ingest pipeline | [full](phase-04-ingest-pipeline.md) | 02, 03 | 2 |
 | 05 | Counters and the Access gate | [full](phase-05-counters-and-access.md) | 04 | 2 |
-| 06 | Zep memory layer | below | 04 | 2 |
-| 07 | Triage | below | 06 | 3 |
+| 06 | Zep memory layer | [full](phase-06-zep-memory.md) | 04 | 2 |
+| 07 | Triage | [full](phase-07-triage.md) | 06 | 3 |
 | 08 | RunDO session core + streaming | below | 05 | 3 |
 | 09 | Code Mode Tier 1 | below | 00·T2, 08 | 3 |
 | 10 | Agent loop | below | 09 | 4 |
