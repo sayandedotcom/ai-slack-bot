@@ -9,6 +9,9 @@ beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM events_seen"),
     env.DB.prepare("DELETE FROM messages"),
+    // Once `triaged` is a real count, decisions written by triage-consumer.test.ts
+    // (created_at = Date.now(), which lands inside these windows) would leak in.
+    env.DB.prepare("DELETE FROM triage_decisions"),
   ]);
   await env.DB.batch([
     env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind("e1", "C1", "ingested", NOW),
@@ -39,6 +42,16 @@ describe("getCounters", () => {
     const c = await getCounters(env.DB, NOW - DAY);
     expect(c.triaged).toBe(0);
     expect(c.escalated).toBe(0);
+  });
+
+  it("counts triage decisions within the window", async () => {
+    await env.DB.prepare(
+      `INSERT INTO triage_decisions (event_id, wake, why, opening_prompt, model, cost_usd, latency_ms, created_at)
+       VALUES ('EvT1', 1, 'q', 'p', 'claude-haiku-4-5', 0.0003, 400, 5000),
+              ('EvT2', 0, 'banter', '', 'claude-haiku-4-5', 0.0002, 300, 1000)`,
+    ).run();
+    const counters = await getCounters(env.DB, 2000);
+    expect(counters.triaged).toBe(1); // only EvT1 is inside the window
   });
 
   it("returns all zeros for an empty window without throwing", async () => {
