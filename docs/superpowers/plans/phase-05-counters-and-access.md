@@ -326,13 +326,23 @@ git commit -m "feat(ops): seed channel policy with real slack ids"
 
 Cloudflare dashboard → Zero Trust → Access → Applications → Add a self-hosted application, on the Worker's hostname.
 
-- [ ] **Step 2: Add the Bypass policy FIRST**
+- [ ] **Step 2: Add the Bypass as SEPARATE, path-scoped applications**
 
-Policy: **Bypass**, on paths `/slack/*` and `/oauth/*`.
+**Corrected 2026-08-11 — the original wording here was wrong and would have killed ingest.** A policy cannot be scoped to a path. **Path scoping is a property of the application**, and Access matches the *most specific application*, not policies in order within one app. Cloudflare's own example: "some applications have an endpoint under the `/admin` route that must be publicly routable… create an Access application for the domain `test.example.com/admin/<your-url>` and add the Bypass policy."
 
-Order matters — Access evaluates policies in order, and Slack cannot authenticate. This policy must exist and must be evaluated before the Allow policy.
+So build three applications, not one:
+
+| # | Application (hostname + path) | Policy |
+|---|---|---|
+| 1 | `firefighter.<subdomain>.workers.dev/slack/*` | **Bypass** — Include · Everyone |
+| 2 | `firefighter.<subdomain>.workers.dev/oauth/*` | **Bypass** — Include · Everyone |
+| 3 | `firefighter.<subdomain>.workers.dev` (all paths) | **Allow** — emails ending `@zellify.app` |
 
 `/oauth/*` is included now because Phase 12 needs it and adding it later means remembering to.
+
+Two consequences of Bypass worth knowing: it enforces **no** Access controls and **does not log** those requests. That is acceptable only because `/slack/events` verifies Slack's `v0` signature itself (Phase 02) — the bypass is not an unguarded hole. Cloudflare recommends Service Auth where you want policy enforcement plus logging; Slack cannot present service tokens, so it does not apply here.
+
+**`workers.dev` can be gated** — the Workers dashboard has a *Domains* tab that puts the `workers.dev` subdomain behind Access. Once the origin moves to a custom domain, re-create these three applications against that hostname; the shape is unchanged.
 
 - [ ] **Step 3: Add the Allow policy**
 
