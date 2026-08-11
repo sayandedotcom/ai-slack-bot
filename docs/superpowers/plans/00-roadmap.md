@@ -41,7 +41,7 @@ Every phase's requirements implicitly include this section. Values are copied ve
 - **The webhook does no I/O beyond the queue send.** Slack demands 200 within 3 seconds and retries three times otherwise.
 - **All ingest writes are idempotent on `event_id`.**
 - **Triage never emits a ticket type.** It emits `{ wake, why, opening_prompt }`. A type field would smuggle the banned pipeline back in.
-- **The Tier 1 isolate has no `fetch`.** Its only reach is RPC bindings held by the parent Worker.
+- **Tier 1 outbound calls are runtime-refused.** `fetch`, socket connect, and WebSocket globals may exist, but `globalOutbound: null` prevents them reaching the network; the isolate's only useful reach is reviewed RPC capabilities in the parent Worker.
 - **The Tier 2 sandbox holds no write credentials.** It emits artifacts; the Worker performs every write.
 - **Linear issues are pinned server-side** to team `fire-fighter-testing`. The agent cannot choose the team.
 - **Product PRs target `staging`**, link the Linear issue so it closes on merge, and carry the proof recording.
@@ -88,7 +88,7 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | **07, 10** | Cloudflare AI Gateway — routing, cost/observability | Adopted late (from `agent-os`); no plan detail written yet. | |
 | **08** | Durable Objects — WebSocket **hibernation** API, DO SQLite, `idFromName` | Hibernation handlers differ from plain WebSocket handling; getting it wrong burns duration cost silently. | skills `cloudflare:durable-objects`, `cloudflare:agents-sdk` |
 | **09** | Vercel AI SDK + `@ai-sdk/anthropic` — tool loop, streaming | Adopted late; the agent loop's whole shape depends on it. | |
-| **09** | Same Cloudflare Worker Loader surface as Phase 00, now in anger | | |
+| **09** | Same Cloudflare Worker Loader surface as Phase 00, now in anger | Current Code Mode package, generated providers, isolation, RPC, and resource limits all changed since the initial sketch. | `cloudflare-docs` · skills `cloudflare:agents-sdk` / `cloudflare:workers-best-practices` |
 | **10** | Anthropic — Fable 5 model id, streaming, prompt caching | Prompt caching matters against the $500 ceiling once voice few-shots and memory recall bloat the system prompt. | |
 | **12** | Slack OAuth v2 — `authed_user` scopes, install flow | | |
 | **12** | GitHub OAuth / GitHub Apps — user-to-server tokens | Two similar flows with different token semantics; easy to build the wrong one. | |
@@ -173,7 +173,7 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | 06 | Zep memory layer | [full](phase-06-zep-memory.md) | 04 | 2 |
 | 07 | Triage | [full](phase-07-triage.md) | 06 | 3 |
 | 08 | RunDO session core + streaming | [full](phase-08-run-session.md) | 05, 07 | 3 |
-| 09 | Code Mode Tier 1 | below | 00·T2, 08 | 3 |
+| 09 | Code Mode Tier 1 | [full](phase-09-code-mode-tier-1.md) | 00·T2, 08 | 3 |
 | 10 | Agent loop | below | 09 | 4 |
 | 11 | Approval | below | 10 | 4 |
 | 12 | Identity, OAuth, rotation | below | 01 | 4 |
@@ -184,7 +184,7 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | 17 | Chat page + citations | below | 06, 08, 14 | 5 |
 | 18 | Sandbox Tier 2 | below | 00·T1, **monorepo** | 5 |
 | 19 | Ship loop + proof capture | below | 18 | 6 |
-| 20 | PR + Linear writes → `web2app-rebuild` `staging` | below | 19 | 6 |
+| 20 | PR + ship-loop Linear updates → `web2app-rebuild` `staging` | below | 19 | 6 |
 | 21 | Voice, eval harness, shadow mode | below | 10, 07 | 6 |
 | 22 | Handoff summary + states polish | below | 15, 16, 17 | 7 |
 | 23 | Drill dry-run, README, Loom | below | all | 7 |
@@ -261,22 +261,21 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 ## Phase 09 — Code Mode Tier 1
 
-**Goal:** One tool. Model-authored TypeScript executing in a network-isolated isolate whose only reach is RPC bindings.
+**Goal:** One tool. Model-authored code, guided by generated TypeScript declarations, executing in a network-isolated isolate whose only useful reach is reviewed RPC capabilities.
 
 **Depends on:** Phase 00 Task 2 **GO**, Phase 08 · **Day 3**
 
-**Files:** `src/codemode/loader.ts`, `src/codemode/bindings/*.ts` (one per integration), `src/codemode/dts.ts` (generate the `.d.ts` injected into the prompt), `src/codemode/execute.ts`, `test/codemode-*.test.ts`
+**Files:** See [the full Phase 09 plan](phase-09-code-mode-tier-1.md).
 
 **Read `docs/inspired-from-ronit.md` §1–§6 before starting.** Binding construction, boundary marshalling, cache semantics and the timeout race are all documented there from working code.
 
 **Tasks:**
-1. **Loader wrapper** over the verified Phase 00 shape: `LOADER.load(code)` with `globalOutbound: null`, capabilities on `env` (never on `globalOutbound`), constructed via `ctx.exports.X({ props })`, DO reach-back wrapped in `RpcTarget`, and the wall-clock race around `entrypoint.run()`.
-2. **Binding-by-binding, each its own TDD cycle:** `slack` (Phase 03 policy enforced *inside* it), `memory`, `linear` (team id pinned), `supabase` (read-only role), `langsmith`, `betterstack`, `files`. `github` and `sandbox` arrive in Phases 20 and 18. Identity travels in `props`, never in arguments — the agent cannot spoof who it is acting as if it never states it.
-3. **`.d.ts` generation** from the binding definitions, so the types the model sees cannot drift from the types that exist. This is the whole reason Code Mode beats flat schemas — the contract is generated, not maintained.
-4. **Result plumbing:** `console.log` output plus return value, serialized back as the tool result.
-5. **The security test that matters.** Assert from inside the isolate that `fetch` is unavailable, that `new WebSocket` fails, and that no binding leaks a raw credential. **This test is the README's security section.** If it cannot be written, decision D1 is wrong.
-6. **Error surfacing:** a thrown `ChannelReadOnly` returns to the model as a readable error it can reason about, not a stack trace.
-7. **Timeout and runaway-loop guards.**
+1. **Use the current stateless Code Mode path.** One AI SDK tool, generated provider declarations, and `DynamicWorkerExecutor`; RunDO remains the durable session authority and Phase 11 remains the explicit approval authority.
+2. **Guard the Loader.** `LOADER.load()` only, `globalOutbound: null`, empty application `env`, bounded wall/CPU/subrequest budgets, bounded logs/results, and no caller override.
+3. **Binding-by-binding TDD:** `slack`, `memory`, `linear`, `supabase`, `langsmith`, `betterstack`, `files`. Host context pins actor, target, customer scope, API origins, and Linear team. `github`, `sandbox`, `escalate`, and `withdraw` arrive in their owning phases.
+4. **Generate the `.d.ts` from the exact runtime schemas** and fail CI when the checked artifact drifts.
+5. **Prove the security boundary deployed.** Network globals exist but outbound use throws; `RpcTarget` dispatch crosses as a call argument rather than loaded-Worker `env`; raw credentials and platform bindings remain absent; CPU runaway is tested on Cloudflare because local Wrangler does not enforce the same limit.
+6. **Make effects retry-aware** and surface safe, readable capability errors instead of stacks or raw upstream bodies.
 
 **Exit criteria:** A hand-written snippet chains four bindings in one execution. The network-isolation test passes. The generated `.d.ts` typechecks against the real implementations.
 
@@ -309,7 +308,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Depends on:** Phase 10 · **Day 4**
 
-**Files:** `src/approval/escalate.ts`, `src/approval/transitions.ts`, `src/api/approvals.ts`, `migrations/0005_approvals.sql`, `src/db/counters.ts` (modify: real `escalated`), `test/approval-*.test.ts`
+**Files:** `src/approval/escalate.ts`, `src/approval/transitions.ts`, `src/api/approvals.ts`, `migrations/0006_approvals.sql`, `src/db/counters.ts` (modify: real `escalated`), `test/approval-*.test.ts`
 
 **Tasks:**
 1. **`approvals` table** per spec §9.
@@ -331,7 +330,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Depends on:** Phase 01 · **Day 4**
 
-**Files:** `src/identity/roster.ts`, `src/identity/rotation.ts`, `src/identity/crypto.ts`, `src/oauth/slack.ts`, `src/oauth/github.ts`, `src/db/identities.ts`, `migrations/0006_identities.sql`, `test/rotation.test.ts`, `test/oauth-*.test.ts`
+**Files:** `src/identity/roster.ts`, `src/identity/rotation.ts`, `src/identity/crypto.ts`, `src/oauth/slack.ts`, `src/oauth/github.ts`, `src/db/identities.ts`, `migrations/0007_identities.sql`, `test/rotation.test.ts`, `test/oauth-*.test.ts`
 
 **Tasks:**
 1. **Hardcoded roster:** four fire-fighters, three viewers, seven emails to roles.
@@ -471,13 +470,13 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Depends on:** Phase 18 · **Day 6**
 
-**Files:** `sandbox/playwright/`, `src/sandbox/record.ts`, `src/files/r2.ts`, `wrangler.jsonc` (modify: R2 binding)
+**Files:** `sandbox/playwright/`, `src/sandbox/record.ts`, `src/files/r2.ts` (reuse/extend Phase 09's publisher for large streamed proof)
 
 **Tasks:**
 1. **Playwright in the image**, driven from model-authored code via `exec`.
 2. **`browser.record(fn)`** wrapping a context with `recordVideo` — no screen-capture rig.
 3. **webm → mp4 transcode** so the link previews usefully.
-4. **R2 upload returning a public URL.** This sidesteps the `files:write` scope question entirely: a link needs no Slack file scope.
+4. **R2 upload returning a public URL**, reusing Phase 09's trusted publisher but streaming large recordings outside the small Code Mode binary limit. This sidesteps the `files:write` scope question entirely: a link needs no Slack file scope.
 5. **The verify cycle:** repro fails → apply fix → repro passes → record the passing run.
 6. **`diff()` returns the change as a string** — the container's entire output, per D5.
 
@@ -485,19 +484,19 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 ---
 
-## Phase 20 — PR and Linear writes
+## Phase 20 — PR and ship-loop Linear updates
 
 **Goal:** Worker-side writes under the fire-fighter's own identity.
 
 **Depends on:** Phase 19 · **Day 6**
 
-**Files:** `src/codemode/bindings/github.ts`, `src/git/commit.ts`, `src/codemode/bindings/linear.ts`, `test/github-*.test.ts`, `test/linear.test.ts`
+**Files:** `src/codemode/bindings/github.ts`, `src/git/commit.ts`, `src/codemode/bindings/linear.ts` (extend Phase 09), `test/github-*.test.ts`, `test/linear.test.ts`
 
 **Tasks:**
 1. **Diff → PR entirely Worker-side:** blobs → tree → commit → ref → PR via REST, authored as the on-duty engineer with their token. The sandbox never holds it.
 2. **Repo PR conventions** honored — base `staging`, Linear issue linked so it closes on merge, proof link in the body.
-3. **Linear binding with the team id pinned server-side.** Test that a model-supplied team id is ignored, not merely discouraged.
-4. **Large-feature-request issue shape:** value, blocking, and customer-weight assessment as structured fields.
+3. **Extend Phase 09's pinned-team Linear binding** with ship-loop linking/status operations. A model-supplied team id remains absent from the schema and rejected at runtime.
+4. **Preserve Phase 09's large-feature-request issue shape:** value, blocking, and customer-weight assessment remain structured fields.
 5. **Idempotency** — a retried run updates its PR rather than opening a second one.
 
 **Exit criteria:** A PR appears under the on-duty engineer's GitHub identity with the recording attached and its Linear issue linked.
