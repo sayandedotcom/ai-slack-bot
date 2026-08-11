@@ -35,7 +35,7 @@ Every phase's requirements implicitly include this section. Values are copied ve
 
 - **Node >= 20** (have 22.20.0), **pnpm 10.33.4**, TypeScript `strict: true`.
 - **`compatibility_date: "2026-08-01"`**, `compatibility_flags: ["nodejs_compat"]`.
-- **Channels only, never DMs.** `channel_type` of `im` or `mpim` is dropped at ingest, unconditionally. The app has no DM history scopes; the code must not depend on that staying true.
+- **Channels only, never DMs.** `channel_type` of `im` or `mpim` is dropped at ingest, unconditionally. **The installed app *does* hold `im:history` and `im:read`** (verified against `auth.test` on 2026-08-11 — see spec §15). The drop is therefore the only thing keeping DMs out of D1, not defense in depth behind a scope wall. Never relax it on the assumption that scopes would catch it.
 - **Fail closed.** A channel absent from the `channels` table is never postable.
 - **No secret values in the repo, ever.** `.dev.vars` locally (gitignored as of `74383cc`), `wrangler secret put` in production. Plans and code name variables, never values.
 - **The webhook does no I/O beyond the queue send.** Slack demands 200 within 3 seconds and retries three times otherwise.

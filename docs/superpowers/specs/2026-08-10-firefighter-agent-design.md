@@ -126,8 +126,9 @@ three times otherwise; a webhook that does work in-band eventually produces dupl
 processing under load. Retries dedupe downstream on `event_id`.
 
 `url_verification` challenges are answered inline. Events with `channel_type` of `im` or
-`mpim` are dropped at the door as defense in depth — the app has no DM history scopes, but
-the code should not depend on that remaining true.
+`mpim` are dropped at the door. This drop is **load-bearing, not defense in depth**: the
+installed app holds `im:history` and `im:read`, so Slack will deliver DM events to us and
+nothing upstream of this check filters them (§15, resolved item 3).
 
 ### 4.2 Ingest consumer
 
@@ -594,7 +595,34 @@ loses the week.
    slow invite reorders the build rather than stalling it.
 2. **Supabase prod read-only, LangSmith, Better Stack** credentials — not yet confirmed
    received.
-3. **`im:write` and `files:write`** grantability on the Slack app (§10, §11.1).
+3. ~~**`im:write` and `files:write`** grantability on the Slack app (§10, §11.1).~~
+   **Half resolved 2026-08-11.** `im:write` **is granted**, so the Slack bot nudge (§10) is
+   unblocked. `files:write` is **not** granted — still needed for §11.1, still an ask.
+
+   Full scope set on the installed bot token, read from the `x-oauth-scopes` header on
+   `auth.test`: `app_mentions:read`, `chat:write`, `im:write`, `reactions:write`,
+   `assistant:write`, `channels:history`, `groups:history`, `im:history`, `im:read`,
+   `reactions:read`, `users:read`.
+
+   Two consequences, both recorded where they bite: the app **can** read DMs (§4.1, §16), and
+   `channels:read`/`groups:read` are **absent** — nothing may call `conversations.list` or
+   `conversations.info`. Phases 02–04 don't, and channel policy is seeded into D1 directly,
+   so this is a constraint on future work rather than a blocker.
+
+4. **Rotate the leaked Slack credentials.** Scope grew: the signing secret, bot token, client
+   secret, and verification token were all exposed in a chat transcript on 2026-08-11, on top
+   of the original Day 1 leak. All four need rotating on the app's Basic Information page.
+   The client secret matters most — with the client ID it permits completing an OAuth flow as
+   this app (§12) — and it costs nothing to rotate now since nothing consumes it yet. After
+   rotating: update `apps/worker/.dev.vars` and re-upload both Worker secrets.
+
+   **Do not use bare `wrangler secret put` from a non-interactive shell** (agent tool call,
+   CI step, anything without a TTY). It reads an empty value from stdin, uploads an empty
+   string, and reports success — `wrangler secret list` then shows the name as present. The
+   symptom is a 500 at runtime, not an auth error: `DataError: Imported HMAC key length (0)`
+   from `crypto.subtle.importKey`. Cost real debugging time on 2026-08-11. Use
+   `wrangler secret bulk <file.json>`, or `wrangler secret put NAME < value.txt`, and delete
+   the file afterwards.
 
 **Non-blocking:**
 
@@ -608,7 +636,8 @@ loses the week.
 
 ## 16. Out of scope
 
-DM and group-DM ingestion (no scopes requested, channels only). Multi-tenant or
+DM and group-DM ingestion (channels only — dropped at ingest by `channel_type`, *not* by
+absence of scopes; the app in fact holds `im:history`/`im:read`, see §4.1). Multi-tenant or
 multi-workspace anything. Billing, teams. Ungated autonomy in real customer channels. Visual
 design beyond working states. Anything IAM-shaped past the domain gate — seven hardcoded
 emails is the whole authorization model.

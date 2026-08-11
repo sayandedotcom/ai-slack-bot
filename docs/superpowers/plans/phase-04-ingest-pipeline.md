@@ -137,8 +137,9 @@ const DROPPED_SUBTYPES = new Set([
  * Decide what happens to one message event. Pure: no I/O, so the whole drop
  * policy is testable in isolation.
  *
- * The DM check comes first and is unconditional. The app has no DM history
- * scopes, but this must not depend on that staying true. See spec §4.1.
+ * The DM check comes first and is unconditional. The installed app holds
+ * im:history and im:read, so Slack really does deliver DM events here — this
+ * line is the only thing keeping them out of D1. See spec §4.1.
  */
 export function classify(event: SlackMessageEvent, channelKnown: boolean): IngestOutcome {
   if (event.channel_type === "im" || event.channel_type === "mpim") return "dropped_dm";
