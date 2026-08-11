@@ -190,3 +190,64 @@ as protection against memory exhaustion.
 
 Console output does **not** travel through `tails`, so the Phase 00 spike's
 ~200KB silent-tail ceiling does not apply here.
+
+---
+
+## Task 5 — 2026-08-12
+
+### Production must use the NON-validating resolver
+
+Counter-intuitive, and measured rather than reasoned. The `/ai` resolver
+validates **before** our `execute` and throws `JSON.stringify(zodIssues)` as the
+error message. Since only `message` survives the isolate boundary, the model
+receives a raw JSON array:
+
+```json
+[{ "expected": "string", "code": "invalid_type", "path": ["text"],
+   "message": "Invalid input: expected string, received number" }]
+```
+
+Three problems with that: it is not the `code: message` wire format, so the
+model cannot branch on a code; it echoes submitted values back for some issue
+types (`"keys": ["teamId"]`), bypassing the "name the path, never the value"
+rule `formatZodIssues` exists to enforce; and it bypasses our error text
+entirely.
+
+The **bare** resolver does not validate at all, so `defineCapability`'s parse is
+the only one and every rejection is a well-formed `invalid_input: …`. Task 13
+must therefore resolve providers with the bare `resolveProvider` from the main
+entry — the opposite of the intuitive choice.
+
+> **Plan correction:** Task 5 Step 2's `rejects a wrong-typed field through the
+> /ai resolver` asserts `/invalid_input/i`. That fails: the /ai path never
+> produces that string. Both resolvers reject, which is what the security
+> invariant needs, but only the bare one produces our format. The test now
+> asserts each resolver's real behaviour separately.
+
+### `generateTypes` degrades a whole capability to `unknown`, silently
+
+An input field JSON Schema cannot express does not raise an error — it renders
+the ENTIRE capability's input type as `type PublishInput = unknown`, so the
+model is told nothing about *any* of its arguments. Reproduced with
+`z.instanceof(Uint8Array)`, `z.custom()`, and `.meta({type:"string"})`; all three
+produce the same silent blanking.
+
+The `files` namespace therefore ships explicit declarations
+(`FILES_DECLARATIONS`), and `CapabilityProvider.types` exists solely for that.
+A test asserts **no other** namespace renders `= unknown`, so a future schema
+change cannot blank a capability's guidance without failing the build.
+
+Related, and confirmed by reading the codec: **binary genuinely survives the
+boundary**. `stringifyForCodemode` base64-tags `Uint8Array` as
+`__codemode_binary_v1__` and `parseForCodemode` decodes it back to a real
+`Uint8Array` on the host. Arguments cross as a JSON string
+(`ToolDispatcher.call(name, argsJson)`), so this codec — not structured clone —
+is why `files.publish({ bytes })` works.
+
+### `generateTypes` cannot render an index signature
+
+`z.record`, `z.looseObject`, and `z.object().catchall()` all emit `{}`. So
+`supabase.select` is declared as `Promise<{}[]>`. This costs nothing at runtime
+— the sandbox runs JavaScript, not TypeScript — but it means the row shape is
+communicated in the method description rather than the type. Not worth an
+override; recorded so nobody re-investigates it.
