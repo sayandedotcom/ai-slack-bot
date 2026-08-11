@@ -7,8 +7,10 @@
 # production these are set with `wrangler secret put <NAME>` and never live in
 # a file. Never paste a real value into this file. See spec §15.8.
 #
-# The test harness does NOT read this file — vitest.config.ts injects its own
-# fixture values through miniflare bindings.
+# The test harness DOES load this file, but vitest.config.ts's explicit miniflare
+# bindings take precedence for the keys it sets, so tests run against fixtures
+# ("test-signing-secret", "xoxb-test") regardless of what is here. Don't rely on
+# a value in this file reaching a test.
 
 # Slack app signing secret, used to verify the X-Slack-Signature HMAC on every
 # inbound event. Slack app settings → Basic Information → App Credentials.

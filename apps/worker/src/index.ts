@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { slackEvents } from "./slack/events";
 
 export type Env = {
   DB: D1Database;
@@ -11,6 +12,9 @@ export type Env = {
 const app = new Hono<{ Bindings: Env }>();
 
 app.get("/api/health", (c) => c.json({ ok: true }));
+
+// Must stay above the catch-all below, which would otherwise swallow it.
+app.route("/slack", slackEvents);
 
 // The Worker runs first on every request; anything unmatched falls through to
 // the static asset bundle. Explicit, rather than relying on route-ordering
