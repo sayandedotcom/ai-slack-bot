@@ -628,11 +628,13 @@ describe("the execution guard reaches the tool through the shipping composition"
     ]);
     const harness = await freshLoopRun({
       model,
-      // What Task 8 will supply for real. The point of the case is that the
-      // value travels `makeAgentContinuation` -> `makeAgentTools` ->
-      // `makeRunCodeTool` and is actually consulted — not that this particular
-      // implementation is the final one.
-      guard: {
+      // The SEAM, forced to refuse deterministically. The point of the case is
+      // that the value travels `makeAgentContinuation` -> `makeAgentTools` ->
+      // `makeRunCodeTool` and is actually consulted. Task 8 supplied the real
+      // durable check, which `makeAgentContinuation` now ANDs in underneath
+      // this one and which no caller can switch off; a refusal from either is
+      // the same safe `stale_generation` result.
+      additionalGuard: {
         async assertFresh() {
           throw new CapabilityError("stale_generation", STALE_GENERATION_MESSAGE);
         },

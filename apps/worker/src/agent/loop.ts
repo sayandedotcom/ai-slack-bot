@@ -731,27 +731,40 @@ async function consumeStream(
 
       // THE ONLY WINDOW IN WHICH A STEER MAY CUT THE PROVIDER OFF.
       //
-      // Armed at `text-start` and withdrawn the moment the model stops emitting
-      // prose, because that is the only phase where aborting is cheaper than
-      // continuing: every further token is text a steer would supersede anyway.
-      // A steer that lands while the model is thinking, while `run_code` is
-      // executing, or between steps finds nothing armed and is absorbed by the
-      // next `prepareStep` instead — with the step's tokens and its tool result
-      // intact, which is strictly better than paying for the step twice.
+      // Armed at `text-start` and withdrawn the moment the step shows any sign
+      // of being worth finishing, because streaming prose is the only phase
+      // where aborting is cheaper than continuing: every further token is text
+      // a steer would supersede anyway. A steer that lands while the model is
+      // thinking, while `run_code` is executing, or between steps finds nothing
+      // armed and is absorbed by the next `prepareStep` instead — with the
+      // step's tokens and its tool result intact, which is strictly better than
+      // paying for the step twice.
+      //
+      // The window is deliberately as small as the stream allows, but it cannot
+      // be zero: while the first narration deltas of a step arrive there is no
+      // signal yet distinguishing "this step is the answer" from "this step is
+      // about to call a tool", and a steer landing in those few tokens does cut
+      // the step short. That costs the narration tokens and re-sends the prompt;
+      // it loses nothing, and `row 2 — a steer during pre-tool narration` pins
+      // the behaviour down rather than leaving it to be discovered.
       case "text-start":
         abort.arm();
         break;
 
       case "text-end":
-      // A step that asked for a tool has work worth keeping. Withdrawn here as
-      // well as at `finish-step` because the tool call can be the last part of
-      // a step whose text ended long before it.
-      //
-      // Nothing is EMITTED for `tool-call`: the outer `run_code` lifecycle is
-      // written by the execute wrapper, not from here, because the wrapper is
-      // what guarantees the outer `started` precedes the nested `cap:*` events
-      // the execution emits while it runs. Mapping both would put every tool
-      // call in the timeline twice (see audit.ts).
+      // The moment the step declares a tool, it has work worth keeping: the
+      // arguments are already being streamed and the call is about to issue.
+      // Disarmed HERE rather than only at `tool-call`, because the argument
+      // payload of a `run_code` call is the model's whole program and streams
+      // as `tool-input-delta` — by far the longest stretch of a tool step, and
+      // the last place an abort should still be on offer.
+      case "tool-input-start":
+      // Belt and braces for a provider that emits the call without the input
+      // framing. Nothing is EMITTED for either: the outer `run_code` lifecycle
+      // is written by the execute wrapper, not from here, because the wrapper
+      // is what guarantees the outer `started` precedes the nested `cap:*`
+      // events the execution emits while it runs. Mapping both would put every
+      // tool call in the timeline twice (see audit.ts).
       case "tool-call":
         abort.disarm();
         break;
@@ -771,7 +784,6 @@ async function consumeStream(
       // Framing and progress with no durable meaning of their own.
       case "start":
       case "start-step":
-      case "tool-input-start":
       case "tool-input-delta":
       case "tool-input-end":
       case "source":
@@ -1031,21 +1043,28 @@ export function withOuterToolEvents(
 export type AgentContinuationOptions = {
   modelFactory: ModelFactory;
   /**
-   * An ADDITIONAL freshness check, on top of the durable one.
+   * An ADDITIONAL freshness check, ANDed on top of the durable one.
    *
-   * Invariant 15's real gate is `generationFreshnessGuard`, and `composeAndRun`
-   * always composes it: `run_code` and every capability re-read this
-   * generation's input revision from durable RunDO state immediately before
-   * acting, so a step already known to be stale produces a safe
-   * `stale_generation` result instead of a live external write. No caller can
-   * turn that off, which is the point — invariant 15 is a property of the
-   * composition, not of whoever wires it up.
+   * Named `additionalGuard` rather than `guard` because the call site is what
+   * an audit of invariant 15 actually reads. A field called `guard` set to
+   * `alwaysFresh()` tells that reader freshness checking is off, which is the
+   * exact inverse of the truth: invariant 15's real gate is
+   * `generationFreshnessGuard`, `composeAndRun` always composes it, and no
+   * caller can turn it off. `additionalGuard: alwaysFresh()` says the true
+   * thing — nothing extra beyond the durable check.
    *
-   * This field stays REQUIRED anyway. It is the seam a test uses to force a
-   * refusal deterministically, and a required field means the answer "nothing
-   * extra" has to be typed out as `alwaysFresh()`, in a diff somebody reads.
+   * The durable half re-reads this generation's input revision, the driver's
+   * pending cursor and the claim epoch from RunDO storage immediately before
+   * the outer `run_code` call and before every capability body, so a step
+   * already known to be stale produces a safe `stale_generation` result instead
+   * of a live external write.
+   *
+   * It stays REQUIRED. It is the seam a test uses to force a refusal
+   * deterministically, and a required field means the answer "nothing extra"
+   * has to be typed out, in a diff somebody reads. AND-semantics mean an added
+   * guard can only ever tighten the check; it cannot loosen it.
    */
-  guard: AgentExecutionGuard;
+  additionalGuard: AgentExecutionGuard;
   limits?: AgentLimits;
   clock?: StreamClock;
   /** Batching thresholds. Tests inject smaller ones. */
@@ -1165,10 +1184,13 @@ async function composeAndRun(
       // The durable half — `generationFreshnessGuard`, which re-reads this
       // generation's included cursor, the driver's pending cursor and the claim
       // epoch immediately before every outer call and every capability body —
-      // is not optional and cannot be opted out of. `options.guard` is an
-      // ADDITIONAL check on top of it, which is why a caller passing
-      // `alwaysFresh()` still gets full steering safety.
-      guard: bothFresh(generationFreshnessGuard(ctx.storage, claim.fence), options.guard),
+      // is not optional and cannot be opted out of. `options.additionalGuard`
+      // is an ADDITIONAL check ANDed on top of it, which is why a caller
+      // passing `alwaysFresh()` still gets full steering safety.
+      guard: bothFresh(
+        generationFreshnessGuard(ctx.storage, claim.fence),
+        options.additionalGuard,
+      ),
       ...(options.dependencies === undefined
         ? {}
         : { dependencies: options.dependencies }),

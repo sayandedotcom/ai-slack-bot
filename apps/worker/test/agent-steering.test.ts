@@ -15,6 +15,7 @@ import type { RunEvent } from "../src/run/protocol";
 import {
   customerTurn,
   freshLoopRun,
+  interleavedToolStep,
   latch,
   mockModel,
   steerTurn,
@@ -223,6 +224,135 @@ describe("row 2 — the provider is streaming before a tool", () => {
     await assertNothingLost(harness, [opening.event.seq, first.event.seq, second.event.seq]);
   });
 
+  it("a steer during pre-tool narration cuts the step short, losing nothing", async () => {
+    /**
+     * THE COST OF THE ONE WINDOW THE STREAM CANNOT DISAMBIGUATE.
+     *
+     * While the first narration deltas of a step arrive, nothing distinguishes
+     * "this step is the answer" from "this step is about to call a tool", so
+     * the abort is armed and an RPC steer landing there cuts the invocation.
+     * The narration tokens are paid for and discarded and the prompt is
+     * re-sent — but the steer is not lost, the generation is the same one, and
+     * the tool call simply happens on the continuation with the steer already
+     * in front of the model.
+     *
+     * Asserted rather than left to be discovered, because it is the honest
+     * cost of the policy and the ONE case where aborting is not free. From
+     * `tool-input-start` onwards — the long stretch in which the model's whole
+     * program streams as tool input, and then executes — nothing is armed.
+     */
+    const streaming = latch();
+    const release = latch();
+    const model = mockModel(
+      [
+        toolStep({
+          toolCallId: "call_1",
+          code: TRIVIAL,
+          narration: ["let me ", "post an update"],
+        }),
+        textStep({ chunks: ["done, with your correction applied"] }),
+      ],
+      {
+        holdAfterDelta: async (call) => {
+          if (call !== 1) return;
+          streaming.open();
+          await release.wait();
+        },
+      },
+    );
+    const harness = await freshLoopRun({ model });
+
+    const opening = await harness.stub.appendTurn(customerTurn("t1"));
+    const running = harness.alarm();
+    await streaming.wait();
+
+    const steer = await harness.stub.appendTurn(steerTurn("s1", "don't post anything"));
+    release.open();
+    await running;
+
+    // Cut short by the abort, not by the finalization compare.
+    expect(harness.results[0].path).toBe("continuation_requested");
+    expect(harness.results[0].detail).toContain("newer input arrived");
+    // The step never got to call its tool, so nothing ran and nothing was sent.
+    const midCalls = await harness.storage((storage) => listToolCalls(storage));
+    expect(midCalls).toHaveLength(0);
+    expect((await assistantStates(harness)).at(-1)).toBe("superseded");
+
+    await harness.alarm();
+
+    // Nothing lost: the same generation continued and answered once, with the
+    // steer in front of the model before the next provider call.
+    const finals = await agentTurns(harness);
+    expect(finals).toHaveLength(1);
+    expect(finals[0].content).toBe("done, with your correction applied");
+    await assertNothingLost(harness, [opening.event.seq, steer.event.seq]);
+  });
+
+  it("does NOT cut short a step whose program is already streaming as tool input", async () => {
+    /**
+     * The other side of the same policy, and what `tool-input-start` buys.
+     *
+     * The stream here interleaves: text is still open when the tool declares
+     * itself and its argument — the model's whole program — begins streaming.
+     * That argument is the longest stretch of a tool step and the last place an
+     * abort should be on offer, so the arm is withdrawn at `tool-input-start`
+     * rather than waiting for `text-end`.
+     *
+     * What the step then does is row 3's behaviour, reached through the real
+     * RPC rather than a session-level append: the step is NOT cut short, it
+     * runs to its tool call, and the freshness guard — not the abort — turns
+     * that call into a safe `stale_generation` result the next step reads.
+     * Both halves matter. The abort must not fire here, and the guard must.
+     */
+    const streamingInput = latch();
+    const release = latch();
+    const model = mockModel(
+      [
+        interleavedToolStep({
+          toolCallId: "call_1",
+          code: TRIVIAL,
+          narration: ["checking that now"],
+        }),
+        textStep({ chunks: ["checked, and your correction is applied"] }),
+      ],
+      {
+        holdAfterToolInput: async (call) => {
+          if (call !== 1) return;
+          streamingInput.open();
+          await release.wait();
+        },
+      },
+    );
+    const harness = await freshLoopRun({ model });
+
+    const opening = await harness.stub.appendTurn(customerTurn("t1"));
+    const running = harness.alarm();
+    await streamingInput.wait();
+
+    const steer = await harness.stub.appendTurn(steerTurn("s1", "also check billing"));
+    release.open();
+    await running;
+
+    // NOT aborted: the step ran to its tool call in ONE provider invocation.
+    // A `continuation_requested` here would mean the abort had fired.
+    expect(harness.results.map((result) => result.path)).toEqual(["completed"]);
+    const calls = await harness.storage((storage) => listToolCalls(storage));
+    const outer = calls.find((call) => call.name === "run_code");
+    // And the guard did its half: a safe refusal, before the isolate loaded.
+    expect(outer?.state).toBe("failed");
+    expect(outer?.error).toContain("stale_generation");
+    expect(calls.filter((call) => call.callId.startsWith("cap:"))).toHaveLength(0);
+
+    // And the steer was absorbed by the NEXT step, not paid for with a
+    // discarded one.
+    expect(await inputRows(harness)).toEqual([
+      { sourceEventSeq: opening.event.seq, globalStep: 0 },
+      { sourceEventSeq: steer.event.seq, globalStep: 1 },
+    ]);
+    expect(await agentTurns(harness)).toHaveLength(1);
+    await assertNothingLost(harness, [opening.event.seq, steer.event.seq]);
+  });
+
   it("advances no cursor and appends no phantom message when nothing new arrived", async () => {
     // Step 2's other half. A `prepareStep` with no pending input must be a
     // read: no cursor movement, no empty input row, nothing for the model to
@@ -270,10 +400,18 @@ describe("row 3 — run_code has not started yet", () => {
       origin: "slack",
       // Committed from inside the object, on the first narration delta: after
       // `prepareStep` has already built the step, and before `run_code` runs.
-      // A steer arriving through the RPC in the same window — between
-      // `text-end` and the tool call, where no abort is armed — leaves durable
-      // state identical, which is the point: the refusal is driven by the
-      // cursors, never by the abort.
+      //
+      // A session-level append is what reaches THIS window without touching
+      // the abort registry, and it is the window that matters: from `text-end`
+      // or `tool-input-start` onwards — the whole stretch in which the model's
+      // program is streamed and then executed — nothing is armed, so a steer
+      // arriving through the RPC there leaves durable state identical to this
+      // and the refusal below is driven purely by the cursors.
+      //
+      // An RPC steer landing EARLIER, during the narration deltas themselves,
+      // does not reach this case: the abort is still armed there and cuts the
+      // step short instead. That path is pinned down by "a steer during
+      // pre-tool narration cuts the step short" below.
       midStream: (storage) => {
         steerSeq = appendTurn(storage, steerTurn("s1", "don't post anything yet")).event.seq;
       },

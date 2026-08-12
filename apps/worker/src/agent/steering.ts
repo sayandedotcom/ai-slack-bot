@@ -78,9 +78,10 @@ export function generationFreshnessGuard(
  * Both guards, in order, first refusal wins.
  *
  * The durable guard is NOT something a caller can opt out of: `makeAgentContinuation`
- * always composes it, and the required `guard` option is an ADDITIONAL check on
- * top. That is deliberate — invariant 15 stops being a wiring decision somebody
- * could forget and becomes a structural property of the composition.
+ * always composes it, and the required `additionalGuard` option is an EXTRA
+ * check on top. That is deliberate — invariant 15 stops being a wiring decision
+ * somebody could forget and becomes a structural property of the composition.
+ * AND-semantics also mean the extra guard can only tighten the check.
  */
 export function bothFresh(
   first: AgentExecutionGuard,

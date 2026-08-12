@@ -117,6 +117,41 @@ export function toolStep(input: {
   ];
 }
 
+/**
+ * A tool step whose tool-input framing arrives BEFORE its text ends.
+ *
+ * The shape that makes `tool-input-start` load-bearing for the steering abort:
+ * with the ordinary `toolStep` the text has already ended by the time the tool
+ * is declared, so `text-end` disarms first and the tool-input window is covered
+ * either way. Interleaved, only the `tool-input-start` arm keeps a steer from
+ * cutting short a step whose program is already streaming.
+ */
+export function interleavedToolStep(input: {
+  toolCallId: string;
+  code: string;
+  narration: string[];
+}): LanguageModelV4StreamPart[] {
+  const inputJson = JSON.stringify({ code: input.code });
+  return [
+    ...head("resp_interleaved"),
+    { type: "text-start", id: "n1" },
+    ...input.narration.map(
+      (delta): LanguageModelV4StreamPart => ({ type: "text-delta", id: "n1", delta }),
+    ),
+    { type: "tool-input-start", id: input.toolCallId, toolName: "run_code" },
+    { type: "tool-input-delta", id: input.toolCallId, delta: inputJson },
+    { type: "tool-input-end", id: input.toolCallId },
+    { type: "text-end", id: "n1" },
+    {
+      type: "tool-call",
+      toolCallId: input.toolCallId,
+      toolName: "run_code",
+      input: inputJson,
+    },
+    finish("tool-calls", "tool_use"),
+  ];
+}
+
 /** A step whose omitted-thinking block arrives with readable text. Must fail safe. */
 export function readableReasoningStep(): LanguageModelV4StreamPart[] {
   return [
@@ -162,6 +197,12 @@ export type ModelScript = {
    * it is the only way to exercise the abort deterministically.
    */
   holdAfterDelta?: (call: number) => Promise<void>;
+  /**
+   * Hold the stream open after the first `tool-input-delta` — i.e. while the
+   * model's program is being streamed as the tool's argument. Nothing may be
+   * armed for abort here: the step has declared work worth keeping.
+   */
+  holdAfterToolInput?: (call: number) => Promise<void>;
 };
 
 export function mockModel(
@@ -187,17 +228,23 @@ export function mockModel(
         chunkDelayInMs: 0,
       });
       const holdAfterDelta = script.holdAfterDelta;
-      if (!holdAfterDelta) {
+      const holdAfterToolInput = script.holdAfterToolInput;
+      if (!holdAfterDelta && !holdAfterToolInput) {
         return { stream, response: { headers: { "cf-aig-log-id": "log_local" } } };
       }
 
-      let held = false;
+      let heldText = false;
+      let heldToolInput = false;
       const pause = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
         async transform(part, controller) {
           controller.enqueue(part);
-          if (!held && part.type === "text-delta") {
-            held = true;
+          if (holdAfterDelta && !heldText && part.type === "text-delta") {
+            heldText = true;
             await holdAfterDelta(invocation);
+          }
+          if (holdAfterToolInput && !heldToolInput && part.type === "tool-input-delta") {
+            heldToolInput = true;
+            await holdAfterToolInput(invocation);
           }
         },
       });
@@ -308,8 +355,12 @@ export type LoopOptions = {
    * loader, the one-tool map — is the real production composer.
    */
   fixtures?: FakeFixtures;
-  /** Invariant 15's gate. Defaults to permissive; staleness cases pass their own. */
-  guard?: AgentExecutionGuard;
+  /**
+   * An EXTRA check ANDed on top of the durable freshness guard, which
+   * `makeAgentContinuation` always composes and nothing here can switch off.
+   * Defaults to `alwaysFresh()` — meaning "nothing extra", not "no checking".
+   */
+  additionalGuard?: AgentExecutionGuard;
   limits?: Partial<AgentLimits>;
   clock?: StreamClock;
   flush?: { chars?: number; ms?: number };
@@ -383,7 +434,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
           // The ADDITIONAL guard only. The durable freshness guard is composed
           // by `makeAgentContinuation` itself and cannot be switched off here,
           // which is exactly the property invariant 15 needs.
-          guard: options.guard ?? alwaysFresh(),
+          additionalGuard: options.additionalGuard ?? alwaysFresh(),
           dependencies: (_env, _scope, depsClock) => {
             const base: CapabilityDependencies = {
               ...fakeDeps(options.fixtures ?? {}),
