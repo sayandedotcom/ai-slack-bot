@@ -1,6 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
 import { streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+
+/**
+ * Record every `createAnthropic` call without replacing it.
+ *
+ * The composer's whole job is to put two secrets onto one request, and a test
+ * suite that only asserts their ABSENCE from safe surfaces cannot tell "the
+ * token was correctly withheld from the snapshot" apart from "the token was
+ * never attached at all". Deleting the `cf-aig-authorization` term from
+ * `model.ts` used to leave all 31 tests, typecheck and dts:check green while
+ * production sent every Fable request unauthenticated. This spy is the
+ * positive half of that proof.
+ *
+ * It DELEGATES to the real implementation rather than stubbing it, so the
+ * models these tests build are still genuine and the surrounding assertions
+ * keep their meaning.
+ */
+const anthropicSpy = vi.hoisted(() => ({
+  calls: [] as { apiKey?: string; baseURL?: string; headers?: Record<string, string> }[],
+}));
+
+vi.mock("@ai-sdk/anthropic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@ai-sdk/anthropic")>();
+  return {
+    ...actual,
+    createAnthropic: (settings: Parameters<typeof actual.createAnthropic>[0]) => {
+      anthropicSpy.calls.push(settings as (typeof anthropicSpy.calls)[number]);
+      return actual.createAnthropic(settings);
+    },
+  };
+});
 import {
   buildGatewayMetadata,
   GATEWAY_AUTH_HEADER,
@@ -266,6 +296,93 @@ describe("production model composer", () => {
     const other = factory({ ...invocation, attempt: 2 });
     expect(other.model).not.toBe(handle.model);
     expect(other.safeHeaders["cf-aig-metadata"]).toContain('"attempt":2');
+  });
+});
+
+describe("the auth header is actually attached", () => {
+  /** Build one model and return the settings the composer handed the provider. */
+  function composedSettings(env = canaryEnv()) {
+    anthropicSpy.calls.length = 0;
+    createProductionModelFactory(env)(invocation);
+    expect(anthropicSpy.calls).toHaveLength(1);
+    return anthropicSpy.calls[0];
+  }
+
+  it("sends cf-aig-authorization with the gateway token as a bearer credential", () => {
+    const settings = composedSettings();
+
+    // THE positive assertion. Without it, deleting the auth term from
+    // model.ts is invisible to every check in this repo, and every Fable
+    // request reaches the Gateway unauthenticated — which, against a gateway
+    // that is not configured as authenticated, SUCCEEDS, defeating the
+    // "an unauthenticated request cannot inflate the bill" property.
+    expect(settings.headers?.[GATEWAY_AUTH_HEADER]).toBe(`Bearer ${CANARY_GATEWAY_TOKEN}`);
+  });
+
+  it("uses the canary token itself, so a real credential cannot satisfy the assertion", () => {
+    const settings = composedSettings(
+      canaryEnv({ AI_GATEWAY_TOKEN: "cf-aig-a-completely-different-token" }),
+    );
+    // The header tracks the configured secret rather than any fixed string.
+    expect(settings.headers?.[GATEWAY_AUTH_HEADER]).toBe(
+      "Bearer cf-aig-a-completely-different-token",
+    );
+    expect(settings.headers?.[GATEWAY_AUTH_HEADER]).not.toContain(CANARY_GATEWAY_TOKEN);
+  });
+
+  it("sends the anthropic key and the provider-native gateway base url", () => {
+    const settings = composedSettings();
+    // The provider keeps sending its OWN credential; the Gateway is
+    // authenticated separately. That pairing is why the provider-native
+    // endpoint needs a second header name at all.
+    expect(settings.apiKey).toBe(CANARY_API_KEY);
+    expect(settings.baseURL).toBe(canaryEnv().AI_GATEWAY_ANTHROPIC_URL);
+    expect(new URL(settings.baseURL!).hostname).toBe(GATEWAY_PROVIDER_NATIVE_HOST);
+  });
+
+  it("sends every safe policy header alongside the credential, not instead of it", () => {
+    const settings = composedSettings();
+    const safe = gatewayHeaders({
+      run: invocation.runId,
+      generation: invocation.generationId,
+      attempt: invocation.attempt,
+      surface: invocation.surface,
+    });
+
+    // The reviewed policy and the credential travel together on one request.
+    for (const [name, value] of Object.entries(safe)) {
+      expect(settings.headers?.[name]).toBe(value);
+    }
+    expect(Object.keys(settings.headers ?? {}).sort()).toEqual(
+      [...Object.keys(safe), GATEWAY_AUTH_HEADER].sort(),
+    );
+  });
+
+  it("attaches the credential to every invocation, not just the first", () => {
+    anthropicSpy.calls.length = 0;
+    const factory = createProductionModelFactory(canaryEnv());
+    factory(invocation);
+    factory({ ...invocation, attempt: 2 });
+
+    expect(anthropicSpy.calls).toHaveLength(2);
+    for (const call of anthropicSpy.calls) {
+      expect(call.headers?.[GATEWAY_AUTH_HEADER]).toBe(`Bearer ${CANARY_GATEWAY_TOKEN}`);
+    }
+    // ...and the per-invocation metadata still differs between them.
+    expect(anthropicSpy.calls[0].headers?.["cf-aig-metadata"]).not.toBe(
+      anthropicSpy.calls[1].headers?.["cf-aig-metadata"],
+    );
+  });
+
+  it("still keeps the credential out of the handle the caller receives", () => {
+    anthropicSpy.calls.length = 0;
+    const handle = createProductionModelFactory(canaryEnv())(invocation);
+
+    // Both halves at once: attached to the REQUEST, absent from the HANDLE.
+    expect(anthropicSpy.calls[0].headers?.[GATEWAY_AUTH_HEADER]).toBe(
+      `Bearer ${CANARY_GATEWAY_TOKEN}`,
+    );
+    expect(handle.safeHeaders[GATEWAY_AUTH_HEADER]).toBeUndefined();
   });
 });
 
