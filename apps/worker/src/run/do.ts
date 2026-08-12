@@ -33,6 +33,7 @@ import {
   readDriver,
   readGeneration,
   readRunIndexRevision,
+  countModelSteps,
   retryProjectionJob,
   readState,
   setStatus,
@@ -49,11 +50,14 @@ import type {
   AssistantUpdateOutcome,
   ClaimFence,
   ClaimSnapshot,
+  DriverPhase,
   DriverState,
   FinalizeOutcome,
   ProjectionJobKind,
 } from "../agent/contracts";
 import { abortForNewerInput } from "../agent/steering";
+import { ensureRunPortsInstalled } from "../agent/ports";
+
 import {
   continuationMadeNoProgress,
   crashOutcome,
@@ -116,6 +120,32 @@ const PROJECTION_DRAIN_MAX = 8;
 
 export type ProjectionFlush = { projected: number; failed: number; pending: number };
 
+/**
+ * The four words a dashboard may know about the driver.
+ *
+ * Identical to `DriverPhase` today, and mapped rather than passed through on
+ * purpose: the private phase set is going to grow (Phase 11 adds an approval
+ * pause), and a pass-through would publish the new member the day it is added.
+ * The map is where a new private phase has to be given a public name — or
+ * deliberately collapsed onto an existing one — in a diff somebody reads.
+ */
+export type PublicDriverPhase = "scheduled" | "running" | "idle" | "failed";
+
+const PUBLIC_DRIVER_PHASE: Record<DriverPhase, PublicDriverPhase> = {
+  idle: "idle",
+  scheduled: "scheduled",
+  running: "running",
+  failed: "failed",
+};
+
+export type PublicDriverState = {
+  state: PublicDriverPhase;
+  attempt: number;
+  steps: number;
+  /** The safe error CODE, never a provider or capability message. */
+  error: string | null;
+};
+
 /** What one alarm delivery actually did. Returned for tests and operator tooling. */
 export type AlarmOutcome = {
   dispatched: "model" | "projection" | "none";
@@ -137,6 +167,16 @@ export class RunDO extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+
+    // THE PRODUCTION WIRING, and the earliest point that can carry it.
+    //
+    // Ports must exist before `#armAlarm()` below decides whether model work is
+    // enabled, and before any alarm, socket or RPC entry reads them. Module
+    // scope cannot do it (the ports need `env`); a handler cannot do it (crash
+    // recovery runs in this constructor, before any handler). Idempotent and
+    // memoized per isolate; a test's key-scoped registration still wins.
+    ensureRunPortsInstalled(env);
+
     // Synchronous only. This runs again on every wake, so it must be cheap and
     // must not await.
     ensureSchema(ctx.storage);
@@ -341,6 +381,40 @@ export class RunDO extends DurableObject<Env> {
   /** Private driver state, for operator inspection and the Task 3 alarm. */
   driver(): DriverState {
     return readDriver(this.ctx.storage);
+  }
+
+  /**
+   * The browser-safe projection of the driver, for the live run snapshot.
+   *
+   * Deliberately a SEPARATE method rather than a filter applied at the API
+   * layer. `driver()` returns lease timestamps, heartbeat times, the claim
+   * epoch, the generation id and the internal agent turn id; a route that
+   * spread that object and deleted three keys would leak the next field
+   * somebody adds. Here the shape is a construction, so a new private field is
+   * private by default.
+   *
+   * What is withheld, and why:
+   *
+   *  - lease/heartbeat/next-attempt timestamps and the claim epoch: they are
+   *    the concurrency fence, and publishing them tells a caller exactly when a
+   *    claim is stealable;
+   *  - the generation and agent turn ids: `agent_turn_id` is the Code Mode
+   *    EFFECT SCOPE, the idempotency key external writes are reserved under;
+   *  - the run key: the Durable Object name (invariant 10's `runs.id` rule);
+   *  - the prompt, the transcript and any assistant text.
+   *
+   * `error` is the safe error CODE only, never the message: a message is
+   * assembled from provider and capability text, and a capability's error can
+   * carry a URL that had a token in it. Codes are ours.
+   */
+  publicDriver(): PublicDriverState {
+    const driver = readDriver(this.ctx.storage);
+    return {
+      state: PUBLIC_DRIVER_PHASE[driver.phase],
+      attempt: driver.attempt,
+      steps: countModelSteps(this.ctx.storage),
+      error: driver.lastErrorCode,
+    };
   }
 
   toolCalls() {
@@ -793,7 +867,10 @@ export class RunDO extends DurableObject<Env> {
     });
     if (claim.outcome !== "claimed") return null;
 
-    const runner = ports.projections[claim.job.kind];
+    // Built per claimed job, from THIS object's ctx and bindings — the same
+    // reason the continuation is a factory. A projection runner reads the
+    // frozen episode or the billed step row out of this object's own storage.
+    const runner = ports.projections[claim.job.kind]?.(this.ctx, this.env);
     if (!runner) {
       // The runner disappeared between the due-time scan and the claim. Put the
       // job back rather than completing work nobody did.

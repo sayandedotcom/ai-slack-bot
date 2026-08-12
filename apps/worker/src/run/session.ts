@@ -2469,6 +2469,19 @@ export function markUsageProjected(
 }
 
 /** Total local spend for this run, in nano-USD. The spend ceiling reads this. */
+/**
+ * How many model steps this run has completed, locally.
+ *
+ * The local row is the system of record (invariant 32): a step counted here has
+ * been billed whether or not its D1 projection has landed yet, which is exactly
+ * what the live snapshot should show while telemetry lags.
+ */
+export function countModelSteps(storage: DurableObjectStorage): number {
+  return storage.sql
+    .exec<{ steps: number }>("SELECT COUNT(*) AS steps FROM model_step_usage")
+    .one().steps;
+}
+
 export function totalCostNanoUsd(storage: DurableObjectStorage): number {
   return storage.sql
     .exec<{ total: number }>(

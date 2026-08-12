@@ -423,6 +423,28 @@ export function evaluateSpendGuard(input: SpendGuardInput): SpendGuardOutcome {
   };
 }
 
+/**
+ * Integer nano-USD as an EXACT decimal string, for an API field.
+ *
+ * Distinct from `formatNanoUsd` below, which is for humans: that one prefixes a
+ * currency symbol and truncates to six places, both of which are wrong in a
+ * JSON body. A client that has to strip a `$` before parsing will eventually
+ * parse it as a float, and a truncated value silently loses the last three
+ * digits of every figure it is asked to add up.
+ *
+ * Nine decimal places is not a rounding choice — it is exactly one nano-USD, so
+ * this conversion is lossless in both directions. The string form is what keeps
+ * it lossless once it leaves us: `JSON.parse` would turn it into a double
+ * (invariant 29).
+ */
+export function decimalNanoUsd(nanoUsd: number): string {
+  const sign = nanoUsd < 0 ? "-" : "";
+  const magnitude = Math.abs(Math.trunc(nanoUsd));
+  const dollars = Math.trunc(magnitude / NANO_USD_PER_USD);
+  const fraction = magnitude % NANO_USD_PER_USD;
+  return `${sign}${dollars}.${String(fraction).padStart(9, "0")}`;
+}
+
 /** Presentation only. Never used to compute or store a charge. */
 export function formatNanoUsd(nanoUsd: number): string {
   const sign = nanoUsd < 0 ? "-" : "";

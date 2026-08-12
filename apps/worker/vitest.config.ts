@@ -15,6 +15,20 @@ export default defineConfig({
           TEST_MIGRATIONS: migrations,
           SLACK_SIGNING_SECRET: "test-signing-secret",
           SLACK_BOT_TOKEN: "xoxb-test",
+          // Newly necessary in Phase 10 Task 10.
+          //
+          // Until the run ports were wired, nothing in a test could reach the
+          // memory queue on its own: a RunDO had no `memory_outbox` runner, so
+          // every projection parked. It has one now, which is the whole point —
+          // and it means a settled generation in any suite can send a real
+          // queue message, whose consumer builds `new ZepMemory(env.ZEP_API_KEY)`.
+          //
+          // `.dev.vars` holds the LIVE key, so without this line a test run
+          // could write episodes into the production memory graph. A fixture
+          // value keeps the composition and the canary assertions working
+          // (they only require a non-empty string) while making the write
+          // impossible. Same reasoning as the two Slack fixtures above.
+          ZEP_API_KEY: "zep-test-key",
         },
       },
     }),

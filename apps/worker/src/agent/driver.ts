@@ -113,6 +113,26 @@ export interface AgentProjectionRunner {
   run(job: ClaimedProjectionJob): Promise<ProjectionOutcome>;
 }
 
+/**
+ * How a projection runner is OBTAINED, for exactly the reason the continuation
+ * is a factory too.
+ *
+ * A projection runner is not a stateless function of its job. The memory-outbox
+ * runner reads the frozen episode out of THIS object's storage and marks it
+ * projected there; the usage runner reads THIS object's locally recorded step
+ * rows. A module-scope singleton has a route to neither, so before this the
+ * only thing that could install one was a test already holding a storage handle
+ * from inside `runInDurableObject` — which is why Task 9's real runner had zero
+ * production call sites.
+ *
+ * Built once per claimed job, like the continuation, so nothing survives
+ * eviction and nothing is cached across claims.
+ */
+export type AgentProjectionRunnerFactory = (
+  ctx: DurableObjectState,
+  env: Env,
+) => AgentProjectionRunner;
+
 // --- limits and clock --------------------------------------------------------
 
 export type DriverLimits = {
@@ -138,7 +158,7 @@ export const DEFAULT_DRIVER_LIMITS: DriverLimits = {
  */
 export type RunPorts = {
   continuation: AgentContinuationFactory | null;
-  projections: Partial<Record<ProjectionJobKind, AgentProjectionRunner>>;
+  projections: Partial<Record<ProjectionJobKind, AgentProjectionRunnerFactory>>;
   limits: DriverLimits;
   /** Injected so a test can advance time past a lease without sleeping for it. */
   now: () => number;

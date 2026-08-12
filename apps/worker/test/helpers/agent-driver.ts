@@ -244,7 +244,16 @@ export async function freshDriverRun(
       ...(continuation === null
         ? {}
         : { continuation: (ctx: DurableObjectState) => continuation.attach(ctx.storage) }),
-      ...(options.projections ? { projections: options.projections } : {}),
+      // Tests hand a runner; the port takes a factory (it is built per claimed
+      // job from the object's own ctx, like the continuation). Wrapping here
+      // keeps every existing suite's `projections: { d1_usage: runner }` intact.
+      ...(options.projections
+        ? {
+            projections: Object.fromEntries(
+              Object.entries(options.projections).map(([kind, runner]) => [kind, () => runner]),
+            ),
+          }
+        : {}),
       now: clock.now,
       limits: {
         claimLeaseMs: 150_000,

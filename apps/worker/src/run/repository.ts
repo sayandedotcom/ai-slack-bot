@@ -114,6 +114,77 @@ export async function createOrGetRun(
   return run;
 }
 
+/**
+ * Create-or-find this thread's unique run under the CURRENT channel policy, and
+ * ratchet its shadow flag before anything schedules work on it.
+ *
+ * THE RATCHET IS ONE-WAY, AND THAT IS THE WHOLE POINT.
+ *
+ * `shadow = 1` is set whenever the channel is not currently a known `live`
+ * channel — observe, internal, or absent from the table altogether. It is never
+ * cleared. There is deliberately NO code path anywhere in this Worker that
+ * turns a shadow run back into an acting one: not this function, not queue
+ * redelivery, not owned-thread continuation, not a steer, not an alarm. Adding
+ * one would be an authority change, and it belongs in a reviewed promotion
+ * operation with its own state, not in the path a redelivered Slack event takes
+ * at 3am.
+ *
+ * That asymmetry is what makes invariant 37 hold under redelivery. A run
+ * created while its channel was `live` and unshadowed keeps acting, correctly;
+ * a run whose channel has since been downgraded to `observe` is shadowed on the
+ * very next message and stays shadowed, even though it was created unshadowed
+ * and even though its D1 row still says the run is active. A live channel's run
+ * never needs the flag cleared, because it was never set.
+ *
+ * BOTH STATEMENTS RUN IN ONE `db.batch()`, which D1 executes as a single
+ * implicit transaction. Split into two awaited calls, the window between them
+ * is a window in which a concurrent reader — the write guard, which re-reads
+ * `runs.shadow` immediately before every external write — can see the row
+ * created and the ratchet not yet applied, which is precisely the moment an
+ * observing run posts to a customer.
+ *
+ * `mustShadow` is computed by the CALLER from `canPost(policy)` so this stays a
+ * D1 module with no policy semantics of its own; see `coordinator.ts`, which is
+ * the only caller and resolves the policy immediately before calling.
+ */
+export async function createOrGetRunUnderPolicy(
+  db: D1Database,
+  descriptor: RunDescriptor,
+  options: { mustShadow: boolean },
+  now = Date.now(),
+): Promise<RunRecord> {
+  const shadow = options.mustShadow ? 1 : 0;
+  await db.batch([
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO runs
+           (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        descriptor.key,
+        descriptor.origin,
+        descriptor.channelId,
+        descriptor.threadTs,
+        shadow,
+        now,
+        now,
+      ),
+    // `AND shadow = 0` rather than an unconditional SET, so the common case
+    // writes no row at all — and so the statement can only ever move the flag
+    // in the safe direction, whatever it is handed. There is no companion
+    // statement that sets it to 0; see the note above.
+    db
+      .prepare(`UPDATE runs SET shadow = 1 WHERE "key" = ? AND shadow = 0 AND ? = 1`)
+      .bind(descriptor.key, shadow),
+  ]);
+
+  const run = await getRunByKey(db, descriptor.key);
+  if (!run) throw new Error(`run vanished immediately after insert: ${descriptor.key}`);
+  return run;
+}
+
 export async function getRunById(db: D1Database, id: string): Promise<RunRecord | null> {
   const row = await db
     .prepare(`SELECT ${COLUMNS} FROM runs WHERE id = ?`)
@@ -200,6 +271,71 @@ export async function listRuns(
     customerSlug: row.customer_slug,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }));
+}
+
+/**
+ * What one run has spent, per model, straight out of D1.
+ *
+ * Served from `agent_model_calls` and NOTHING ELSE. The dashboard's cost view
+ * must not wake a Durable Object — the local `model_step_usage` table is the
+ * system of record, but reading it costs a wake per run, and a list of fifty
+ * runs would cost fifty. That is the same rule `GET /api/runs` already follows.
+ *
+ * The consequence is honest and worth naming: a step billed seconds ago whose
+ * projection has not landed yet is not in this total. It is a projection, it
+ * lags, and it never over-reports.
+ *
+ * `costNanoUsd` stays an INTEGER all the way to the route, which formats it as
+ * a decimal string (invariant 29). Nothing in this file produces a float.
+ */
+export type RunUsageAggregate = {
+  model: string;
+  calls: number;
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  costNanoUsd: number;
+};
+
+export async function readRunUsage(
+  db: D1Database,
+  runId: string,
+): Promise<RunUsageAggregate[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT model,
+              COUNT(*)                       AS calls,
+              COALESCE(SUM(input_tokens), 0)       AS input_tokens,
+              COALESCE(SUM(cache_read_tokens), 0)  AS cache_read_tokens,
+              COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+              COALESCE(SUM(output_tokens), 0)      AS output_tokens,
+              COALESCE(SUM(cost_nano_usd), 0)      AS cost_nano_usd
+         FROM agent_model_calls
+        WHERE run_id = ?
+        GROUP BY model
+        ORDER BY model ASC`,
+    )
+    .bind(runId)
+    .all<{
+      model: string;
+      calls: number;
+      input_tokens: number;
+      cache_read_tokens: number;
+      cache_write_tokens: number;
+      output_tokens: number;
+      cost_nano_usd: number;
+    }>();
+
+  return (results ?? []).map((row) => ({
+    model: row.model,
+    calls: row.calls,
+    inputTokens: row.input_tokens,
+    cacheReadTokens: row.cache_read_tokens,
+    cacheWriteTokens: row.cache_write_tokens,
+    outputTokens: row.output_tokens,
+    costNanoUsd: row.cost_nano_usd,
   }));
 }
 

@@ -7,6 +7,12 @@ import {
   retryProjectionJob,
 } from "../run/session";
 import type { NormalizedUsage, StepUsageRecord } from "./contracts";
+import {
+  safeErrorText,
+  type AgentProjectionRunner,
+  type ClaimedProjectionJob,
+  type ProjectionOutcome,
+} from "./driver";
 
 /**
  * Model-step telemetry: normalization, and the idempotent D1 projection of
@@ -132,6 +138,42 @@ export async function projectStepUsageToD1(
     .run();
 
   return { outcome: (result.meta.changes ?? 0) > 0 ? "inserted" : "duplicate" };
+}
+
+/**
+ * The alarm-driven half of the same projection, for ONE already-claimed job.
+ *
+ * `projectPendingUsage` below does its own claiming, which was correct while
+ * nothing else claimed. The driver now owns the claim, the lease and the
+ * backoff, so a runner that claimed again would be a second implementation of a
+ * protocol that only works when there is one — and the two would race for the
+ * same row.
+ *
+ * Missing and already-delivered rows are `dropped` rather than retried. A job
+ * whose source row is gone can never be delivered, and keeping an alarm armed
+ * on it forever wakes the object to discover that, repeatedly.
+ */
+export function makeUsageProjectionRunner(input: {
+  storage: DurableObjectStorage;
+  db: D1Database;
+  now?: () => number;
+}): AgentProjectionRunner {
+  const now = input.now ?? (() => Date.now());
+  return {
+    async run(job: ClaimedProjectionJob): Promise<ProjectionOutcome> {
+      const record = readStepUsage(input.storage, job.job.sourceId);
+      if (!record) return { outcome: "dropped", reason: "no local usage row for this job" };
+      if (record.d1ProjectedAt !== null) return { outcome: "delivered" };
+
+      try {
+        await projectStepUsageToD1(input.db, job.runId, record);
+      } catch (error) {
+        return { outcome: "retry", error: safeErrorText(error, "d1 usage projection failed") };
+      }
+      markUsageProjected(input.storage, record.id, now());
+      return { outcome: "delivered" };
+    },
+  };
 }
 
 export type UsageDrainResult = {
