@@ -741,3 +741,158 @@ Neither gate blocks writing Phase 10's loop code against mocked
 `MockLanguageModelV4` providers and the existing local test suite, which is
 what Task 1 onward should do; both gates block calling this phase "verified in
 production" before someone runs the deferred live proofs in this document.
+
+---
+
+## Task 5 — provider, Gateway, retry and spend
+
+### RESOLVED: the AI Gateway auth-header conflict
+
+Task 0 recorded this as "ambiguous, unresolved" (see the drift table above).
+**It is now resolved, and the two docs were never actually in conflict** — they
+describe two different endpoint families:
+
+| Endpoint family | Base | Auth header |
+| --- | --- | --- |
+| REST API | `api.cloudflare.com/client/v4/accounts/<id>/ai/...` | `Authorization: Bearer <CF API token>` |
+| Provider-native | `gateway.ai.cloudflare.com/v1/<id>/<gateway>/anthropic` | `cf-aig-authorization: Bearer <token>` |
+
+Source: [AI Gateway →
+Authentication](https://developers.cloudflare.com/ai-gateway/configuration/authentication/),
+which states it directly: "When using the REST API, pass your Cloudflare API
+token in the standard `Authorization` header. When using provider-native
+endpoints at `gateway.ai.cloudflare.com`, use the `cf-aig-authorization` header
+instead." On provider-native routes `Authorization` already belongs to the
+upstream provider, which is why a second header name exists at all.
+
+This system routes Anthropic **natively**, so the Anthropic SDK keeps sending
+its own credential and the Gateway is authenticated separately. That is the
+provider-native family, so **the plan's `cf-aig-authorization` is correct** and
+no plan change is needed.
+
+To stop the two from ever drifting apart, `agent/model.ts` refuses to compose a
+model unless `AI_GATEWAY_ANTHROPIC_URL` is an `https://gateway.ai.cloudflare.com`
+URL. Pointed at the REST host, `cf-aig-authorization` would be silently ignored
+and the request would authenticate as nobody — so the header choice and the
+endpoint choice are now enforced together rather than merely documented
+together.
+
+Still **unverified live**: no request has been sent. Deferred proof, below.
+
+### DEFERRED OPERATOR STEP: the Gateway does not exist yet
+
+Task 0 confirmed by grep that no AI Gateway is configured anywhere in this repo,
+and that is still true. `AI_GATEWAY_ANTHROPIC_URL` and `AI_GATEWAY_TOKEN` do not
+exist in `.dev.vars`, `wrangler.jsonc`, or the account. Creating the gateway,
+issuing a `Run`-scoped token, and setting both as **Worker secrets** is a
+deferred operator step.
+
+No URL was invented and no check was weakened to make a test pass. The composer
+**fails closed** instead: with no Gateway URL it throws `missing_gateway_url`
+rather than calling Anthropic directly. Local unit tests never enter the
+production composer — they inject `MockLanguageModelV4` — which is why the whole
+task is testable with no Gateway in existence.
+
+Deliberately **not** added to `wrangler.jsonc`: the Gateway URL embeds an
+account ID and gateway name, but it is inseparable from the secret token that
+authenticates to it, and it does not vary by environment today. Both live as
+secrets. `pnpm --filter @workspace/worker cf-typegen` was rerun and produced
+**no diff** to `worker-configuration.d.ts`, which is the expected result of
+adding no non-secret var.
+
+### CONFIRMED: which usage type `streamText` actually hands you
+
+The operator brief flagged the plan's cost table as describing the wrong type.
+**Re-checked against both installed declarations, and the plan's table is
+correct** for the callback path this task uses. The confusion is real but it
+lands one layer down:
+
+| Type | Package | Shape | Where it appears |
+| --- | --- | --- | --- |
+| `LanguageModelUsage` | `ai@7.0.59` `dist/index.d.ts:320`, **exported** (in the export list at :9320) | **FLAT**: `inputTokens`, `inputTokenDetails.{noCacheTokens,cacheReadTokens,cacheWriteTokens}`, `outputTokens`, `outputTokenDetails.{textTokens,reasoningTokens}`, `totalTokens`, `raw?` — every field `number \| undefined` | `StepResult.usage` (`:1484`), and therefore `onStepEnd` |
+| `LanguageModelV4Usage` | `@ai-sdk/provider@4.0.7` `dist/index.d.ts:2573` | **NESTED**: `inputTokens: { total, noCache, cacheRead, cacheWrite }`, `outputTokens: { total, text, reasoning }`, `raw?` — and **no `totalTokens` field at all** | what a `LanguageModelV4` implementation emits in its `finish` stream part |
+
+`streamText`'s `onStepEnd` receives `GenerateTextStepEndEvent`, which is
+`StepResult<TOOLS, RUNTIME_CONTEXT>` (`:3872`), whose `usage` is
+`LanguageModelUsage` — the **flat** one. So `agent/cost.ts#normalizeSdkUsage`
+reads the flat shape, as the plan's Step 2 says.
+
+This is not taken on faith. `agent-gateway.test.ts` emits the **provider**
+(nested) shape from a `MockLanguageModelV4` and asserts that what arrives at
+`step.usage` is the **flat** shape — `typeof step.usage.inputTokens === "number"`
+and `step.usage.inputTokens.total === undefined`. The SDK does the conversion.
+The absent `totalTokens` on the provider type is a second, compile-time proof:
+adding one to the mock is a `TS2353` type error.
+
+### CONFIRMED: the raw finish reason is structurally available
+
+`LanguageModelV4FinishReason` is the object `{ unified, raw }`
+(`@ai-sdk/provider@4.0.7:2536`) as Task 4 recorded. The AI SDK **splits it in
+two** before a callback sees it: `StepResult.finishReason` is the unified enum
+(`FinishReason`, `ai:124`) and `StepResult.rawFinishReason` is
+`string | undefined`. So Anthropic's raw `refusal` stop reason is read
+structurally from `rawFinishReason`, with no `providerMetadata` digging — as the
+brief hoped, just via a different field than expected.
+
+### The reviewed numbers, and the exact overshoot bound
+
+Price table (nano-USD per token, integers only — invariant 29): uncached input
+10,000; 5-minute cache write 12,500; 1-hour cache write 20,000; cache read
+1,000; output 50,000. An **unknown model throws `UnknownModelPriceError`** and is
+never charged at Fable's rate — including on an unbilled refusal, so an unpriced
+model cannot slip through the zero-cost path.
+
+The pre-step guard's conservative byte→token floor is
+`CONSERVATIVE_BYTES_PER_TOKEN = 2`. Real traffic runs nearer 3–4 bytes/token, so
+this over-estimates by roughly 2x, in the direction that protects the cap.
+
+**Maximum overshoot: zero, while the byte estimate holds.** The guard reserves
+the full worst case of every billable Gateway attempt before admitting a step,
+so output and attempts contribute nothing to overshoot. The single residual term
+is an input under-estimate:
+
+```
+overshoot <= gatewayAttempts x max(inputRate, cacheWrite1hRate)
+             x max(0, actualInputTokens - ceil(promptBytes / 2))
+```
+
+For the pathological all-single-byte-token prompt at 40,000 bytes, that is
+`2 x 20,000 x 20,000` = **$0.80**. Both halves are asserted in
+`agent-cost.test.ts`.
+
+**Measured evidence is still owed** on the byte ratio: no real Fable prompt has
+been tokenized yet. If measurement shows the floor is far from 2, that is a
+reviewed change to this constant with the evidence recorded here, per the plan's
+"starting values, not sacred numbers" rule.
+
+### Fixed: a third control-byte incident, found by the new guard
+
+The machine guard added this task (`.gitattributes` + `check-text-files.mjs`,
+wired into `codemode:dts:check`) failed on its first run against a **real,
+pre-existing** occurrence: `apps/worker/src/files/r2.ts:69` contained the raw
+bytes `0x00 0x2d 0x1f 0x7f` inside a regex character class. `git grep -I`
+confirmed the file was being treated as **binary**, meaning that Phase 09
+filename-validation control has been unreviewable in every diff since it landed.
+Replaced with the equivalent escaped `/[\x00-\x1f\x7f]/`; behaviour is
+unchanged and the file now renders as a normal text diff.
+
+One subtlety worth keeping: in `.gitattributes`, `text` alone does **not** fix
+this. `text` controls end-of-line normalization; the attribute that overrides
+git's NUL-byte binary auto-detection for diffs is `diff`. Both are set. Getting
+this wrong is likely why the problem kept recurring.
+
+### Deferred live proofs added by this task
+
+8. **The Gateway itself.** Create the AI Gateway, issue a `Run`-scoped token,
+   set `AI_GATEWAY_ANTHROPIC_URL` and `AI_GATEWAY_TOKEN` as Worker secrets.
+9. **`cf-aig-authorization` accepted live.** Resolved on paper above; one real
+   provider-native request must confirm a 200 rather than a 401.
+10. **Prompt-cache proof.** Per the plan: run a second turn with the stable
+    prefix unchanged and assert `cacheReadTokens > 0` in both local telemetry
+    and the AI Gateway log, recording both requests' token classes and cost
+    here. Nothing in this task claims caching works because a header was set.
+11. **Byte-per-token ratio.** Measure real prompts against
+    `CONSERVATIVE_BYTES_PER_TOKEN`.
+12. **Billing cross-check.** A crash after provider billing but before the local
+    step checkpoint still undercounts; the AI Gateway log remains the external
+    reconciliation source for a final cost report (invariant 32).

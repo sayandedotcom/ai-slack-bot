@@ -30,7 +30,15 @@ export type Env = {
   SLACK_BOT_TOKEN: string;
   ZEP_API_KEY: string;
   ANTHROPIC_API_KEY: string;
+  // The private AI Gateway the agent's Fable calls are routed through. Optional
+  // in the type because the Gateway does not exist yet; the agent's production
+  // composer refuses to build a model without it (see agent/model.ts), so the
+  // optionality can never become a quiet direct-to-Anthropic call.
   AI_GATEWAY_ANTHROPIC_URL?: string;
+  // Cloudflare API token with AI Gateway `Run`, sent as `cf-aig-authorization`
+  // on provider-native Gateway endpoints. A Worker SECRET: it is never written
+  // to wrangler.jsonc, docs, generated types, or a test snapshot.
+  AI_GATEWAY_TOKEN?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();

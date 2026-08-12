@@ -18,7 +18,27 @@ import {
   projectStepUsageToD1,
   ZERO_USAGE,
 } from "../src/agent/usage";
-import type { ClaimFence, StepUsageInput } from "../src/agent/contracts";
+import type { ClaimFence, NormalizedUsage, StepUsageInput } from "../src/agent/contracts";
+import type { LanguageModelUsage } from "ai";
+import {
+  costNanoUsd,
+  evaluateSpendGuard,
+  FABLE_5_MODEL_ID,
+  FABLE_5_PRICES,
+  formatNanoUsd,
+  isPricedModel,
+  normalizeSdkUsage,
+  pricesFor,
+  UnknownModelPriceError,
+} from "../src/agent/cost";
+import { gatewayHeaders } from "../src/agent/gateway";
+import {
+  GATEWAY_MAX_ATTEMPTS,
+  GENERATION_SPEND_CAP_NANO_USD,
+  MAX_OUTPUT_TOKENS_PER_STEP,
+  NANO_USD_PER_USD,
+  RUN_SPEND_CAP_NANO_USD,
+} from "../src/agent/limits";
 
 /**
  * Model-step telemetry: the local ledger is the authority and D1 is its
@@ -390,5 +410,493 @@ describe("0006 migration properties", () => {
         .bind(crypto.randomUUID())
         .run(),
     ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 5: the price table, the AI SDK usage adapter, and the pre-step guard.
+// ---------------------------------------------------------------------------
+
+/** Build an installed-shape `LanguageModelUsage` without repeating the nesting. */
+function sdkUsage(
+  overrides: {
+    inputTokens?: number;
+    noCacheTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    outputTokens?: number;
+    textTokens?: number;
+    reasoningTokens?: number;
+    totalTokens?: number;
+  } = {},
+): LanguageModelUsage {
+  return {
+    inputTokens: overrides.inputTokens,
+    inputTokenDetails: {
+      noCacheTokens: overrides.noCacheTokens,
+      cacheReadTokens: overrides.cacheReadTokens,
+      cacheWriteTokens: overrides.cacheWriteTokens,
+    },
+    outputTokens: overrides.outputTokens,
+    outputTokenDetails: {
+      textTokens: overrides.textTokens,
+      reasoningTokens: overrides.reasoningTokens,
+    },
+    totalTokens: overrides.totalTokens,
+  };
+}
+
+function tokens(overrides: Partial<NormalizedUsage> = {}): NormalizedUsage {
+  return { ...ZERO_USAGE, ...overrides };
+}
+
+describe("fable price table", () => {
+  it("holds the reviewed prices as integer nano-USD per token", () => {
+    expect(FABLE_5_PRICES).toEqual({
+      input: 10_000,
+      cacheWrite5m: 12_500,
+      cacheWrite1h: 20_000,
+      cacheRead: 1_000,
+      output: 50_000,
+    });
+    // $10.00 per million uncached input tokens, and so on down the table.
+    expect(FABLE_5_PRICES.input * 1_000_000).toBe(10 * NANO_USD_PER_USD);
+    expect(FABLE_5_PRICES.cacheWrite5m * 1_000_000).toBe(12.5 * NANO_USD_PER_USD);
+    expect(FABLE_5_PRICES.cacheWrite1h * 1_000_000).toBe(20 * NANO_USD_PER_USD);
+    expect(FABLE_5_PRICES.cacheRead * 1_000_000).toBe(1 * NANO_USD_PER_USD);
+    expect(FABLE_5_PRICES.output * 1_000_000).toBe(50 * NANO_USD_PER_USD);
+  });
+
+  it("stores every price as an integer, never a floating-point dollar amount", () => {
+    for (const price of Object.values(FABLE_5_PRICES)) {
+      expect(Number.isInteger(price)).toBe(true);
+    }
+  });
+
+  it("fails closed on an unknown model instead of applying fable's rate", () => {
+    expect(isPricedModel(FABLE_5_MODEL_ID)).toBe(true);
+    expect(isPricedModel("claude-fable-6")).toBe(false);
+
+    for (const unknown of ["claude-fable-6", "claude-sonnet-4", "", "gpt-5"]) {
+      expect(() => pricesFor(unknown)).toThrow(UnknownModelPriceError);
+      expect(() => costNanoUsd({ modelId: unknown, usage: tokens({ inputTokens: 1_000 }) })).toThrow(
+        UnknownModelPriceError,
+      );
+    }
+  });
+
+  it("cannot be tricked into a price by a prototype key", () => {
+    expect(() => pricesFor("constructor")).toThrow(UnknownModelPriceError);
+    expect(() => pricesFor("toString")).toThrow(UnknownModelPriceError);
+  });
+
+  it("even a refused, unbilled step refuses to price an unknown model", () => {
+    expect(() =>
+      costNanoUsd({ modelId: "claude-fable-6", usage: tokens(), billing: "none" }),
+    ).toThrow(UnknownModelPriceError);
+  });
+});
+
+describe("ai sdk usage adapter", () => {
+  it("reads the installed flat LanguageModelUsage shape, not the nested provider one", () => {
+    const normalized = normalizeSdkUsage(
+      sdkUsage({
+        inputTokens: 1_000,
+        noCacheTokens: 200,
+        cacheReadTokens: 700,
+        cacheWriteTokens: 100,
+        outputTokens: 350,
+        textTokens: 230,
+        reasoningTokens: 120,
+        totalTokens: 1_350,
+      }),
+    );
+
+    expect(normalized).toEqual({
+      inputTokens: 1_000,
+      noCacheTokens: 200,
+      cacheReadTokens: 700,
+      cacheWriteTokens: 100,
+      outputTokens: 350,
+      reasoningTokens: 120,
+      totalTokens: 1_350,
+    });
+  });
+
+  it("records zero for every unreported field, which means none", () => {
+    // `undefined` is the SDK's way of saying the provider reported nothing for
+    // that class. Every field is a COUNT, so unreported and none are the same
+    // number — and the row survives to record that the money was spent.
+    expect(normalizeSdkUsage(sdkUsage())).toEqual(ZERO_USAGE);
+    expect(normalizeSdkUsage(undefined)).toEqual(ZERO_USAGE);
+  });
+
+  it("recomputes a missing total without double-counting the detail subsets", () => {
+    const normalized = normalizeSdkUsage(
+      sdkUsage({
+        inputTokens: 1_000,
+        noCacheTokens: 200,
+        cacheReadTokens: 700,
+        cacheWriteTokens: 100,
+        outputTokens: 350,
+        reasoningTokens: 120,
+      }),
+    );
+    // 1,000 + 350. NOT 1,000 + 200 + 700 + 100 + 350, and not + reasoning.
+    expect(normalized.totalTokens).toBe(1_350);
+  });
+
+  it("coerces negative, fractional and non-finite counts to safe integers", () => {
+    const normalized = normalizeSdkUsage(
+      sdkUsage({
+        inputTokens: 10.6,
+        noCacheTokens: -5,
+        cacheReadTokens: Number.NaN,
+        cacheWriteTokens: Number.POSITIVE_INFINITY,
+        outputTokens: 20.4,
+      }),
+    );
+    expect(normalized).toMatchObject({
+      inputTokens: 11,
+      noCacheTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 20,
+    });
+    for (const value of Object.values(normalized)) {
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("survives a large but valid response", () => {
+    const normalized = normalizeSdkUsage(
+      sdkUsage({ inputTokens: 200_000, cacheReadTokens: 190_000, outputTokens: 8_192 }),
+    );
+    expect(normalized.inputTokens).toBe(200_000);
+    expect(normalized.totalTokens).toBe(208_192);
+  });
+});
+
+describe("step cost", () => {
+  const model = FABLE_5_MODEL_ID;
+
+  it("costs a zero-token step at zero", () => {
+    expect(costNanoUsd({ modelId: model, usage: tokens() }).totalNanoUsd).toBe(0);
+  });
+
+  it("costs exactly one token of each class at its own rate", () => {
+    const oneEach = costNanoUsd({
+      modelId: model,
+      usage: tokens({
+        inputTokens: 3,
+        noCacheTokens: 1,
+        cacheReadTokens: 1,
+        cacheWriteTokens: 1,
+        outputTokens: 1,
+      }),
+    });
+    // 10,000 + 1,000 + 12,500 + 50,000. Nothing left unclassified.
+    expect(oneEach.unclassifiedInputTokens).toBe(0);
+    expect(oneEach.totalNanoUsd).toBe(73_500);
+  });
+
+  it("bills a 1-hour cache write at the higher rate when that ttl was used", () => {
+    const usage5m = costNanoUsd({
+      modelId: model,
+      usage: tokens({ inputTokens: 100, cacheWriteTokens: 100 }),
+    });
+    const usage1h = costNanoUsd({
+      modelId: model,
+      usage: tokens({ inputTokens: 100, cacheWriteTokens: 100 }),
+      cacheWriteTtl: "1h",
+    });
+    expect(usage5m.totalNanoUsd).toBe(100 * 12_500);
+    expect(usage1h.totalNanoUsd).toBe(100 * 20_000);
+  });
+
+  it("does not add inputTokens on top of its own detail subsets", () => {
+    // The whole 1,000 is classified, so the ONLY charge is the three classes.
+    const fullyClassified = costNanoUsd({
+      modelId: model,
+      usage: tokens({
+        inputTokens: 1_000,
+        noCacheTokens: 200,
+        cacheReadTokens: 700,
+        cacheWriteTokens: 100,
+      }),
+    });
+    expect(fullyClassified.unclassifiedInputTokens).toBe(0);
+    expect(fullyClassified.unclassifiedInputNanoUsd).toBe(0);
+    expect(fullyClassified.totalNanoUsd).toBe(200 * 10_000 + 700 * 1_000 + 100 * 12_500);
+
+    // The naive double-count would have charged all 1,000 at the input rate
+    // AGAIN on top of that. Prove we are strictly below it.
+    expect(fullyClassified.totalNanoUsd).toBeLessThan(
+      1_000 * 10_000 + 200 * 10_000 + 700 * 1_000 + 100 * 12_500,
+    );
+  });
+
+  it("charges only the unclassified remainder of input", () => {
+    const partial = costNanoUsd({
+      modelId: model,
+      usage: tokens({ inputTokens: 1_000, cacheReadTokens: 600 }),
+    });
+    // 600 read at 1,000; the other 400 at the plain input rate. Not 1,000 + 600.
+    expect(partial.unclassifiedInputTokens).toBe(400);
+    expect(partial.totalNanoUsd).toBe(600 * 1_000 + 400 * 10_000);
+  });
+
+  it("treats total input as uncached when the provider classifies nothing", () => {
+    const noDetails = costNanoUsd({ modelId: model, usage: tokens({ inputTokens: 1_000 }) });
+    // The dangerous alternative is recording a free request.
+    expect(noDetails.totalNanoUsd).toBe(1_000 * 10_000);
+    expect(noDetails.totalNanoUsd).toBeGreaterThan(0);
+  });
+
+  it("never charges a negative remainder when classified input exceeds the total", () => {
+    // Anthropic's raw wire format reports input_tokens EXCLUDING cache tokens.
+    // If an adapter change ever leaks that through, each class is still
+    // charged exactly once and nothing is subtracted.
+    const raw = costNanoUsd({
+      modelId: model,
+      usage: tokens({ inputTokens: 200, noCacheTokens: 200, cacheReadTokens: 700 }),
+    });
+    expect(raw.unclassifiedInputTokens).toBe(0);
+    expect(raw.totalNanoUsd).toBe(200 * 10_000 + 700 * 1_000);
+    expect(raw.totalNanoUsd).toBeGreaterThan(0);
+  });
+
+  it("records reasoning tokens without charging for them twice", () => {
+    const withReasoning = costNanoUsd({
+      modelId: model,
+      usage: tokens({ outputTokens: 1_000, reasoningTokens: 400 }),
+    });
+    const withoutReasoning = costNanoUsd({
+      modelId: model,
+      usage: tokens({ outputTokens: 1_000 }),
+    });
+    // reasoningTokens is a diagnostic SUBSET of outputTokens.
+    expect(withReasoning.totalNanoUsd).toBe(withoutReasoning.totalNanoUsd);
+    expect(withReasoning.totalNanoUsd).toBe(1_000 * 50_000);
+  });
+
+  it("produces integer nano-USD for every combination it is given", () => {
+    for (const inputTokens of [0, 1, 7, 1_001, 199_999]) {
+      for (const outputTokens of [0, 3, 8_192]) {
+        const result = costNanoUsd({
+          modelId: model,
+          usage: tokens({ inputTokens, outputTokens, cacheReadTokens: inputTokens >> 1 }),
+        });
+        expect(Number.isInteger(result.totalNanoUsd)).toBe(true);
+        expect(result.totalNanoUsd).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it("charges zero for an unbilled refusal but keeps the breakdown", () => {
+    const refused = costNanoUsd({
+      modelId: model,
+      usage: tokens({ inputTokens: 5_000, noCacheTokens: 5_000 }),
+      billing: "none",
+    });
+    expect(refused.totalNanoUsd).toBe(0);
+    // Usage is retained for rate and observability; only the money is zero.
+    expect(refused.noCacheNanoUsd).toBe(5_000 * 10_000);
+  });
+});
+
+describe("pre-step spend guard", () => {
+  const base = {
+    modelId: FABLE_5_MODEL_ID,
+    generationSpentNanoUsd: 0,
+    runSpentNanoUsd: 0,
+    promptBytes: 40_000,
+    requestedMaxOutputTokens: MAX_OUTPUT_TOKENS_PER_STEP,
+    gatewayAttempts: GATEWAY_MAX_ATTEMPTS,
+  };
+
+  it("clamps a fresh generation to the reviewed step ceiling, not the provider's", () => {
+    const result = evaluateSpendGuard(base);
+    expect(result.outcome).toBe("ok");
+    if (result.outcome !== "ok") return;
+    // 40,000 bytes / 2 = 20,000 estimated tokens.
+    expect(result.estimatedInputTokens).toBe(20_000);
+    // 20,000 x 20,000 nano x 2 attempts = $0.80 reserved.
+    expect(result.reservedInputNanoUsd).toBe(800_000_000);
+    expect(result.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS_PER_STEP);
+  });
+
+  it("estimates input at the highest input rate, never at the cache-read rate", () => {
+    const result = evaluateSpendGuard({ ...base, gatewayAttempts: 1 });
+    if (result.outcome !== "ok") throw new Error("expected ok");
+    // 20,000 tokens at the 1-hour cache-write rate, which is the highest.
+    expect(result.reservedInputNanoUsd).toBe(20_000 * 20_000);
+    // Assuming a cache hit would have reserved 20x less.
+    expect(result.reservedInputNanoUsd).toBe(20 * (20_000 * FABLE_5_PRICES.cacheRead));
+  });
+
+  it("does not assume a cache hit that has not happened yet", () => {
+    // Two calls with identical prompt bytes must reserve identically, whether
+    // or not earlier steps in the generation happened to hit cache. The guard
+    // takes no cache input at all, which is the structural form of that claim.
+    const cold = evaluateSpendGuard(base);
+    const afterCacheHits = evaluateSpendGuard({ ...base, generationSpentNanoUsd: 0 });
+    expect(cold).toEqual(afterCacheHits);
+    if (cold.outcome !== "ok") throw new Error("expected ok");
+    expect(cold.reservedInputNanoUsd).toBeGreaterThan(
+      cold.estimatedInputTokens * FABLE_5_PRICES.cacheRead,
+    );
+  });
+
+  it("multiplies provider exposure by the gateway attempt count", () => {
+    const one = evaluateSpendGuard({ ...base, gatewayAttempts: 1 });
+    const two = evaluateSpendGuard({ ...base, gatewayAttempts: 2 });
+    if (one.outcome !== "ok" || two.outcome !== "ok") throw new Error("expected ok");
+    expect(two.reservedInputNanoUsd).toBe(one.reservedInputNanoUsd * 2);
+    // And the header the request actually carries agrees with the budget math.
+    const headers = gatewayHeaders({
+      run: "run:a",
+      generation: "gen:b",
+      attempt: 1,
+      surface: "chat",
+    });
+    expect(headers["cf-aig-max-attempts"]).toBe(String(GATEWAY_MAX_ATTEMPTS));
+  });
+
+  it("clamps output when the remaining budget is smaller than the step ceiling", () => {
+    const result = evaluateSpendGuard({
+      ...base,
+      promptBytes: 2_000,
+      // $1.90 of the $2.00 generation cap is gone; $0.10 remains.
+      generationSpentNanoUsd: 1_900_000_000,
+    });
+    if (result.outcome !== "ok") throw new Error("expected ok");
+    expect(result.remainingNanoUsd).toBe(100_000_000);
+    // 1,000 estimated tokens x 20,000 x 2 = $0.04 reserved, $0.06 left for
+    // output, at 50,000 nano x 2 attempts = 600 tokens.
+    expect(result.reservedInputNanoUsd).toBe(40_000_000);
+    expect(result.maxOutputTokens).toBe(600);
+    expect(result.maxOutputTokens).toBeLessThan(MAX_OUTPUT_TOKENS_PER_STEP);
+  });
+
+  it("stops before the call when input alone does not fit", () => {
+    const result = evaluateSpendGuard({ ...base, generationSpentNanoUsd: 1_990_000_000 });
+    expect(result.outcome).toBe("cost_limit");
+    if (result.outcome !== "cost_limit") return;
+    expect(result.reason).toBe("input_reservation");
+    expect(result.scope).toBe("generation");
+  });
+
+  it("stops before the call when no USEFUL output budget remains", () => {
+    const result = evaluateSpendGuard({
+      ...base,
+      promptBytes: 2_000,
+      // Leaves enough for the input reservation but only a few output tokens.
+      generationSpentNanoUsd: 1_955_000_000,
+    });
+    expect(result.outcome).toBe("cost_limit");
+    if (result.outcome !== "cost_limit") return;
+    expect(result.reason).toBe("no_useful_output");
+  });
+
+  it("reports whichever cap is binding, generation or run", () => {
+    const runBound = evaluateSpendGuard({
+      ...base,
+      promptBytes: 2_000,
+      generationSpentNanoUsd: 0,
+      runSpentNanoUsd: RUN_SPEND_CAP_NANO_USD - 100_000_000,
+    });
+    if (runBound.outcome !== "ok") throw new Error("expected ok");
+    expect(runBound.bindingScope).toBe("run");
+    expect(runBound.remainingNanoUsd).toBe(100_000_000);
+
+    const runExhausted = evaluateSpendGuard({ ...base, runSpentNanoUsd: RUN_SPEND_CAP_NANO_USD });
+    expect(runExhausted).toMatchObject({ outcome: "cost_limit", scope: "run" });
+  });
+
+  it("refuses a step once a cap is already spent or overspent", () => {
+    for (const spent of [GENERATION_SPEND_CAP_NANO_USD, GENERATION_SPEND_CAP_NANO_USD * 2]) {
+      const result = evaluateSpendGuard({ ...base, generationSpentNanoUsd: spent });
+      expect(result.outcome).toBe("cost_limit");
+      if (result.outcome !== "cost_limit") continue;
+      expect(result.remainingNanoUsd).toBe(0);
+    }
+  });
+
+  it("fails closed on an unknown model rather than budgeting at fable's rate", () => {
+    expect(() => evaluateSpendGuard({ ...base, modelId: "claude-fable-6" })).toThrow(
+      UnknownModelPriceError,
+    );
+  });
+
+  it("PROVES THE MAXIMUM OVERSHOOT: zero, while the byte estimate holds", () => {
+    // Take the worst admitted step under a series of caps, then charge it the
+    // worst thing that can actually happen: every attempt billed, the full
+    // estimated input at the most expensive input rate, and the full clamped
+    // output. If the guard is correct, that total still fits under the cap.
+    let admitted = 0;
+    for (const spent of [0, 500_000_000, 1_000_000_000, 1_900_000_000, 1_950_000_000]) {
+      for (const promptBytes of [0, 2_000, 40_000, 90_000]) {
+        const result = evaluateSpendGuard({ ...base, promptBytes, generationSpentNanoUsd: spent });
+        if (result.outcome !== "ok") continue;
+        admitted += 1;
+
+        const worstActual = costNanoUsd({
+          modelId: FABLE_5_MODEL_ID,
+          usage: tokens({
+            // The estimate holding means actual input <= estimated input.
+            inputTokens: result.estimatedInputTokens,
+            cacheWriteTokens: result.estimatedInputTokens,
+            outputTokens: result.maxOutputTokens,
+          }),
+          // The most expensive cache ttl, even though policy configures 5m.
+          cacheWriteTtl: "1h",
+        }).totalNanoUsd;
+
+        const billedForEveryAttempt = worstActual * GATEWAY_MAX_ATTEMPTS;
+        expect(result.worstCaseStepNanoUsd).toBeGreaterThanOrEqual(billedForEveryAttempt);
+        expect(spent + billedForEveryAttempt).toBeLessThanOrEqual(GENERATION_SPEND_CAP_NANO_USD);
+      }
+    }
+    // The loop must have actually exercised admitted steps, not skipped all.
+    expect(admitted).toBeGreaterThan(4);
+  });
+
+  it("documents the ONE overshoot term: an input under-estimate", () => {
+    const result = evaluateSpendGuard({ ...base, promptBytes: 40_000 });
+    if (result.outcome !== "ok") throw new Error("expected ok");
+
+    // A pathological prompt of single-byte tokens: 40,000 real tokens where
+    // the reviewed 2-bytes-per-token floor estimated 20,000.
+    const actualInputTokens = 40_000;
+    const underEstimate = actualInputTokens - result.estimatedInputTokens;
+    expect(underEstimate).toBe(20_000);
+
+    const overshoot =
+      GATEWAY_MAX_ATTEMPTS *
+      Math.max(FABLE_5_PRICES.input, FABLE_5_PRICES.cacheWrite1h) *
+      underEstimate;
+    // The exact, documented bound: 2 x 20,000 nano x 20,000 tokens = $0.80.
+    expect(overshoot).toBe(800_000_000);
+
+    // Output and attempts contribute NOTHING to overshoot: output is clamped
+    // to what the guard returned, and every attempt was reserved in full.
+    const actualWorst =
+      GATEWAY_MAX_ATTEMPTS *
+      costNanoUsd({
+        modelId: FABLE_5_MODEL_ID,
+        usage: tokens({ inputTokens: actualInputTokens, outputTokens: result.maxOutputTokens }),
+      }).totalNanoUsd;
+    expect(actualWorst).toBeLessThanOrEqual(result.worstCaseStepNanoUsd + overshoot);
+  });
+});
+
+describe("nano-USD formatting", () => {
+  it("renders money without ever computing in floating-point dollars", () => {
+    expect(formatNanoUsd(0)).toBe("$0.000000");
+    expect(formatNanoUsd(NANO_USD_PER_USD)).toBe("$1.000000");
+    expect(formatNanoUsd(73_500)).toBe("$0.000073");
+    expect(formatNanoUsd(2 * NANO_USD_PER_USD)).toBe("$2.000000");
   });
 });

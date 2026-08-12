@@ -30,6 +30,24 @@ ZEP_API_KEY=
 # Phase 10 adds Fable 5 for the main agent on the same key.
 ANTHROPIC_API_KEY=
 
+# Private AI Gateway for the Phase 10 agent's Fable calls. NOT YET CREATED --
+# see docs/superpowers/plans/phase-10-notes.md; creating the gateway and
+# issuing its token is a deferred operator step.
+#
+# The URL must be the PROVIDER-NATIVE Anthropic endpoint, of the form
+#   https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway>/anthropic
+# because cf-aig-authorization is the auth header for that endpoint family and
+# not for the api.cloudflare.com REST API. agent/model.ts enforces the host.
+#
+# AI_GATEWAY_TOKEN is a Cloudflare API token with AI Gateway `Run`, sent as
+# `cf-aig-authorization: Bearer <token>`. It is a secret and must never appear
+# in wrangler.jsonc, docs, generated types, or a test snapshot.
+#
+# Local unit tests need neither value: they inject a mock model and never enter
+# the production composer.
+AI_GATEWAY_ANTHROPIC_URL=
+AI_GATEWAY_TOKEN=
+
 # Better Stack SQL API connection (Phase 09 Task 11, betterstack.logs()).
 # NOT a bearer token: the log query path is HTTP Basic auth against a
 # ClickHouse-compatible endpoint. Create at telemetry.betterstack.com ->

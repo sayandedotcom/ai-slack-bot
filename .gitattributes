@@ -1,0 +1,32 @@
+# Source is text, and must be DIFFED as text.
+#
+# Git auto-detects "binary" from a NUL byte, and a file it thinks is binary is
+# shown in review as "Binary files differ" — no lines, no diff, no review. A
+# single stray control byte in a TypeScript file has done exactly that three
+# times in this repo, twice hiding ~19KB of security tests from a review diff
+# and once hiding a filename-validation regex in src/files/r2.ts.
+#
+# Both attributes are load-bearing and they do different jobs:
+#   text  — normalizes line endings.
+#   diff  — forces a TEXTUAL diff, overriding the NUL-byte auto-detection.
+#           `text` alone does NOT do this, which is the subtlety that makes
+#           this failure keep coming back.
+#
+# The matching machine guard that FAILS on the byte, rather than merely
+# rendering it, is apps/worker/scripts/check-text-files.mjs, wired into the
+# `codemode:dts:check` script.
+
+*.ts    text diff
+*.tsx   text diff
+*.js    text diff
+*.mjs   text diff
+*.cjs   text diff
+*.json  text diff
+*.jsonc text diff
+*.md    text diff
+*.sql   text diff
+*.yml   text diff
+*.yaml  text diff
+*.css   text diff
+*.html  text diff
+*.sh    text diff eol=lf

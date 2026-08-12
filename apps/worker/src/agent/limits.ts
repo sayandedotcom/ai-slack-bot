@@ -12,6 +12,8 @@
  * here too.
  */
 
+// --- driver and alarm -------------------------------------------------------
+
 /**
  * How long a claim owns the run before another alarm may reclaim it.
  *
@@ -78,3 +80,121 @@ export function projectionRetryBackoffMs(attempts: number): number {
 
 /** How long a claimed projection job is owned before another pass may reclaim it. */
 export const PROJECTION_LEASE_MS = 30_000;
+
+// --- the provider call ------------------------------------------------------
+
+/**
+ * Steps one unsettled generation may take before the loop stops asking.
+ *
+ * Ten, not fifty: one Code Mode call already aggregates many reads, so a
+ * generation that has not converged in ten model turns is looping, not
+ * working. This is a STEP ceiling and explicitly not a spend ceiling — see
+ * `agent/cost.ts` and invariant 28. A cheap loop and an expensive one both
+ * stop here; only the spend caps below stop an expensive one sooner.
+ */
+export const MAX_STEPS_PER_GENERATION = 10;
+
+/**
+ * Output tokens one step may produce, before the pre-step spend guard clamps
+ * it further.
+ *
+ * Fable 5's provider maximum is 128k. Accepting that as the application
+ * maximum would mean a single runaway step could spend $6.40 of a $2.00
+ * generation cap before anybody reads a usage row, because usage is only known
+ * after the response. 8,192 keeps the worst single step at roughly $0.41.
+ */
+export const MAX_OUTPUT_TOKENS_PER_STEP = 8_192;
+
+/** Provider step timeout. Bounds a cold or wedged provider call. */
+export const PROVIDER_STEP_TIMEOUT_MS = 90_000;
+
+/** No first chunk by here and the stream is failing, not thinking. */
+export const FIRST_CHUNK_TIMEOUT_MS = 30_000;
+
+/** A stream that stops mid-answer is detected here rather than at the wall. */
+export const INTER_CHUNK_TIMEOUT_MS = 45_000;
+
+/**
+ * Outer tool wall, above Phase 09's own 20-second execution cap so the inner
+ * limit is the one that reports a legible timeout to the model.
+ */
+export const OUTER_TOOL_TIMEOUT_MS = 30_000;
+
+// --- spend ------------------------------------------------------------------
+
+/** One US dollar in nano-USD. Integer units only (invariant 29). */
+export const NANO_USD_PER_USD = 1_000_000_000;
+
+/**
+ * What one generation may spend: $2.00.
+ *
+ * Enough for real drill work at Fable's prices — roughly 40 full-size steps —
+ * and bounded far below the $500 the account is allowed to lose in a month.
+ */
+export const GENERATION_SPEND_CAP_NANO_USD = 2 * NANO_USD_PER_USD;
+
+/**
+ * What one run may spend across every generation: $10.00.
+ *
+ * The generation cap alone cannot catch a run that is steered twenty times;
+ * this one can.
+ */
+export const RUN_SPEND_CAP_NANO_USD = 10 * NANO_USD_PER_USD;
+
+// --- the gateway ------------------------------------------------------------
+
+/**
+ * Transport attempts AI Gateway may make for one provider call.
+ *
+ * Two, and AI Gateway is the ONLY retry owner: the AI SDK's `maxRetries` is
+ * zero and driver retries are crash/continuation attempts (invariant 27).
+ * Every attempt can be billed, so the pre-step guard multiplies its worst-case
+ * exposure by exactly this number.
+ */
+export const GATEWAY_MAX_ATTEMPTS = 2;
+
+/** Explicit retry delay, so a Gateway dashboard default cannot change policy. */
+export const GATEWAY_RETRY_DELAY_MS = 250;
+
+/** Explicit backoff strategy, for the same reason. */
+export const GATEWAY_BACKOFF = "exponential" as const;
+
+/**
+ * Explicit per-request Gateway timeout, below the provider step timeout so the
+ * Gateway gives up first and the SDK's step timeout stays a backstop.
+ */
+export const GATEWAY_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The one bundle the model path reads, so a test can inject smaller numbers
+ * without reaching for module mocks.
+ */
+export type AgentLimits = {
+  maxStepsPerGeneration: number;
+  maxOutputTokensPerStep: number;
+  continuationMs: number;
+  stepMs: number;
+  firstChunkMs: number;
+  chunkMs: number;
+  toolMs: number;
+  generationSpendCapNanoUsd: number;
+  runSpendCapNanoUsd: number;
+  gatewayMaxAttempts: number;
+  gatewayRetryDelayMs: number;
+  gatewayRequestTimeoutMs: number;
+};
+
+export const DEFAULT_AGENT_LIMITS: AgentLimits = {
+  maxStepsPerGeneration: MAX_STEPS_PER_GENERATION,
+  maxOutputTokensPerStep: MAX_OUTPUT_TOKENS_PER_STEP,
+  continuationMs: CONTINUATION_TOTAL_MS,
+  stepMs: PROVIDER_STEP_TIMEOUT_MS,
+  firstChunkMs: FIRST_CHUNK_TIMEOUT_MS,
+  chunkMs: INTER_CHUNK_TIMEOUT_MS,
+  toolMs: OUTER_TOOL_TIMEOUT_MS,
+  generationSpendCapNanoUsd: GENERATION_SPEND_CAP_NANO_USD,
+  runSpendCapNanoUsd: RUN_SPEND_CAP_NANO_USD,
+  gatewayMaxAttempts: GATEWAY_MAX_ATTEMPTS,
+  gatewayRetryDelayMs: GATEWAY_RETRY_DELAY_MS,
+  gatewayRequestTimeoutMs: GATEWAY_REQUEST_TIMEOUT_MS,
+};

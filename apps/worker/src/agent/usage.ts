@@ -64,9 +64,12 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
     usage[field] = toCount(source[field]);
   }
   if (usage.totalTokens === 0) {
-    // Cache reads and writes are billed input, so they belong in the total.
-    usage.totalTokens =
-      usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens + usage.outputTokens;
+    // `inputTokens` is the TOTAL input, of which no-cache, cache-read and
+    // cache-write are subsets — so adding them again would double-count the
+    // cached tokens. Same reason `reasoningTokens` is absent: it is a subset
+    // of `outputTokens`. See `normalizeSdkUsage` in `agent/cost.ts`, which
+    // reads the installed `LanguageModelUsage` declaration this mirrors.
+    usage.totalTokens = usage.inputTokens + usage.outputTokens;
   }
   return usage;
 }
