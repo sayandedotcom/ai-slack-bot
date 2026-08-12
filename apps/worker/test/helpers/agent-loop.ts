@@ -1,30 +1,20 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { simulateReadableStream, tool, type LanguageModel, type Tool } from "ai";
+import { simulateReadableStream, type LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { z } from "zod";
 import { chatRunKey, runStubForKey, slackRunKey } from "../../src/run/keys";
 import { createOrGetRun } from "../../src/run/repository";
-import { readState, type RunDescriptor } from "../../src/run/session";
+import type { RunDescriptor } from "../../src/run/session";
 import type { RunTurnInput } from "../../src/run/protocol";
 import { installRunPorts } from "../../src/agent/driver";
 import type { AlarmOutcome, RunDO } from "../../src/run/do";
-import {
-  makeRunEventPort,
-  runContinuation,
-  toContinuationOutcome,
-  withOuterToolEvents,
-  type ContinuationResult,
-  type RunEventPort,
-} from "../../src/agent/loop";
-import type { ToolUpdateWriter } from "../../src/agent/audit";
-import { auditSinkFactory } from "../../src/agent/audit";
+import { makeAgentContinuation, type ContinuationResult } from "../../src/agent/loop";
 import { FABLE_5_MODEL_ID } from "../../src/agent/cost";
 import { DEFAULT_AGENT_LIMITS, type AgentLimits } from "../../src/agent/limits";
 import type { ModelHandle } from "../../src/agent/model";
-import { resolveTrustedContext } from "../../src/agent/prompt";
 import type { StreamClock } from "../../src/agent/stream";
+import { alwaysFresh, type AgentExecutionGuard } from "../../src/codemode/contracts";
 import type { CodeModeOutput } from "../../src/codemode/tool";
-import type { Env } from "../../src/index";
+import { fakeDeps, type FakeFixtures } from "./codemode";
 import { FakeClock } from "./agent-driver";
 
 /**
@@ -171,6 +161,48 @@ export function mockModel(steps: LanguageModelV4StreamPart[][]): LanguageModel {
   }) as unknown as LanguageModel;
 }
 
+/**
+ * Tap the provider stream so a test can commit to durable storage part-way
+ * through the FINAL step.
+ *
+ * The tap runs inside the Durable Object's own execution context — the SDK
+ * pulls this stream there — so it calls the SYNCHRONOUS session functions
+ * directly. An RPC back into the same object from here would deadlock.
+ *
+ * It fires once per claimed attempt, on the first `text-delta`. Callers that
+ * need the window before `finalizeAnswer`'s cursor compare therefore script a
+ * SINGLE text step: with only one step there is no later `prepareStep` to
+ * absorb the input, which is exactly the state that branch exists for.
+ */
+function wrapModel(
+  model: LanguageModel,
+  ctx: DurableObjectState,
+  midStream: ((storage: DurableObjectStorage) => void) | undefined,
+): LanguageModel {
+  if (!midStream) return model;
+
+  const inner = model as unknown as MockLanguageModelV4;
+  let fired = false;
+
+  return new MockLanguageModelV4({
+    provider: "mock",
+    modelId: FABLE_5_MODEL_ID,
+    doStream: async (callOptions) => {
+      const result = await inner.doStream(callOptions);
+      const tap = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
+        transform(part, controller) {
+          if (!fired && part.type === "text-delta") {
+            fired = true;
+            midStream(ctx.storage);
+          }
+          controller.enqueue(part);
+        },
+      });
+      return { ...result, stream: result.stream.pipeThrough(tap) };
+    },
+  }) as unknown as LanguageModel;
+}
+
 export function handleFor(model: LanguageModel): ModelHandle {
   return {
     model,
@@ -198,22 +230,13 @@ export const failedOutput = (error: string): CodeModeOutput => ({
   metrics: { durationMs: 4, capabilityCalls: 0 },
 });
 
-export function fakeRunCodeTool(
-  execute: (code: string) => CodeModeOutput | Promise<CodeModeOutput>,
-): Tool<{ code: string }, CodeModeOutput> {
-  return tool({
-    description: "run javascript",
-    inputSchema: z.strictObject({ code: z.string().min(1) }),
-    execute: async ({ code }) => execute(code),
-  }) as Tool<{ code: string }, CodeModeOutput>;
-}
-
 /* -------------------------------------------------------------- harness -- */
 
 export type LoopHarness = {
   key: string;
   runId: string;
   stub: DurableObjectStub<RunDO>;
+  /** The ten typed paths, observed through the factory's own `onOutcome`. */
   results: ContinuationResult[];
   /** One faithful platform delivery: clear the armed alarm, then dispatch. */
   alarm: () => Promise<AlarmOutcome>;
@@ -222,25 +245,36 @@ export type LoopHarness = {
 
 export type LoopOptions = {
   model: LanguageModel;
-  /** The fake tool. Ignored when `makeTools` is supplied. */
-  tool?: Tool<{ code: string }, CodeModeOutput>;
-  /** The real composer path, for the end-to-end suite. */
-  makeTools?: (input: {
-    env: Env;
-    generationId: string;
-    agentTurnId: string;
-    auditForExecution: ReturnType<typeof auditSinkFactory>;
-  }) => Promise<Tool<{ code: string }, CodeModeOutput>>;
+  /**
+   * Vendor ports only. Everything else — scope resolution, the write guard, the
+   * loader, the one-tool map — is the real production composer.
+   */
+  fixtures?: FakeFixtures;
+  /** Invariant 15's gate. Defaults to permissive; staleness cases pass their own. */
+  guard?: AgentExecutionGuard;
   limits?: Partial<AgentLimits>;
   clock?: StreamClock;
   flush?: { chars?: number; ms?: number };
   origin?: "chat" | "slack";
+  shadow?: boolean;
   historyBounds?: { maxMessages: number; maxBytes: number };
+  /**
+   * Commit something to durable storage part-way through the FINAL provider
+   * step, from inside the object's own execution context.
+   *
+   * This exists for one scenario that cannot be reached any other way: input
+   * that lands after the last `prepareStep` and before the finalization
+   * transaction. That is precisely the window `finalizeAnswer`'s atomic cursor
+   * compare exists for, and a steer arriving anywhere earlier is absorbed by the
+   * next `prepareStep` instead — correctly, which is why it does not exercise
+   * the branch.
+   */
+  midStream?: (storage: DurableObjectStorage) => void;
 };
 
 export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
   const origin = options.origin ?? "chat";
-  const descriptor = await seedRun(origin);
+  const descriptor = await seedRun(origin, options.shadow ?? false);
   const results: ContinuationResult[] = [];
   const limits: AgentLimits = { ...DEFAULT_AGENT_LIMITS, ...options.limits };
 
@@ -260,58 +294,43 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
 
   installRunPorts(
     {
-      continuation: (ctx, workerEnv) => ({
-        async run(claim) {
-          const state = readState(ctx.storage);
-          if (!state) throw new Error("run is not initialized");
-
-          const resolved = await resolveTrustedContext(workerEnv.DB, {
-            generationId: claim.generationId,
-            run: {
-              runId: state.runId,
-              origin: state.origin,
-              channelId: state.channelId,
-              threadTs: state.threadTs,
-            },
-          });
-          if (resolved.outcome === "refused") {
-            throw new Error(`trusted context refused: ${resolved.reason}`);
-          }
-
-          const events: RunEventPort = makeRunEventPort(ctx, claim.fence);
-          const writer: ToolUpdateWriter = {
-            async write(update) {
-              await events.toolUpdate(update);
-            },
-          };
-          const inner = options.makeTools
-            ? await options.makeTools({
-                env: workerEnv,
-                generationId: claim.generationId,
-                agentTurnId: claim.agentTurnId,
-                auditForExecution: auditSinkFactory(claim.generationId, writer),
-              })
-            : (options.tool ?? fakeRunCodeTool(() => okOutput({ ok: true })));
-
-          const result = await runContinuation(claim, {
-            storage: ctx.storage,
-            events,
-            tools: {
-              run_code: withOuterToolEvents(inner, claim.generationId, writer),
-            },
-            model: handleFor(options.model),
-            context: resolved.context,
-            limits,
-            clock,
-            ...(options.flush === undefined ? {} : { flush: options.flush }),
-            ...(options.historyBounds === undefined
-              ? {}
-              : { historyBounds: options.historyBounds }),
-          });
-          results.push(result);
-          return toContinuationOutcome(result);
-        },
-      }),
+      /**
+       * THE PRODUCTION FACTORY, not a copy of it.
+       *
+       * These suites call `makeAgentContinuation` — the same function Task 10
+       * will install — so `resolveTrustedContext`, `makeAgentTools`,
+       * `resolveCodeModeScope`, the write guard, `auditSinkFactory` and
+       * `withOuterToolEvents` are all genuinely executed. A harness that rebuilt
+       * that composition itself would leave the shipping entry point untested:
+       * it could pass the wrong scope, drop the guard or mis-key the tool map
+       * and every assertion below would still pass.
+       *
+       * The ONLY thing swapped is the vendor ports, through the narrow
+       * `dependencies` seam, so nothing here can reach Slack, Zep, Linear,
+       * Supabase, LangSmith, Better Stack or R2.
+       */
+      continuation: (ctx, workerEnv) =>
+        makeAgentContinuation(ctx, workerEnv, {
+          modelFactory: () => handleFor(wrapModel(options.model, ctx, options.midStream)),
+          // Stated explicitly, because the option is required. Cases about
+          // staleness pass their own.
+          guard: options.guard ?? alwaysFresh(),
+          dependencies: (_env, _scope, depsClock) => ({
+            ...fakeDeps(options.fixtures ?? {}),
+            // The write guard re-reads the channel policy and the `runs` row
+            // from D1 immediately before any `external_write`, so it needs a
+            // real handle. Faking it would fake away the thing being protected.
+            db: workerEnv.DB,
+            clock: depsClock,
+          }),
+          limits,
+          clock,
+          onOutcome: (result) => results.push(result),
+          ...(options.flush === undefined ? {} : { flush: options.flush }),
+          ...(options.historyBounds === undefined
+            ? {}
+            : { historyBounds: options.historyBounds }),
+        }),
       now: () => clock.now(),
       limits: {
         claimLeaseMs: 150_000,
@@ -338,7 +357,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
   };
 }
 
-async function seedRun(origin: "chat" | "slack"): Promise<RunDescriptor> {
+async function seedRun(origin: "chat" | "slack", shadow: boolean): Promise<RunDescriptor> {
   if (origin === "chat") {
     const key = chatRunKey(crypto.randomUUID());
     const record = await createOrGetRun(env.DB, {
@@ -365,6 +384,12 @@ async function seedRun(origin: "chat" | "slack"): Promise<RunDescriptor> {
     channelId,
     threadTs,
   });
+  if (shadow) {
+    // `shadow` lives on the D1 `runs` row and NOWHERE else — a check written
+    // against the RunDO descriptor reads `undefined`, which is falsy, and an
+    // observing run posts to a real customer.
+    await env.DB.prepare("UPDATE runs SET shadow = 1 WHERE id = ?").bind(record.id).run();
+  }
   return { runId: record.id, key, origin: "slack", channelId, threadTs };
 }
 

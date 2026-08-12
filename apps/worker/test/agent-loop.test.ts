@@ -6,6 +6,8 @@ import { dropUnresolvedTailCalls } from "../src/agent/transcript";
 import { toContinuationOutcome } from "../src/agent/loop";
 import { decodeUntrustedEvidence } from "../src/agent/prompt";
 import {
+  appendTurn,
+  finalizeAnswer,
   listToolCalls,
   listTurns,
   readDriver,
@@ -14,28 +16,36 @@ import {
   listPendingUsageProjections,
   listEvents,
 } from "../src/run/session";
+import { CapabilityError, STALE_GENERATION_MESSAGE } from "../src/codemode/errors";
 import {
   customerTurn,
   errorStep,
-  failedOutput,
-  fakeRunCodeTool,
   freshLoopRun,
   legacyTriageTurn,
   mockModel,
-  okOutput,
   readableReasoningStep,
   textStep,
   toolStep,
 } from "./helpers/agent-loop";
 
+/** Programs the REAL isolate runs. No capability needed, no vendor reached. */
+const TRIVIAL = "async () => ({ ok: true })";
+/** A real capability refusal: a chat run has no conversation to reply into. */
+const REPLY = 'async () => slack.reply({ text: "hello" })';
+
 /**
  * The streamed model/tool continuation.
  *
  * LOCAL AND AUTOMATED, with no exceptions: the provider is a mock `doStream`,
- * the tool is either a fake or the real isolate driven against fake gateways,
- * and no test in this file can reach a network. What is being proved is the
- * loop's own behaviour — authority, batching, checkpointing, finalization and
- * every terminal path — not that Anthropic works.
+ * the tool is the REAL Phase 09 isolate composed by the REAL production factory
+ * with fake vendor ports, and no test in this file can reach a network.
+ *
+ * Every case here goes through `makeAgentContinuation` — the exact function
+ * Task 10 will install — rather than a harness-local rebuild of it. That is
+ * deliberate: a harness that reassembles the composition itself leaves the
+ * shipping entry point executed by nothing, so `makeAgentTools`, the resolved
+ * Code Mode scope and the shared host write guard could all be wrong while
+ * every assertion below still passed.
  */
 
 afterEach(() => {
@@ -81,12 +91,11 @@ describe("the step ceiling is preflighted, not left to stopWhen", () => {
 
   it("reports step_limit, not an empty answer, when the ceiling lands mid tool loop", async () => {
     const model = mockModel([
-      toolStep({ toolCallId: "call_1", code: "async () => 1" }),
-      toolStep({ toolCallId: "call_2", code: "async () => 2" }),
+      toolStep({ toolCallId: "call_1", code: TRIVIAL }),
+      toolStep({ toolCallId: "call_2", code: TRIVIAL }),
     ]);
     const harness = await freshLoopRun({
       model,
-      tool: fakeRunCodeTool(() => okOutput(1)),
       limits: { maxStepsPerGeneration: 2 },
     });
     await harness.stub.appendTurn(customerTurn("t1"));
@@ -197,14 +206,13 @@ describe("text -> run_code -> result -> final answer", () => {
     const model = mockModel([
       toolStep({
         toolCallId: "call_1",
-        code: "async () => 1",
+        code: TRIVIAL,
         narration: ["Let me check ", "the deploy logs."],
       }),
       textStep({ chunks: ["The 04:12 deploy ", "renamed a column."] }),
     ]);
     const harness = await freshLoopRun({
       model,
-      tool: fakeRunCodeTool(() => okOutput({ deploy: "04:12" })),
     });
 
     await harness.stub.appendTurn(customerTurn("t1"));
@@ -249,12 +257,11 @@ describe("text -> run_code -> result -> final answer", () => {
 
   it("treats a Code Mode error as a normal tool result and a failed tool event", async () => {
     const model = mockModel([
-      toolStep({ toolCallId: "call_1", code: "async () => bad()" }),
+      toolStep({ toolCallId: "call_1", code: REPLY }),
       textStep({ chunks: ["That query is not available; here is what I could check."] }),
     ]);
     const harness = await freshLoopRun({
       model,
-      tool: fakeRunCodeTool(() => failedOutput("capability_denied: nope")),
     });
 
     await harness.stub.appendTurn(customerTurn("t1"));
@@ -264,23 +271,22 @@ describe("text -> run_code -> result -> final answer", () => {
     // throw, and a second step ran.
     expect(harness.results[0].path).toBe("completed");
     const transcript = await harness.storage((storage) => readModelTranscript(storage));
-    expect(JSON.stringify(transcript)).toContain("capability_denied");
+    expect(JSON.stringify(transcript)).toContain("slack_context_required");
 
     // The visible event is nonetheless failed.
     const calls = await harness.storage((storage) => listToolCalls(storage));
     const outer = calls.find((call) => call.name === "run_code");
     expect(outer?.state).toBe("failed");
-    expect(outer?.error).toContain("capability_denied");
+    expect(outer?.error).toContain("slack_context_required");
   });
 
   it("emits the outer tool lifecycle exactly once per call", async () => {
     const model = mockModel([
-      toolStep({ toolCallId: "call_1", code: "async () => 1" }),
+      toolStep({ toolCallId: "call_1", code: TRIVIAL }),
       textStep({ chunks: ["done"] }),
     ]);
     const harness = await freshLoopRun({
       model,
-      tool: fakeRunCodeTool(() => okOutput(1)),
     });
     await harness.stub.appendTurn(customerTurn("t1"));
     await harness.alarm();
@@ -488,5 +494,165 @@ describe("finalization is one transaction the projector cannot roll back", () =>
 
     const turns = await harness.storage((storage) => listTurns(storage));
     expect(turns.find((turn) => turn.source === "agent")?.metadata?.delivery).toBe("visible");
+  });
+});
+
+/* ------------------------------------------- the atomic cursor compare -- */
+
+describe("a steer that lands after the last prepareStep supersedes the final", () => {
+  /**
+   * The window `finalizeAnswer`'s step 3 exists for, and the only one that can
+   * reach it: input committed after the last `prepareStep` and before the
+   * finalization transaction. A steer arriving anywhere earlier is absorbed by
+   * the next `prepareStep` — correctly, which is why a single-step fixture is
+   * what exercises this branch.
+   */
+  it("appends no final turn and does not settle the generation", async () => {
+    const model = mockModel([textStep({ chunks: ["the answer to the OLD ", "question"] })]);
+    const harness = await freshLoopRun({
+      model,
+      midStream: (storage) => {
+        appendTurn(storage, customerTurn("t2", "actually, ignore that — what about billing?"));
+      },
+    });
+
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.alarm();
+
+    expect(harness.results[0].path).toBe("continuation_requested");
+
+    // The stale answer was NOT appended. A customer's follow-up must never be
+    // answered by the previous question's answer (invariant 14).
+    const turns = await harness.storage((storage) => listTurns(storage));
+    expect(turns.filter((turn) => turn.source === "agent")).toHaveLength(0);
+
+    // The SAME generation continues, keeping its Code Mode effect scope and its
+    // transcript coherent. It is not settled and not failed.
+    const driver = await harness.storage((storage) => readDriver(storage));
+    expect(driver.phase).toBe("scheduled");
+    expect(driver.generationId).not.toBeNull();
+    const generation = await harness.storage((storage) =>
+      readGeneration(storage, driver.generationId as string),
+    );
+    expect(generation?.state).toBe("scheduled");
+    expect(generation?.settledThroughSeq).toBeNull();
+    expect(generation?.finishedAt).toBeNull();
+
+    // The client is told to drop its draft, exactly once, and is never told the
+    // answer completed.
+    const events = await harness.storage((storage) => listEvents(storage, 0, 200));
+    const states = events
+      .filter((event) => event.type === "assistant_update")
+      .map((event) => (event as { update: { state: string } }).update.state);
+    expect(states.filter((state) => state === "superseded")).toHaveLength(1);
+    expect(states).not.toContain("completed");
+    expect(states.at(-1)).toBe("superseded");
+
+    // Nothing was projected for an answer that does not exist.
+    const jobs = await harness.storage((storage) =>
+      storage.sql
+        .exec<{ kind: string }>("SELECT kind FROM agent_projection_jobs")
+        .toArray()
+        .map((job) => job.kind),
+    );
+    expect(jobs).not.toContain("memory_outbox");
+  });
+
+  it("absorbs a steer that a later prepareStep can still include", async () => {
+    // The other half of the same rule, and the reason the branch above must be
+    // narrow: input a later `prepareStep` can still carry is included, never
+    // superseded.
+    const model = mockModel([
+      toolStep({ toolCallId: "call_1", code: TRIVIAL }),
+      textStep({ chunks: ["both questions answered"] }),
+    ]);
+    const harness = await freshLoopRun({ model });
+
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.stub.appendTurn(customerTurn("t2", "and also: why is billing slow?"));
+    await harness.alarm();
+
+    expect(harness.results[0].path).toBe("completed");
+    const transcript = await harness.storage((storage) => readModelTranscript(storage));
+    const inputs = transcript.filter((row) => row.kind === "input");
+    // Both turns reached the model, each exactly once (invariant 13).
+    expect(inputs).toHaveLength(2);
+    expect(new Set(inputs.map((row) => row.sourceEventSeq)).size).toBe(2);
+
+    const turns = await harness.storage((storage) => listTurns(storage));
+    expect(turns.filter((turn) => turn.source === "agent")).toHaveLength(1);
+  });
+
+  it("is idempotent: a redelivered finalization appends no second turn", async () => {
+    const model = mockModel([textStep({ chunks: ["the queue drained"] })]);
+    const harness = await freshLoopRun({ model });
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.alarm();
+
+    const turnId = harness.results[0].finalTurnId as string;
+    const generationId = turnId.replace(/^agent:/, "").replace(/:final$/, "");
+
+    // Replay the whole finalization against the already-settled generation, as
+    // an at-least-once alarm redelivery would.
+    const replay = await harness.storage((storage) =>
+      finalizeAnswer(
+        storage,
+        { generationId, claimEpoch: 99 },
+        {
+          attempt: 1,
+          finalText: "a DIFFERENT answer that must never be written",
+          summary: "no",
+          internalNarration: false,
+          deltaBatchSeq: 50,
+          terminalBatchSeq: 51,
+          globalStep: 0,
+        },
+      ),
+    );
+    expect(replay.outcome).toBe("already_final");
+
+    const turns = await harness.storage((storage) => listTurns(storage));
+    const finals = turns.filter((turn) => turn.source === "agent");
+    expect(finals).toHaveLength(1);
+    expect(finals[0].content).toBe("the queue drained");
+  });
+});
+
+/* --------------------------------------------------- the freshness guard -- */
+
+describe("the execution guard reaches the tool through the shipping composition", () => {
+  it("turns a stale generation into a safe tool result the model can read", async () => {
+    const model = mockModel([
+      toolStep({ toolCallId: "call_1", code: TRIVIAL }),
+      textStep({ chunks: ["I stopped: newer input arrived."] }),
+    ]);
+    const harness = await freshLoopRun({
+      model,
+      // What Task 8 will supply for real. The point of the case is that the
+      // value travels `makeAgentContinuation` -> `makeAgentTools` ->
+      // `makeRunCodeTool` and is actually consulted — not that this particular
+      // implementation is the final one.
+      guard: {
+        async assertFresh() {
+          throw new CapabilityError("stale_generation", STALE_GENERATION_MESSAGE);
+        },
+      },
+    });
+
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.alarm();
+
+    // A refusal is a RESULT, not a crash: the model reads it and adapts.
+    expect(harness.results[0].path).toBe("completed");
+    const transcript = await harness.storage((storage) => readModelTranscript(storage));
+    expect(JSON.stringify(transcript)).toContain("stale_generation");
+
+    const calls = await harness.storage((storage) => listToolCalls(storage));
+    const outer = calls.find((call) => call.name === "run_code");
+    expect(outer?.state).toBe("failed");
+    expect(outer?.error).toContain("stale_generation");
+
+    // The guard refused BEFORE the isolate was loaded, so no capability ran.
+    expect(calls.filter((call) => call.callId.startsWith("cap:"))).toHaveLength(0);
   });
 });

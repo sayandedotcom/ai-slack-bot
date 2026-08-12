@@ -211,6 +211,19 @@ export function makeCapabilityDependencies(
 
 /* -------------------------------------------------------------- the tool -- */
 
+/**
+ * How `Env` becomes the seven capability ports.
+ *
+ * A named type with exactly one production implementation
+ * (`makeCapabilityDependencies`), so the override below can be typed instead of
+ * being an `any`-shaped hole.
+ */
+export type CapabilityDependencyFactory = (
+  env: Env,
+  scope: CodeModeScope,
+  clock: () => number,
+) => CapabilityDependencies;
+
 export type RunCodeToolInput = {
   env: Env;
   /** The RunDO's own `run_state` row. The only accepted source of run identity. */
@@ -221,6 +234,24 @@ export type RunCodeToolInput = {
   guard: AgentExecutionGuard;
   limits?: CodeModeLimits;
   clock?: () => number;
+  /**
+   * Swap the VENDOR PORTS, and nothing else.
+   *
+   * This is the seam that lets a test drive the real composer — real scope
+   * resolution against real D1 rows, the real write guard, the real loader, the
+   * real one-tool map — against fake Slack/Zep/Linear/Supabase gateways.
+   *
+   * It exists because the alternative is worse. Without it, a test that must
+   * not reach a vendor has to rebuild the composition itself, and then the thing
+   * that ships is the thing nothing executes: the scope could be built wrong,
+   * the write guard could be dropped, the tool map could be mis-keyed, and every
+   * test would still pass.
+   *
+   * Deliberately narrow. It cannot supply the scope, the guard, the loader or
+   * the limits — the parts that decide whether this run may act — so a test
+   * using it is still subject to every policy decision production makes.
+   */
+  dependencies?: CapabilityDependencyFactory;
 };
 
 /**
@@ -244,7 +275,7 @@ export async function makeRunCodeToolForRun(
 
   return makeRunCodeTool({
     scope,
-    deps: makeCapabilityDependencies(input.env, scope, clock),
+    deps: (input.dependencies ?? makeCapabilityDependencies)(input.env, scope, clock),
     limits: input.limits ?? PRODUCTION_LIMITS,
     auditForExecution: input.auditForExecution,
     guard: input.guard,

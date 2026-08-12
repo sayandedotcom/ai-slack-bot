@@ -1,11 +1,11 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetRunPorts } from "../src/agent/driver";
-import { makeRunCodeTool } from "../src/codemode/tool";
-import { alwaysFresh, PRODUCTION_LIMITS } from "../src/codemode/contracts";
-import { listEvents, listToolCalls, listTurns } from "../src/run/session";
+import { alwaysFresh } from "../src/codemode/contracts";
+import { makeAgentTools } from "../src/agent/dependencies";
+import { listEvents, listToolCalls, listTurns, readModelTranscript } from "../src/run/session";
 import type { RunEvent, RunServerMessage } from "../src/run/protocol";
-import { fakeDeps, seedPermittedScope } from "./helpers/codemode";
+import { fakeDeps } from "./helpers/codemode";
 import {
   customerTurn,
   freshLoopRun,
@@ -28,6 +28,11 @@ import type { Env } from "../src/index";
  * isolate against fake gateways is exactly the point, because it proves the
  * outer tool, the nested capability audit trail and the transcript all line up
  * without needing an account anywhere.
+ *
+ * The COMPOSITION is real too, and that is the load-bearing part. Everything
+ * below reaches the loop through `makeAgentContinuation`, so
+ * `resolveCodeModeScope`, `makeAgentTools` and the shared host write guard are
+ * executed by these tests. Only the seven vendor ports are swapped.
  */
 
 afterEach(() => {
@@ -39,31 +44,15 @@ const CODE = `async () => {
   return { messages: thread.length, first: thread[0].text };
 }`;
 
-async function realIsolateTool() {
-  const scope = await seedPermittedScope(env.DB);
-  return makeRunCodeTool({
-    scope,
-    deps: fakeDeps({
-      slackThread: [
-        { ts: "1.0", userId: "U1", text: "exports are empty", permalink: null },
-        { ts: "2.0", userId: "U2", text: "since the 04:12 deploy", permalink: null },
-      ],
-    }),
-    limits: PRODUCTION_LIMITS,
-    auditForExecution: () => ({
-      async started() {},
-      async completed() {},
-      async failed() {},
-    }),
-    guard: alwaysFresh(),
-    loader: (env as unknown as Env).LOADER,
-  });
-}
+const THREAD = [
+  { ts: "1.0", userId: "U1", text: "exports are empty", permalink: null },
+  { ts: "2.0", userId: "U2", text: "since the 04:12 deploy", permalink: null },
+];
 
 describe("the whole loop, against a real Tier 1 isolate", () => {
   it("runs mock model -> run_code -> isolate -> result -> final answer", async () => {
-    const scope = await seedPermittedScope(env.DB);
     const harness = await freshLoopRun({
+      origin: "slack",
       model: mockModel([
         toolStep({
           toolCallId: "call_1",
@@ -72,20 +61,7 @@ describe("the whole loop, against a real Tier 1 isolate", () => {
         }),
         textStep({ chunks: ["Two messages; it started at the 04:12 deploy."] }),
       ]),
-      makeTools: async ({ auditForExecution }) =>
-        makeRunCodeTool({
-          scope,
-          deps: fakeDeps({
-            slackThread: [
-              { ts: "1.0", userId: "U1", text: "exports are empty", permalink: null },
-              { ts: "2.0", userId: "U2", text: "since the 04:12 deploy", permalink: null },
-            ],
-          }),
-          limits: PRODUCTION_LIMITS,
-          auditForExecution,
-          guard: alwaysFresh(),
-          loader: (env as unknown as Env).LOADER,
-        }),
+      fixtures: { slackThread: THREAD },
       flush: { chars: 16 },
     });
 
@@ -149,12 +125,65 @@ describe("the whole loop, against a real Tier 1 isolate", () => {
   });
 
   it("keeps the model's tool map to exactly one entry", async () => {
-    const tool = await realIsolateTool();
+    // The REAL composer, resolving a REAL scope from D1, with only the vendor
+    // ports faked. `makeAgentTools` is the one home for "exactly one outer
+    // tool"; this asserts the map it actually returns.
+    const harness = await freshLoopRun({
+      origin: "slack",
+      model: mockModel([textStep({ chunks: ["unused"] })]),
+    });
+    const state = await harness.stub.state();
+
+    const tools = await makeAgentTools({
+      env: env as unknown as Env,
+      state: state!,
+      turnId: `agent:gen:${crypto.randomUUID()}`,
+      auditForExecution: () => ({
+        async started() {},
+        async completed() {},
+        async failed() {},
+      }),
+      guard: alwaysFresh(),
+      dependencies: () => ({ ...fakeDeps(), db: env.DB, clock: () => 0 }),
+    });
+
+    expect(Object.keys(tools)).toEqual(["run_code"]);
     // The seven namespaces exist only inside the isolate, described once in this
     // tool's description (invariants 5 and 24).
-    expect(typeof tool.description).toBe("string");
-    expect(tool.description).toContain("slack");
-    expect(tool.description).toContain("You have one tool");
+    expect(tools.run_code.description).toContain("slack");
+    expect(tools.run_code.description).toContain("You have one tool");
+  });
+
+  it("does not let the shipping composition bypass the host write guard", async () => {
+    // Task 6 fixed a real defect: a SHADOW run could file a Linear issue and
+    // publish artifacts. That fix lives in the shared guard `makeAgentTools`
+    // wires, so it is worth nothing if the composition that ships skips it.
+    // This run is shadow, its channel is live, and the model tries to reply.
+    const harness = await freshLoopRun({
+      origin: "slack",
+      shadow: true,
+      model: mockModel([
+        toolStep({
+          toolCallId: "call_1",
+          code: 'async () => slack.reply({ text: "we are on it" })',
+        }),
+        textStep({ chunks: ["Drafted a reply but could not send it."] }),
+      ]),
+      fixtures: { slackThread: THREAD },
+    });
+
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.alarm();
+
+    // Denied — and denied as a READABLE result the model adapts to, not a crash.
+    expect(harness.results[0].path).toBe("completed");
+    const transcript = await harness.storage((storage) => readModelTranscript(storage));
+    expect(JSON.stringify(transcript)).toContain("shadow_write_denied");
+
+    const calls = await harness.storage((storage) => listToolCalls(storage));
+    expect(calls.find((call) => call.name === "run_code")?.state).toBe("failed");
+    // The refusal is recorded against the capability that was attempted.
+    expect(calls.find((call) => call.name === "slack.reply")?.state).toBe("failed");
   });
 });
 
@@ -172,19 +201,8 @@ describe("reconnect replays exactly the missing frames", () => {
         }),
         textStep({ chunks: ["Two messages; the 04:12 deploy started it."] }),
       ]),
-      makeTools: async ({ auditForExecution }) => {
-        const scope = await seedPermittedScope(env.DB);
-        return makeRunCodeTool({
-          scope,
-          deps: fakeDeps({
-            slackThread: [{ ts: "1.0", userId: "U1", text: "empty", permalink: null }],
-          }),
-          limits: PRODUCTION_LIMITS,
-          auditForExecution,
-          guard: alwaysFresh(),
-          loader: (env as unknown as Env).LOADER,
-        });
-      },
+      origin: "slack",
+      fixtures: { slackThread: [{ ts: "1.0", userId: "U1", text: "empty", permalink: null }] },
       // One batch per narration chunk, so "two text batches" is a real cursor.
       flush: { chars: 8 },
     });

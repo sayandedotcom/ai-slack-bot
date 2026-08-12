@@ -68,8 +68,8 @@ import {
   type TranscriptMessage,
 } from "./transcript";
 import { AssistantStream, systemClock, type StreamClock } from "./stream";
-import { makeAgentTools } from "./dependencies";
-import { alwaysFresh } from "../codemode/contracts";
+import { makeAgentTools, type CapabilityDependencyFactory } from "./dependencies";
+import type { AgentExecutionGuard } from "../codemode/contracts";
 import type { CodeModeOutput } from "../codemode/tool";
 
 /**
@@ -911,8 +911,43 @@ export function withOuterToolEvents(
 
 export type AgentContinuationOptions = {
   modelFactory: ModelFactory;
+  /**
+   * REQUIRED, with no default, because it is invariant 15's gate.
+   *
+   * `run_code` and every capability must check the generation's input revision
+   * immediately before acting, so that a step already known to be stale produces
+   * a safe `stale_generation` result instead of a live external write. Task 8
+   * supplies the implementation that reads the RunDO generation.
+   *
+   * It is not optional and it does not default to `alwaysFresh()`, because a
+   * default is a decision nobody makes. A caller wiring this up — Task 10's
+   * brief is surface wiring, not guards — would otherwise get the permissive
+   * behaviour by saying nothing, and the first stale Slack run would perform an
+   * `external_write` with no test red. Passing `alwaysFresh()` is still allowed;
+   * it just has to be typed out, in a diff somebody reads.
+   */
+  guard: AgentExecutionGuard;
   limits?: AgentLimits;
   clock?: StreamClock;
+  /** Batching thresholds. Tests inject smaller ones. */
+  flush?: { chars?: number; ms?: number };
+  historyBounds?: { maxMessages: number; maxBytes: number };
+  /**
+   * Swap the capability layer's VENDOR PORTS only. See
+   * `RunCodeToolInput.dependencies`: it is what lets a test drive this exact
+   * composition without reaching a vendor, instead of rebuilding it.
+   */
+  dependencies?: CapabilityDependencyFactory;
+  /**
+   * Observe the ten typed paths.
+   *
+   * The driver contract deliberately narrows to three outcomes — settle,
+   * continue, retry — because that is all scheduling needs. An operator looking
+   * at a failed run wants to know whether it was a refusal, a spend cap or a
+   * malformed history, and those are all `failed` by the time the driver sees
+   * them. This is where that detail is available without widening the port.
+   */
+  onOutcome?: (result: ContinuationResult) => void;
 };
 
 /**
@@ -946,6 +981,7 @@ export function makeAgentContinuation(
 
       const events = makeRunEventPort(ctx, claim.fence);
       const result = await composeAndRun(ctx, env, state, claim, events, options);
+      options.onOutcome?.(result);
       return toContinuationOutcome(result);
     },
   };
@@ -1005,9 +1041,11 @@ async function composeAndRun(
       // audit.ts, wired: nested capability events become `cap:*` tool updates
       // on the same replayable stream as everything else (invariant 19).
       auditForExecution: auditSinkFactory(claim.generationId, writer),
-      // Task 8 owns the freshness guard. Until then this is honestly permissive
-      // rather than dishonestly strict.
-      guard: alwaysFresh(),
+      // Invariant 15's gate, and the caller had to state it.
+      guard: options.guard,
+      ...(options.dependencies === undefined
+        ? {}
+        : { dependencies: options.dependencies }),
     });
   } catch (error) {
     return classifyThrown(error);
@@ -1021,5 +1059,9 @@ async function composeAndRun(
     context: resolved.context,
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),
+    ...(options.flush === undefined ? {} : { flush: options.flush }),
+    ...(options.historyBounds === undefined
+      ? {}
+      : { historyBounds: options.historyBounds }),
   });
 }
