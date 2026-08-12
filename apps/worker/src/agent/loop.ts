@@ -68,6 +68,14 @@ import {
   type TranscriptMessage,
 } from "./transcript";
 import { AssistantStream, systemClock, type StreamClock } from "./stream";
+import {
+  abortMeansContinuation,
+  armSteeringAbort,
+  bothFresh,
+  disarmSteeringAbort,
+  generationFreshnessGuard,
+  SteeringAbort,
+} from "./steering";
 import { makeAgentTools, type CapabilityDependencyFactory } from "./dependencies";
 import type { AgentExecutionGuard } from "../codemode/contracts";
 import type { CodeModeOutput } from "../codemode/tool";
@@ -162,6 +170,11 @@ export type ContinuationPath =
   | "continuation_requested"
   /** A successor claimed the run mid-stream. This attempt writes nothing more. */
   | "aborted_stale_claim"
+  /**
+   * The provider stream was aborted with NO trusted input pending — an operator
+   * or user cancellation rather than steering. Visible, not a silent retry.
+   */
+  | "run_cancelled"
   | "provider_refusal"
   | "provider_timeout"
   /** Unpaired tool calls, unusable history, or a response we refuse to store. */
@@ -215,6 +228,7 @@ export function toContinuationOutcome(result: ContinuationResult): ContinuationO
         errorCode: result.errorCode ?? "cost_limit",
         ...(result.detail === undefined ? {} : { errorMessage: result.detail }),
       };
+    case "run_cancelled":
     case "step_limit":
     case "malformed_history":
       return {
@@ -268,6 +282,14 @@ export type ContinuationDeps = {
   context: TrustedContext;
   limits?: AgentLimits;
   clock?: StreamClock;
+  /**
+   * An OUTER signal to fold into this invocation's own steering controller.
+   *
+   * Chained rather than passed through, so there is exactly one signal reaching
+   * `streamText` and exactly one place that decides what an abort meant. What
+   * it meant is always read from the durable cursors (see `steering.ts`), never
+   * from whichever signal fired.
+   */
   abortSignal?: AbortSignal;
   /** Bounds for the model history read. Tests inject smaller ones. */
   historyBounds?: { maxMessages: number; maxBytes: number };
@@ -340,6 +362,43 @@ export async function runContinuation(
    * `agent-loop.test.ts` covers both callbacks.
    */
   let stopped: ContinuationResult | null = null;
+
+  /**
+   * The best-effort abort for THIS provider invocation.
+   *
+   * Created per invocation and offered to `RunDO.appendTurn` only while the
+   * provider is streaming visible text (see `steering.ts`). It carries no
+   * correctness state: what an abort MEANT is decided below from the durable
+   * cursors, never from this controller or its reason.
+   */
+  const steering = new AbortController();
+  const external = deps.abortSignal;
+  if (external !== undefined) {
+    if (external.aborted) steering.abort(external.reason);
+    else external.addEventListener("abort", () => steering.abort(external.reason), { once: true });
+  }
+  const abortControls = {
+    arm: () => armSteeringAbort(storage, steering),
+    disarm: () => disarmSteeringAbort(storage, steering),
+    /**
+     * An abort is a CONTINUATION when trusted input is pending — the same
+     * generation carries on with the steer at its next `prepareStep` — and a
+     * visible cancellation when nothing is pending. Read from durable state so
+     * an evicted object reaches the same answer.
+     */
+    result: (): ContinuationResult =>
+      abortMeansContinuation(storage, claim.generationId)
+        ? {
+            path: "continuation_requested",
+            errorCode: null,
+            detail: "the provider stream was aborted because newer input arrived",
+          }
+        : {
+            path: "run_cancelled",
+            errorCode: "run_cancelled",
+            detail: "the provider stream was aborted with no newer input pending",
+          },
+  };
 
   // Explicitly annotated, because TypeScript only treats a call as
   // never-returning — and therefore narrows the code after it — when the callee
@@ -465,7 +524,7 @@ export async function runContinuation(
       // No raw provider chunks. There is nothing this loop may do with one, and
       // an ignored stream of them is still a stream of them (invariant 18).
       includeRawChunks: false,
-      ...(deps.abortSignal === undefined ? {} : { abortSignal: deps.abortSignal }),
+      abortSignal: steering.signal,
       ...modelCallOptions(limits, remainingSteps),
 
       prepareStep: async ({ stepNumber }) => {
@@ -577,7 +636,7 @@ export async function runContinuation(
       },
     });
 
-    await consumeStream(generation.stream, stream, halt, () => stopped);
+    await consumeStream(generation.stream, stream, halt, () => stopped, abortControls);
 
     if (stopped !== null) {
       await terminateFor(stream, stopped);
@@ -621,9 +680,17 @@ export async function runContinuation(
       await terminateFor(stream, error.result);
       return error.result;
     }
-    const mapped = classifyThrown(error);
+    // The SDK may raise the abort instead of streaming an `abort` part,
+    // depending on where in the pipeline the signal fires. Both mean the same
+    // thing, and both ask the durable cursors what that thing is.
+    const mapped = isAbort(error, steering) ? abortControls.result() : classifyThrown(error);
     await terminateFor(stream, mapped);
     return mapped;
+  } finally {
+    // Never leave a controller on offer past the invocation it belongs to: an
+    // `appendTurn` that found a stale entry would abort nothing while believing
+    // it had. Idempotent, and it removes only this invocation's own entry.
+    abortControls.disarm();
   }
 
   return result;
@@ -649,6 +716,7 @@ async function consumeStream(
   stream: AssistantStream,
   halt: (result: ContinuationResult) => never,
   stopped: () => ContinuationResult | null,
+  abort: { arm: () => void; disarm: () => void; result: () => ContinuationResult },
 ): Promise<void> {
   for await (const part of parts) {
     // A callback already decided this attempt is over. Stop reading rather than
@@ -659,6 +727,33 @@ async function consumeStream(
     switch (part.type) {
       case "text-delta":
         await stream.delta(part.text);
+        break;
+
+      // THE ONLY WINDOW IN WHICH A STEER MAY CUT THE PROVIDER OFF.
+      //
+      // Armed at `text-start` and withdrawn the moment the model stops emitting
+      // prose, because that is the only phase where aborting is cheaper than
+      // continuing: every further token is text a steer would supersede anyway.
+      // A steer that lands while the model is thinking, while `run_code` is
+      // executing, or between steps finds nothing armed and is absorbed by the
+      // next `prepareStep` instead — with the step's tokens and its tool result
+      // intact, which is strictly better than paying for the step twice.
+      case "text-start":
+        abort.arm();
+        break;
+
+      case "text-end":
+      // A step that asked for a tool has work worth keeping. Withdrawn here as
+      // well as at `finish-step` because the tool call can be the last part of
+      // a step whose text ended long before it.
+      //
+      // Nothing is EMITTED for `tool-call`: the outer `run_code` lifecycle is
+      // written by the execute wrapper, not from here, because the wrapper is
+      // what guarantees the outer `started` precedes the nested `cap:*` events
+      // the execution emits while it runs. Mapping both would put every tool
+      // call in the timeline twice (see audit.ts).
+      case "tool-call":
+        abort.disarm();
         break;
 
       // Reasoning, in every form. Ignored ENTIRELY: no event, no log, no D1
@@ -676,34 +771,35 @@ async function consumeStream(
       // Framing and progress with no durable meaning of their own.
       case "start":
       case "start-step":
-      case "text-start":
-      case "text-end":
       case "tool-input-start":
       case "tool-input-delta":
       case "tool-input-end":
       case "source":
       case "file":
       case "custom":
-      // The outer `run_code` lifecycle is emitted by the execute wrapper, not
-      // from here: the wrapper is what guarantees the outer `started` precedes
-      // the nested `cap:*` events the execution emits while it runs. Mapping
-      // both would put every tool call in the timeline twice (see audit.ts).
-      case "tool-call":
+      // Tool lifecycle, emitted by the execute wrapper rather than from here
+      // (see the `tool-call` arm above).
       case "tool-result":
       case "tool-error":
+        break;
+
       // Per-step accounting happens in `onStepEnd`, which the SDK awaits.
       case "finish-step":
       case "finish":
+        abort.disarm();
         break;
 
+      // Reachable from Task 8 on: `RunDO.appendTurn` may abort the armed
+      // controller after a steering turn commits. What it MEANS is read from
+      // durable state — steering continues the same generation, a cancellation
+      // with nothing pending is a visible outcome — never from the reason
+      // string, which an eviction would lose.
       case "abort":
-        return halt({
-          path: "infrastructure_retry",
-          errorCode: "stream_aborted",
-          ...(part.reason === undefined ? {} : { detail: part.reason }),
-        });
+        abort.disarm();
+        return halt(abort.result());
 
       case "error":
+        abort.disarm();
         return halt(classifyThrown(part.error));
 
       case "tool-output-denied":
@@ -769,14 +865,37 @@ function classifyThrown(error: unknown): ContinuationResult {
 }
 
 /**
+ * Was this the steering abort, or something that merely looks like one?
+ *
+ * The controller's own signal is the primary test, because a signal this loop
+ * created can only have been aborted by this loop's registry entry. The name
+ * checks are the fallback for the SDK re-wrapping the reason on the way out.
+ */
+function isAbort(error: unknown, controller: AbortController): boolean {
+  if (controller.signal.aborted) return true;
+  if (error instanceof SteeringAbort) return true;
+  const name = error instanceof Error ? error.name : "";
+  return name === "AbortError";
+}
+
+/**
  * Terminate the visible stream for a non-success path.
  *
  * Every exit terminates exactly one stream update, so a client is never left
  * holding a draft with nothing coming for it. A stale claimant terminates
  * nothing: its writes are refused anyway, and the successor owns the answer.
+ *
+ * A continuation terminates the draft as `superseded`, not `failed`. Nothing
+ * failed: the customer steered, the same generation is about to continue, and
+ * showing them a failed answer for having typed is the opposite of what
+ * happened.
  */
 async function terminateFor(stream: AssistantStream, result: ContinuationResult): Promise<void> {
   if (result.path === "aborted_stale_claim") return;
+  if (result.path === "continuation_requested") {
+    await stream.terminate("superseded");
+    return;
+  }
   await stream.terminate("failed", result.errorCode ?? result.path);
 }
 
@@ -912,19 +1031,19 @@ export function withOuterToolEvents(
 export type AgentContinuationOptions = {
   modelFactory: ModelFactory;
   /**
-   * REQUIRED, with no default, because it is invariant 15's gate.
+   * An ADDITIONAL freshness check, on top of the durable one.
    *
-   * `run_code` and every capability must check the generation's input revision
-   * immediately before acting, so that a step already known to be stale produces
-   * a safe `stale_generation` result instead of a live external write. Task 8
-   * supplies the implementation that reads the RunDO generation.
+   * Invariant 15's real gate is `generationFreshnessGuard`, and `composeAndRun`
+   * always composes it: `run_code` and every capability re-read this
+   * generation's input revision from durable RunDO state immediately before
+   * acting, so a step already known to be stale produces a safe
+   * `stale_generation` result instead of a live external write. No caller can
+   * turn that off, which is the point — invariant 15 is a property of the
+   * composition, not of whoever wires it up.
    *
-   * It is not optional and it does not default to `alwaysFresh()`, because a
-   * default is a decision nobody makes. A caller wiring this up — Task 10's
-   * brief is surface wiring, not guards — would otherwise get the permissive
-   * behaviour by saying nothing, and the first stale Slack run would perform an
-   * `external_write` with no test red. Passing `alwaysFresh()` is still allowed;
-   * it just has to be typed out, in a diff somebody reads.
+   * This field stays REQUIRED anyway. It is the seam a test uses to force a
+   * refusal deterministically, and a required field means the answer "nothing
+   * extra" has to be typed out as `alwaysFresh()`, in a diff somebody reads.
    */
   guard: AgentExecutionGuard;
   limits?: AgentLimits;
@@ -1041,8 +1160,15 @@ async function composeAndRun(
       // audit.ts, wired: nested capability events become `cap:*` tool updates
       // on the same replayable stream as everything else (invariant 19).
       auditForExecution: auditSinkFactory(claim.generationId, writer),
-      // Invariant 15's gate, and the caller had to state it.
-      guard: options.guard,
+      // INVARIANT 15, composed here rather than delegated to the caller.
+      //
+      // The durable half — `generationFreshnessGuard`, which re-reads this
+      // generation's included cursor, the driver's pending cursor and the claim
+      // epoch immediately before every outer call and every capability body —
+      // is not optional and cannot be opted out of. `options.guard` is an
+      // ADDITIONAL check on top of it, which is why a caller passing
+      // `alwaysFresh()` still gets full steering safety.
+      guard: bothFresh(generationFreshnessGuard(ctx.storage, claim.fence), options.guard),
       ...(options.dependencies === undefined
         ? {}
         : { dependencies: options.dependencies }),

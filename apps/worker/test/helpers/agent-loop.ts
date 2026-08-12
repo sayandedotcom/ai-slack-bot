@@ -15,6 +15,7 @@ import type { StreamClock } from "../../src/agent/stream";
 import { alwaysFresh, type AgentExecutionGuard } from "../../src/codemode/contracts";
 import type { CodeModeOutput } from "../../src/codemode/tool";
 import { fakeDeps, type FakeFixtures } from "./codemode";
+import type { CapabilityDependencies } from "../../src/codemode/gateways";
 import { FakeClock } from "./agent-driver";
 
 /**
@@ -138,7 +139,35 @@ export function errorStep(message: string): LanguageModelV4StreamPart[] {
  * A scripted provider. Each entry is one step's worth of stream parts; the last
  * entry repeats, so a fixture never has to guess how many steps the loop takes.
  */
-export function mockModel(steps: LanguageModelV4StreamPart[][]): LanguageModel {
+export type ModelScript = {
+  /**
+   * Called with the 1-based provider invocation number BEFORE the stream is
+   * produced. This is the number the coalescing property is about: ten steers
+   * during one answer must cost one extra invocation, not ten.
+   */
+  onCall?: (call: number) => void;
+  /**
+   * Hold the provider here. Awaited before any part is emitted, so a test can
+   * append durable input through the REAL RunDO RPC while a claimed attempt is
+   * genuinely mid-flight, then release it.
+   */
+  hold?: (call: number) => Promise<void>;
+  /**
+   * Hold the stream open AFTER its first text delta.
+   *
+   * The window the abort optimization lives in: the provider is streaming
+   * visible text, the loop has armed its controller, and a steer arriving now
+   * may cut the call short. Nothing about correctness depends on it — the same
+   * steer arriving with nothing armed is absorbed by the cursor compare — but
+   * it is the only way to exercise the abort deterministically.
+   */
+  holdAfterDelta?: (call: number) => Promise<void>;
+};
+
+export function mockModel(
+  steps: LanguageModelV4StreamPart[][],
+  script: ModelScript = {},
+): LanguageModel {
   let call = 0;
   return new MockLanguageModelV4({
     provider: "mock",
@@ -149,12 +178,31 @@ export function mockModel(steps: LanguageModelV4StreamPart[][]): LanguageModel {
     doStream: async () => {
       const parts = steps[Math.min(call, steps.length - 1)];
       call += 1;
+      script.onCall?.(call);
+      if (script.hold) await script.hold(call);
+      const invocation = call;
+      const stream = simulateReadableStream({
+        chunks: parts,
+        initialDelayInMs: 0,
+        chunkDelayInMs: 0,
+      });
+      const holdAfterDelta = script.holdAfterDelta;
+      if (!holdAfterDelta) {
+        return { stream, response: { headers: { "cf-aig-log-id": "log_local" } } };
+      }
+
+      let held = false;
+      const pause = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
+        async transform(part, controller) {
+          controller.enqueue(part);
+          if (!held && part.type === "text-delta") {
+            held = true;
+            await holdAfterDelta(invocation);
+          }
+        },
+      });
       return {
-        stream: simulateReadableStream({
-          chunks: parts,
-          initialDelayInMs: 0,
-          chunkDelayInMs: 0,
-        }),
+        stream: stream.pipeThrough(pause),
         response: { headers: { "cf-aig-log-id": "log_local" } },
       };
     },
@@ -241,6 +289,16 @@ export type LoopHarness = {
   /** One faithful platform delivery: clear the armed alarm, then dispatch. */
   alarm: () => Promise<AlarmOutcome>;
   storage: <T>(fn: (storage: DurableObjectStorage) => T) => Promise<T>;
+  /**
+   * The object's own storage handle, captured when a claim builds the
+   * continuation.
+   *
+   * For code that already runs INSIDE the Durable Object's execution context —
+   * a fake vendor port called from a live `run_code` execution, a stream tap —
+   * and therefore must use the synchronous session functions rather than an RPC
+   * back into the object it is already inside. Null before the first claim.
+   */
+  claimed: () => DurableObjectStorage | null;
 };
 
 export type LoopOptions = {
@@ -270,6 +328,14 @@ export type LoopOptions = {
    * the branch.
    */
   midStream?: (storage: DurableObjectStorage) => void;
+  /**
+   * Wrap the fake vendor ports.
+   *
+   * Used by the steering suite to make a capability commit durable input while
+   * it is running — the only way to reach "input arrived BETWEEN two capability
+   * calls" without a second thread.
+   */
+  wrapDeps?: (base: CapabilityDependencies) => CapabilityDependencies;
 };
 
 export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
@@ -277,6 +343,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
   const descriptor = await seedRun(origin, options.shadow ?? false);
   const results: ContinuationResult[] = [];
   const limits: AgentLimits = { ...DEFAULT_AGENT_LIMITS, ...options.limits };
+  let claimedStorage: DurableObjectStorage | null = null;
 
   /**
    * ONE clock, an hour ahead of wall time, driving both the driver and the
@@ -309,20 +376,25 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
        * `dependencies` seam, so nothing here can reach Slack, Zep, Linear,
        * Supabase, LangSmith, Better Stack or R2.
        */
-      continuation: (ctx, workerEnv) =>
-        makeAgentContinuation(ctx, workerEnv, {
+      continuation: (ctx, workerEnv) => {
+        claimedStorage = ctx.storage;
+        return makeAgentContinuation(ctx, workerEnv, {
           modelFactory: () => handleFor(wrapModel(options.model, ctx, options.midStream)),
-          // Stated explicitly, because the option is required. Cases about
-          // staleness pass their own.
+          // The ADDITIONAL guard only. The durable freshness guard is composed
+          // by `makeAgentContinuation` itself and cannot be switched off here,
+          // which is exactly the property invariant 15 needs.
           guard: options.guard ?? alwaysFresh(),
-          dependencies: (_env, _scope, depsClock) => ({
-            ...fakeDeps(options.fixtures ?? {}),
-            // The write guard re-reads the channel policy and the `runs` row
-            // from D1 immediately before any `external_write`, so it needs a
-            // real handle. Faking it would fake away the thing being protected.
-            db: workerEnv.DB,
-            clock: depsClock,
-          }),
+          dependencies: (_env, _scope, depsClock) => {
+            const base: CapabilityDependencies = {
+              ...fakeDeps(options.fixtures ?? {}),
+              // The write guard re-reads the channel policy and the `runs` row
+              // from D1 immediately before any `external_write`, so it needs a
+              // real handle. Faking it would fake away the thing being protected.
+              db: workerEnv.DB,
+              clock: depsClock,
+            };
+            return options.wrapDeps ? options.wrapDeps(base) : base;
+          },
           limits,
           clock,
           onOutcome: (result) => results.push(result),
@@ -330,7 +402,8 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
           ...(options.historyBounds === undefined
             ? {}
             : { historyBounds: options.historyBounds }),
-        }),
+        });
+      },
       now: () => clock.now(),
       limits: {
         claimLeaseMs: 150_000,
@@ -354,6 +427,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
       return stub.dispatchAlarm();
     },
     storage: (fn) => runInDurableObject(stub, (_instance, state) => fn(state.storage)),
+    claimed: () => claimedStorage,
   };
 }
 
@@ -395,6 +469,45 @@ async function seedRun(origin: "chat" | "slack", shadow: boolean): Promise<RunDe
 
 export function customerTurn(id: string, content = "the deploy is stuck"): RunTurnInput {
   return { id, role: "user", source: "customer", content };
+}
+
+/**
+ * Human steering, shaped exactly as `RunDO`'s own WebSocket handler shapes it:
+ * server-assigned role and source, so a browser cannot pose as the customer.
+ */
+export function steerTurn(id: string, content: string): RunTurnInput {
+  return { id, role: "user", source: "human_steer", content };
+}
+
+/**
+ * A one-way flag two Workers I/O contexts may share.
+ *
+ * NOT a promise, deliberately, and this is the whole reason the helper exists.
+ * A promise created in the test and resolved inside the Durable Object drags
+ * the resolving context across the await, and the next line — `stub.appendTurn`
+ * in the test, or a storage write in the object — fails with "Cannot perform
+ * I/O on behalf of a different Durable Object". A boolean plus a timer owned by
+ * whichever side is waiting keeps each context's I/O its own.
+ */
+export function latch(): {
+  open: () => void;
+  isOpen: () => boolean;
+  wait: (timeoutMs?: number) => Promise<void>;
+} {
+  let opened = false;
+  return {
+    open: () => {
+      opened = true;
+    },
+    isOpen: () => opened,
+    wait: async (timeoutMs = 5_000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (!opened) {
+        if (Date.now() > deadline) throw new Error("latch never opened");
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    },
+  };
 }
 
 /** A stored triage opening shaped exactly like the pre-fix rows in production. */

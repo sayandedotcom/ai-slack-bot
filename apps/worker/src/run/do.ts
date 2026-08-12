@@ -53,6 +53,7 @@ import type {
   FinalizeOutcome,
   ProjectionJobKind,
 } from "../agent/contracts";
+import { abortForNewerInput } from "../agent/steering";
 import {
   continuationMadeNoProgress,
   crashOutcome,
@@ -353,7 +354,26 @@ export class RunDO extends DurableObject<Env> {
    */
   async appendTurn(input: RunTurnInput): Promise<AppendResult> {
     const result = appendTurn(this.ctx.storage, input);
-    return this.#afterCommit(result);
+    const committed = await this.#afterCommit(result);
+
+    // BEST EFFORT, AFTER THE DURABLE COMMIT, AND NEVER BEFORE IT.
+    //
+    // A steer that joined a generation already in flight may cut short the
+    // provider text that generation is streaming — the customer has changed
+    // the question, so every further token is prose that is about to be
+    // superseded anyway. It happens here, after the transaction, because an
+    // abort issued before the commit could stop the current answer for input
+    // that then failed to persist: the one ordering that can lose a turn.
+    //
+    // Nothing depends on it. The controller lives in memory and is usually
+    // absent — the object may have been evicted, the model may be between
+    // steps, or the loop may be inside a tool call, and in every one of those
+    // cases the steer is picked up by the next `prepareStep` or by
+    // `finalizeAnswer`'s cursor compare instead. This only makes it faster.
+    if (committed.appended && committed.scheduling.outcome === "joined") {
+      abortForNewerInput(this.ctx.storage);
+    }
+    return committed;
   }
 
   async appendToolCallUpdate(input: ToolCallUpdateInput): Promise<AppendResult> {
