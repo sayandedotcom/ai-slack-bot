@@ -9,6 +9,7 @@ import type {
   ToolCallUpdateInput,
 } from "./protocol";
 import { parseClientMessage } from "./protocol";
+import { broadcastEvent } from "./broadcast";
 import { projectRunIndex } from "./repository";
 import {
   appendAssistantUpdate,
@@ -130,8 +131,6 @@ export type AlarmOutcome = {
 };
 
 export class RunDO extends DurableObject<Env> {
-  /** Instance-level overrides, layered over whatever the registry resolves to. */
-  #portOverrides: Partial<RunPorts> = {};
   #ports: RunPorts | null = null;
   #portsKey: string | null = null;
 
@@ -168,18 +167,6 @@ export class RunDO extends DurableObject<Env> {
   }
 
   /**
-   * Install ports on this instance.
-   *
-   * The module-level registry in `agent/driver.ts` is the wiring seam that
-   * survives eviction; this is for a test that wants to swap a fake on an
-   * object it is already holding.
-   */
-  installPorts(ports: Partial<RunPorts>): void {
-    this.#portOverrides = { ...this.#portOverrides, ...ports };
-    this.#ports = null;
-  }
-
-  /**
    * Ports are resolved lazily and re-resolved once the run has a key.
    *
    * The constructor runs before `initialize()` on a brand-new object, so a
@@ -191,7 +178,7 @@ export class RunDO extends DurableObject<Env> {
     const key = readState(this.ctx.storage)?.key ?? null;
     if (this.#ports === null || key !== this.#portsKey) {
       this.#portsKey = key;
-      this.#ports = { ...resolveRunPorts(key), ...this.#portOverrides };
+      this.#ports = resolveRunPorts(key);
     }
     return this.#ports;
   }
@@ -652,7 +639,10 @@ export class RunDO extends DurableObject<Env> {
    */
   async #runContinuation(claim: ClaimSnapshot, now: number): Promise<string> {
     const ports = this.#resolvePorts();
-    const continuation = ports.continuation;
+    // Built per claimed attempt, from THIS object's state and bindings. Nothing
+    // is cached across claims: a continuation holds a claim fence, and a reused
+    // instance would be holding a fence that has since been superseded.
+    const continuation = ports.continuation?.(this.ctx, this.env) ?? null;
     if (!continuation) return "no continuation wired";
 
     // A claimed generation is visibly working, whatever the run said before.
@@ -929,18 +919,6 @@ export class RunDO extends DurableObject<Env> {
    * failure would be invisible to any test that never evicts.
    */
   #broadcast(event: RunEvent): void {
-    const frame = JSON.stringify({ type: "event", event });
-    for (const socket of this.ctx.getWebSockets()) {
-      try {
-        const attachment = socket.deserializeAttachment() as { lastSeq?: number } | null;
-        const lastSeq = attachment?.lastSeq ?? 0;
-        if (lastSeq >= event.seq) continue;
-
-        socket.send(frame);
-        socket.serializeAttachment({ ...(attachment ?? {}), lastSeq: event.seq });
-      } catch {
-        // One broken socket must not fail the mutation for every other client.
-      }
-    }
+    broadcastEvent(this.ctx, event);
   }
 }

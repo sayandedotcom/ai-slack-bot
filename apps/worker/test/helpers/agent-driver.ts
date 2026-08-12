@@ -236,7 +236,14 @@ export async function freshDriverRun(
 
   installRunPorts(
     {
-      ...(continuation === null ? {} : { continuation }),
+      // A FACTORY, not the fake itself. This is what retired Task 3's
+      // `attach(storage)` hack: the port is now built per claimed attempt from
+      // the object's own `ctx`, so the fake reads pending input through the same
+      // route the real continuation does instead of being handed a storage
+      // handle from inside `runInDurableObject`.
+      ...(continuation === null
+        ? {}
+        : { continuation: (ctx: DurableObjectState) => continuation.attach(ctx.storage) }),
       ...(options.projections ? { projections: options.projections } : {}),
       now: clock.now,
       limits: {

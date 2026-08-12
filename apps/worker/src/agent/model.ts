@@ -1,5 +1,5 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
-import type { LanguageModel } from "ai";
+import { stepCountIs, type LanguageModel } from "ai";
 import { FABLE_5_MODEL_ID, isPricedModel } from "./cost";
 import {
   GATEWAY_AUTH_HEADER,
@@ -187,7 +187,7 @@ export function createProductionModelFactory(
 }
 
 /**
- * The non-negotiable half of the eventual `streamText()` options.
+ * The non-negotiable half of the `streamText()` options.
  *
  * `maxRetries: 0` is the load-bearing line. AI Gateway owns at most two
  * transport attempts and it is the ONLY retry owner (invariant 27); leaving the
@@ -196,10 +196,35 @@ export function createProductionModelFactory(
  *
  * Timeouts are all explicit for the same reason the Gateway headers are:
  * a default that changes underneath a reviewed policy is not a reviewed policy.
+ *
+ * `stopWhen` is here now, and `remainingSteps` is REQUIRED rather than defaulted
+ * to the whole ceiling. The number is per-generation state the caller owns: a
+ * continuation of a generation that has already taken seven of its ten steps
+ * must be allowed three, and a default of ten here would silently hand it ten
+ * more on every continuation — turning a bounded ceiling into a per-invocation
+ * allowance that a steered conversation can renew forever.
+ *
+ * NOTE the strict-equality trap this signature does not paper over. The pinned
+ * SDK's `stepCountIs(n)` (exported as `isStepCount`) returns true when the
+ * completed step count EQUALS `n`, so `stepCountIs(0)` never fires before the
+ * first call and would not protect it. Callers must preflight
+ * `remainingSteps <= 0` and refuse BEFORE invoking the provider; this function
+ * refuses to build options for a non-positive budget so that the trap cannot be
+ * fallen into silently here either.
  */
-export function modelCallOptions(limits: AgentLimits = DEFAULT_AGENT_LIMITS) {
+export function modelCallOptions(
+  limits: AgentLimits = DEFAULT_AGENT_LIMITS,
+  remainingSteps: number = limits.maxStepsPerGeneration,
+) {
+  if (!Number.isInteger(remainingSteps) || remainingSteps <= 0) {
+    throw new ModelCompositionError(
+      "step_limit",
+      "remainingSteps must be a positive integer; preflight the step ceiling before calling the provider",
+    );
+  }
   return {
     maxRetries: 0 as const,
+    stopWhen: stepCountIs(remainingSteps),
     timeout: {
       totalMs: limits.continuationMs,
       stepMs: limits.stepMs,

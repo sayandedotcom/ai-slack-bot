@@ -1,3 +1,4 @@
+import type { Env } from "../index";
 import type {
   ClaimSnapshot,
   DriverState,
@@ -65,6 +66,30 @@ export interface AgentContinuation {
   run(snapshot: ClaimedGeneration): Promise<ContinuationOutcome>;
 }
 
+/**
+ * How a continuation is OBTAINED, as opposed to what it does.
+ *
+ * The registry below is module scope, because a Durable Object cannot be handed
+ * a live object over RPC and must be able to reach its ports from the
+ * constructor. But a module-scope singleton `AgentContinuation` cannot work:
+ * every real continuation needs THIS object's storage and THIS object's
+ * bindings, and a singleton has a route to neither. Task 3's own fake had to be
+ * handed storage through an `attach()` call from inside `runInDurableObject`
+ * precisely because of that gap — a hack that only a test could perform, which
+ * is a strong sign the seam was in the wrong place.
+ *
+ * A factory closes it with no change to the pinned `run(snapshot)` contract: the
+ * continuation is still a plain object with one method, it is simply built by a
+ * closure over the `(ctx, env)` the object already has.
+ *
+ * Called once per claimed attempt, not once per object, so nothing here needs to
+ * survive eviction and nothing may be cached across claims.
+ */
+export type AgentContinuationFactory = (
+  ctx: DurableObjectState,
+  env: Env,
+) => AgentContinuation;
+
 // --- the projection port -----------------------------------------------------
 
 export type ClaimedProjectionJob = {
@@ -105,14 +130,14 @@ export const DEFAULT_DRIVER_LIMITS: DriverLimits = {
 /**
  * What a RunDO drives its loop with.
  *
- * `continuation: null` is Phase 10's honest production value: no model exists
- * yet, so model work is claimed by nobody and simply waits. That is a deliberate
- * park, not a silent drop — the generation stays `scheduled`, the input stays
- * above the settled watermark, and the first alarm after Task 7 wires the real
- * loop picks it up exactly where it was left.
+ * `continuation: null` parks model work: the generation stays `scheduled`, the
+ * input stays above the settled watermark, and the first alarm after a
+ * continuation is installed picks it up exactly where it was left. That is the
+ * default because installing the real loop for every object in the runtime is a
+ * surface-wiring decision (Task 10), not something a module import should do.
  */
 export type RunPorts = {
-  continuation: AgentContinuation | null;
+  continuation: AgentContinuationFactory | null;
   projections: Partial<Record<ProjectionJobKind, AgentProjectionRunner>>;
   limits: DriverLimits;
   /** Injected so a test can advance time past a lease without sleeping for it. */
@@ -141,6 +166,12 @@ export function defaultRunPorts(): RunPorts {
  * Per-key overrides exist for that scoping reason. Objects in one isolate share
  * this module, so an unscoped test fake would also be handed to every other run
  * in the same runtime.
+ *
+ * There is deliberately no instance-level override any more. `RunDO` used to
+ * carry an `installPorts()` method with no callers, which read as the escape
+ * hatch for the storage problem the factory above actually solves — while being
+ * structurally unable to solve it, because a Durable Object stub cannot be
+ * handed a live port over RPC either. One seam, one place to look.
  */
 const KEYED_PORTS = new Map<string, Partial<RunPorts>>();
 let GLOBAL_PORTS: Partial<RunPorts> = {};
