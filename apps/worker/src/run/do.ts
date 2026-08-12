@@ -14,11 +14,13 @@ import {
   appendAssistantUpdate,
   appendToolCallUpdate,
   appendTurn,
+  claimGeneration,
   claimProjectionJob,
   coalesceSupersededRunIndexJobs,
   completeProjectionJob,
   countPendingProjectionJobs,
   ensureSchema,
+  finalizeGeneration,
   initializeSession,
   latestSeq,
   listEvents,
@@ -26,6 +28,7 @@ import {
   listToolCalls,
   listTurns,
   listTurnsAfter,
+  nextProjectionDueAt,
   readDriver,
   readRunIndexRevision,
   retryProjectionJob,
@@ -43,8 +46,27 @@ import {
 import type {
   AssistantUpdateOutcome,
   ClaimFence,
+  ClaimSnapshot,
   DriverState,
+  FinalizeOutcome,
+  ProjectionJobKind,
 } from "../agent/contracts";
+import {
+  crashOutcome,
+  deadlineOutcome,
+  nextAlarmAt,
+  resolveRunPorts,
+  safeErrorText,
+  toFinalizeRequest,
+  type ClaimedProjectionJob,
+  type ContinuationOutcome,
+  type RunPorts,
+} from "../agent/driver";
+import {
+  driverRetryBackoffMs,
+  PROJECTION_LEASE_MS,
+  projectionRetryBackoffMs,
+} from "../agent/limits";
 
 /**
  * The thread-scoped run. One object per origin key — `slack:{channel}:{thread}`
@@ -86,12 +108,30 @@ function eventCreatedAt(event: RunEvent): number {
 
 /** How many revisions one drain pass will carry before yielding. */
 const PROJECTION_DRAIN_MAX = 8;
-const PROJECTION_LEASE_MS = 30_000;
-const PROJECTION_BACKOFF_MS = 15_000;
 
 export type ProjectionFlush = { projected: number; failed: number; pending: number };
 
+/** What one alarm delivery actually did. Returned for tests and operator tooling. */
+export type AlarmOutcome = {
+  dispatched: "model" | "projection" | "none";
+  /**
+   * What the model half of the dispatch decided, reported separately from
+   * `dispatched` on purpose: "a projection was delivered" and "the model claim
+   * was refused because a lease is live" are different facts, and collapsing
+   * them into one field is how a test ends up asserting the wrong one.
+   */
+  model: "claimed" | "lease_held" | "backoff" | "not_scheduled" | "parked";
+  /** The alarm armed for the next due item, or null when the object may hibernate. */
+  nextAlarmAt: number | null;
+  detail: string;
+};
+
 export class RunDO extends DurableObject<Env> {
+  /** Instance-level overrides, layered over whatever the registry resolves to. */
+  #portOverrides: Partial<RunPorts> = {};
+  #ports: RunPorts | null = null;
+  #portsKey: string | null = null;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Synchronous only. This runs again on every wake, so it must be cheap and
@@ -102,6 +142,59 @@ export class RunDO extends DurableObject<Env> {
     // can hold a liveness check that costs nothing. setWebSocketAutoResponse is
     // the method; WebSocketRequestResponsePair is only the payload.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+
+    // Short constructor recovery.
+    //
+    // `blockConcurrencyWhile` is used for exactly one thing: read LOCAL driver
+    // and projection state and re-arm the alarm, so an object that crashed
+    // mid-attempt or lost a post-commit `setAlarm()` heals on its next wake
+    // instead of waiting for a message that may never come.
+    //
+    // Nothing external happens inside it — no model, no projector, no D1, no
+    // fetch. Holding the gate across external I/O would block steering from
+    // entering while a provider request is in flight, which is the one thing
+    // the whole design is arranged to allow (invariant 11).
+    //
+    // Nothing is caught. If the local read or `setAlarm()` itself fails, this
+    // object's ONLY recovery path has failed, and swallowing that would leave a
+    // permanently unscheduled run that looks healthy. Letting it throw resets
+    // the object and lets the platform try again.
+    ctx.blockConcurrencyWhile(async () => {
+      await this.#armAlarm();
+    });
+  }
+
+  /**
+   * Install ports on this instance.
+   *
+   * The module-level registry in `agent/driver.ts` is the wiring seam that
+   * survives eviction; this is for a test that wants to swap a fake on an
+   * object it is already holding.
+   */
+  installPorts(ports: Partial<RunPorts>): void {
+    this.#portOverrides = { ...this.#portOverrides, ...ports };
+    this.#ports = null;
+  }
+
+  /**
+   * Ports are resolved lazily and re-resolved once the run has a key.
+   *
+   * The constructor runs before `initialize()` on a brand-new object, so a
+   * key-scoped registration would be invisible if the resolution happened only
+   * there. The ports are NOT built here — resolving is a map lookup and a local
+   * SELECT, never a client, a socket or a secret.
+   */
+  #resolvePorts(): RunPorts {
+    const key = readState(this.ctx.storage)?.key ?? null;
+    if (this.#ports === null || key !== this.#portsKey) {
+      this.#portsKey = key;
+      this.#ports = { ...resolveRunPorts(key), ...this.#portOverrides };
+    }
+    return this.#ports;
+  }
+
+  #now(): number {
+    return this.#resolvePorts().now();
   }
 
   /**
@@ -293,6 +386,7 @@ export class RunDO extends DurableObject<Env> {
     const result = appendAssistantUpdate(this.ctx.storage, fence, input);
     if (result.outcome === "appended") {
       this.#broadcast(result.event);
+      await this.#armAlarm();
       this.#kickProjection();
     }
     return result;
@@ -326,6 +420,7 @@ export class RunDO extends DurableObject<Env> {
     // WITHOUT awaiting it: the status is already durable locally, and a D1
     // outage must not make a status change fail or hang.
     if (result.event) this.#broadcast(result.event);
+    await this.#armAlarm();
     this.#kickProjection();
     return { ok: true, changed: result.changed, status: result.status, event: result.event };
   }
@@ -340,6 +435,7 @@ export class RunDO extends DurableObject<Env> {
    */
   async setSummary(summary: string): Promise<{ changed: boolean; revision: number | null }> {
     const result = setSummary(this.ctx.storage, summary);
+    await this.#armAlarm();
     this.#kickProjection();
     return result;
   }
@@ -381,8 +477,344 @@ export class RunDO extends DurableObject<Env> {
       eventCreatedAt(result.event),
       result.appended ? undefined : 0,
     );
+
+    // The wake, and its position is load-bearing.
+    //
+    // AFTER commit and broadcast: an alarm that fired before the turn was
+    // durable would claim a generation whose input does not exist yet, and one
+    // that fired before the broadcast could interleave an assistant update
+    // ahead of the message it answers.
+    //
+    // BEFORE any D1 work: the index is a projection, and a D1 outage must never
+    // be what stops the loop from waking.
+    //
+    // On a DUPLICATE delivery too, which is the point of doing it here rather
+    // than inside the append's transaction: the first attempt may have committed
+    // the turn and then died before scheduling, and a redelivery is the only
+    // thing that will ever heal that. `#armAlarm` is idempotent — it only ever
+    // moves the alarm earlier.
+    await this.#armAlarm();
     this.#kickProjection();
     return result;
+  }
+
+  // --- the alarm -------------------------------------------------------------
+
+  /**
+   * The kinds this object can actually deliver right now.
+   *
+   * `run_index` is always here: this object owns it, because it needs `env.DB`
+   * and the coalescing drain below. The other two are here only once a runner
+   * is installed — a job whose kind has no runner is deliberately never claimed
+   * and never scheduled, so an unwired `d1_usage` row parks instead of waking
+   * the object forever to discover nobody can deliver it.
+   */
+  #projectionKinds(): ProjectionJobKind[] {
+    const ports = this.#resolvePorts();
+    const kinds: ProjectionJobKind[] = ["run_index"];
+    for (const kind of ["d1_usage", "memory_outbox"] as const) {
+      if (ports.projections[kind]) kinds.push(kind);
+    }
+    return kinds;
+  }
+
+  #plannedAlarmAt(now: number): number | null {
+    const ports = this.#resolvePorts();
+    return nextAlarmAt({
+      driver: readDriver(this.ctx.storage),
+      projectionDueAt: nextProjectionDueAt(this.ctx.storage, this.#projectionKinds()),
+      modelEnabled: ports.continuation !== null,
+      now,
+    });
+  }
+
+  /**
+   * Arm the single alarm slot for the earliest due item.
+   *
+   * Only ever moves the alarm EARLIER. That is what makes it idempotent under
+   * at-least-once delivery and safe to call from every mutation path: a
+   * duplicate kick re-computes the same time and writes nothing, and a fresh
+   * input arriving during a backoff pulls the alarm forward instead of queueing
+   * behind it.
+   *
+   * Deliberately not wrapped in try/catch anywhere it is called. A failed
+   * `setAlarm()` is the failure of the only mechanism that would ever retry
+   * this work; the caller must see it, so its own retry can heal it.
+   */
+  async #armAlarm(): Promise<void> {
+    const at = this.#plannedAlarmAt(this.#now());
+    const current = await this.ctx.storage.getAlarm();
+
+    if (at === null) {
+      // Nothing is due. Leaving a stale alarm armed would wake this object to
+      // discover it has no work, forever, on an otherwise hibernating run.
+      if (current !== null) await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    if (current !== null && current <= at) return;
+    await this.ctx.storage.setAlarm(at);
+  }
+
+  /**
+   * One durable wake.
+   *
+   * Delivery is at-least-once and the platform retries a rejection up to six
+   * times, so every step below is idempotent: the claim is a conditional
+   * transaction, the checkpoint keys are stable, and re-arming is
+   * earliest-wins.
+   *
+   * Exactly ONE item is dispatched per delivery, model work first. Claiming
+   * model work ahead of an older-due projection job is the priority rule that
+   * keeps a vendor outage from starving the customer loop; arming for the
+   * earliest of the two is what keeps the busy loop from starving delivery.
+   * If more is due, the re-arm at the end schedules the next delivery
+   * immediately rather than looping here — a long drain inside one alarm is a
+   * long time during which a crash loses everything after the last commit.
+   *
+   * `ctx.waitUntil()` is not the loop's lifetime. A promise the runtime is
+   * merely waiting on has no durable existence: if the object dies, nothing
+   * remembers it. The alarm does.
+   */
+  async alarm(info?: AlarmInvocationInfo): Promise<void> {
+    await this.dispatchAlarm(info);
+  }
+
+  /**
+   * The alarm's body, returning what it did.
+   *
+   * `alarm()` itself must return void to satisfy the platform's handler shape,
+   * which would leave a test asserting on scheduling by inspecting storage and
+   * guessing. This says it outright.
+   */
+  async dispatchAlarm(_info?: AlarmInvocationInfo): Promise<AlarmOutcome> {
+    const now = this.#now();
+    const ports = this.#resolvePorts();
+    let dispatched: AlarmOutcome["dispatched"] = "none";
+    let model: AlarmOutcome["model"] = "parked";
+    let detail = "no continuation wired; model work parked";
+
+    if (ports.continuation !== null) {
+      const claim = claimGeneration(this.ctx.storage, {
+        now,
+        leaseMs: ports.limits.claimLeaseMs,
+      });
+      switch (claim.outcome) {
+        case "claimed":
+          dispatched = "model";
+          model = "claimed";
+          detail = await this.#runContinuation(claim.claim, now);
+          break;
+        case "already_running":
+          // A live lease. A second provider stream is refused (invariant 10) —
+          // but the projection half of this delivery still runs, and the re-arm
+          // at the end covers the lease expiry.
+          model = "lease_held";
+          detail = `model lease held until ${claim.leaseExpiresAt}`;
+          break;
+        case "backoff":
+          model = "backoff";
+          detail = `model retry backoff until ${claim.nextAttemptAt}`;
+          break;
+        case "nothing_scheduled":
+          model = "not_scheduled";
+          detail = `driver ${claim.phase}`;
+          break;
+      }
+    }
+
+    if (dispatched === "none") {
+      const projected = await this.#projectOneDueJob(now);
+      if (projected !== null) {
+        dispatched = "projection";
+        detail = `${detail}; ${projected}`;
+      }
+    }
+
+    // Last, and never inside a catch: if this throws, the alarm rejects and the
+    // platform retries, which is exactly what a run whose scheduling failed
+    // needs. Swallowing it would leave durable work with nothing coming for it.
+    await this.#armAlarm();
+    return { dispatched, model, nextAlarmAt: await this.ctx.storage.getAlarm(), detail };
+  }
+
+  /**
+   * Run one claimed attempt and commit whatever it reports.
+   *
+   * The continuation's own failures are CAUGHT: a provider outage or a thrown
+   * capability is ordinary work failure, and letting it reject the alarm would
+   * burn the platform's six retries invisibly, with no persisted error and no
+   * explicit schedule. The finalize that follows is NOT caught — that is the
+   * recovery state write, and if it fails the only honest thing is to let the
+   * platform retry the whole delivery.
+   */
+  async #runContinuation(claim: ClaimSnapshot, now: number): Promise<string> {
+    const ports = this.#resolvePorts();
+    const continuation = ports.continuation;
+    if (!continuation) return "no continuation wired";
+
+    // A claimed generation is visibly working, whatever the run said before.
+    await this.#applyPublicStatus("live");
+
+    const state = readState(this.ctx.storage);
+    const deadlineAt = now + ports.limits.continuationTotalMs;
+    let outcome: ContinuationOutcome;
+    try {
+      outcome = await this.#withDeadline(
+        continuation.run({ ...claim, runId: state?.runId ?? "", deadlineAt }),
+        deadlineAt,
+      );
+    } catch (error) {
+      outcome = crashOutcome(error);
+    }
+
+    const request = toFinalizeRequest(outcome, claim, ports.limits);
+    const finalize = finalizeGeneration(
+      this.ctx.storage,
+      claim.fence,
+      request.kind === "retry"
+        ? { ...request, retryAfterMs: driverRetryBackoffMs(claim.attempt) }
+        : request,
+      this.#now(),
+    );
+    await this.#applyFinalizeStatus(finalize);
+    return `${outcome.outcome} -> ${finalize.outcome}`;
+  }
+
+  /**
+   * The wall-time budget, enforced by the driver rather than trusted to the
+   * port. A continuation that overruns is abandoned, not cancelled: it keeps
+   * whatever it was doing, but the finalize below moves the driver out of
+   * `running`, so the claim fence refuses every write it attempts afterwards.
+   */
+  async #withDeadline(
+    work: Promise<ContinuationOutcome>,
+    deadlineAt: number,
+  ): Promise<ContinuationOutcome> {
+    const remaining = deadlineAt - this.#now();
+    if (remaining <= 0) return deadlineOutcome();
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<ContinuationOutcome>((resolve) => {
+          timer = setTimeout(() => resolve(deadlineOutcome()), remaining);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * The public status, which the session layer deliberately does not touch.
+   *
+   * This is the seam Task 2 left open on purpose: `finalizeGeneration` moves the
+   * PRIVATE driver phase and stops. Without this mapping a settled run stays
+   * `live` on the dashboard forever.
+   *
+   * `done` is never set here. Phase 10 has no notion of a conversation being
+   * finished — only of having nothing scheduled — and `awaiting_approval` stays
+   * reserved for Phase 11's approval gate.
+   */
+  async #applyFinalizeStatus(finalize: FinalizeOutcome): Promise<void> {
+    switch (finalize.outcome) {
+      case "settled":
+        await this.#applyPublicStatus(finalize.driverPhase === "idle" ? "idle" : "failed");
+        return;
+      case "continued":
+      case "rescheduled":
+        // Still working, or about to be. Stay live.
+        await this.#applyPublicStatus("live");
+        return;
+      case "already_settled":
+      case "stale_claim":
+        // Somebody else owns the outcome. Touching the public status from here
+        // would let a superseded attempt overwrite the current one's answer.
+        return;
+    }
+  }
+
+  async #applyPublicStatus(status: RunStatus): Promise<void> {
+    const current = readState(this.ctx.storage)?.status;
+    if (current === undefined || current === status) return;
+    await this.setStatus(status);
+  }
+
+  /**
+   * Claim and deliver exactly one due projection job.
+   *
+   * `run_index` is handled by this object's own coalescing drain rather than a
+   * port, because it needs `env.DB` and because collapsing a long backlog into
+   * one write is the behaviour that keeps a D1 outage cheap. Everything else
+   * goes through its installed runner.
+   *
+   * Returns null when nothing was due.
+   */
+  async #projectOneDueJob(now: number): Promise<string | null> {
+    const runIndexDue = nextProjectionDueAt(this.ctx.storage, ["run_index"]);
+    if (runIndexDue !== null && runIndexDue <= now) {
+      const flush = await this.#drainRunIndex();
+      return `run_index projected=${flush.projected} failed=${flush.failed}`;
+    }
+
+    const ports = this.#resolvePorts();
+    const kinds = this.#projectionKinds().filter((kind) => kind !== "run_index");
+    if (kinds.length === 0) return null;
+
+    const claim = claimProjectionJob(this.ctx.storage, {
+      kinds,
+      now,
+      leaseMs: PROJECTION_LEASE_MS,
+    });
+    if (claim.outcome !== "claimed") return null;
+
+    const runner = ports.projections[claim.job.kind];
+    if (!runner) {
+      // The runner disappeared between the due-time scan and the claim. Put the
+      // job back rather than completing work nobody did.
+      retryProjectionJob(this.ctx.storage, {
+        id: claim.job.id,
+        claimToken: claim.claimToken,
+        backoffMs: projectionRetryBackoffMs(claim.job.attempts),
+        error: "no runner installed for this kind",
+        now: this.#now(),
+      });
+      return `${claim.job.kind} has no runner`;
+    }
+
+    const job: ClaimedProjectionJob = {
+      job: claim.job,
+      claimToken: claim.claimToken,
+      runId: readState(this.ctx.storage)?.runId ?? "",
+    };
+
+    let outcome;
+    try {
+      outcome = await runner.run(job);
+    } catch (error) {
+      outcome = {
+        outcome: "retry" as const,
+        error: safeErrorText(error, "projection runner threw"),
+      };
+    }
+
+    if (outcome.outcome === "delivered" || outcome.outcome === "dropped") {
+      completeProjectionJob(this.ctx.storage, {
+        id: claim.job.id,
+        claimToken: claim.claimToken,
+        now: this.#now(),
+      });
+    } else {
+      retryProjectionJob(this.ctx.storage, {
+        id: claim.job.id,
+        claimToken: claim.claimToken,
+        backoffMs: outcome.backoffMs ?? projectionRetryBackoffMs(claim.job.attempts),
+        error: outcome.error,
+        now: this.#now(),
+      });
+    }
+    return `${claim.job.kind} ${outcome.outcome}`;
   }
 
   /**
@@ -459,8 +891,11 @@ export class RunDO extends DurableObject<Env> {
         retryProjectionJob(this.ctx.storage, {
           id: claim.job.id,
           claimToken: claim.claimToken,
-          backoffMs: PROJECTION_BACKOFF_MS,
-          error: error instanceof Error ? error.message : "run index projection failed",
+          // Exponential and capped, so a long D1 outage backs off instead of
+          // re-arming the alarm every fifteen seconds for an hour.
+          backoffMs: projectionRetryBackoffMs(claim.job.attempts),
+          error: safeErrorText(error, "run index projection failed"),
+          now: this.#now(),
         });
         failed += 1;
         break;

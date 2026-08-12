@@ -16,10 +16,10 @@ import {
   type ToolCallUpdateInput,
 } from "./protocol";
 import type { RunOrigin } from "./keys";
+import { CLAIM_LEASE_MS, PROJECTION_LEASE_MS } from "../agent/limits";
 import {
   agentTurnIdFor,
   assistantUpdateIdFor,
-  DEFAULT_CLAIM_LEASE_MS,
   isInputResumablePolicy,
   isTerminalGenerationState,
   isWakeSource,
@@ -144,9 +144,10 @@ const TOOL_STATES = new Set(["running", "completed", "failed"]);
  * The local schema version this build expects.
  *
  * v1 is Phase 08's four tables. v2 adds the Phase 10 agent driver, generation,
- * transcript, telemetry and run-index projection tables.
+ * transcript, telemetry and run-index projection tables. v3 gives the driver a
+ * durable retry-backoff time.
  */
-export const RUN_SCHEMA_VERSION = 2;
+export const RUN_SCHEMA_VERSION = 3;
 
 type LocalMigration = {
   version: number;
@@ -558,9 +559,28 @@ function activateSchemaV2(storage: DurableObjectStorage, now: number): void {
   storage.sql.exec("UPDATE run_state SET status = 'idle' WHERE singleton = 1 AND status = 'live'");
 }
 
+/**
+ * v3: when a `scheduled` generation may be claimed again.
+ *
+ * A separate column rather than overloading `lease_expires_at`, which already
+ * means "who owns the run right now". Two meanings in one column is how a
+ * backoff eventually gets read as ownership by the one caller that forgot.
+ *
+ * It has to be durable, not in-memory: the retry budget is spent across alarm
+ * deliveries and object wakes, and a backoff that lived in a field would be
+ * zero again after every hibernation — turning a bounded retry into a hot loop
+ * against whatever is already failing.
+ */
+function applyV3(storage: DurableObjectStorage): void {
+  storage.sql.exec(
+    "ALTER TABLE agent_driver ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0",
+  );
+}
+
 const LOCAL_MIGRATIONS: readonly LocalMigration[] = [
   { version: 1, apply: (storage) => applyV1(storage) },
   { version: 2, apply: (storage, now) => applyV2(storage, now) },
+  { version: 3, apply: (storage) => applyV3(storage) },
 ];
 
 // --- state -----------------------------------------------------------------
@@ -849,6 +869,15 @@ function scheduleInput(
     // Already working. The same generation absorbs this input at its next step
     // or continuation; allocating a second one here would fork the transcript
     // and the Code Mode effect scope.
+    //
+    // The retry backoff is cleared. A backoff exists to space out attempts at
+    // something that just failed, not to make a customer who typed a follow-up
+    // wait for a timer; the attempt CEILING is what bounds the retry, and it is
+    // untouched here.
+    storage.sql.exec(
+      "UPDATE agent_driver SET next_attempt_at = 0, updated_at = ? WHERE singleton = 1",
+      now,
+    );
     return {
       scheduling: {
         outcome: "joined",
@@ -901,6 +930,7 @@ function scheduleInput(
        attempt = 0,
        lease_expires_at = NULL,
        last_heartbeat_at = NULL,
+       next_attempt_at = 0,
        resume_policy = NULL,
        last_error_code = NULL,
        last_error_message = NULL,
@@ -1482,22 +1512,31 @@ function toProjectionJob(row: ProjectionJobRow): ProjectionJob {
  */
 export function claimProjectionJob(
   storage: DurableObjectStorage,
-  options: { kind: ProjectionJobKind; now?: number; leaseMs?: number },
+  options: {
+    /** One kind, or several. With several, the earliest due job across them wins. */
+    kind?: ProjectionJobKind;
+    kinds?: readonly ProjectionJobKind[];
+    now?: number;
+    leaseMs?: number;
+  },
 ): ProjectionClaimOutcome {
   const now = options.now ?? Date.now();
-  const leaseMs = options.leaseMs ?? 30_000;
+  const leaseMs = options.leaseMs ?? PROJECTION_LEASE_MS;
+  const kinds = projectionKindList(options);
+  if (kinds.length === 0) return { outcome: "none" };
+  const placeholders = kinds.map(() => "?").join(", ");
 
   return storage.transactionSync(() => {
     const rows = storage.sql
       .exec<ProjectionJobRow>(
         `SELECT ${PROJECTION_JOB_COLUMNS} FROM agent_projection_jobs
-         WHERE kind = ? AND next_attempt_at <= ?
+         WHERE kind IN (${placeholders}) AND next_attempt_at <= ?
            AND (
              state = 'pending'
              OR (state = 'claimed' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
            )
          ORDER BY next_attempt_at ASC, id ASC LIMIT 1`,
-        options.kind,
+        ...kinds,
         now,
         now,
       )
@@ -1524,6 +1563,48 @@ export function claimProjectionJob(
       claimToken,
     };
   });
+}
+
+function projectionKindList(options: {
+  kind?: ProjectionJobKind;
+  kinds?: readonly ProjectionJobKind[];
+}): ProjectionJobKind[] {
+  const merged = new Set<ProjectionJobKind>(options.kinds ?? []);
+  if (options.kind !== undefined) merged.add(options.kind);
+  return [...merged];
+}
+
+/**
+ * When the earliest of these kinds is next claimable, or null when none is
+ * outstanding. This is the projection half of the single alarm slot's due-time
+ * arithmetic (see `nextAlarmAt`).
+ *
+ * A `claimed` job counts at its LEASE EXPIRY, not its next attempt time: the
+ * pass that claimed it may have died mid-delivery, and if nothing ever re-armed
+ * for the expiry, the job would sit claimed forever with no alarm coming for
+ * it. That is also what heals the microtask-ordering lost wakeup in the
+ * best-effort `#kickProjection` drain — the durable job and this due time are
+ * the guarantee, the kick is only an optimization.
+ */
+export function nextProjectionDueAt(
+  storage: DurableObjectStorage,
+  kinds: readonly ProjectionJobKind[],
+): number | null {
+  if (kinds.length === 0) return null;
+  const placeholders = kinds.map(() => "?").join(", ");
+  const row = storage.sql
+    .exec<{ due: number | null }>(
+      `SELECT MIN(
+         CASE WHEN state = 'pending' THEN next_attempt_at
+              ELSE MAX(next_attempt_at, COALESCE(lease_expires_at, next_attempt_at))
+         END
+       ) AS due
+       FROM agent_projection_jobs
+       WHERE kind IN (${placeholders}) AND state IN ('pending', 'claimed')`,
+      ...kinds,
+    )
+    .one();
+  return row.due;
 }
 
 /** Fenced to the claim token, so a timed-out claimant cannot retire a job a successor owns. */
@@ -1625,6 +1706,7 @@ type DriverRow = {
   claim_epoch: number;
   lease_expires_at: number | null;
   last_heartbeat_at: number | null;
+  next_attempt_at: number;
   resume_policy: ResumePolicy | null;
   last_error_code: string | null;
   last_error_message: string | null;
@@ -1633,7 +1715,7 @@ type DriverRow = {
 
 const DRIVER_COLUMNS = `phase, pending_through_seq, settled_through_seq, current_generation_id,
   current_agent_turn_id, attempt, claim_epoch, lease_expires_at, last_heartbeat_at,
-  resume_policy, last_error_code, last_error_message, updated_at`;
+  next_attempt_at, resume_policy, last_error_code, last_error_message, updated_at`;
 
 export function readDriver(storage: DurableObjectStorage): DriverState {
   const rows = storage.sql
@@ -1656,6 +1738,7 @@ export function readDriver(storage: DurableObjectStorage): DriverState {
     claimEpoch: row.claim_epoch,
     leaseExpiresAt: row.lease_expires_at,
     lastHeartbeatAt: row.last_heartbeat_at,
+    nextAttemptAt: row.next_attempt_at,
     resumePolicy: row.resume_policy,
     lastErrorCode: row.last_error_code,
     lastErrorMessage: row.last_error_message,
@@ -1775,7 +1858,7 @@ export function claimGeneration(
   options: { now?: number; leaseMs?: number } = {},
 ): ClaimOutcome {
   const now = options.now ?? Date.now();
-  const leaseMs = options.leaseMs ?? DEFAULT_CLAIM_LEASE_MS;
+  const leaseMs = options.leaseMs ?? CLAIM_LEASE_MS;
 
   return storage.transactionSync(() => {
     const driver = readDriver(storage);
@@ -1793,6 +1876,17 @@ export function claimGeneration(
         leaseExpiresAt: driver.leaseExpiresAt ?? 0,
       };
     }
+    if (driver.phase === "scheduled" && driver.nextAttemptAt > now) {
+      // Inside a retry backoff. The gate is HERE rather than in the alarm
+      // because alarm delivery is at-least-once: a dispatcher-side check would
+      // be bypassed by a redelivery, and the whole retry budget would be spent
+      // in the milliseconds it takes to redeliver three times.
+      return {
+        outcome: "backoff",
+        generationId: driver.generationId,
+        nextAttemptAt: driver.nextAttemptAt,
+      };
+    }
 
     const attempt = driver.attempt + 1;
     const claimEpoch = driver.claimEpoch + 1;
@@ -1801,8 +1895,8 @@ export function claimGeneration(
     storage.sql.exec(
       `UPDATE agent_driver SET
          phase = 'running', attempt = ?, claim_epoch = ?, lease_expires_at = ?,
-         last_heartbeat_at = ?, resume_policy = NULL, last_error_code = NULL,
-         last_error_message = NULL, updated_at = ?
+         last_heartbeat_at = ?, next_attempt_at = 0, resume_policy = NULL,
+         last_error_code = NULL, last_error_message = NULL, updated_at = ?
        WHERE singleton = 1`,
       attempt,
       claimEpoch,
@@ -1850,7 +1944,7 @@ export function heartbeat(
   options: { now?: number; leaseMs?: number } = {},
 ): HeartbeatOutcome {
   const now = options.now ?? Date.now();
-  const leaseMs = options.leaseMs ?? DEFAULT_CLAIM_LEASE_MS;
+  const leaseMs = options.leaseMs ?? CLAIM_LEASE_MS;
   const leaseExpiresAt = now + leaseMs;
 
   return storage.transactionSync(() => {
@@ -2401,6 +2495,9 @@ export function finalizeGeneration(
     const driver = readDriver(storage);
 
     if (request.kind === "retry") {
+      // The backoff is persisted, not slept: this attempt is over, and the next
+      // one belongs to whichever alarm delivery arrives after `nextAttemptAt`.
+      const nextAttemptAt = now + Math.max(0, Math.floor(request.retryAfterMs ?? 0));
       storage.sql.exec(
         `UPDATE agent_generations SET state = 'scheduled', updated_at = ? WHERE id = ?`,
         now,
@@ -2408,14 +2505,21 @@ export function finalizeGeneration(
       );
       storage.sql.exec(
         `UPDATE agent_driver SET
-           phase = 'scheduled', lease_expires_at = NULL, resume_policy = 'retryable',
-           last_error_code = ?, last_error_message = ?, updated_at = ?
+           phase = 'scheduled', lease_expires_at = NULL, next_attempt_at = ?,
+           resume_policy = 'retryable', last_error_code = ?, last_error_message = ?,
+           updated_at = ?
          WHERE singleton = 1`,
+        nextAttemptAt,
         request.errorCode,
         truncateError(request.errorMessage),
         now,
       );
-      return { outcome: "rescheduled", generationId: generation.id, attempt: driver.attempt };
+      return {
+        outcome: "rescheduled",
+        generationId: generation.id,
+        attempt: driver.attempt,
+        nextAttemptAt,
+      };
     }
 
     if (request.kind === "failed") {
@@ -2437,7 +2541,7 @@ export function finalizeGeneration(
       );
       storage.sql.exec(
         `UPDATE agent_driver SET
-           phase = 'failed', lease_expires_at = NULL, resume_policy = ?,
+           phase = 'failed', lease_expires_at = NULL, next_attempt_at = 0, resume_policy = ?,
            last_error_code = ?, last_error_message = ?, updated_at = ?
          WHERE singleton = 1`,
         request.resumePolicy,
@@ -2461,7 +2565,10 @@ export function finalizeGeneration(
         generation.id,
       );
       storage.sql.exec(
-        `UPDATE agent_driver SET phase = 'scheduled', lease_expires_at = NULL, updated_at = ?
+        // A continuation is not a retry: the input that arrived mid-answer is
+        // waiting NOW, so there is deliberately no backoff on this path.
+        `UPDATE agent_driver SET
+           phase = 'scheduled', lease_expires_at = NULL, next_attempt_at = 0, updated_at = ?
          WHERE singleton = 1`,
         now,
       );
@@ -2487,7 +2594,8 @@ export function finalizeGeneration(
       `UPDATE agent_driver SET
          phase = 'idle', settled_through_seq = ?, current_generation_id = NULL,
          current_agent_turn_id = NULL, attempt = 0, lease_expires_at = NULL,
-         resume_policy = NULL, last_error_code = NULL, last_error_message = NULL,
+         next_attempt_at = 0, resume_policy = NULL, last_error_code = NULL,
+         last_error_message = NULL,
          updated_at = ?
        WHERE singleton = 1`,
       settledThroughSeq,

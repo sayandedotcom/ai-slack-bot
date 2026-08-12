@@ -4,6 +4,7 @@ import { chatRunKey, runStubForKey, slackRunKey } from "../src/run/keys";
 import { createOrGetRun, getRunById } from "../src/run/repository";
 import type { RunDescriptor } from "../src/run/session";
 import type { RunTurnInput } from "../src/run/protocol";
+import type { Env } from "../src/index";
 
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM runs").run();
@@ -231,15 +232,69 @@ describe("d1 index is kept in step", () => {
   });
 
   it("does not await d1 on the local event path", async () => {
-    const { stub, record } = await freshRun();
-    // A D1 outage is simulated by removing the index row entirely: every write
-    // below still has to commit, broadcast and return.
-    await env.DB.prepare("DELETE FROM runs WHERE id = ?").bind(record.id).run();
+    const { stub } = await freshRun();
 
-    await expect(stub.appendTurn(turn("t-outage"))).resolves.toMatchObject({ appended: true });
-    await expect(stub.setStatus("awaiting_approval")).resolves.toMatchObject({ ok: true });
-    await expect(stub.setSummary("still working")).resolves.toMatchObject({ changed: true });
-    expect((await stub.state())?.summary).toBe("still working");
+    // A REAL outage, not a missing row. Deleting the index row only makes
+    // `projectRunIndex` return `applied: false`, which never throws and never
+    // blocks — so the old version of this test could not tell the invariant
+    // from a tolerated no-op. These two stubs can: one rejects, one never
+    // settles at all.
+    const throwing = {
+      prepare() {
+        throw new Error("d1 is unreachable");
+      },
+    } as unknown as D1Database;
+
+    let releaseHang: () => void = () => {};
+    const hang = new Promise<void>((resolve) => {
+      releaseHang = resolve;
+    });
+    const hanging = {
+      prepare() {
+        return {
+          bind() {
+            return this;
+          },
+          async run() {
+            await hang;
+            return { meta: { changes: 0 } };
+          },
+          async first() {
+            await hang;
+            return null;
+          },
+        };
+      },
+    } as unknown as D1Database;
+
+    // Each write below must commit, broadcast, schedule its alarm and RETURN
+    // while D1 is doing nothing of the kind. A hang here fails by timeout,
+    // which is exactly the failure being guarded against.
+    for (const [label, db] of [
+      ["throwing", throwing],
+      ["hanging", hanging],
+    ] as const) {
+      await runInDurableObject(stub, async (instance) => {
+        const patched = instance as unknown as { env: Env };
+        const original = patched.env;
+        patched.env = { ...original, DB: db };
+        try {
+          await expect(instance.appendTurn(turn(`t-outage-${label}`))).resolves.toMatchObject({
+            appended: true,
+          });
+          await expect(instance.setStatus("live")).resolves.toMatchObject({ ok: true });
+          await expect(instance.setSummary(`still working ${label}`)).resolves.toMatchObject({
+            changed: true,
+          });
+        } finally {
+          patched.env = original;
+        }
+      });
+    }
+
+    expect((await stub.state())?.summary).toBe("still working hanging");
+    // Let the parked projection drain unblock, so nothing outlives the case.
+    releaseHang();
   });
 
   it("does not fail a mutation when the index row is missing", async () => {

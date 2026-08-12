@@ -173,8 +173,12 @@ export type ClaimFence = {
   claimEpoch: number;
 };
 
-/** Long enough to cover a provider step, a tool run and a chunk wait, plus margin. */
-export const DEFAULT_CLAIM_LEASE_MS = 120_000;
+/**
+ * The claim lease lives in `agent/limits.ts` with the phase's other reviewed
+ * numbers (`CLAIM_LEASE_MS`). It was briefly duplicated here at a value that
+ * disagreed with the reviewed one, which is the failure mode a single limits
+ * home exists to prevent: two constants, one of them quietly wrong.
+ */
 
 // --- records ----------------------------------------------------------------
 
@@ -190,6 +194,14 @@ export type DriverState = {
   claimEpoch: number;
   leaseExpiresAt: number | null;
   lastHeartbeatAt: number | null;
+  /**
+   * The earliest wall-clock time a `scheduled` generation may be claimed.
+   *
+   * Zero for fresh input, which is the whole point: a retry backoff must delay
+   * the retry and nothing else, so a customer message arriving during a backoff
+   * resets this to zero and is answered immediately.
+   */
+  nextAttemptAt: number;
   resumePolicy: ResumePolicy | null;
   lastErrorCode: string | null;
   lastErrorMessage: string | null;
@@ -255,6 +267,13 @@ export type InputScheduling =
 export type ClaimOutcome =
   | { outcome: "claimed"; claim: ClaimSnapshot }
   | { outcome: "already_running"; generationId: string; leaseExpiresAt: number }
+  /**
+   * Scheduled, but inside a retry backoff. A separate outcome from
+   * `nothing_scheduled` because the caller must re-arm its alarm for
+   * `nextAttemptAt` — treating it as "nothing to do" is how a retryable failure
+   * turns into a run that never resumes.
+   */
+  | { outcome: "backoff"; generationId: string; nextAttemptAt: number }
   | { outcome: "nothing_scheduled"; phase: DriverPhase };
 
 export type HeartbeatOutcome =
@@ -295,7 +314,13 @@ export type FinalizeRequest =
       errorCode: string;
       errorMessage?: string;
     }
-  | { kind: "retry"; errorCode: string; errorMessage?: string };
+  | {
+      kind: "retry";
+      errorCode: string;
+      errorMessage?: string;
+      /** Backoff before the generation may be claimed again. Defaults to none. */
+      retryAfterMs?: number;
+    };
 
 export type FinalizeOutcome =
   | {
@@ -311,7 +336,7 @@ export type FinalizeOutcome =
       pendingThroughSeq: number;
       includedThroughSeq: number;
     }
-  | { outcome: "rescheduled"; generationId: string; attempt: number }
+  | { outcome: "rescheduled"; generationId: string; attempt: number; nextAttemptAt: number }
   | { outcome: "already_settled"; generationId: string; generationState: GenerationState }
   | { outcome: "stale_claim" };
 
