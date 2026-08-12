@@ -633,6 +633,58 @@ describe("provenance from trusted tool reads", () => {
     expect(rendered).not.toContain("eventId");
   });
 
+  it("orders what a Slack run READ ahead of the question it was answering", async () => {
+    // The Slack counterpart of the Chat case above, and the one that actually
+    // bites: a Slack input turn carries an `eventId`, so it produces a real
+    // `run_turn` descriptor. `source_index` is assigned densely in payload
+    // order and `cite()` takes the lowest, so if the question came first every
+    // agent episode on the Slack surface would cite the customer asking rather
+    // than the evidence the answer was built on.
+    const harness = await freshLoopRun({
+      origin: "slack",
+      model: mockModel([
+        toolStep({ toolCallId: "call_1", code: RECALL_CODE }),
+        textStep({ chunks: ["The 04:12 deploy."] }),
+      ]),
+      fixtures: {
+        memoryFacts: [
+          { factId: "edge_1", fact: "the export worker was dropped", episodeUuids: ["zep_ev"] },
+        ],
+      },
+    });
+
+    await harness.stub.appendTurn({
+      id: "t1",
+      role: "user",
+      source: "customer",
+      content: "why are exports empty?",
+      // Exactly what the Slack coordinator writes for a real customer message.
+      metadata: { eventId: "EvQuestion", channelId: "C1", threadTs: "1.0" },
+    });
+    await harness.alarm();
+
+    const frozen = await harness.storage((storage) => {
+      const generationId = storage.sql
+        .exec<{ id: string }>("SELECT id FROM agent_generations LIMIT 1")
+        .toArray()[0].id;
+      return readGenerationMemory(storage, generationId);
+    });
+
+    const sources = JSON.parse(frozen!.sourceJson) as { kind: string; ref: string }[];
+    // BOTH are present — the question is real provenance and is not dropped.
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        { kind: "zep_episode", ref: "zep_ev" },
+        { kind: "run_turn", ref: "EvQuestion", turnId: "t1" },
+      ]),
+    );
+    // But the evidence is FIRST, so it is what a citation resolves to.
+    expect(sources[0].kind).toBe("zep_episode");
+    expect(sources.findIndex((s) => s.kind === "zep_episode")).toBeLessThan(
+      sources.findIndex((s) => s.kind === "run_turn"),
+    );
+  });
+
   it("records the same read twice as one source", async () => {
     const harness = await freshLoopRun({
       origin: "chat",

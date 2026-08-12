@@ -278,6 +278,24 @@ export async function projectAgentEpisode(
       // second physical episode, because a previous attempt could have reached
       // Zep and died before recording anything. Reported, never hidden.
       duplicateEpisodeRisk = claim.attempts > 1;
+      if (duplicateEpisodeRisk) {
+        // EMITTED, not merely returned. The honest-limit story depends on this
+        // window being observable in production, and a flag nobody logs is a
+        // window nobody can measure — the docblock explaining it would be the
+        // only evidence it exists. This is the line that turns "may contain a
+        // physical duplicate" into something an operator can count and, if it
+        // ever becomes common, act on.
+        //
+        // Warn rather than error: the projection SUCCEEDED. What is uncertain
+        // is whether an earlier attempt also left an episode behind.
+        console.warn("memory: possible duplicate Zep episode", {
+          outboxId: claim.id,
+          generationId: claim.generationId,
+          graphId: claim.graphId,
+          attempt: claim.attempts,
+          episodeUuid,
+        });
+      }
     } catch (error) {
       const message = sterileError(
         error instanceof Error ? error.message : "the memory store rejected the episode",

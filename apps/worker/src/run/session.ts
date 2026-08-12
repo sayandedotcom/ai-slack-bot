@@ -3195,10 +3195,25 @@ export function buildGenerationEpisodePayload(
     asked,
     actions: readActions(storage, input.generationId),
     draft: input.draft,
-    // Input-turn provenance first, then what the tool reads returned. Both are
-    // needed: the first says what was asked, the second says what the answer
-    // was actually built on.
-    sources: [...sources, ...listGenerationSources(storage, input.generationId)],
+    // TOOL READS FIRST, input turns second, and the order is load-bearing.
+    //
+    // `source_index` is assigned densely in this order and `cite()` takes the
+    // lowest resolvable index, so whatever sits at index 0 becomes the
+    // citation. Input turns first meant a Slack episode cited the customer's
+    // own question — "why are exports empty?" — instead of the engineer's
+    // message the answer was actually built on, because a Slack input turn
+    // carries an `eventId` and therefore always resolved.
+    //
+    // That is the same failure the memory contract names for Chat, surviving on
+    // the Slack surface. It was invisible in the Chat test precisely because a
+    // Chat turn produces no descriptor to out-rank the evidence — which made
+    // that guarantee accidental. This ordering makes it structural on both
+    // surfaces: evidence outranks the question, always.
+    //
+    // Input turns are still recorded. They are what the agent was ANSWERING,
+    // which is worth keeping as provenance; they are simply not the first
+    // thing to cite when real evidence exists.
+    sources: [...listGenerationSources(storage, input.generationId), ...sources],
   });
 }
 

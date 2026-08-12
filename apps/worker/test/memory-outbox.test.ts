@@ -261,6 +261,56 @@ describe("the claim protocol", () => {
     expect(later.outcome).toBe("claimed");
   });
 
+  it("warns when a retried claim may have left a duplicate episode in Zep", async () => {
+    const { id } = await seedOutbox();
+    const store = new ControllableStore();
+
+    // Attempt one reaches the vendor and fails, so a later attempt cannot know
+    // whether an episode was created. This IS the documented window.
+    store.failWith = "zep 503";
+    await projectAgentEpisode(env.DB, store, id, 1_000);
+
+    const warnings: unknown[][] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => void warnings.push(args);
+    try {
+      store.failWith = null;
+      const result = await projectAgentEpisode(
+        env.DB,
+        store,
+        id,
+        1_000 + outboxRetryBackoffMs(1) + 1,
+      );
+      expect(result).toMatchObject({ outcome: "projected", duplicateEpisodeRisk: true });
+    } finally {
+      console.warn = original;
+    }
+
+    // The flag is not merely returned — it is EMITTED, so the window is
+    // countable in production rather than only described in a docblock.
+    const duplicateWarning = warnings.find(
+      (args) => typeof args[0] === "string" && args[0].includes("possible duplicate"),
+    );
+    expect(duplicateWarning).toBeDefined();
+    expect(duplicateWarning?.[1]).toMatchObject({ outboxId: id, attempt: 2 });
+  });
+
+  it("does not warn on a clean first-attempt projection", async () => {
+    const { id } = await seedOutbox();
+    const warnings: unknown[][] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => void warnings.push(args);
+    try {
+      const result = await projectAgentEpisode(env.DB, new ControllableStore(), id, 2_000);
+      expect(result).toMatchObject({ outcome: "projected", duplicateEpisodeRisk: false });
+    } finally {
+      console.warn = original;
+    }
+    expect(
+      warnings.filter((args) => typeof args[0] === "string" && args[0].includes("duplicate")),
+    ).toEqual([]);
+  });
+
   it("marks content that can never be delivered as terminally failed", async () => {
     const { id } = await seedOutbox({ episodeJson: "{not json" });
     const store = new ControllableStore();
@@ -317,9 +367,16 @@ describe("the claim protocol", () => {
 
 describe("source resolution and citation", () => {
   beforeEach(async () => {
+    // D1 is shared across every case in this pool, so each case re-seeds the
+    // exact rows it needs rather than trusting what a neighbour left behind.
     await env.DB.batch([
-      env.DB.prepare("DELETE FROM messages WHERE event_id IN ('EvSrc1', 'EvGone')"),
-      env.DB.prepare("DELETE FROM zep_episodes WHERE episode_uuid = 'zep_src'"),
+      env.DB.prepare(
+        `DELETE FROM messages WHERE event_id IN
+           ('EvSrc1', 'EvGone', 'EvQuestion', 'EvOldQuestion', 'EvOnly')`,
+      ),
+      env.DB.prepare(
+        "DELETE FROM zep_episodes WHERE episode_uuid IN ('zep_src', 'zep_evidence')",
+      ),
     ]);
     await env.DB.prepare(
       `INSERT INTO messages (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
@@ -358,6 +415,95 @@ describe("source resolution and citation", () => {
     ]);
     expect(citations).toHaveLength(1);
     expect(citations[0].permalink).toBe("https://slack.example/archives/CSRC/p1");
+  });
+
+  it("cites the evidence a Slack run READ, not the customer question it answered", async () => {
+    // THE SLACK PATH, which is where this went wrong. A Slack input turn
+    // carries an `eventId`, so unlike Chat it produces a real, resolvable
+    // `run_turn` source — and if it out-ranks the tool read, the citation for
+    // "why are exports empty?" is the customer asking the question rather than
+    // the engineer's message that answers it.
+    await env.DB.prepare(
+      `INSERT INTO messages (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
+       VALUES ('EvQuestion', 'CSRC', '1.0', NULL, 'UCUST', 'why are exports empty?', NULL, 'https://slack.example/archives/CSRC/pQUESTION', 'pulsefit', 1)`,
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO zep_episodes (episode_uuid, event_id, graph_id, created_at) VALUES ('zep_evidence', 'EvSrc1', 'customer:pulsefit', 1)",
+    ).run();
+
+    const { id } = await seedOutbox({
+      // Exactly the order `buildGenerationEpisodePayload` produces: what the
+      // agent READ, then what it was ANSWERING.
+      sources: [
+        { kind: "zep_episode", ref: "zep_evidence" },
+        { kind: "run_turn", ref: "EvQuestion", turnId: "t1" },
+      ],
+    });
+
+    const result = await projectAgentEpisode(env.DB, new ControllableStore(), id, 2_000);
+    const episodeUuid = result.outcome === "projected" ? result.episodeUuid : "";
+
+    // BOTH are recorded — the question is real provenance and is not discarded.
+    const rows = await env.DB.prepare(
+      "SELECT source_kind, message_event_id FROM memory_episode_sources WHERE episode_uuid = ? ORDER BY source_index",
+    )
+      .bind(episodeUuid)
+      .all<{ source_kind: string; message_event_id: string }>();
+    expect(rows.results.map((r) => r.message_event_id)).toEqual(["EvSrc1", "EvQuestion"]);
+
+    // But the citation points at the EVIDENCE.
+    const citations = await cite(env.DB, [
+      { factId: "edge_1", fact: "the 04:12 deploy dropped the export worker", episodeUuids: [episodeUuid] },
+    ]);
+    expect(citations[0].permalink).toBe("https://slack.example/archives/CSRC/p1");
+    expect(citations[0].permalink).not.toContain("pQUESTION");
+  });
+
+  it("repairs an episode already written with the question at index 0", async () => {
+    // Rows projected BEFORE the ordering fix carry `run_turn` at source_index
+    // 0. Only the read-side rule can rescue those, which is why the ordering
+    // is enforced in `cite()` as well as in the payload.
+    await env.DB.prepare(
+      `INSERT INTO messages (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
+       VALUES ('EvOldQuestion', 'CSRC', '1.0', NULL, 'UCUST', 'why?', NULL, 'https://slack.example/archives/CSRC/pOLDQ', 'pulsefit', 1)`,
+    ).run();
+    const episodeUuid = `legacy-${crypto.randomUUID()}`;
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO memory_episode_sources (episode_uuid, source_index, source_kind, message_event_id, run_id, turn_id, permalink, created_at)
+         VALUES (?, 0, 'run_turn', 'EvOldQuestion', 'run_old', 't1', 'https://slack.example/archives/CSRC/pOLDQ', 1)`,
+      ).bind(episodeUuid),
+      env.DB.prepare(
+        `INSERT INTO memory_episode_sources (episode_uuid, source_index, source_kind, message_event_id, run_id, turn_id, permalink, created_at)
+         VALUES (?, 1, 'slack_message', 'EvSrc1', 'run_old', NULL, 'https://slack.example/archives/CSRC/p1', 1)`,
+      ).bind(episodeUuid),
+    ]);
+
+    const citations = await cite(env.DB, [
+      { factId: "edge_1", fact: "exports broke", episodeUuids: [episodeUuid] },
+    ]);
+    expect(citations[0].permalink).toBe("https://slack.example/archives/CSRC/p1");
+  });
+
+  it("still cites the input turn when it is the only exact source", async () => {
+    // The rule is a PREFERENCE, not an exclusion. A generation that read
+    // nothing still has provenance, and dropping it would trade a mildly
+    // unhelpful citation for no citation at all.
+    await env.DB.prepare(
+      `INSERT INTO messages (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
+       VALUES ('EvOnly', 'CSRC', '1.0', NULL, 'UCUST', 'just asking', NULL, 'https://slack.example/archives/CSRC/pONLY', 'pulsefit', 1)`,
+    ).run();
+    const { id } = await seedOutbox({
+      sources: [{ kind: "run_turn", ref: "EvOnly", turnId: "t1" }],
+    });
+
+    const result = await projectAgentEpisode(env.DB, new ControllableStore(), id, 2_000);
+    const episodeUuid = result.outcome === "projected" ? result.episodeUuid : "";
+
+    const citations = await cite(env.DB, [
+      { factId: "edge_1", fact: "they asked", episodeUuids: [episodeUuid] },
+    ]);
+    expect(citations[0].permalink).toBe("https://slack.example/archives/CSRC/pONLY");
   });
 
   it("drops a source that resolves to nothing rather than inventing a link", async () => {

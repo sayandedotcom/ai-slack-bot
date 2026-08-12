@@ -76,12 +76,25 @@ async function resolveEpisode(
   // `message_event_id` no longer resolves to a stored message produces no
   // citation, even though the row itself holds a permalink copy. The live
   // message is the system of record; the copy is not evidence of anything.
+  //
+  // EVIDENCE OUTRANKS THE QUESTION. `run_turn` is what the agent was answering;
+  // every other kind is what it went and READ. Citing the former when the
+  // latter exists points a reader at the customer asking "why are exports
+  // empty?" rather than at the engineer's message that explains why — the
+  // failure the memory contract names for Chat, which reached the Slack path
+  // because a Slack input turn always resolves.
+  //
+  // The ordering is enforced HERE as well as in the payload that assigns
+  // `source_index`, and that redundancy is deliberate rather than belt-and-
+  // braces: rows written before this fix already carry `run_turn` at index 0,
+  // and only a read-side rule can repair them. `= 'run_turn'` yields 1 or 0,
+  // so ASC puts real evidence first.
   const source = await db
     .prepare(
       `SELECT m.permalink, m.channel_id, m.ts
          FROM memory_episode_sources s JOIN messages m ON m.event_id = s.message_event_id
         WHERE s.episode_uuid = ? AND s.message_event_id IS NOT NULL
-        ORDER BY s.source_index ASC
+        ORDER BY (s.source_kind = 'run_turn') ASC, s.source_index ASC
         LIMIT 1`,
     )
     .bind(episodeUuid)
