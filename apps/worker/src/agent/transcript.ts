@@ -222,14 +222,24 @@ function normalizeAssistant(
           detail: `message ${messageIndex} part ${partIndex} has tool input that is not JSON`,
         };
       }
+      // Exactly four fields, and NO `providerOptions`.
+      //
+      // This used to forward the provider bag whole if it merely looked like
+      // JSON, which contradicted this module's own rule two screens up: a
+      // passed-through object carries fields nobody enumerated, and that is how
+      // a raw provider body or readable reasoning reaches a durable row. A
+      // future `@ai-sdk/anthropic` attaching metadata to a tool-use part would
+      // have been persisted verbatim into `model_messages`.
+      //
+      // Anthropic needs nothing beyond id, name and input to replay a
+      // `tool_use` block, so dropping the bag costs no continuation fidelity.
+      // Contrast the reasoning part above, which keeps exactly ONE named key
+      // because the provider genuinely requires it.
       kept.push({
         type: "tool-call",
         toolCallId: call.toolCallId,
         toolName: call.toolName,
         input: call.input,
-        ...(isProviderOptions(call.providerOptions)
-          ? { providerOptions: call.providerOptions }
-          : {}),
       });
       continue;
     }
@@ -402,10 +412,6 @@ function isJsonLike(value: unknown, seen = new Set<object>()): boolean {
   }
 }
 
-function isProviderOptions(value: unknown): value is Record<string, Record<string, never>> {
-  return typeof value === "object" && value !== null && isJsonLike(value);
-}
-
 // --- bounded history selection ----------------------------------------------
 
 /** One durable transcript row, as the pruner sees it. */
@@ -433,10 +439,32 @@ export type HistorySelection =
       bytes: number;
       /** How many atomic exchanges were evicted from the front. */
       droppedGroups: number;
+      /**
+       * Tool calls in the FINAL group that have no tool result.
+       *
+       * This is an OBLIGATION ON THE CALLER, not a diagnostic, which is why it
+       * is in the type rather than in a comment. A transcript can legitimately
+       * end this way — a crash between issuing a tool call and checkpointing its
+       * result — and nothing here fabricates a result to repair it, because the
+       * plan forbids that outright. But Anthropic rejects a request whose last
+       * assistant block is an unanswered `tool_use`, so the driver must either
+       * re-execute these calls and checkpoint their results, or drop the
+       * trailing assistant message, BEFORE sending.
+       *
+       * An array rather than the single id that `disableParallelToolUse: true`
+       * should guarantee: the guarantee is the provider's, and a selection
+       * function that silently reports one of two unresolved calls would hide
+       * exactly the case where that guarantee failed.
+       */
+      unresolvedTailCallIds: string[];
     }
   | {
       outcome: "context_limit";
-      reason: "protected_exceeds_budget" | "unpaired_tool_call";
+      reason:
+        | "protected_exceeds_budget"
+        | "unpaired_tool_call"
+        /** Nothing that fits opens on a `user` message, which Anthropic requires. */
+        | "no_user_boundary";
       detail: string;
     };
 
@@ -483,7 +511,13 @@ export function selectModelHistory(
   // nothing but the input messages the caller is about to add — and it must read
   // as "nothing to send", never as a context failure.
   if (all.length === 0) {
-    return { outcome: "selected", messages: [], bytes: 2, droppedGroups: 0 };
+    return {
+      outcome: "selected",
+      messages: [],
+      bytes: 2,
+      droppedGroups: 0,
+      unresolvedTailCallIds: [],
+    };
   }
   markProtected(all, bounds.protectedGenerationId);
   // The newest group is always protected even when no generation id is supplied:
@@ -496,20 +530,46 @@ export function selectModelHistory(
     const window = all.slice(start);
     const messages = window.flatMap((group) => group.entries.map((entry) => entry.message));
     const bytes = encodedBytes(messages);
-    if (messages.length <= bounds.maxMessages && bytes <= bounds.maxBytes) {
+    const fits = messages.length <= bounds.maxMessages && bytes <= bounds.maxBytes;
+    // The Anthropic Messages API requires the FIRST message to be `user`.
+    //
+    // Group boundaries alone do not give this. An ordinary multi-step
+    // generation is `[user][assistant+tool][assistant+tool][assistant+tool]`,
+    // and evicting only the oldest group there leaves a window that opens on an
+    // assistant message — structurally well-paired, and rejected with a 400
+    // before a token is generated. So a window that fits but does not open on a
+    // user message is not a boundary; keep evicting.
+    const opensOnUser = messages.length === 0 || messages[0].role === "user";
+
+    if (fits && opensOnUser) {
       const paired = assertPairing(window);
       if (!paired.ok) {
         return { outcome: "context_limit", reason: "unpaired_tool_call", detail: paired.detail };
       }
-      return { outcome: "selected", messages, bytes, droppedGroups: start };
-    }
-    if (all[start].protected) {
-      // Everything left is protected and it still does not fit. Refuse.
       return {
-        outcome: "context_limit",
-        reason: "protected_exceeds_budget",
-        detail: `${messages.length} messages / ${bytes} bytes of unsettled history exceed the ${bounds.maxMessages} / ${bounds.maxBytes} bound`,
+        outcome: "selected",
+        messages,
+        bytes,
+        droppedGroups: start,
+        unresolvedTailCallIds: unresolvedTailCalls(window),
       };
+    }
+
+    if (all[start].protected) {
+      // Everything left is protected. Whichever condition failed cannot be
+      // fixed by evicting more, because the next thing to evict is unsettled
+      // work — so refuse rather than send something Anthropic will reject.
+      return fits
+        ? {
+            outcome: "context_limit",
+            reason: "no_user_boundary",
+            detail: `the unsettled history opens on a ${messages[0]?.role ?? "empty"} message; no user turn survives the ${bounds.maxMessages} / ${bounds.maxBytes} bound`,
+          }
+        : {
+            outcome: "context_limit",
+            reason: "protected_exceeds_budget",
+            detail: `${messages.length} messages / ${bytes} bytes of unsettled history exceed the ${bounds.maxMessages} / ${bounds.maxBytes} bound`,
+          };
     }
     start += 1;
   }
@@ -554,6 +614,37 @@ function markProtected(groups: Group[], protectedGenerationId: string | undefine
       group.protected = true;
     }
   }
+}
+
+/**
+ * The unanswered tool calls in the final group — the exemption `assertPairing`
+ * grants, made visible to the caller instead of left implicit.
+ *
+ * `assertPairing` deliberately allows the tail to hold an unresolved call,
+ * because that is a real crash-recovery state rather than a malformed history.
+ * This reports exactly what that exemption let through, so the driver cannot
+ * receive a `selected` result and assume it is ready to send.
+ */
+function unresolvedTailCalls(groups: readonly Group[]): string[] {
+  const last = groups[groups.length - 1];
+  if (!last) return [];
+
+  const calls: string[] = [];
+  const results = new Set<string>();
+  for (const entry of last.entries) {
+    const message = entry.message;
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (part.type === "tool-call") calls.push(part.toolCallId);
+      }
+    }
+    if (message.role === "tool") {
+      for (const part of message.content) {
+        if (part.type === "tool-result") results.add(part.toolCallId);
+      }
+    }
+  }
+  return calls.filter((id) => !results.has(id));
 }
 
 /**

@@ -267,6 +267,66 @@ describe("response message allowlist", () => {
     });
   });
 
+  it("drops a tool call's provider metadata rather than forwarding the bag", () => {
+    const step = fableStep();
+    (step[0] as { content: Array<Record<string, unknown>> }).content[1].providerOptions = {
+      anthropic: { cacheControl: { type: "ephemeral" } },
+      somethingNew: { rawProviderBody: "a field nobody enumerated" },
+    };
+
+    const outcome = normalizeResponseMessages(step);
+    if (outcome.outcome !== "normalized") throw new Error("expected a normalized step");
+
+    const call = (outcome.messages[0] as { content: Array<Record<string, unknown>> }).content[1];
+    // Exactly four fields. Anthropic needs nothing else to replay a tool_use.
+    expect(Object.keys(call).sort()).toEqual(["input", "toolCallId", "toolName", "type"]);
+    expect(JSON.stringify(outcome.messages)).not.toContain("a field nobody enumerated");
+  });
+
+  it("canonicalises a bare-string assistant content into a text part", () => {
+    const outcome = normalizeResponseMessages([
+      { role: "assistant", content: "the export job filters a renamed column" },
+    ]);
+    if (outcome.outcome !== "normalized") throw new Error("expected a normalized step");
+    expect(outcome.messages[0]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "the export job filters a renamed column" }],
+    });
+  });
+
+  /**
+   * The regression the second self-review fix exists for. A provider body whose
+   * `content` is neither a string nor an array must DROP the message, never
+   * throw — the step has already been billed by the time this runs, and an
+   * exception here loses a completed step along with its usage row.
+   */
+  it("drops a message with non-array content instead of throwing mid-checkpoint", () => {
+    for (const content of [null, undefined, 42, { not: "an array" }]) {
+      const step = [{ role: "assistant", content }] as unknown as ResponseMessage[];
+      let outcome: ReturnType<typeof normalizeResponseMessages>;
+      expect(() => {
+        outcome = normalizeResponseMessages(step);
+      }).not.toThrow();
+      outcome = normalizeResponseMessages(step);
+      if (outcome.outcome !== "normalized") throw new Error("expected a normalized step");
+      expect(outcome.messages).toEqual([]);
+      expect(outcome.dropped).toEqual([
+        { messageIndex: 0, partIndex: -1, partType: "assistant", reason: "empty_message" },
+      ]);
+    }
+  });
+
+  it("drops a tool message with non-array content the same way", () => {
+    const step = [{ role: "tool", content: { not: "an array" } }] as unknown as ResponseMessage[];
+    expect(() => normalizeResponseMessages(step)).not.toThrow();
+    const outcome = normalizeResponseMessages(step);
+    if (outcome.outcome !== "normalized") throw new Error("expected a normalized step");
+    expect(outcome.messages).toEqual([]);
+    expect(outcome.dropped).toEqual([
+      { messageIndex: 0, partIndex: -1, partType: "tool", reason: "empty_message" },
+    ]);
+  });
+
   it("finds nothing to replay in metadata that carries no signature", () => {
     expect(readOmittedThinking(undefined)).toBeNull();
     expect(readOmittedThinking({ openai: { signature: "x" } })).toBeNull();
@@ -422,6 +482,39 @@ describe("bounded history selection", () => {
     return out;
   }
 
+  /**
+   * ONE user turn followed by several model steps — the ordinary shape of a
+   * multi-step generation, and the one where group boundaries alone do not give
+   * a legal request: evicting the single user group leaves a window that opens
+   * on an assistant message, which the Messages API rejects.
+   */
+  function multiStepGeneration(steps: number, generationId = "gen:current"): TranscriptMessage[] {
+    const out: TranscriptMessage[] = [
+      entry(1, generationId, { role: "user", content: "why are exports empty?" }),
+    ];
+    for (let index = 0; index < steps; index += 1) {
+      const id = `toolu_step${index}`;
+      out.push(
+        entry(out.length + 1, generationId, {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "", providerOptions: { anthropic: { signature: `sig${index}` } } },
+            { type: "tool-call", toolCallId: id, toolName: "run_code", input: { code: "x" } },
+          ],
+        }),
+      );
+      out.push(
+        entry(out.length + 1, generationId, {
+          role: "tool",
+          content: [
+            { type: "tool-result", toolCallId: id, toolName: "run_code", output: { type: "json", value: index } },
+          ],
+        }),
+      );
+    }
+    return out;
+  }
+
   it("reads an empty transcript as nothing to send, not as a failure", () => {
     expect(selectModelHistory([], { maxMessages: 10, maxBytes: 1_000 })).toMatchObject({
       outcome: "selected",
@@ -531,7 +624,66 @@ describe("bounded history selection", () => {
     });
   });
 
-  it("keeps a trailing unresolved tool call, which is a real crash-recovery state", () => {
+  /**
+   * Finding 2. Seven messages, one user turn, three model steps. A cap of 6
+   * evicts the only user group; the remainder is perfectly well-paired and is
+   * still a request Anthropic rejects before generating a token.
+   */
+  it("never returns a history that opens on an assistant message", () => {
+    const history = multiStepGeneration(3);
+    expect(history).toHaveLength(7);
+
+    for (let maxMessages = 1; maxMessages <= 7; maxMessages += 1) {
+      const selection = selectModelHistory(history, { maxMessages, maxBytes: 100_000 });
+      if (selection.outcome !== "selected") continue;
+      expect(selection.messages[0].role).toBe("user");
+    }
+  });
+
+  it("refuses with no_user_boundary when no user turn survives the bound", () => {
+    // Cap 6 against 7 messages. Eviction walks past every unprotected group and
+    // reaches the protected tail still opening on an assistant message, so
+    // there is no legal boundary left to find.
+    const selection = selectModelHistory(multiStepGeneration(3), {
+      maxMessages: 6,
+      maxBytes: 100_000,
+    });
+    expect(selection).toMatchObject({ outcome: "context_limit", reason: "no_user_boundary" });
+  });
+
+  it("refuses with protected_exceeds_budget when the user turn is itself unsettled", () => {
+    // The same 7 messages, but the user turn belongs to the generation being
+    // answered — so it cannot be evicted at all, and the failure is size, not
+    // boundary. Two different refusals for two different causes.
+    const selection = selectModelHistory(multiStepGeneration(3), {
+      maxMessages: 6,
+      maxBytes: 100_000,
+      protectedGenerationId: "gen:current",
+    });
+    expect(selection).toMatchObject({
+      outcome: "context_limit",
+      reason: "protected_exceeds_budget",
+    });
+  });
+
+  it("still keeps a whole multi-step generation when it fits", () => {
+    const selection = selectModelHistory(multiStepGeneration(3), {
+      maxMessages: 7,
+      maxBytes: 100_000,
+    });
+    if (selection.outcome !== "selected") throw new Error("expected a selection");
+    expect(selection.messages).toHaveLength(7);
+    expect(selection.messages[0].role).toBe("user");
+    expect(selection.unresolvedTailCallIds).toEqual([]);
+  });
+
+  /**
+   * Finding 4. Keeping this selection is right — nothing is fabricated to
+   * repair it — but a bare `selected` told the caller nothing, and Anthropic
+   * rejects a request whose last assistant block is an unanswered `tool_use`.
+   * The obligation is now in the RESULT, so Task 7 cannot miss it.
+   */
+  it("reports a trailing unresolved tool call as an obligation on the caller", () => {
     const history = [
       ...exchanges(1),
       entry(4, "gen:current", {
@@ -540,20 +692,77 @@ describe("bounded history selection", () => {
       }),
     ];
     const selection = selectModelHistory(history, { maxMessages: 100, maxBytes: 100_000 });
-    expect(selection.outcome).toBe("selected");
+    if (selection.outcome !== "selected") throw new Error("expected a selection");
+    expect(selection.unresolvedTailCallIds).toEqual(["toolu_live"]);
   });
 
-  it("refuses when an unresolved call is stranded in the middle of the history", () => {
+  it("reports every unresolved tail call, not just the first", () => {
+    // `disableParallelToolUse: true` should make this impossible. Reporting only
+    // one of two would hide precisely the case where that guarantee failed.
     const history = [
-      entry(1, "gen:1", {
+      ...exchanges(1),
+      entry(4, "gen:current", {
+        role: "assistant",
+        content: [
+          { type: "tool-call", toolCallId: "toolu_a", toolName: "run_code", input: { code: "x" } },
+          { type: "tool-call", toolCallId: "toolu_b", toolName: "run_code", input: { code: "y" } },
+        ],
+      }),
+    ];
+    const selection = selectModelHistory(history, { maxMessages: 100, maxBytes: 100_000 });
+    if (selection.outcome !== "selected") throw new Error("expected a selection");
+    expect(selection.unresolvedTailCallIds).toEqual(["toolu_a", "toolu_b"]);
+  });
+
+  it("reports nothing owed when the tail exchange is complete", () => {
+    const selection = selectModelHistory(exchanges(2), { maxMessages: 100, maxBytes: 100_000 });
+    if (selection.outcome !== "selected") throw new Error("expected a selection");
+    expect(selection.unresolvedTailCallIds).toEqual([]);
+  });
+
+  /**
+   * A stranded unresolved call in an OLD, evictable prefix.
+   *
+   * Before the opens-on-user rule this refused outright. It no longer does, and
+   * that is the better answer: the prefix opens on an assistant message, so it
+   * could never have been sent anyway, and evicting it yields a legal request
+   * instead of failing a customer's turn. The call is dropped from history, not
+   * repaired — nothing is fabricated.
+   */
+  it("evicts an old stranded tool call rather than failing the turn", () => {
+    const history = [
+      entry(1, "gen:old", {
         role: "assistant",
         content: [{ type: "tool-call", toolCallId: "toolu_lost", toolName: "run_code", input: { code: "x" } }],
       }),
-      entry(2, "gen:1", { role: "user", content: "still there?" }),
+      entry(2, "gen:current", { role: "user", content: "still there?" }),
     ];
-    expect(selectModelHistory(history, { maxMessages: 100, maxBytes: 100_000 })).toMatchObject({
-      outcome: "context_limit",
-      reason: "unpaired_tool_call",
-    });
+    const selection = selectModelHistory(history, { maxMessages: 100, maxBytes: 100_000 });
+    if (selection.outcome !== "selected") throw new Error("expected a selection");
+    expect(selection.messages).toEqual([{ role: "user", content: "still there?" }]);
+    expect(selection.droppedGroups).toBe(1);
+    expect(JSON.stringify(selection.messages)).not.toContain("toolu_lost");
+  });
+
+  /**
+   * The same defect inside the PROTECTED region, where eviction is not
+   * available. This is the case that must still refuse.
+   */
+  it("refuses when an unresolved call is stranded inside unsettled history", () => {
+    const history = [
+      entry(1, "gen:current", { role: "user", content: "why are exports empty?" }),
+      entry(2, "gen:current", {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "toolu_lost", toolName: "run_code", input: { code: "x" } }],
+      }),
+      entry(3, "gen:current", { role: "user", content: "still there?" }),
+    ];
+    expect(
+      selectModelHistory(history, {
+        maxMessages: 100,
+        maxBytes: 100_000,
+        protectedGenerationId: "gen:current",
+      }),
+    ).toMatchObject({ outcome: "context_limit", reason: "unpaired_tool_call" });
   });
 });
