@@ -16,6 +16,17 @@ import {
   type ToolCallUpdateInput,
 } from "./protocol";
 import type { RunOrigin } from "./keys";
+// Pure value module: no storage, no D1, no vendor. Importing it here is what
+// lets the episode be assembled INSIDE the finalization transaction, from
+// durable local state, with nothing async in the way.
+import {
+  boundSources,
+  buildAgentEpisode,
+  describeAction,
+  type AgentEpisodePayload,
+  type EpisodeOutcome,
+  type EpisodeSourceDescriptor,
+} from "../memory/episode";
 import { CLAIM_LEASE_MS, PROJECTION_LEASE_MS } from "../agent/limits";
 import {
   agentTurnIdFor,
@@ -148,9 +159,10 @@ const TOOL_STATES = new Set(["running", "completed", "failed"]);
  * v1 is Phase 08's four tables. v2 adds the Phase 10 agent driver, generation,
  * transcript, telemetry and run-index projection tables. v3 gives the driver a
  * durable retry-backoff time. v4 separates the retry budget from the claim
- * counter.
+ * counter. v5 adds generation-local provenance from trusted tool reads, so a
+ * settled generation's memory episode can cite the evidence it actually used.
  */
-export const RUN_SCHEMA_VERSION = 4;
+export const RUN_SCHEMA_VERSION = 5;
 
 type LocalMigration = {
   version: number;
@@ -601,11 +613,49 @@ function applyV4(storage: DurableObjectStorage): void {
   );
 }
 
+/**
+ * v5: generation-local provenance from trusted tool reads.
+ *
+ * The subtle half of two-sided memory. A generation's episode must cite the
+ * evidence the agent actually USED, and for a Chat question that evidence is
+ * whatever `memory.recall`, `memory.cite` and `slack.searchMessages` RETURNED —
+ * not the Chat prompt that triggered them. So the adapters register the ids
+ * they handed back, here, as the read happens.
+ *
+ * `ref` is always a host-side identifier: a Zep episode UUID the store
+ * returned, or a stored `messages.event_id`. Model-authored code cannot reach
+ * this table, cannot name a ref, and never sees either identifier — episode
+ * uuids stay host-side in `memory.recall`, and the search binding projects the
+ * model-visible shape without the event id.
+ *
+ * The primary key makes registration idempotent, which matters because a
+ * generation retries and re-reads: the same recall in attempt two adds no rows.
+ */
+function applyV5(storage: DurableObjectStorage): void {
+  storage.sql.exec(`
+    CREATE TABLE IF NOT EXISTS agent_source_records (
+      generation_id TEXT NOT NULL,
+      kind          TEXT NOT NULL CHECK (
+        kind IN ('run_turn', 'zep_episode', 'slack_message')
+      ),
+      ref           TEXT NOT NULL,
+      turn_id       TEXT,
+      created_at    INTEGER NOT NULL,
+      PRIMARY KEY (generation_id, kind, ref)
+    );
+  `);
+  storage.sql.exec(`
+    CREATE INDEX IF NOT EXISTS idx_agent_source_records_generation
+      ON agent_source_records (generation_id, created_at);
+  `);
+}
+
 const LOCAL_MIGRATIONS: readonly LocalMigration[] = [
   { version: 1, apply: (storage) => applyV1(storage) },
   { version: 2, apply: (storage, now) => applyV2(storage, now) },
   { version: 3, apply: (storage) => applyV3(storage) },
   { version: 4, apply: (storage) => applyV4(storage) },
+  { version: 5, apply: (storage) => applyV5(storage) },
 ];
 
 // --- state -----------------------------------------------------------------
@@ -2634,6 +2684,38 @@ export function finalizeGeneration(
         truncateError(request.errorMessage),
         now,
       );
+
+      // A failure is memory too, and arguably the more valuable half: "we were
+      // asked this, we tried these things, and it ended as `refused`" is what
+      // stops the next run repeating a dead end. There is no draft, because no
+      // answer was selected — an episode never carries partial delta text.
+      //
+      // Same immutable freeze and same outbox job as the success path, so a
+      // failed generation reaches Zep by exactly the mechanism a completed one
+      // does, with no second projector to keep correct.
+      const state = readState(storage);
+      const outcome = episodeOutcomeFor(request.state);
+      if (state !== null && outcome !== null) {
+        persistGenerationEpisode(
+          storage,
+          generation.id,
+          buildGenerationEpisodePayload(storage, {
+            runId: state.runId,
+            generationId: generation.id,
+            agentTurnId: generation.agentTurnId,
+            outcome,
+            draft: "",
+          }),
+          now,
+        );
+        enqueueProjectionJob(
+          storage,
+          "memory_outbox",
+          memoryOutboxIdFor(state.runId, generation.id),
+          now,
+        );
+      }
+
       return {
         outcome: "settled",
         generationId: generation.id,
@@ -2927,6 +3009,26 @@ export function finalizeAnswer(
     //    run-index revision when the status moved; a settle that changed no
     //    status still needs one, because the summary above did change.
     if (events[events.length - 1]?.type !== "status") writeRunIndexRevision(storage, now);
+
+    // The immutable episode, frozen in the SAME transaction as the answer it
+    // describes. Not in the projector: a projector reads state that has already
+    // moved on, and an episode assembled after the fact would drift from the
+    // answer the customer actually received.
+    persistGenerationEpisode(
+      storage,
+      generation.id,
+      buildGenerationEpisodePayload(storage, {
+        runId: state.runId,
+        generationId: generation.id,
+        agentTurnId: generation.agentTurnId,
+        outcome: "completed",
+        // The SELECTED final draft — the same string that just became the
+        // durable final turn. Never the delta buffer, and never narration
+        // from an earlier step.
+        draft: input.finalText,
+      }),
+      now,
+    );
     enqueueProjectionJob(
       storage,
       "memory_outbox",
@@ -2936,6 +3038,269 @@ export function finalizeAnswer(
 
     return { outcome: "finalized", events, turnId, settledThroughSeq };
   });
+}
+
+/* ------------------------------------------------- the agent's own memory -- */
+
+/**
+ * Register bounded trusted provenance from a tool read.
+ *
+ * Called by the capability layer, synchronously, as part of the read that
+ * produced the ids. `INSERT OR IGNORE` because a generation retries: the same
+ * `memory.recall` in attempt two must add nothing.
+ */
+export function recordGenerationSources(
+  storage: DurableObjectStorage,
+  generationId: string,
+  sources: readonly EpisodeSourceDescriptor[],
+  now = Date.now(),
+): void {
+  for (const source of boundSources(sources)) {
+    storage.sql.exec(
+      `INSERT OR IGNORE INTO agent_source_records (generation_id, kind, ref, turn_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      generationId,
+      source.kind,
+      source.ref,
+      source.turnId ?? null,
+      now,
+    );
+  }
+}
+
+export function listGenerationSources(
+  storage: DurableObjectStorage,
+  generationId: string,
+): EpisodeSourceDescriptor[] {
+  return storage.sql
+    .exec<{ kind: EpisodeSourceDescriptor["kind"]; ref: string; turn_id: string | null }>(
+      `SELECT kind, ref, turn_id FROM agent_source_records
+        WHERE generation_id = ? ORDER BY created_at ASC, ref ASC`,
+      generationId,
+    )
+    .toArray()
+    .map((row) =>
+      row.turn_id === null
+        ? { kind: row.kind, ref: row.ref }
+        : { kind: row.kind, ref: row.ref, turnId: row.turn_id },
+    );
+}
+
+/** Escape the LIKE metacharacters in a value that is matched as a prefix. */
+function escapeLikePrefix(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+/**
+ * What the agent was ASKED, from the input turns this generation actually
+ * consumed — and, for each one that came from Slack, a source descriptor
+ * pointing at the stored message.
+ *
+ * The join is through `model_messages`, not through a sequence range, because
+ * that table records exactly which RunEvents entered the transcript. A steer
+ * that arrived mid-answer and was included is in the ask; one that arrived
+ * after the final and started a new generation is not.
+ */
+function readAsked(
+  storage: DurableObjectStorage,
+  generationId: string,
+): { asked: string; sources: EpisodeSourceDescriptor[] } {
+  const rows = storage.sql
+    .exec<{ id: string; content: string; metadata_json: string | null }>(
+      `SELECT t.id, t.content, t.metadata_json
+         FROM model_messages mm JOIN turns t ON t.event_seq = mm.source_event_seq
+        WHERE mm.generation_id = ? AND mm.kind = 'input'
+        ORDER BY mm.source_event_seq ASC`,
+      generationId,
+    )
+    .toArray();
+
+  const parts: string[] = [];
+  const sources: EpisodeSourceDescriptor[] = [];
+  for (const row of rows) {
+    parts.push(row.content);
+    if (row.metadata_json === null) continue;
+    let metadata: unknown;
+    try {
+      metadata = JSON.parse(row.metadata_json);
+    } catch {
+      continue;
+    }
+    if (metadata === null || typeof metadata !== "object") continue;
+    const eventId = (metadata as Record<string, unknown>).eventId;
+    // A Chat turn carries no `eventId`, so it contributes NO source — which is
+    // the structural half of "a Chat question's own input is not accepted as
+    // the source for facts learned from customer memory or search".
+    if (typeof eventId === "string" && eventId.length > 0) {
+      sources.push({ kind: "run_turn", ref: eventId, turnId: row.id });
+    }
+  }
+
+  return { asked: parts.join("\n\n"), sources };
+}
+
+/**
+ * What the agent DID, from the durable capability audit.
+ *
+ * Names and stable error CODES only. The audit's `output` column already holds
+ * sizes rather than content, and even that is not read here — an episode records
+ * that `supabase.query` happened, never what it returned (invariant 33).
+ */
+function readActions(storage: DurableObjectStorage, generationId: string): string[] {
+  const rows = storage.sql
+    .exec<{ name: string; state: string; error: string | null }>(
+      `SELECT name, state, error FROM tool_updates
+        WHERE id LIKE ? ESCAPE '\\' AND state IN ('completed', 'failed') AND name <> 'run_code'
+        ORDER BY event_seq ASC`,
+      `tool:${escapeLikePrefix(generationId)}:%`,
+    )
+    .toArray();
+
+  return rows.map((row) =>
+    describeAction({
+      name: row.name,
+      state: row.state === "failed" ? "failed" : "completed",
+      // The wire form is `code: message` and the message half can be anything a
+      // vendor wrote. Only the code — a stable token this system defines —
+      // reaches memory.
+      errorCode: row.error === null ? null : row.error.split(":", 1)[0],
+    }),
+  );
+}
+
+/**
+ * The episode for one settled generation, assembled from durable local state.
+ *
+ * Built from tables rather than from whatever the continuation happened to be
+ * holding, which is what makes it DETERMINISTIC: re-finalizing the same
+ * generation reads the same rows and produces the same payload, so the outbox
+ * row it is written into can be immutable.
+ */
+export function buildGenerationEpisodePayload(
+  storage: DurableObjectStorage,
+  input: {
+    runId: string;
+    generationId: string;
+    agentTurnId: string;
+    outcome: EpisodeOutcome;
+    /** The SELECTED final draft. Empty for a generation that never produced one. */
+    draft: string;
+  },
+): AgentEpisodePayload {
+  const { asked, sources } = readAsked(storage, input.generationId);
+  return buildAgentEpisode({
+    runId: input.runId,
+    agentTurnId: input.agentTurnId,
+    outcome: input.outcome,
+    asked,
+    actions: readActions(storage, input.generationId),
+    draft: input.draft,
+    // Input-turn provenance first, then what the tool reads returned. Both are
+    // needed: the first says what was asked, the second says what the answer
+    // was actually built on.
+    sources: [...sources, ...listGenerationSources(storage, input.generationId)],
+  });
+}
+
+/**
+ * Freeze the episode onto the generation, ONCE.
+ *
+ * `WHERE memory_episode_json IS NULL` is the immutability rule as a condition
+ * rather than a convention. A re-finalization — a redelivered alarm, a crash
+ * retry that reaches finalization twice — recomputes an identical payload and
+ * writes nothing, and a Phase 11 approval edit that later reuses this outbox
+ * cannot silently rewrite what Zep has already ingested.
+ */
+export function persistGenerationEpisode(
+  storage: DurableObjectStorage,
+  generationId: string,
+  payload: AgentEpisodePayload,
+  now: number,
+): void {
+  storage.sql.exec(
+    `UPDATE agent_generations
+        SET memory_episode_json = ?, memory_source_json = ?,
+            memory_projection_state = 'pending', updated_at = ?
+      WHERE id = ? AND memory_episode_json IS NULL`,
+    JSON.stringify(payload.episode),
+    JSON.stringify(payload.sources),
+    now,
+    generationId,
+  );
+}
+
+export type GenerationMemory = {
+  generationId: string;
+  agentTurnId: string;
+  episodeJson: string;
+  sourceJson: string;
+  state: MemoryProjectionState;
+};
+
+/** The frozen payload, for the projector that carries it to D1. */
+export function readGenerationMemory(
+  storage: DurableObjectStorage,
+  generationId: string,
+): GenerationMemory | null {
+  const rows = storage.sql
+    .exec<{
+      id: string;
+      agent_turn_id: string;
+      memory_episode_json: string | null;
+      memory_source_json: string | null;
+      memory_projection_state: MemoryProjectionState;
+    }>(
+      `SELECT id, agent_turn_id, memory_episode_json, memory_source_json, memory_projection_state
+         FROM agent_generations WHERE id = ?`,
+      generationId,
+    )
+    .toArray();
+  const row = rows[0];
+  if (!row || row.memory_episode_json === null) return null;
+  return {
+    generationId: row.id,
+    agentTurnId: row.agent_turn_id,
+    episodeJson: row.memory_episode_json,
+    sourceJson: row.memory_source_json ?? "[]",
+    state: row.memory_projection_state,
+  };
+}
+
+/**
+ * Record that D1 has taken ownership of this generation's episode.
+ *
+ * "Projected" here means HANDED OFF, not ingested: the D1 outbox row exists and
+ * the queue job has been sent. Whether Zep has the episode is the outbox row's
+ * business, not this object's — and deliberately so, because a RunDO that
+ * tracked vendor state would be a second authority over the same fact.
+ */
+export function markGenerationMemoryProjected(
+  storage: DurableObjectStorage,
+  generationId: string,
+  now = Date.now(),
+): void {
+  storage.sql.exec(
+    `UPDATE agent_generations SET memory_projection_state = 'projected', updated_at = ?
+      WHERE id = ? AND memory_projection_state = 'pending'`,
+    now,
+    generationId,
+  );
+}
+
+/** How a settled generation's state reads as an episode outcome. */
+export function episodeOutcomeFor(state: GenerationState): EpisodeOutcome | null {
+  switch (state) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "refused":
+      return "refused";
+    case "budget_exhausted":
+      return "budget_exhausted";
+    default:
+      return null;
+  }
 }
 
 function truncateError(message: string | undefined): string | null {

@@ -896,3 +896,148 @@ this wrong is likely why the problem kept recurring.
 12. **Billing cross-check.** A crash after provider billing but before the local
     step checkpoint still undercounts; the AI Gateway log remains the external
     reconciliation source for a final cost report (invariant 32).
+
+---
+
+## Task 9 — agent-side memory
+
+### What was verified, and how
+
+**The Zep docs MCP was REACHABLE** (`mcp__zep-docs__search_documentation`,
+2026-08-13) and was checked before `MemoryStore` changed, as the plan's Step 2
+requires. Everything below is confirmed twice — against the MCP and against the
+installed `@getzep/zep-cloud@3.27.0` declarations — except where noted:
+
+- `graph.add(request, requestOptions?)`. The complete `AddDataRequest` body is
+  `data`, `type`, `createdAt?`, `graphId?`, `metadata?`, `sourceDescription?`,
+  `strictOntology?`, `userId?`.
+- **There is no client-supplied episode id, uuid, or idempotency key**, in the
+  types or in the REST reference. The only caller-influenced UUID anywhere is
+  the separate Batch API's `source_uuid`, which `graph.add` does not have. This
+  is the fact the whole claim protocol is designed around; it was NOT invented.
+- `metadata`: "Max 10 keys. Values must be strings, numbers, booleans, or
+  arrays of scalars." Empty arrays and arrays containing null are rejected, and
+  nested objects are unsupported. Enforced locally by `boundedMetadata`.
+- `sourceDescription`: the REST reference carries an explicit `<=500 characters`
+  constraint that **Fern drops from the generated TypeScript**, so the compiler
+  will not catch a violation. Enforced locally by `boundedSourceDescription`.
+- The returned episode's id field is `uuid` (required), not `uuid_`.
+- `RequestOptions` accepts `timeoutInSeconds`, `maxRetries`, `abortSignal`,
+  `headers`, and **`maxRetries` defaults to 2**. That default is a silent
+  duplicate-episode source on a non-idempotent call, so `addEpisode` passes
+  `maxRetries: 0` and lets the durable outbox own retrying.
+
+### The duplicate window, stated exactly
+
+D1 is exact: one outbox row per `(run, generation)`, one recorded episode uuid,
+one set of source rows. **Zep delivery is at-least-once and may contain a
+physical duplicate.** The window is:
+
+> between `graph.add` returning and the fenced `recordEpisodeUuid` committing.
+
+A crash there leaves a real episode in Zep that D1 has no record of; the lease
+expires, a later claim finds no uuid, and the episode is added again. The same
+applies when a claimant's lease expires while its request hangs and the
+abandoned call later resolves. This is **not** exactly-once projection and is
+not described as such anywhere in the code.
+
+It is narrowed, not closed, by two deliberate choices: `maxRetries: 0` on the
+vendor call, and recording the uuid as its own fenced write BEFORE the source
+resolution, so a claim that finds a uuid resumes instead of re-adding.
+
+### Deferred live proofs added by this task
+
+All **NOT RUN** — no network call, no deploy, no live Zep request, and no spend
+was involved in Task 9, by explicit operator decision. Nothing below is implied
+by any automated test: the Zep client is faked at the `MemoryStore` seam
+throughout, and a fake cannot fail to extract, cannot lag, and cannot duplicate.
+
+13. **A real agent episode is ingested and becomes searchable.** Project one
+    settled generation to a scratch graph and confirm extraction actually
+    happens — `graph.add` returning an episode does **not** mean the fact is
+    searchable, and Phase 06 measured roughly 5.5 minutes of lag.
+
+    ```ts
+    // scratch-zep-agent-episode.ts — DO NOT COMMIT
+    import { ZepClient } from "@getzep/zep-cloud";
+    const zep = new ZepClient({ apiKey: process.env.ZEP_API_KEY! });
+    const graphId = `scratch-agent-${Date.now()}`;
+    await zep.graph.create({ graphId, name: graphId });
+
+    const episode = {
+      asked: "why are PulseFit exports empty",
+      actions: ["slack.thread", "supabase.query", "linear.createIssue"],
+      draft: "the 04:12 deploy dropped the export worker; issue FF-123 filed",
+      outcome: "completed",
+      run_id: "run_scratch",
+      agent_turn_id: "agent:gen_scratch",
+    };
+    const added = await zep.graph.add(
+      {
+        graphId,
+        type: "json",
+        data: JSON.stringify(episode),
+        metadata: { source: "firefighter_agent", outcome: "completed" },
+        sourceDescription: "Firefighter agent turn (completed).",
+      },
+      { timeoutInSeconds: 20, maxRetries: 0 },
+    );
+    console.log("uuid", added.uuid, "processed", added.processed);
+
+    // Poll for extraction rather than asserting immediately.
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise((r) => setTimeout(r, 30_000));
+      const res = await zep.graph.search({ graphId, query: "export worker", scope: "edges" });
+      console.log(i, (res.edges ?? []).length);
+      if ((res.edges ?? []).length > 0) break;
+    }
+    ```
+
+    **PASS:** `added.uuid` is a non-empty string; within 10 minutes at least one
+    edge is returned whose `fact` refers to the export worker / the deploy, and
+    whose `episodes` array contains `added.uuid`.
+    **FAIL:** the call is rejected (recheck `metadata`/`sourceDescription`
+    bounds), or no edge appears within 10 minutes — in which case the episode
+    body is too terse or too structured for extraction and `EPISODE_LIMITS`
+    needs revisiting. Record the observed latency here either way.
+
+14. **Metadata and `sourceDescription` limits are enforced by the SERVER as
+    documented.** The 10-key limit is in the TypeScript docstring; the
+    500-character `sourceDescription` limit is **not in the types at all**, so
+    only a live call can confirm it.
+
+    ```ts
+    // Eleven keys, and a 501-character description. Both should be rejected.
+    await zep.graph.add({ graphId, type: "json", data: "{}",
+      metadata: Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`k${i}`, i])) });
+    await zep.graph.add({ graphId, type: "json", data: "{}",
+      sourceDescription: "x".repeat(501) });
+    ```
+
+    **PASS:** both raise `BadRequestError` (400). **FAIL:** either is accepted —
+    which means our local bound is stricter than the server and can be relaxed,
+    or the server silently truncates, which we would want to know before relying
+    on a description being complete.
+
+15. **A recall on a real graph resolves to a real permalink end to end.** The
+    provenance chain — `memory.recall` → registered episode uuid →
+    `zep_episodes` / `memory_episode_sources` → `messages.permalink` — is proven
+    locally against seeded D1 rows, but never against uuids Zep itself minted.
+
+    Run one real message projection and one real agent projection into the same
+    graph, then call `memory.recall` followed by `memory.cite` through a Chat
+    run. **PASS:** every returned citation's permalink opens the Slack message
+    the fact came from. **FAIL:** any citation is returned with a permalink that
+    404s, or a fact that was clearly derived from an ingested message returns no
+    citation at all (the second is safe but means provenance is not being
+    registered on the live path).
+
+16. **The one-minute Cron Trigger actually fires in production.** `triggers.crons`
+    is local configuration; no deployment has been made. After deploying, confirm
+    with `npx wrangler deployments list` that the trigger is attached, then watch
+    two consecutive minutes of `scheduled()` invocations in the Worker logs.
+    **PASS:** an invocation per minute, each completing without error, and a row
+    left `pending` by a deliberately failed queue send reaches `projected`
+    within two minutes with no alarm involvement. **FAIL:** no scheduled
+    invocations appear — the recovery backstop does not exist and DLQ'd
+    projections are unrecoverable.

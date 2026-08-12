@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
 import { CapabilityError } from "../errors";
+import type { SlackMessage } from "../gateways";
 import { runEffect } from "../effects";
 import { auditedCapability, effectDeps, type BindingContext } from "../registry";
 import { resolveCustomerScope } from "./customers";
@@ -23,6 +24,29 @@ const threadInput = z
   .strictObject({ limit: z.number().int().min(1).max(200).optional() })
   .default({});
 
+/**
+ * The model-visible projection of a stored message.
+ *
+ * Explicit rather than a pass-through, because `SlackMessage` now carries a
+ * host-only `eventId` and the output schema above is a `strictObject`. Building
+ * the visible shape by hand is what keeps "the model never sees a stored event
+ * id" a property of this file rather than a property of whichever zod mode
+ * happened to be in force.
+ */
+function visible(messages: readonly SlackMessage[]): {
+  ts: string;
+  userId: string | null;
+  text: string;
+  permalink: string | null;
+}[] {
+  return messages.map((m) => ({
+    ts: m.ts,
+    userId: m.userId,
+    text: m.text,
+    permalink: m.permalink,
+  }));
+}
+
 export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
   return {
     thread: auditedCapability(ctx, "slack", "thread", {
@@ -31,7 +55,7 @@ export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
         "Read the messages of the conversation this run belongs to, oldest first.",
       input: threadInput,
       output: z.array(message),
-      run: async (input) => ctx.deps.slack.thread(input.limit ?? 50),
+      run: async (input) => visible(await ctx.deps.slack.thread(input.limit ?? 50)),
     }),
 
     searchMessages: auditedCapability(ctx, "slack", "searchMessages", {
@@ -47,15 +71,27 @@ export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
         limit: z.number().int().min(1).max(100).optional(),
       }),
       output: z.array(message),
-      run: async (input) =>
+      run: async (input) => {
         // The slug is resolved HERE, in the trusted parent, before the gateway
         // is called. The gateway receives a slug the host vouched for; it never
         // receives a reference and has no way to mint one.
-        ctx.deps.slack.searchMessages(
+        const found = await ctx.deps.slack.searchMessages(
           input.query,
           input.limit ?? 20,
           resolveCustomerScope(ctx, input.customerRef),
-        ),
+        );
+
+        // Provenance from what this read RETURNED, registered before the result
+        // is narrowed. A Chat answer built on these messages therefore cites
+        // the messages, not the Chat prompt that went looking for them.
+        ctx.execution.provenance.record(
+          found
+            .filter((m): m is typeof m & { eventId: string } => typeof m.eventId === "string")
+            .map((m) => ({ kind: "slack_message" as const, ref: m.eventId })),
+        );
+
+        return visible(found);
+      },
     }),
 
     reply: auditedCapability(ctx, "slack", "reply", {

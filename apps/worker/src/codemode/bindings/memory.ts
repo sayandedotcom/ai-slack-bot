@@ -108,6 +108,21 @@ export function makeMemoryTools(ctx: BindingContext): ToolDescriptors {
           Math.min(input.limit ?? 10, 50),
         );
         for (const f of facts) recalled.set(f.factId, f);
+
+        // Provenance, registered from what this read RETURNED.
+        //
+        // This is the line that makes an internal Chat answer cite the CUSTOMER
+        // evidence it was built on. Without it the only source descriptor a
+        // Chat generation would have is its own input turn — which for Chat
+        // carries no message event id at all, so the answer would silently
+        // become uncitable while appearing to be grounded. The ids come from
+        // the store's own response and are never model-supplied.
+        ctx.execution.provenance.record(
+          facts.flatMap((f) =>
+            f.episodeUuids.map((ref) => ({ kind: "zep_episode" as const, ref })),
+          ),
+        );
+
         // Episode UUIDs stay host-side: they are the handle cite() resolves,
         // and exposing them would let model code fabricate one.
         return facts.map((f) => ({ factId: f.factId, fact: f.fact }));
@@ -150,6 +165,21 @@ export function makeMemoryTools(ctx: BindingContext): ToolDescriptors {
         }
 
         const citations = await resolveCitations(ctx.deps.db, wanted);
+
+        // Redundant TODAY, and kept deliberately.
+        //
+        // `recalled` is execution-local, so every fact reaching this line was
+        // already registered by the recall above and the sink's primary key
+        // collapses the repeat. What this line buys is that the registration
+        // does not depend on that coincidence: `cite` is the stronger claim —
+        // the model did not merely receive these facts, it built its answer on
+        // them — and if the citation cache ever widens beyond one execution,
+        // provenance keeps working rather than quietly going missing.
+        ctx.execution.provenance.record(
+          wanted.flatMap((f) =>
+            f.episodeUuids.map((ref) => ({ kind: "zep_episode" as const, ref })),
+          ),
+        );
         // Drop channel_id: the permalink already locates the message, and a
         // destination identifier is never shown to the model.
         return citations.map((c) => ({

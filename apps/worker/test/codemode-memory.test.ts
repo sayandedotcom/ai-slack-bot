@@ -13,6 +13,7 @@ function recordingStore(byGraph: Record<string, MemoryFact[]> = {}) {
   const store: MemoryStore & { searched: string[] } = {
     searched,
     async ensureGraph() {},
+    async addEpisode() { return { episodeUuid: "ep_0" }; },
     async addMessage() { return { episodeUuid: "ep_0" }; },
     async search(graphId: string) {
       searched.push(graphId);
@@ -93,6 +94,7 @@ describe("memory.recall graph scoping", () => {
     let seenLimit: number | undefined;
     const store: MemoryStore = {
       async ensureGraph() {},
+      async addEpisode() { return { episodeUuid: "e" }; },
       async addMessage() { return { episodeUuid: "e" }; },
       async search(_g, _q, limit) { seenLimit = limit; return []; },
     };
@@ -103,6 +105,7 @@ describe("memory.recall graph scoping", () => {
   it("turns an upstream memory failure into a safe error", async () => {
     const store: MemoryStore = {
       async ensureGraph() {},
+      async addEpisode() { return { episodeUuid: "e" }; },
       async addMessage() { return { episodeUuid: "e" }; },
       async search() { throw new Error("zep 503: key=sk-secret-value"); },
     };

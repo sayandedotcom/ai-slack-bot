@@ -5,6 +5,19 @@
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // The memory-outbox recovery sweep (Phase 10 Task 9, Step 5).
+  //
+  // Every minute, `scheduled()` re-enqueues a BOUNDED page of due D1
+  // `pending | retry | expired-projecting` agent_memory_outbox rows. It is the
+  // backstop for the two delivery paths that can be lost entirely: a RunDO
+  // alarm that never fires again, and a queue message that exhausted its
+  // retries and went to the DLQ. The D1 row outlives both.
+  //
+  // One minute rather than something rarer because memory lag compounds: a run
+  // that answers using a graph missing yesterday's episodes is worse than a
+  // slightly busier cron. The sweep is one indexed SELECT and at most a page of
+  // queue sends, and it never touches a customer-facing answer.
+  "triggers": { "crons": ["* * * * *"] },
   // Non-secret pins for Phase 09 capabilities. These are IDs and hostnames, not
   // credentials — they live here rather than in .dev.vars so that a reviewer can
   // confirm what the capability layer is scoped to by reading the diff.

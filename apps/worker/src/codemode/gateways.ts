@@ -24,6 +24,20 @@ export type SlackMessage = {
   userId: string | null;
   text: string;
   permalink: string | null;
+  /**
+   * The stored `messages.event_id`, for HOST use only.
+   *
+   * It never reaches model-authored code: the Slack binding projects the
+   * model-visible shape explicitly and drops this field. It exists so a read
+   * can register bounded trusted provenance for the messages it RETURNED,
+   * which is what lets a later citation resolve through D1 to the real message
+   * rather than to a URL somebody assembled from components.
+   *
+   * Optional because a gateway may legitimately not have one — a fake in a
+   * test, or a future non-D1 source. A missing id registers no provenance,
+   * which costs a citation and can never produce a wrong one.
+   */
+  eventId?: string;
 };
 
 export type RecalledFact = {

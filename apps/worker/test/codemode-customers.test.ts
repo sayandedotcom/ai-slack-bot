@@ -36,6 +36,9 @@ function recordingStore(): MemoryStore & { graphs: string[] } {
   return {
     graphs,
     async ensureGraph() {},
+    async addEpisode() {
+      return { episodeUuid: "ep_0" };
+    },
     async addMessage() {
       return { episodeUuid: "ep_0" };
     },

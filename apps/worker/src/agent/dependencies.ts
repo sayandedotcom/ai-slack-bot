@@ -6,6 +6,7 @@ import { makeArtifactPublisher } from "../files/r2";
 import { makeLangSmithReader } from "../langsmith/client";
 import { makeLinearGateway } from "../linear/client";
 import type { MemoryStore } from "../memory/store";
+import type { ProvenanceSink } from "../memory/episode";
 import { ZepMemory } from "../memory/zep";
 import { getRunById } from "../run/repository";
 import type { RunState } from "../run/session";
@@ -143,6 +144,7 @@ export async function resolveCodeModeScope(
 function closeOver(store: MemoryStore): MemoryStore {
   return {
     ensureGraph: (graphId) => store.ensureGraph(graphId),
+    addEpisode: (episode) => store.addEpisode(episode),
     addMessage: (graphId, data) => store.addMessage(graphId, data),
     search: (graphId, query, limit) => store.search(graphId, query, limit),
   };
@@ -231,6 +233,13 @@ export type RunCodeToolInput = {
   /** The persisted `agent_turn_id`, allocated before any provider I/O. */
   turnId: string;
   auditForExecution(context: CodeExecutionContext): CapabilityAuditSink;
+  /**
+   * The generation's provenance sink. Optional here for the same reason it is
+   * optional on the tool: a composer test with no Durable Object behind it
+   * still exercises the real composition, and a discarded record costs a
+   * citation rather than producing a false one.
+   */
+  provenance?: ProvenanceSink;
   guard: AgentExecutionGuard;
   limits?: CodeModeLimits;
   clock?: () => number;
@@ -278,6 +287,7 @@ export async function makeRunCodeToolForRun(
     deps: (input.dependencies ?? makeCapabilityDependencies)(input.env, scope, clock),
     limits: input.limits ?? PRODUCTION_LIMITS,
     auditForExecution: input.auditForExecution,
+    ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
     guard: input.guard,
     loader: input.env.LOADER,
   });

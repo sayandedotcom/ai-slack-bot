@@ -101,7 +101,10 @@ describe("backfillMemory", () => {
       "INSERT INTO zep_episodes (episode_uuid, event_id, graph_id, created_at) VALUES ('ep-a', 'EvA', 'customer:pulsefit', 1)",
     ).run();
     const sent: string[] = [];
-    const queue = { send: async (job: MemoryJob) => void sent.push(job.event_id) } as unknown as Queue<MemoryJob>;
+    const queue = {
+      send: async (job: MemoryJob) =>
+        void sent.push("event_id" in job ? job.event_id : ""),
+    } as unknown as Queue<MemoryJob>;
 
     const enqueued = await backfillMemory(env.DB, queue, 100);
 

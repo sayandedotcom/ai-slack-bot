@@ -1,4 +1,5 @@
 import type { JsonObject } from "../../run/protocol";
+import { discardingProvenanceSink, type ProvenanceSink } from "../../memory/episode";
 import type {
   AgentExecutionGuard,
   CapabilityAuditSink,
@@ -131,6 +132,15 @@ export type CodeExecution = {
   counter: CallCounter;
   guard: AgentExecutionGuard;
   customers: CustomerReferenceResolver;
+  /**
+   * Where a trusted tool read registers what it RETURNED.
+   *
+   * On the execution rather than on `deps` because it belongs to one
+   * generation's record of what it learned, not to a vendor port. A capability
+   * writes ids the HOST produced — a Zep episode uuid, a stored message event
+   * id — and never anything model-authored code supplied or even saw.
+   */
+  provenance: ProvenanceSink;
   clock: () => number;
   /** The overall operation's signal, where a parent-side wait can honour it. */
   abortSignal?: AbortSignal;
@@ -146,6 +156,7 @@ export function newCodeExecution(input: {
   guard: AgentExecutionGuard;
   limits: CodeModeLimits;
   clock: () => number;
+  provenance?: ProvenanceSink;
   abortSignal?: AbortSignal;
 }): CodeExecution {
   return {
@@ -154,6 +165,10 @@ export function newCodeExecution(input: {
     counter: newCallCounter(input.limits),
     guard: input.guard,
     customers: newCustomerReferenceResolver(),
+    // Defaults to discarding, which is the right default for a declaration-only
+    // registry and for a caller with no generation to attribute a read to. A
+    // missing sink costs a citation; it can never produce a wrong one.
+    provenance: input.provenance ?? discardingProvenanceSink(),
     clock: input.clock,
     abortSignal: input.abortSignal,
   };

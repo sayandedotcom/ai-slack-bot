@@ -77,6 +77,7 @@ import {
   SteeringAbort,
 } from "./steering";
 import { makeAgentTools, type CapabilityDependencyFactory } from "./dependencies";
+import { makeProvenanceSink } from "./memory";
 import type { AgentExecutionGuard } from "../codemode/contracts";
 import type { CodeModeOutput } from "../codemode/tool";
 
@@ -1179,6 +1180,11 @@ async function composeAndRun(
       // audit.ts, wired: nested capability events become `cap:*` tool updates
       // on the same replayable stream as everything else (invariant 19).
       auditForExecution: auditSinkFactory(claim.generationId, writer),
+      // Generation-scoped, not execution-scoped: every `run_code` call this
+      // generation makes contributes evidence to the ONE episode its
+      // finalization will freeze. This is what lets a Chat answer cite the
+      // customer messages a recall returned rather than its own prompt.
+      provenance: makeProvenanceSink(ctx.storage, claim.generationId),
       // INVARIANT 15, composed here rather than delegated to the caller.
       //
       // The durable half — `generationFreshnessGuard`, which re-reads this

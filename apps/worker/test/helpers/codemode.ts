@@ -163,6 +163,17 @@ export async function seedPermittedScope(
  */
 export type FakeFixtures = {
   slackThread?: Array<{ ts: string; userId: string | null; text: string; permalink: string | null }>;
+  /**
+   * What `slack.searchMessages` returns. Carries `eventId` because the real D1
+   * gateway does, and because provenance registration reads exactly that field.
+   */
+  slackSearch?: Array<{
+    ts: string;
+    userId: string | null;
+    text: string;
+    permalink: string | null;
+    eventId?: string;
+  }>;
   memoryFacts?: Array<{ factId: string; fact: string; episodeUuids: string[] }>;
   citations?: Array<{ factId: string; fact: string; permalink: string; ts: string }>;
   supabaseRows?: Array<Record<string, string | number | boolean | null>>;
@@ -174,11 +185,12 @@ export function fakeDeps(fixtures: FakeFixtures = {}): CapabilityDependencies {
     db: undefined as never, // no capability in Task 5 touches D1 directly
     slack: {
       async thread() { return fixtures.slackThread ?? []; },
-      async searchMessages() { return []; },
+      async searchMessages() { return fixtures.slackSearch ?? []; },
       async reply() { return { ts: "1.0", permalink: null }; },
     },
     memory: {
       async ensureGraph() {},
+      async addEpisode() { return { episodeUuid: "ep_0" }; },
       async addMessage() { return { episodeUuid: "ep_0" }; },
       async search() { return fixtures.memoryFacts ?? []; },
     },

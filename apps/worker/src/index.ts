@@ -7,6 +7,7 @@ import { artifactsApi } from "./api/artifacts";
 import { routeSlackMessageToOwnedRun, wakeSlackRun } from "./run/coordinator";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
+import { sweepMemoryOutbox } from "./memory/sweeper";
 import { ZepMemory } from "./memory/zep";
 import { handleTriageBatch, type TriageJob } from "./triage/consumer";
 import { makeTriageRunner } from "./triage/run";
@@ -95,6 +96,23 @@ export default {
           },
         });
     }
+  },
+  /**
+   * The one-minute Cron Trigger, configured in wrangler.jsonc.
+   *
+   * It owns exactly one job: re-enqueueing D1 memory-outbox rows that are due,
+   * including rows whose queue delivery has already exhausted its retries and
+   * gone to the DLQ. Everything else about projection — the claim, the lease,
+   * the fence, the vendor call — belongs to the queue consumer, and duplicating
+   * any of it here would be a second implementation of a protocol that only
+   * works if there is one.
+   *
+   * `waitUntil` is deliberately NOT used: the sweep is the whole point of this
+   * invocation, so it is awaited, and a failure should surface as a failed cron
+   * run rather than as silence.
+   */
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await sweepMemoryOutbox(env);
   },
   // The second type parameter is the queue message body. Without it,
   // ExportedHandler defaults to `unknown` and the queue handler will not typecheck.

@@ -17,6 +17,7 @@ import { runCode } from "@cloudflare/codemode";
 import { resolveProvider } from "@cloudflare/codemode";
 import type { JsonValue } from "../run/protocol";
 import { newCodeExecution } from "./bindings/shared";
+import type { ProvenanceSink } from "../memory/episode";
 import {
   alwaysFresh,
   type AgentExecutionGuard,
@@ -60,6 +61,16 @@ export type MakeRunCodeToolInput = {
    */
   auditForExecution(context: CodeExecutionContext): CapabilityAuditSink;
   guard: AgentExecutionGuard;
+  /**
+   * Where trusted tool reads register what they returned, for the settled
+   * generation's memory episode.
+   *
+   * NOT per execution, unlike the audit sink: provenance belongs to the
+   * GENERATION, and a generation makes many `run_code` calls whose evidence all
+   * feeds one episode. Optional, and omitting it discards — a caller with no
+   * generation to attribute a read to loses a citation, never gains a wrong one.
+   */
+  provenance?: ProvenanceSink;
   loader: WorkerLoader;
 };
 
@@ -191,6 +202,7 @@ export function makeRunCodeTool(
         guard: input.guard,
         limits: input.limits,
         clock: input.deps.clock,
+        ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
         abortSignal: context.abortSignal,
       });
 

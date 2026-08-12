@@ -14,19 +14,27 @@ import type { SlackMessage } from "../codemode/gateways";
  */
 
 type MessageRow = {
+  event_id: string;
   ts: string;
   user_id: string | null;
   text: string;
   permalink: string | null;
 };
 
-/** Drop the raw row shape at the boundary. Callers never see D1 column names. */
+/**
+ * Drop the raw row shape at the boundary. Callers never see D1 column names.
+ *
+ * `eventId` is carried through for the trusted parent's provenance record and
+ * is stripped again by the Slack binding before anything reaches model-authored
+ * code — see `SlackMessage`.
+ */
 function toMessage(row: MessageRow): SlackMessage {
   return {
     ts: row.ts,
     userId: row.user_id,
     text: row.text,
     permalink: row.permalink,
+    eventId: row.event_id,
   };
 }
 
@@ -45,7 +53,7 @@ export async function readThread(
 ): Promise<SlackMessage[]> {
   const { results } = await db
     .prepare(
-      `SELECT ts, user_id, text, permalink
+      `SELECT event_id, ts, user_id, text, permalink
          FROM messages
         WHERE channel_id = ? AND (ts = ? OR thread_ts = ?)
         ORDER BY ts ASC
@@ -83,7 +91,7 @@ export async function searchStoredMessages(
 ): Promise<SlackMessage[]> {
   const { results } = await db
     .prepare(
-      `SELECT ts, user_id, text, permalink
+      `SELECT event_id, ts, user_id, text, permalink
          FROM messages
         WHERE customer_slug = ? AND text LIKE ? ESCAPE '\\'
         ORDER BY ts DESC
