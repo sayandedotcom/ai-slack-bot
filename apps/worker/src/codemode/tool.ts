@@ -1,4 +1,4 @@
-import { tool, type Tool } from "ai";
+import { tool, type Tool, type ToolExecutionOptions } from "ai";
 import { z } from "zod";
 import { runCode } from "@cloudflare/codemode";
 // DELIBERATELY the index entry's resolveProvider, NOT `@cloudflare/codemode/ai`.
@@ -268,15 +268,39 @@ function normalizeFailure(err: unknown): string {
 }
 
 /**
+ * The only part of the SDK's `ToolExecutionOptions` this module reads, derived
+ * from the installed type rather than hand-written.
+ *
+ * A local `{ toolCallId?: string }` would be strictly worse than no type at
+ * all. If the SDK renamed or optionalized the field in a minor bump, the real
+ * options object would still satisfy an optional property, `tsc` would stay
+ * green, and `outerToolCallId` would quietly fall through to its fallback —
+ * making every nested audit id `cap:local_<uuid>:N`, unlinkable to the
+ * `run_code` call it belongs to. That is precisely the invariant this task
+ * exists to establish, breaking with zero signal.
+ *
+ * So the drift fails the build instead. A rename makes the `Pick` reference a
+ * key that no longer exists; optionalizing collapses this to `never` and the
+ * one call site stops compiling. If you are reading this because of an
+ * "argument is not assignable to parameter of type 'never'" error: check
+ * whether `toolCallId` is still a required `string` on the installed
+ * `ToolExecutionOptions`, and fix the audit id derivation deliberately.
+ */
+type OuterCallOptions =
+  ToolExecutionOptions<never> extends { toolCallId: string }
+    ? Pick<ToolExecutionOptions<never>, "toolCallId">
+    : never;
+
+/**
  * The outer tool call this execution belongs to.
  *
- * The AI SDK always supplies one. The fallback is for a host-side caller
- * driving `execute` directly, and it MINTS rather than reusing a constant:
- * `cap:unknown:1` from two such calls would collide, which is precisely the
- * defect the id exists to prevent.
+ * The AI SDK always supplies one, which the type above pins. The runtime
+ * fallback covers a host-side caller driving `execute` directly, and it MINTS
+ * rather than reusing a constant: `cap:unknown:1` from two such calls would
+ * collide, which is precisely the defect the id exists to prevent.
  */
-function outerToolCallId(options?: { toolCallId?: string }): string {
-  const supplied = options?.toolCallId;
+function outerToolCallId(options: OuterCallOptions): string {
+  const supplied: string | undefined = options.toolCallId;
   return typeof supplied === "string" && supplied.length > 0
     ? supplied
     : `local_${crypto.randomUUID()}`;

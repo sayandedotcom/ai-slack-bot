@@ -63,8 +63,17 @@ export function newCallCounter(limits: CodeModeLimits): CallCounter {
  * `memory.findCustomers` yet. This exists because the execution context is the
  * only correct owner for it and Task 1 is the task that builds that context;
  * wiring it into a later namespace must not become an excuse to hang it off the
- * factory, where it would outlive the execution. Its isolation is tested
- * directly in test/codemode-isolation.test.ts.
+ * factory, where it would outlive the execution.
+ *
+ * COVERAGE, stated precisely rather than implied. The isolation claim — a
+ * reference minted in execution A is unknown in execution B — is proven in
+ * `test/codemode-contracts.test.ts`, in the "customer references are
+ * execution-local" block, and it is proven at UNIT level only: it builds two
+ * `testExecution()` objects, not two `execute` calls. It cannot yet be proven
+ * end to end through the tool, because no capability mints a reference for a
+ * program to carry across executions. When one lands, the claim belongs in
+ * `test/codemode-isolation.test.ts` alongside the other two-execution tests,
+ * and this note should say so instead.
  */
 export type CustomerReferenceResolver = {
   /** Mint a reference for a slug the host has already validated. */
