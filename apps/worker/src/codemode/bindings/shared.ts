@@ -59,21 +59,23 @@ export function newCallCounter(limits: CodeModeLimits): CallCounter {
  * Shared by the `memory` and `slack` namespaces *within* one execution so a
  * reference minted by one is usable by the other, and by nothing else.
  *
- * NOTE: Phase 09 ships no capability that mints one — there is no
- * `memory.findCustomers` yet. This exists because the execution context is the
- * only correct owner for it and Task 1 is the task that builds that context;
- * wiring it into a later namespace must not become an excuse to hang it off the
- * factory, where it would outlive the execution.
+ * WHO MINTS ONE. Exactly one capability: `memory.findCustomers`, which is
+ * Chat-only and mints only after reading the D1 channel/customer catalog
+ * itself. That ordering is the guarantee this whole indirection rests on —
+ * `resolve()` can only ever return a slug the host read out of its own
+ * database, so `customer:${slug}` downstream is never `customer:${modelInput}`.
+ * A Slack-origin run mints nothing and accepts no reference: its customer is
+ * pinned to its channel's policy (invariant 35).
  *
  * COVERAGE, stated precisely rather than implied. The isolation claim — a
- * reference minted in execution A is unknown in execution B — is proven in
- * `test/codemode-contracts.test.ts`, in the "customer references are
- * execution-local" block, and it is proven at UNIT level only: it builds two
- * `testExecution()` objects, not two `execute` calls. It cannot yet be proven
- * end to end through the tool, because no capability mints a reference for a
- * program to carry across executions. When one lands, the claim belongs in
- * `test/codemode-isolation.test.ts` alongside the other two-execution tests,
- * and this note should say so instead.
+ * reference minted in execution A is unknown in execution B — is proven twice:
+ * at unit level in `test/codemode-contracts.test.ts` ("customer references are
+ * execution-local"), and END TO END in `test/codemode-isolation.test.ts` ("a
+ * customer reference does not survive its execution"), which drives two real
+ * `execute()` calls on ONE tool instance and carries the reference across them
+ * the way model-authored code would. The end-to-end form is the load-bearing
+ * one; the unit tests remain because they pin the refusal's wording, which is
+ * itself a security property (it names neither the reference nor a slug).
  */
 export type CustomerReferenceResolver = {
   /** Mint a reference for a slug the host has already validated. */
@@ -189,10 +191,49 @@ function redactArgs(args: JsonObject | undefined): JsonObject | null {
       redacted += 1;
       continue;
     }
-    out[key] = value;
+    out[key] = summarizeNonData(value);
   }
   if (redacted > 0) out.redactedFields = redacted;
   return out as JsonObject;
+}
+
+/**
+ * Replace anything that is not plain JSON data with a description of it.
+ *
+ * This exists for `files.publish`, whose validated input carries a real
+ * `Uint8Array` of up to `MAX_ARTIFACT_BYTES`. An audit record is supposed to
+ * say what a call was ASKED to do, and every consumer downstream bounds the
+ * string it stores — but bounding happens after serialization, and
+ * `JSON.stringify` on a 5MB typed array first materializes a ~67 MILLION
+ * character string (`{"0":1,"1":2,…}`) inside the trusted parent Worker, taking
+ * over a second of CPU. The stored event would look perfectly correct at 400
+ * characters, which is exactly why nothing downstream can catch this: the cost
+ * is entirely in a transient allocation that model-authored code can trigger on
+ * demand, once per publish.
+ *
+ * So the bytes never enter the record in the first place. A summary is also the
+ * more USEFUL audit line — "20 bytes of binary" is what a reader wants, and the
+ * content hash is already an argument of the effect key.
+ */
+function summarizeNonData(value: unknown): unknown {
+  if (value === null) return null;
+  if (typeof value !== "object") return value;
+
+  if (ArrayBuffer.isView(value)) return `<binary: ${value.byteLength} bytes>`;
+  if (value instanceof ArrayBuffer) return `<binary: ${value.byteLength} bytes>`;
+  if (Array.isArray(value)) return value.map(summarizeNonData);
+
+  // A class instance is not data. Naming its constructor is enough for an
+  // audit line and avoids walking an object whose size we do not control.
+  const proto = Object.getPrototypeOf(value) as unknown;
+  if (proto !== Object.prototype && proto !== null) {
+    const name = (value as object).constructor?.name;
+    return `<${typeof name === "string" && name.length > 0 ? name : "object"}>`;
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) out[key] = summarizeNonData(item);
+  return out;
 }
 
 function serializedLength(value: unknown): number | null {

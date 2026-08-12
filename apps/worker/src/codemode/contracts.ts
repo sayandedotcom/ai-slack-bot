@@ -19,6 +19,19 @@ export type CodeModeScope = {
   runId: string;
   turnId: string;
   origin: "slack" | "chat";
+  /**
+   * The run's shadow flag AS OF COMPOSITION. Carried for diagnostics and for
+   * the strictness of `validateScope`; it is deliberately NOT what the write
+   * guard reads.
+   *
+   * Do not add a consumer that authorizes a write from this field. It is a
+   * snapshot, and an operator flipping a run to shadow mid-run must stop the
+   * NEXT write, not the next run — so `write-guard.ts` re-reads the D1 `runs`
+   * row immediately before every external write instead. A reader that trusted
+   * this value would reintroduce the stale-shadow bug the guard exists to
+   * prevent, and it would do so silently, because the snapshot is usually
+   * correct.
+   */
   shadow: boolean;
   customerSlug: string | null;
   slackThread: {

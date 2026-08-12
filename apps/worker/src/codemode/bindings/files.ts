@@ -50,6 +50,7 @@ declare const files: {
 export function makeFilesTools(ctx: BindingContext): ToolDescriptors {
   return {
     publish: auditedCapability(ctx, "files", "publish", {
+      effect: "external_write",
       description:
         "Publish bytes as a retrievable artifact and get back its address. This is the only way to return binary content.",
       input: z.strictObject({

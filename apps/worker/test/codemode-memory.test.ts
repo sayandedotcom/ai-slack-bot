@@ -239,8 +239,13 @@ describe("memory.cite integrity", () => {
 });
 
 describe("memory has no write capability", () => {
-  it("declares recall and cite and nothing else", () => {
+  // findCustomers joined in Phase 10 Task 6 and is READ-ONLY: it searches the
+  // D1 channel catalog and mints references. There is still no `remember()`,
+  // and there is deliberately no way for the model to write a fact — memory
+  // writes are automatic system behaviour driven by what actually happened, or
+  // the system of record fills with things the model merely inferred.
+  it("declares only read capabilities", () => {
     const tools = memoryTools(slackScope, recordingStore());
-    expect(Object.keys(tools).sort()).toEqual(["cite", "recall"]);
+    expect(Object.keys(tools).sort()).toEqual(["cite", "findCustomers", "recall"]);
   });
 });

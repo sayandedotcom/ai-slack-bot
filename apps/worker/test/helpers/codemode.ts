@@ -98,6 +98,61 @@ export const slackScope: CodeModeScope = {
   actor: { engineerEmail: "eng@example.com", slackUserId: "U1" },
 };
 
+/* --------------------------------------------------- write-permitted scope -- */
+
+/**
+ * Seed D1 so a scope actually PASSES the shared write guard.
+ *
+ * From Task 6 on, every `external_write` capability — Slack, Linear and files
+ * alike — re-reads the channel policy and the `runs` row immediately before it
+ * acts. A scope invented in TypeScript therefore denies by default: its channel
+ * is unmapped (`observe`) and its run id names no row, which is the correct
+ * fail-closed answer and exactly what the guard's own tests assert.
+ *
+ * That default is right, and it is why this helper exists. A suite about Linear
+ * issue bodies or artifact hashing should be testing Linear issue bodies or
+ * artifact hashing — not accidentally re-testing the write guard, and not
+ * quietly passing because it never reached its own subject. Call this when the
+ * case is about what a permitted write DOES; pass a hand-built scope when the
+ * case is about a write being refused.
+ *
+ * Storage is shared across files (test/setup.ts migrates once), so every call
+ * mints its own channel, thread and run and nothing here counts rows.
+ */
+export async function seedPermittedScope(
+  db: D1Database,
+  overrides: Partial<CodeModeScope> = {},
+): Promise<CodeModeScope> {
+  const channelId = `C${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
+  const threadTs = `17123456${Math.floor(10 + Math.random() * 89)}.000100`;
+  const runId = `run_${crypto.randomUUID()}`;
+  const customerSlug = overrides.customerSlug ?? "acme";
+
+  await db
+    .prepare("INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, 'live')")
+    .bind(channelId, `chan-${channelId}`, customerSlug)
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
+       VALUES (?, ?, 'slack', ?, ?, 'live', 0, 0, 0)`,
+    )
+    .bind(runId, `slack:${channelId}:${threadTs}`, channelId, threadTs)
+    .run();
+
+  return {
+    ...slackScope,
+    runId,
+    // Fresh per call: every write goes through the effect ledger, so a reused
+    // turn would make the second identical call REPLAY the first rather than
+    // reach the subject under test.
+    turnId: `turn_${crypto.randomUUID()}`,
+    customerSlug,
+    slackThread: { channelId, threadTs },
+    ...overrides,
+  };
+}
+
 /**
  * Gateways that answer with empty, well-shaped results.
  *

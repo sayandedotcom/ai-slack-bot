@@ -1,14 +1,29 @@
 import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
 import { cite as resolveCitations } from "../../memory/cite";
+import { CUSTOMER_SEARCH_MAX, searchCustomers } from "../../db/channels";
 import type { MemoryFact } from "../../memory/store";
 import { CapabilityError } from "../errors";
 import { auditedCapability, type BindingContext } from "../registry";
+import { assertDiscoveryAllowed, resolveCustomerScope } from "./customers";
 
 const fact = z.strictObject({
   factId: z.string(),
   fact: z.string(),
 });
+
+const customerMatch = z.strictObject({
+  /** Opaque, execution-local, and the ONLY handle a capability will accept. */
+  customerRef: z.string(),
+  label: z.string(),
+});
+
+/**
+ * A reference is a handle, not a name. Bounded so a model cannot paste a
+ * megabyte of text into the resolver's map key and so an obviously-forged value
+ * is refused before it costs a lookup.
+ */
+const customerRefInput = z.string().min(1).max(120).optional();
 
 const citation = z.strictObject({
   factId: z.string(),
@@ -36,20 +51,57 @@ export function makeMemoryTools(ctx: BindingContext): ToolDescriptors {
   const recalled = new Map<string, MemoryFact>();
 
   return {
-    recall: auditedCapability(ctx, "memory", "recall", {
+    /**
+     * The one way a customer enters an internal chat's scope.
+     *
+     * Read-only, Chat-only, capped, and it hands back a REFERENCE rather than
+     * anything that names the customer to the host: a slug, a graph id or a
+     * channel id in this result would be a credential for reading that
+     * customer's data from any later execution.
+     */
+    findCustomers: auditedCapability(ctx, "memory", "findCustomers", {
+      effect: "read",
       description:
-        "Recall previously recorded facts. Scope 'customer' stays within this run's customer; 'org' covers shared engineering knowledge.",
+        "Look up which customer an internal question is about. Returns opaque references usable only in this execution; pass one as customerRef to recall or slack.searchMessages. Unavailable in a customer conversation, which is already scoped.",
+      input: z.strictObject({
+        query: z.string().min(2).max(120),
+        limit: z.number().int().min(1).max(CUSTOMER_SEARCH_MAX).optional(),
+      }),
+      output: z.array(customerMatch),
+      run: async (input) => {
+        assertDiscoveryAllowed(ctx);
+        const matches = await searchCustomers(
+          ctx.deps.db,
+          input.query,
+          input.limit ?? 5,
+        );
+        // Mint AFTER the D1 read, one reference per row D1 actually returned.
+        // That ordering is the guarantee: the resolver only ever holds slugs
+        // this host read out of its own catalog.
+        return matches.map((match) => ({
+          customerRef: ctx.execution.customers.mint(match.slug),
+          label: match.label,
+        }));
+      },
+    }),
+
+    recall: auditedCapability(ctx, "memory", "recall", {
+      effect: "read",
+      description:
+        "Recall previously recorded facts. Scope 'customer' stays within this conversation's customer, or the one named by customerRef in an internal chat; 'org' covers shared engineering knowledge.",
       input: z.strictObject({
         query: z.string().min(1).max(500),
         scope: z.enum(["customer", "org"]).optional(),
+        customerRef: customerRefInput,
         limit: z.number().int().min(1).max(50).optional(),
       }),
       output: z.array(fact),
       run: async (input) => {
-        // The graph is derived from the trusted scope. The model cannot name
-        // one, which is what stops a customer graph being read from a run that
+        // The graph is derived from the trusted scope, or from a reference the
+        // HOST minted from a row it read itself. The model cannot name a graph,
+        // which is what stops a customer graph being read from a run that
         // belongs to a different customer.
-        const graphId = graphFor(ctx, input.scope ?? "customer");
+        const graphId = graphFor(ctx, input.scope ?? "customer", input.customerRef);
         const facts = await ctx.deps.memory.search(
           graphId,
           input.query,
@@ -63,6 +115,7 @@ export function makeMemoryTools(ctx: BindingContext): ToolDescriptors {
     }),
 
     cite: auditedCapability(ctx, "memory", "cite", {
+      effect: "read",
       description:
         "Turn recalled facts into quotable citations. Only identifiers returned by recall in this same execution are accepted.",
       input: z.strictObject({
@@ -110,13 +163,28 @@ export function makeMemoryTools(ctx: BindingContext): ToolDescriptors {
   };
 }
 
-function graphFor(ctx: BindingContext, scope: "customer" | "org"): string {
-  if (scope === "org") return "org";
-  if (ctx.scope.customerSlug === null) {
-    throw new CapabilityError(
-      "customer_scope_required",
-      "this run has no customer, so there is no customer memory to search. Ask which customer this concerns, or use scope 'org'.",
-    );
+/**
+ * Which Zep graph a recall reads.
+ *
+ * Note where the string comes from. `resolveCustomerScope` returns either the
+ * scope's own slug (set by the composer from the D1 channel policy) or a slug
+ * the resolver is holding because THIS execution's `findCustomers` read it out
+ * of D1. There is no branch on which a model-supplied string reaches this
+ * template — `customer:${modelInput}` does not exist anywhere in the host.
+ */
+function graphFor(
+  ctx: BindingContext,
+  scope: "customer" | "org",
+  customerRef: string | undefined,
+): string {
+  if (scope === "org") {
+    if (customerRef !== undefined) {
+      throw new CapabilityError(
+        "invalid_input",
+        "org memory is not customer-scoped; drop customerRef or use scope 'customer'.",
+      );
+    }
+    return "org";
   }
-  return `customer:${ctx.scope.customerSlug}`;
+  return `customer:${resolveCustomerScope(ctx, customerRef)}`;
 }

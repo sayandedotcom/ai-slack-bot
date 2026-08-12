@@ -41,13 +41,14 @@ export function makeSlackGateway(
       );
     },
 
-    async searchMessages(query: string, limit: number): Promise<SlackMessage[]> {
-      if (scope.customerSlug === null) {
-        throw new CapabilityError(
-          "customer_scope_required",
-          "this run has no customer, so there is no message scope to search. Ask which customer this concerns.",
-        );
-      }
+    async searchMessages(
+      query: string,
+      limit: number,
+      customerSlug: string,
+    ): Promise<SlackMessage[]> {
+      // The caller resolved this. It is either the run's own pinned slug or one
+      // the host read out of D1 for this execution — never a model string, and
+      // never something this gateway chose.
       if (isWildcardOnly(query)) {
         throw new CapabilityError(
           "invalid_input",
@@ -55,7 +56,7 @@ export function makeSlackGateway(
         );
       }
       return searchStoredMessages(db, {
-        customerSlug: scope.customerSlug,
+        customerSlug,
         query,
         limit: Math.min(limit, MAX_SEARCH),
       });

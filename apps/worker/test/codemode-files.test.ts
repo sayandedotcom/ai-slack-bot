@@ -5,27 +5,33 @@ import { makeArtifactPublisher, MAX_ARTIFACT_BYTES } from "../src/files/r2";
 import { guardLoader } from "../src/codemode/guarded-loader";
 import { makeGuardedExecutor } from "../src/codemode/executor";
 import type { CodeModeScope } from "../src/codemode/contracts";
-import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
+import { fakeAuditSink, fakeDeps, seedPermittedScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 const BASE = "https://firefighter.example/api/artifacts";
 
-/** Fresh run/turn per call: publish reserves through the effect ledger. */
-function freshScope(): CodeModeScope {
-  return {
-    ...slackScope,
-    runId: `run_${crypto.randomUUID()}`,
-    turnId: `turn_${crypto.randomUUID()}`,
-  };
+/**
+ * Fresh run/turn per call: publish reserves through the effect ledger.
+ *
+ * Also a WRITE-PERMITTED scope. `files.publish` is classified `external_write`,
+ * so the shared host guard now re-reads this run's channel policy and `runs`
+ * row before every publish — the same matrix that has always gated
+ * `slack.reply`. A hand-built scope denies with `channel_read_only`, which is
+ * correct and is asserted in codemode-write-guard.test.ts; this file is about
+ * what a permitted publish DOES, so it seeds the rows that let it happen.
+ */
+async function freshScope(): Promise<CodeModeScope> {
+  return seedPermittedScope(env.DB);
 }
 
-function filesTools(scope: CodeModeScope = freshScope()) {
+async function filesTools(scope?: CodeModeScope) {
+  const resolved = scope ?? (await freshScope());
   const publisher = makeArtifactPublisher({ bucket: env.ARTIFACTS, baseUrl: BASE });
   const deps = { ...fakeDeps(), db: env.DB, files: publisher };
-  return buildRegistry(scope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
+  return buildRegistry(resolved, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
     .find((p) => p.name === "files")!.tools;
 }
 
-const call = (tools: ReturnType<typeof filesTools>, args: unknown) =>
+const call = (tools: Awaited<ReturnType<typeof filesTools>>, args: unknown) =>
   (tools.publish as { execute: (a: unknown) => Promise<unknown> }).execute(args);
 
 const bytes = (text: string) => new TextEncoder().encode(text);
@@ -38,7 +44,7 @@ const valid = () => ({
 
 describe("files.publish input validation", () => {
   it("accepts a small allowlisted artifact", async () => {
-    const out = await call(filesTools(), valid()) as Record<string, unknown>;
+    const out = await call(await filesTools(), valid()) as Record<string, unknown>;
     expect(Object.keys(out).sort()).toEqual(["sha256", "size", "url"]);
     expect(out.size).toBe(15);
   });
@@ -53,7 +59,7 @@ describe("files.publish input validation", () => {
     ["a control character", { filename: "re\0port.csv" }],
     ["a leading dot", { filename: ".hidden" }],
   ])("rejects %s", async (_label, patch) => {
-    await expect(call(filesTools(), { ...valid(), ...patch })).rejects.toThrow(/invalid_input/);
+    await expect(call(await filesTools(), { ...valid(), ...patch })).rejects.toThrow(/invalid_input/);
   });
 
   it.each([
@@ -61,7 +67,7 @@ describe("files.publish input validation", () => {
     ["an ELF binary", [0x7f, 0x45, 0x4c, 0x46]],
     ["a shebang script", [0x23, 0x21, 0x2f, 0x62]],
   ])("rejects %s by its magic bytes", async (_label, magic) => {
-    await expect(call(filesTools(), {
+    await expect(call(await filesTools(), {
       ...valid(), bytes: new Uint8Array([...magic, 1, 2, 3]), contentType: "application/pdf", filename: "x.pdf",
     })).rejects.toThrow(/invalid_input/);
   });
@@ -74,17 +80,17 @@ describe("files.publish input validation", () => {
     ["a public origin", { publicUrl: "https://evil.example" }],
     ["an expiry", { expiresIn: 999 }],
   ])("rejects %s argument", async (_label, patch) => {
-    await expect(call(filesTools(), { ...valid(), ...patch })).rejects.toThrow(/invalid_input/);
+    await expect(call(await filesTools(), { ...valid(), ...patch })).rejects.toThrow(/invalid_input/);
   });
 
   it("rejects one byte over the cap", async () => {
-    await expect(call(filesTools(), {
+    await expect(call(await filesTools(), {
       ...valid(), bytes: new Uint8Array(MAX_ARTIFACT_BYTES + 1).fill(65), contentType: "text/plain", filename: "big.txt",
     })).rejects.toThrow(/invalid_input/);
   });
 
   it("accepts exactly the cap", async () => {
-    const out = await call(filesTools(), {
+    const out = await call(await filesTools(), {
       ...valid(), bytes: new Uint8Array(MAX_ARTIFACT_BYTES).fill(65), contentType: "text/plain", filename: "atcap.txt",
     }) as { size: number };
     expect(out.size).toBe(MAX_ARTIFACT_BYTES);
@@ -93,24 +99,24 @@ describe("files.publish input validation", () => {
 
 describe("files.publish is deterministic and retry-safe", () => {
   it("returns the same url and hash for a retry within one turn", async () => {
-    const scope = freshScope();
-    const first = await call(filesTools(scope), valid()) as { url: string; sha256: string };
-    const second = await call(filesTools(scope), valid()) as { url: string; sha256: string };
+    const scope = await freshScope();
+    const first = await call(await filesTools(scope), valid()) as { url: string; sha256: string };
+    const second = await call(await filesTools(scope), valid()) as { url: string; sha256: string };
     expect(second).toEqual(first);
   });
 
   it("writes one object, not two, for that retry", async () => {
-    const scope = freshScope();
-    await call(filesTools(scope), valid());
-    await call(filesTools(scope), valid());
+    const scope = await freshScope();
+    await call(await filesTools(scope), valid());
+    await call(await filesTools(scope), valid());
     const listed = await env.ARTIFACTS.list({ limit: 1000 });
-    const first = await call(filesTools(scope), valid()) as { url: string };
+    const first = await call(await filesTools(scope), valid()) as { url: string };
     const key = first.url.slice(BASE.length + 1);
     expect(listed.objects.filter((o) => o.key === key)).toHaveLength(1);
   });
 
   it("stores the declared content type and forces attachment download", async () => {
-    const out = await call(filesTools(), valid()) as { url: string };
+    const out = await call(await filesTools(), valid()) as { url: string };
     const object = await env.ARTIFACTS.get(out.url.slice(BASE.length + 1));
     expect(object?.httpMetadata?.contentType).toBe("text/csv");
     // Never inline: an artifact served from the app's own origin that renders
@@ -119,15 +125,15 @@ describe("files.publish is deterministic and retry-safe", () => {
   });
 
   it("records a verifiable hash", async () => {
-    const out = await call(filesTools(), valid()) as { url: string; sha256: string };
+    const out = await call(await filesTools(), valid()) as { url: string; sha256: string };
     const object = await env.ARTIFACTS.get(out.url.slice(BASE.length + 1));
     expect(object?.customMetadata?.sha256).toBe(out.sha256);
     expect(out.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("gives different content a different object", async () => {
-    const a = await call(filesTools(), valid()) as { url: string };
-    const b = await call(filesTools(), { ...valid(), bytes: bytes("different") }) as { url: string };
+    const a = await call(await filesTools(), valid()) as { url: string };
+    const b = await call(await filesTools(), { ...valid(), bytes: bytes("different") }) as { url: string };
     expect(a.url).not.toBe(b.url);
   });
 
@@ -141,11 +147,11 @@ describe("files.publish is deterministic and retry-safe", () => {
    * file. Same scope on purpose — a fresh run/turn would hide the collision.
    */
   it("does not alias two different files of the same name, type and size", async () => {
-    const scope = freshScope();
+    const scope = await freshScope();
     const shared = { contentType: "text/csv", filename: "proof.csv" };
-    const a = await call(filesTools(scope), { ...shared, bytes: bytes("aaaaaaaa") }) as
+    const a = await call(await filesTools(scope), { ...shared, bytes: bytes("aaaaaaaa") }) as
       { url: string; size: number; sha256: string };
-    const b = await call(filesTools(scope), { ...shared, bytes: bytes("bbbbbbbb") }) as
+    const b = await call(await filesTools(scope), { ...shared, bytes: bytes("bbbbbbbb") }) as
       { url: string; size: number; sha256: string };
 
     expect(a.size).toBe(b.size);            // the old tuple matched on all three
@@ -162,28 +168,28 @@ describe("files.publish is deterministic and retry-safe", () => {
   // The other half of the claim: identical CONTENT must still deduplicate, or
   // adding the hash would have traded one bug for a retry sending twice.
   it("still replays identical content within one turn", async () => {
-    const scope = freshScope();
-    const a = await call(filesTools(scope), valid()) as { url: string };
-    const b = await call(filesTools(scope), valid()) as { url: string };
+    const scope = await freshScope();
+    const a = await call(await filesTools(scope), valid()) as { url: string };
+    const b = await call(await filesTools(scope), valid()) as { url: string };
     expect(b.url).toBe(a.url);
   });
 });
 
 describe("files.publish leaks nothing about storage", () => {
   it("returns only url, size and hash", async () => {
-    const out = await call(filesTools(), valid()) as Record<string, unknown>;
+    const out = await call(await filesTools(), valid()) as Record<string, unknown>;
     expect(Object.keys(out).sort()).toEqual(["sha256", "size", "url"]);
   });
 
   it("names no bucket, account, or credential", async () => {
-    const out = JSON.stringify(await call(filesTools(), valid()));
+    const out = JSON.stringify(await call(await filesTools(), valid()));
     for (const forbidden of ["firefighter-artifacts", "ARTIFACTS", "r2.cloudflarestorage", "accountId", "accessKey"]) {
       expect(out).not.toContain(forbidden);
     }
   });
 
   it("serves from the app's own origin, not a public bucket", async () => {
-    const out = await call(filesTools(), valid()) as { url: string };
+    const out = await call(await filesTools(), valid()) as { url: string };
     expect(out.url.startsWith(BASE)).toBe(true);
     expect(out.url).not.toContain("r2.dev");
   });

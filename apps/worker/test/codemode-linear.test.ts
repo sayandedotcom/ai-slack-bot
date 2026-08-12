@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRegistry } from "../src/codemode/registry";
 import { issueIdFromEffectKey, makeLinearGateway } from "../src/linear/client";
 import type { CodeModeScope } from "../src/codemode/contracts";
-import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
+import { fakeAuditSink, fakeDeps, seedPermittedScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 const TEAM_ID = "3b7d3585-029d-4490-80ce-6a44c6d9f081";
 const OTHER_TEAM = "4a4914d5-f940-4121-a014-171a84b8f8dc";
@@ -36,25 +36,29 @@ const created = (identifier = "FIR-1") => ({
  * so reusing one scope would make the second identical call REPLAY the first
  * rather than reach the mocked transport — which is the ledger working, but
  * would silently hollow out these assertions.
+ *
+ * Also WRITE-PERMITTED. Both Linear mutators are classified `external_write`,
+ * so from Task 6 on the shared host guard re-reads this run's channel policy
+ * and `runs` row before either of them acts — a shadow run cannot file an issue
+ * any more than it can post to Slack. A hand-built scope denies with
+ * `channel_read_only`; that refusal is asserted in codemode-write-guard.test.ts
+ * and this file is about what a permitted mutation does.
  */
-const freshScope = (): CodeModeScope => ({
-  ...slackScope,
-  runId: `run_${crypto.randomUUID()}`,
-  turnId: `turn_${crypto.randomUUID()}`,
-});
+const freshScope = async (): Promise<CodeModeScope> => seedPermittedScope(env.DB);
 
-function linearTools(
+async function linearTools(
   gateway = makeLinearGateway(config),
   // A shared scope is what the effect-key tests need: two calls in ONE turn are
   // the only place an aliasing key can be observed.
-  scope: CodeModeScope = freshScope(),
+  scope?: CodeModeScope,
 ) {
+  const resolved = scope ?? (await freshScope());
   const deps = { ...fakeDeps(), db: env.DB, linear: gateway };
-  return buildRegistry(scope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
+  return buildRegistry(resolved, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
     .find((p) => p.name === "linear")!.tools;
 }
 
-const call = (tools: ReturnType<typeof linearTools>, method: string, args: unknown) =>
+const call = (tools: Awaited<ReturnType<typeof linearTools>>, method: string, args: unknown) =>
   (tools[method] as { execute: (a: unknown) => Promise<unknown> }).execute(args);
 
 const validCreate = {
@@ -70,7 +74,7 @@ const validCreate = {
 
 describe("linear.createIssue schema", () => {
   it("requires every assessment axis", async () => {
-    const tools = linearTools();
+    const tools = await linearTools();
     for (const missing of ["platformValue", "blocking", "customerWeight", "evidence"]) {
       const assessment = { ...validCreate.assessment } as Record<string, unknown>;
       delete assessment[missing];
@@ -87,7 +91,7 @@ describe("linear.createIssue schema", () => {
     ["a token", { token: "lin_api_leak" }],
     ["an endpoint", { url: "https://evil.example" }],
   ])("rejects %s argument", async (_label, patch) => {
-    await expect(call(linearTools(), "createIssue", { ...validCreate, ...patch }))
+    await expect(call(await linearTools(), "createIssue", { ...validCreate, ...patch }))
       .rejects.toThrow(/invalid_input/);
   });
 
@@ -99,7 +103,7 @@ describe("linear.createIssue schema", () => {
     ["an oversized description", { description: "x".repeat(21_000) }],
     ["too many labels", { labels: Array.from({ length: 11 }, (_, i) => `l${i}`) }],
   ])("rejects %s", async (_label, patch) => {
-    await expect(call(linearTools(), "createIssue", { ...validCreate, ...patch }))
+    await expect(call(await linearTools(), "createIssue", { ...validCreate, ...patch }))
       .rejects.toThrow(/invalid_input/);
   });
 });
@@ -107,7 +111,7 @@ describe("linear.createIssue schema", () => {
 describe("linear.createIssue always uses the pinned team", () => {
   it("sends the configured team and nothing the caller chose", async () => {
     const sent = mockTransport([created()]);
-    await call(linearTools(), "createIssue", validCreate);
+    await call(await linearTools(), "createIssue", validCreate);
     expect(sent[0].variables.teamId).toBe(TEAM_ID);
   });
 
@@ -119,7 +123,7 @@ describe("linear.createIssue always uses the pinned team", () => {
       { assessment: { ...validCreate.assessment, blocking: "low" as const } },
     ]) {
       const sent = mockTransport([created()]);
-      await call(linearTools(), "createIssue", { ...validCreate, ...patch });
+      await call(await linearTools(), "createIssue", { ...validCreate, ...patch });
       expect(sent[0].variables.teamId).toBe(TEAM_ID);
       vi.unstubAllGlobals();
     }
@@ -127,14 +131,14 @@ describe("linear.createIssue always uses the pinned team", () => {
 
   it("sends a bare authorization header with no Bearer prefix", async () => {
     const sent = mockTransport([created()]);
-    await call(linearTools(), "createIssue", validCreate);
+    await call(await linearTools(), "createIssue", validCreate);
     expect(sent[0].headers.get("authorization")).toBe("lin_api_test");
     expect(sent[0].headers.get("authorization")).not.toMatch(/^Bearer /);
   });
 
   it("renders the assessment into the issue body so it cannot be omitted", async () => {
     const sent = mockTransport([created()]);
-    await call(linearTools(), "createIssue", validCreate);
+    await call(await linearTools(), "createIssue", validCreate);
     const description = String(sent[0].variables.description);
     expect(description).toContain("Platform value: high");
     expect(description).toContain("Blocking: medium");
@@ -144,7 +148,7 @@ describe("linear.createIssue always uses the pinned team", () => {
 
   it("normalizes the response to identifiers only", async () => {
     mockTransport([created("FIR-7")]);
-    const out = await call(linearTools(), "createIssue", validCreate) as Record<string, unknown>;
+    const out = await call(await linearTools(), "createIssue", validCreate) as Record<string, unknown>;
     expect(Object.keys(out).sort()).toEqual(["id", "identifier", "url"]);
   });
 });
@@ -202,14 +206,14 @@ describe("linear.createIssue idempotency", () => {
  */
 describe("linear effect keys name everything that changes the effect", () => {
   it("does not alias two creates that differ only by label", async () => {
-    const scope = freshScope();
+    const scope = await freshScope();
     const sent = mockTransport([created("FIR-1"), created("FIR-2")]);
     // `labels` was missing from the key, so the second create replayed the
     // first issue's URL: the labels were silently never applied and the model
     // was told it had succeeded.
-    await call(linearTools(makeLinearGateway(config), scope), "createIssue",
+    await call(await linearTools(makeLinearGateway(config), scope), "createIssue",
       { ...validCreate, labels: ["bug"] });
-    await call(linearTools(makeLinearGateway(config), scope), "createIssue",
+    await call(await linearTools(makeLinearGateway(config), scope), "createIssue",
       { ...validCreate, labels: ["security"] });
 
     expect(sent).toHaveLength(2);
@@ -218,11 +222,11 @@ describe("linear effect keys name everything that changes the effect", () => {
   });
 
   it("still replays a genuinely identical create", async () => {
-    const scope = freshScope();
+    const scope = await freshScope();
     const sent = mockTransport([created("FIR-1")]);
     const args = { ...validCreate, labels: ["bug"] };
-    const a = await call(linearTools(makeLinearGateway(config), scope), "createIssue", args);
-    const b = await call(linearTools(makeLinearGateway(config), scope), "createIssue", args);
+    const a = await call(await linearTools(makeLinearGateway(config), scope), "createIssue", args);
+    const b = await call(await linearTools(makeLinearGateway(config), scope), "createIssue", args);
     expect(sent).toHaveLength(1);          // ONE issue filed
     expect(b).toEqual(a);
   });
@@ -231,11 +235,11 @@ describe("linear effect keys name everything that changes the effect", () => {
   // issues. `canonical()` preserves array order by design, so the binding
   // normalizes before the key is taken.
   it("treats a reordered label set as the same effect", async () => {
-    const scope = freshScope();
+    const scope = await freshScope();
     const sent = mockTransport([created("FIR-1")]);
-    await call(linearTools(makeLinearGateway(config), scope), "createIssue",
+    await call(await linearTools(makeLinearGateway(config), scope), "createIssue",
       { ...validCreate, labels: ["bug", "security"] });
-    await call(linearTools(makeLinearGateway(config), scope), "createIssue",
+    await call(await linearTools(makeLinearGateway(config), scope), "createIssue",
       { ...validCreate, labels: ["security", "bug"] });
     expect(sent).toHaveLength(1);
   });
@@ -249,11 +253,11 @@ describe("linear.updateIssue goes through the effect ledger", () => {
   const rounds = (n: number) => Array.from({ length: n }, () => [owned, updated]).flat();
 
   it("applies a repeated identical update once", async () => {
-    const scope = freshScope();
+    const scope = await freshScope();
     const sent = mockTransport(rounds(1));
     const args = { issueId: "i", title: "new title" };
-    const a = await call(linearTools(makeLinearGateway(config), scope), "updateIssue", args);
-    const b = await call(linearTools(makeLinearGateway(config), scope), "updateIssue", args);
+    const a = await call(await linearTools(makeLinearGateway(config), scope), "updateIssue", args);
+    const b = await call(await linearTools(makeLinearGateway(config), scope), "updateIssue", args);
 
     // The replay does not even re-run the ownership check: the whole effect,
     // including its upstream reads, is answered from the ledger.
@@ -262,11 +266,11 @@ describe("linear.updateIssue goes through the effect ledger", () => {
   });
 
   it("does not alias two updates that set different fields", async () => {
-    const scope = freshScope();
+    const scope = await freshScope();
     const sent = mockTransport(rounds(2));
-    await call(linearTools(makeLinearGateway(config), scope), "updateIssue",
+    await call(await linearTools(makeLinearGateway(config), scope), "updateIssue",
       { issueId: "i", title: "one" });
-    await call(linearTools(makeLinearGateway(config), scope), "updateIssue",
+    await call(await linearTools(makeLinearGateway(config), scope), "updateIssue",
       { issueId: "i", title: "two" });
     expect(sent.filter((s) => s.document.includes("issueUpdate"))).toHaveLength(2);
   });
@@ -274,11 +278,11 @@ describe("linear.updateIssue goes through the effect ledger", () => {
   // "leave the description alone" and "set the description to X" are different
   // effects and must not hash alike, even when every other field matches.
   it("does not alias an omitted field with a supplied one", async () => {
-    const scope = freshScope();
+    const scope = await freshScope();
     const sent = mockTransport(rounds(2));
-    await call(linearTools(makeLinearGateway(config), scope), "updateIssue",
+    await call(await linearTools(makeLinearGateway(config), scope), "updateIssue",
       { issueId: "i", title: "same" });
-    await call(linearTools(makeLinearGateway(config), scope), "updateIssue",
+    await call(await linearTools(makeLinearGateway(config), scope), "updateIssue",
       { issueId: "i", title: "same", description: "and a body" });
     expect(sent.filter((s) => s.document.includes("issueUpdate"))).toHaveLength(2);
   });
@@ -287,19 +291,19 @@ describe("linear.updateIssue goes through the effect ledger", () => {
 describe("linear.updateIssue authorization", () => {
   it("refuses an issue belonging to another team", async () => {
     mockTransport([{ data: { issue: { id: "iss-9", team: { id: OTHER_TEAM } } } }]);
-    await expect(call(linearTools(), "updateIssue", { issueId: "iss-9", title: "new" }))
+    await expect(call(await linearTools(), "updateIssue", { issueId: "iss-9", title: "new" }))
       .rejects.toThrow(/linear_team_denied/);
   });
 
   it("refuses an issue that does not exist", async () => {
     mockTransport([{ data: { issue: null } }]);
-    await expect(call(linearTools(), "updateIssue", { issueId: "nope", title: "new" }))
+    await expect(call(await linearTools(), "updateIssue", { issueId: "nope", title: "new" }))
       .rejects.toThrow(/invalid_input/);
   });
 
   it("checks ownership before it mutates anything", async () => {
     const sent = mockTransport([{ data: { issue: { id: "i", team: { id: OTHER_TEAM } } } }]);
-    await call(linearTools(), "updateIssue", { issueId: "i", title: "new" }).catch(() => {});
+    await call(await linearTools(), "updateIssue", { issueId: "i", title: "new" }).catch(() => {});
     expect(sent).toHaveLength(1);                      // the mutation never ran
     expect(sent[0].document).not.toContain("issueUpdate");
   });
@@ -310,7 +314,7 @@ describe("linear.updateIssue authorization", () => {
       { data: { team: { states: { nodes: [{ id: "st-1", name: "Done" }] } } } },
       { data: { issueUpdate: { success: true, issue: { id: "i", url: "https://x" } } } },
     ]);
-    await call(linearTools(), "updateIssue", { issueId: "i", state: "done" });
+    await call(await linearTools(), "updateIssue", { issueId: "i", state: "done" });
     expect(sent[1].variables.teamId).toBe(TEAM_ID);
     expect(sent[2].variables.stateId).toBe("st-1");
   });
@@ -320,7 +324,7 @@ describe("linear.updateIssue authorization", () => {
       { data: { issue: { id: "i", team: { id: TEAM_ID } } } },
       { data: { team: { states: { nodes: [{ id: "st-1", name: "Done" }] } } } },
     ]);
-    await expect(call(linearTools(), "updateIssue", { issueId: "i", state: "Shipped" }))
+    await expect(call(await linearTools(), "updateIssue", { issueId: "i", state: "Shipped" }))
       .rejects.toThrow(/unknown state.*Done/s);
   });
 
@@ -329,7 +333,7 @@ describe("linear.updateIssue authorization", () => {
     ["an assignee", { assigneeId: "u1" }],
     ["a priority", { priority: 1 }],
   ])("rejects %s on update", async (_label, patch) => {
-    await expect(call(linearTools(), "updateIssue", { issueId: "i", ...patch }))
+    await expect(call(await linearTools(), "updateIssue", { issueId: "i", ...patch }))
       .rejects.toThrow(/invalid_input/);
   });
 });
@@ -349,11 +353,11 @@ describe("linear upstream failures stay safe", () => {
     [500, /effect_in_doubt/],
   ])("maps HTTP %i to a safe code", async (status, pattern) => {
     failWith(status);
-    await expect(call(linearTools(), "createIssue", validCreate)).rejects.toThrow(pattern);
+    await expect(call(await linearTools(), "createIssue", validCreate)).rejects.toThrow(pattern);
   });
 
   it("resolves an in-doubt create through findIssue instead of filing twice", async () => {
-    const tools = linearTools();
+    const tools = await linearTools();
     failWith(500);
     await expect(call(tools, "createIssue", validCreate)).rejects.toThrow(/effect_in_doubt/);
 
@@ -365,7 +369,7 @@ describe("linear upstream failures stay safe", () => {
 
   it("leaks neither the document nor the credential", async () => {
     vi.stubGlobal("fetch", async () => new Response("secret body: lin_api_test", { status: 500 }));
-    const err = await call(linearTools(), "createIssue", validCreate)
+    const err = await call(await linearTools(), "createIssue", validCreate)
       .then(() => { throw new Error("should have failed"); }, (e: Error) => e);
     expect(err.message).not.toContain("lin_api_test");
     expect(err.message).not.toContain("issueCreate");
@@ -375,21 +379,21 @@ describe("linear upstream failures stay safe", () => {
   // A 200 with an unreadable body means the mutation may well have run.
   it("survives an unreadable response body", async () => {
     vi.stubGlobal("fetch", async () => new Response("<html>gateway</html>", { status: 200 }));
-    await expect(call(linearTools(), "createIssue", validCreate))
+    await expect(call(await linearTools(), "createIssue", validCreate))
       .rejects.toThrow(/effect_in_doubt/);
   });
 
   // Never reached the server, so nothing was filed and a retry is safe.
   it("survives the network being gone", async () => {
     vi.stubGlobal("fetch", async () => { throw new TypeError("network error"); });
-    await expect(call(linearTools(), "createIssue", validCreate))
+    await expect(call(await linearTools(), "createIssue", validCreate))
       .rejects.toThrow(/capability_unavailable/);
   });
 });
 
 describe("linear carries no approval annotation", () => {
-  it("declares createIssue and updateIssue with no approval flag", () => {
-    const tools = linearTools();
+  it("declares createIssue and updateIssue with no approval flag", async () => {
+    const tools = await linearTools();
     expect(Object.keys(tools).sort()).toEqual(["createIssue", "updateIssue"]);
     for (const tool of Object.values(tools)) {
       expect(tool).not.toHaveProperty("needsApproval");

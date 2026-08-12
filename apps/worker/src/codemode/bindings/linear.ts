@@ -22,6 +22,7 @@ const assessment = z.strictObject({
 export function makeLinearTools(ctx: BindingContext): ToolDescriptors {
   return {
     createIssue: auditedCapability(ctx, "linear", "createIssue", {
+      effect: "external_write",
       // No destination argument. The destination is pinned server-side; the
       // credential itself reaches every group in the account, so this pin is
       // the only thing that keeps the agent out of the live ones.
@@ -77,6 +78,7 @@ export function makeLinearTools(ctx: BindingContext): ToolDescriptors {
     }),
 
     updateIssue: auditedCapability(ctx, "linear", "updateIssue", {
+      effect: "external_write",
       description:
         "Update an issue this run already created or read. Fields left out are unchanged.",
       input: z.strictObject({

@@ -252,3 +252,195 @@ describe("two executions of ONE run_code tool are isolated", () => {
       .toEqual(["cap:call_a:1", "cap:call_b:1"]);
   });
 });
+
+/**
+ * The claim Task 1 could only make at unit level.
+ *
+ * Task 1 built the per-execution customer-reference resolver and proved its
+ * isolation by constructing two `testExecution()` objects — which proves the
+ * MAP is per execution but not that the TOOL is, because Phase 09 shipped no
+ * capability that minted a reference. `memory.findCustomers` is that
+ * capability, so the claim can now be made where it belongs: two real
+ * `execute()` calls on ONE tool instance, with a program that carries a
+ * reference across the boundary the way model-authored code actually would.
+ */
+describe("a customer reference does not survive its execution", () => {
+  const chatScope: CodeModeScope = {
+    ...slackScope,
+    origin: "chat",
+    customerSlug: null,
+    slackThread: null,
+  };
+
+  const seedCustomer = async (slug: string): Promise<void> => {
+    const channelId = `C${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
+    await env.DB.prepare(
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, 'live')",
+    ).bind(channelId, `chan-${channelId}`, slug).run();
+  };
+
+  it("refuses in execution B a reference minted in execution A", async () => {
+    const slug = `xexec-${crypto.randomUUID().slice(0, 8)}`;
+    await seedCustomer(slug);
+    const t = makeTool({ audit: fakeAuditSink(), scope: chatScope, wallTimeMs: 5_000 });
+
+    // A: discover, and hand the reference back as this execution's result —
+    // exactly what a model would do before reasoning about it in the next turn.
+    const a = await run(
+      t,
+      `async () => { const found = await memory.findCustomers({ query: ${JSON.stringify(slug)} }); return found[0].customerRef; }`,
+      { toolCallId: "call_mint" },
+    );
+    const reference = a.result as string;
+    expect(reference).toMatch(/^cust_/);
+
+    // B: the same tool, the same run, the same customer — and a reference that
+    // is real, current, and completely meaningless here.
+    const b = await run(
+      t,
+      `async () => { try { await memory.recall({ query: 'x', scope: 'customer', customerRef: ${JSON.stringify(reference)} }); return 'resolved'; } catch (e) { return e.message; } }`,
+      { toolCallId: "call_reuse" },
+    );
+    expect(b.result).toMatch(/invalid_input/);
+    expect(b.result).not.toContain(slug);
+  });
+
+  it("resolves the same reference within the execution that minted it", async () => {
+    const slug = `sameexec-${crypto.randomUUID().slice(0, 8)}`;
+    await seedCustomer(slug);
+    const t = makeTool({ audit: fakeAuditSink(), scope: chatScope, wallTimeMs: 5_000 });
+
+    // The control. Without it, the case above would pass just as well against a
+    // resolver that refused every reference always.
+    const out = await run(
+      t,
+      `async () => { const f = await memory.findCustomers({ query: ${JSON.stringify(slug)} }); await memory.recall({ query: 'x', scope: 'customer', customerRef: f[0].customerRef }); return 'resolved'; }`,
+      { toolCallId: "call_same" },
+    );
+    expect(out.result).toBe("resolved");
+    expect(out.error).toBeUndefined();
+  });
+});
+
+/**
+ * Step 9: two runs, two customers, one Worker isolate.
+ *
+ * The pool runs one runtime, so these two tools genuinely share an isolate and
+ * a module registry. That is the environment where a module-level `currentRun`,
+ * a shared fact cache or a factory-scoped counter would cross two customers'
+ * data — and none of those failures announce themselves, which is why the
+ * assertion is on every channel at once rather than on a single result.
+ */
+describe("two concurrent runs never cross", () => {
+  it("keeps customer, thread, audit, budget and result apart", async () => {
+    const mine = { audit: fakeAuditSink(), searched: [] as string[] };
+    const theirs = { audit: fakeAuditSink(), searched: [] as string[] };
+
+    const gatewayFor = (label: string, record: string[]): SlackGateway => ({
+      async thread() {
+        return [{ ts: "1.0", userId: "U1", text: `${label} thread`, permalink: null }];
+      },
+      async searchMessages(_query, _limit, customerSlug) {
+        record.push(customerSlug);
+        return [];
+      },
+      async reply() {
+        return { ts: "1.0", permalink: null };
+      },
+    });
+
+    const acmeScope: CodeModeScope = {
+      ...slackScope,
+      runId: "run_acme",
+      turnId: "turn_acme",
+      customerSlug: "acme",
+      slackThread: { channelId: "CACME", threadTs: "1712345678.000111" },
+    };
+    const globexScope: CodeModeScope = {
+      ...slackScope,
+      runId: "run_globex",
+      turnId: "turn_globex",
+      customerSlug: "globex",
+      slackThread: { channelId: "CGLOBEX", threadTs: "1712345678.000222" },
+    };
+
+    const acme = makeTool({
+      audit: mine.audit,
+      scope: acmeScope,
+      slack: gatewayFor("acme", mine.searched),
+      wallTimeMs: 5_000,
+    });
+    const globex = makeTool({
+      audit: theirs.audit,
+      scope: globexScope,
+      slack: gatewayFor("globex", theirs.searched),
+      wallTimeMs: 5_000,
+    });
+
+    const program =
+      "async () => { const t = await slack.thread({}); await slack.searchMessages({ query: 'outage' }); return t[0].text; }";
+
+    const [a, b] = await Promise.all([
+      run(acme, program, { toolCallId: "call_acme" }),
+      run(globex, program, { toolCallId: "call_globex" }),
+    ]);
+
+    // Generated code is identical; everything it reached is not.
+    expect(a.result).toBe("acme thread");
+    expect(b.result).toBe("globex thread");
+    expect(mine.searched).toEqual(["acme"]);
+    expect(theirs.searched).toEqual(["globex"]);
+
+    // Audit streams name their own run and their own outer call, with their own
+    // sequence numbers — no id from one run appears in the other's stream.
+    expect(new Set(mine.audit.events.map((e) => e.runId))).toEqual(new Set(["run_acme"]));
+    expect(new Set(theirs.audit.events.map((e) => e.runId))).toEqual(new Set(["run_globex"]));
+    expect(mine.audit.events.every((e) => e.callId.startsWith("cap:call_acme:"))).toBe(true);
+    expect(theirs.audit.events.every((e) => e.callId.startsWith("cap:call_globex:"))).toBe(true);
+    expect(new Set(mine.audit.events.map((e) => e.turnId))).toEqual(new Set(["turn_acme"]));
+
+    // Independent budgets: two calls each, not four on one counter.
+    expect(a.metrics.capabilityCalls).toBe(2);
+    expect(b.metrics.capabilityCalls).toBe(2);
+  });
+
+  it("never lets one run's actor or scope reach the other", async () => {
+    const audit = fakeAuditSink();
+    const withActor = makeTool({
+      audit,
+      scope: { ...slackScope, runId: "run_actor", turnId: "turn_actor" },
+      wallTimeMs: 5_000,
+    });
+    const withoutActor = makeTool({
+      audit: fakeAuditSink(),
+      scope: { ...slackScope, runId: "run_noactor", turnId: "turn_noactor", actor: null },
+      wallTimeMs: 5_000,
+    });
+
+    // Neither can read its own scope, let alone the other's — the trust
+    // envelope is never serialized into the isolate, so there is no global
+    // holding a run id, a customer slug, an engineer's address or a thread.
+    //
+    // The probe searches for those VALUES rather than for suggestive NAMES:
+    // `ServiceWorkerGlobalScope` matches /scope/ and is a platform global, and
+    // a test that failed on it would be measuring workerd, not isolation.
+    const probe = `async () => {
+      const needles = ['run_actor', 'run_noactor', 'acme', 'eng@example.com', 'C123', 'turn_actor'];
+      const found = [];
+      for (const name of Object.getOwnPropertyNames(globalThis)) {
+        let value;
+        try { value = globalThis[name]; } catch { continue; }
+        if (typeof value !== 'string') continue;
+        if (needles.some((n) => value.includes(n))) found.push(name);
+      }
+      return found.join(',') || 'none';
+    }`;
+
+    const [a, b] = await Promise.all([
+      run(withActor, probe, { toolCallId: "call_p1" }),
+      run(withoutActor, probe, { toolCallId: "call_p2" }),
+    ]);
+    expect(a.result).toBe("none");
+    expect(b.result).toBe("none");
+  });
+});

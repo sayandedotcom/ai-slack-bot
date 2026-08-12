@@ -1,10 +1,9 @@
 import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
-import { canPost, getChannelPolicy } from "../../db/channels";
-import { getRunById } from "../../run/repository";
 import { CapabilityError } from "../errors";
 import { runEffect } from "../effects";
 import { auditedCapability, effectDeps, type BindingContext } from "../registry";
+import { resolveCustomerScope } from "./customers";
 
 const message = z.strictObject({
   ts: z.string(),
@@ -27,6 +26,7 @@ const threadInput = z
 export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
   return {
     thread: auditedCapability(ctx, "slack", "thread", {
+      effect: "read",
       description:
         "Read the messages of the conversation this run belongs to, oldest first.",
       input: threadInput,
@@ -35,21 +35,31 @@ export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
     }),
 
     searchMessages: auditedCapability(ctx, "slack", "searchMessages", {
+      effect: "read",
       // Named searchMessages, not search: generated type aliases carry no
       // namespace prefix, so a second `search` elsewhere would emit a duplicate
       // `type SearchInput` and the joined declarations would not compile.
       description:
-        "Search previously ingested messages within the scope this run already has.",
+        "Search previously ingested messages for this conversation's customer, or for the one named by customerRef in an internal chat.",
       input: z.strictObject({
         query: z.string().min(1).max(500),
+        customerRef: z.string().min(1).max(120).optional(),
         limit: z.number().int().min(1).max(100).optional(),
       }),
       output: z.array(message),
       run: async (input) =>
-        ctx.deps.slack.searchMessages(input.query, input.limit ?? 20),
+        // The slug is resolved HERE, in the trusted parent, before the gateway
+        // is called. The gateway receives a slug the host vouched for; it never
+        // receives a reference and has no way to mint one.
+        ctx.deps.slack.searchMessages(
+          input.query,
+          input.limit ?? 20,
+          resolveCustomerScope(ctx, input.customerRef),
+        ),
     }),
 
     reply: auditedCapability(ctx, "slack", "reply", {
+      effect: "external_write",
       // No destination argument, deliberately. Where a reply lands is a
       // property of the run, decided by the host before this code ever ran.
       description:
@@ -94,43 +104,22 @@ export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
  *  3. is this run allowed to act?     → shadow_write_denied
  *  4. do we have a voice to use?      → identity_unavailable
  *
- * Policy is re-fetched here rather than captured when the run started: a
- * channel switched to `observe` mid-run must stop accepting messages
- * immediately, not at the end of the run.
+ * Steps 2 and 3 are NOT here any more, and their absence is the Task 6 repair.
+ * They were never Slack-specific — a shadow run must not file a Linear issue or
+ * publish an artifact either — so they moved to the shared host guard in
+ * `codemode/write-guard.ts`, which `auditedCapability` applies to every method
+ * classified `external_write`. The guard runs immediately before this function,
+ * still re-reading both D1 rows at that moment rather than at composition, so a
+ * channel switched to `observe` mid-run stops the very next write.
+ *
+ * What remains here is what genuinely belongs to replying: a destination, and a
+ * human to speak as.
  */
 async function assertMayReply(ctx: BindingContext): Promise<void> {
-  const target = ctx.scope.slackThread;
-  if (target === null) {
+  if (ctx.scope.slackThread === null) {
     throw new CapabilityError(
       "slack_context_required",
       "this run is not attached to a conversation, so there is nowhere to reply.",
-    );
-  }
-
-  const policy = await getChannelPolicy(ctx.deps.db, target.channelId);
-  if (!canPost(policy)) {
-    // canPost is already `known && mode === "live"`, and an unmapped channel
-    // resolves to `{ mode: "observe", known: false }`. The fail-closed default
-    // is inherited from the shipped policy code, not reimplemented here.
-    throw new CapabilityError(
-      "channel_read_only",
-      `replies are disabled for this conversation (mode=${policy.mode}). Report the reply instead of sending it.`,
-    );
-  }
-
-  // Read shadow from D1, NOT from the run descriptor. RunState has no `shadow`
-  // field; a check written against the descriptor reads undefined, which is
-  // falsy, and the run posts. This is the single most dangerous wrong
-  // assumption available in this phase, so it is a database read.
-  //
-  // A missing row refuses too: an unconfirmable run is not a permitted one.
-  const record = await getRunById(ctx.deps.db, ctx.scope.runId);
-  if (record === null || record.shadow) {
-    throw new CapabilityError(
-      "shadow_write_denied",
-      record === null
-        ? "this run could not be confirmed as permitted to post; nothing was sent."
-        : "this run is observing only; nothing was sent. Report what you would have posted.",
     );
   }
 

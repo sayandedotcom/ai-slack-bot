@@ -6,6 +6,11 @@ import type { CodeModeLimits, CodeModeScope } from "./contracts";
 import type { EffectDeps } from "./effects";
 import { CapabilityError } from "./errors";
 import type { CapabilityDependencies } from "./gateways";
+import {
+  assertEffectPermitted,
+  isCapabilityEffect,
+  type CapabilityEffect,
+} from "./write-guard";
 
 import { makeSlackTools } from "./bindings/slack";
 import { makeMemoryTools } from "./bindings/memory";
@@ -31,6 +36,46 @@ export const PHASE_09_NAMESPACES = [
   "betterstack",
   "files",
 ] as const;
+
+/**
+ * Proof that a descriptor was built by `auditedCapability`.
+ *
+ * Module-private and unexported, so it cannot be stamped from anywhere else in
+ * the codebase — which is the entire point. The `effect` field alone is a
+ * LABEL: a hand-rolled descriptor could carry `effect: "external_write"` and
+ * still run with no budget, no audit and no write guard, because those come
+ * from the wrapper rather than from the string. Checking the brand checks the
+ * WIRING, which is what the registry actually needs to know.
+ */
+const AUDITED = Symbol("firefighter.auditedCapability");
+
+/**
+ * A tool descriptor that carries its effect classification and its provenance.
+ *
+ * Both ride on the descriptor rather than in a parallel table because a
+ * parallel table is a second thing to update: a new method would compile, run,
+ * and simply not appear in the map. `@cloudflare/codemode`'s resolver reads
+ * `description`, `inputSchema`, `outputSchema` and `execute` and ignores the
+ * rest, so both are inert on the wire and never reach the model. The brand is
+ * a symbol, so it is also invisible to `Object.entries` and `JSON.stringify`.
+ */
+export type ClassifiedTool = ToolDescriptor & {
+  effect: CapabilityEffect;
+  [AUDITED]: true;
+};
+
+/**
+ * The effect of a tool that genuinely went through the chokepoint.
+ *
+ * Returns null for an unbranded descriptor even when it carries a valid-looking
+ * `effect`, because an unbranded descriptor has not been through the guard no
+ * matter what it claims about itself.
+ */
+export function capabilityEffectOf(tool: ToolDescriptor): CapabilityEffect | null {
+  const candidate = tool as Partial<ClassifiedTool>;
+  if (candidate[AUDITED] !== true) return null;
+  return isCapabilityEffect(candidate.effect) ? candidate.effect : null;
+}
 
 export type CapabilityProvider = {
   name: string;
@@ -105,11 +150,18 @@ export function formatZodIssues(error: z.ZodError): string {
  */
 export function defineCapability<I, O>(spec: {
   description: string;
+  /**
+   * REQUIRED, with no default. See `CapabilityEffect` — omitting it is a
+   * compile error here and a construction failure in `buildRegistry`, because
+   * the alternative is a capability that quietly skips the write guard.
+   */
+  effect: CapabilityEffect;
   input: z.ZodType<I>;
   output: z.ZodType<O>;
   run: (input: I) => Promise<O>;
-}): ToolDescriptor {
+}): ToolDescriptor & { effect: CapabilityEffect } {
   return {
+    effect: spec.effect,
     description: spec.description,
     inputSchema: spec.input,
     // Without an outputSchema the generated return type is `unknown`, which
@@ -133,9 +185,21 @@ function auditArgs(input: unknown): JsonObject | undefined {
 }
 
 /**
- * `defineCapability` plus the audit and budget chokepoint. Every capability in
- * every namespace goes through this, which is what makes the per-execution call
- * budget a property of the execution rather than of one provider.
+ * `defineCapability` plus the audit/budget chokepoint plus the write guard.
+ * Every capability in every namespace goes through this, which is what makes
+ * the per-execution call budget a property of the execution rather than of one
+ * provider — and what makes the write policy a property of the effect class
+ * rather than of whichever adapter remembered to check.
+ *
+ * The guard runs INSIDE `withCapabilityAudit`, as the first thing in the
+ * capability body. That placement is deliberate on both sides:
+ *
+ *  - inside, so a refusal is counted against the budget and leaves a `started`
+ *    and a `failed` record. "The model kept trying to post from a shadow run"
+ *    is exactly what an operator needs to be able to see, and a refusal that
+ *    leaves no trace is indistinguishable from a call that never happened;
+ *  - first, so the D1 policy reads happen immediately before the vendor call
+ *    and after the freshness check, not once at composition time.
  */
 export function auditedCapability<I, O>(
   ctx: BindingContext,
@@ -143,25 +207,37 @@ export function auditedCapability<I, O>(
   method: string,
   spec: {
     description: string;
+    effect: CapabilityEffect;
     input: z.ZodType<I>;
     output: z.ZodType<O>;
     run: (input: I) => Promise<O>;
   },
-): ToolDescriptor {
-  return defineCapability({
-    description: spec.description,
-    input: spec.input,
-    output: spec.output,
-    run: (input: I) =>
-      withCapabilityAudit(
-        ctx.execution,
-        ctx.scope,
-        namespace,
-        method,
-        () => spec.run(input),
-        auditArgs(input),
-      ),
-  });
+): ClassifiedTool {
+  return {
+    // Stamped HERE and nowhere else: this is the only function that attaches
+    // the budget, the audit stream and the write guard, so it is the only one
+    // entitled to certify that a descriptor has them. `defineCapability` alone
+    // attaches validation and a label, which is not the same claim.
+    [AUDITED]: true,
+    ...defineCapability({
+      description: spec.description,
+      effect: spec.effect,
+      input: spec.input,
+      output: spec.output,
+      run: (input: I) =>
+        withCapabilityAudit(
+          ctx.execution,
+          ctx.scope,
+          namespace,
+          method,
+          async () => {
+            await assertEffectPermitted(ctx.deps, ctx.scope, spec.effect);
+            return spec.run(input);
+          },
+          auditArgs(input),
+        ),
+    }),
+  };
 }
 
 /* --------------------------------------------------------------- registry -- */
@@ -191,7 +267,7 @@ export function buildRegistry(
 ): CapabilityRegistry {
   const ctx: BindingContext = { scope, deps, limits, execution };
 
-  return [
+  return assertClassified([
     { name: "slack", tools: makeSlackTools(ctx) },
     { name: "memory", tools: makeMemoryTools(ctx) },
     { name: "linear", tools: makeLinearTools(ctx) },
@@ -199,5 +275,40 @@ export function buildRegistry(
     { name: "langsmith", tools: makeLangSmithTools(ctx) },
     { name: "betterstack", tools: makeBetterStackTools(ctx) },
     { name: "files", tools: makeFilesTools(ctx), types: FILES_DECLARATIONS },
-  ];
+  ]);
+}
+
+/**
+ * Refuse to build a registry containing an unclassified method.
+ *
+ * The compile-time half of this rule — `effect` being a required field on
+ * `auditedCapability` — only binds capabilities that go through
+ * `auditedCapability`. A future namespace could hand `buildRegistry` a bare
+ * `ToolDescriptor` object literal and typecheck cleanly, because
+ * `ToolDescriptors` is the package's type and knows nothing about effects.
+ * That capability would then run with no budget, no audit and no write guard.
+ *
+ * So the rule is also enforced at construction, on the real registry, where a
+ * bare descriptor cannot hide. What is checked is the BRAND, not the label: a
+ * hand-rolled descriptor that helpfully declares `effect: "external_write"`
+ * still has no guard attached, because the guard comes from the wrapper and not
+ * from the string. Only `auditedCapability` can stamp the brand, and it is the
+ * function that attaches the guard.
+ *
+ * Throwing rather than defaulting is the whole point: the reviewed failure mode
+ * for "somebody forgot" is a loud crash on the first `run_code` call, never a
+ * Linear issue filed by a shadow run.
+ */
+export function assertClassified(registry: CapabilityRegistry): CapabilityRegistry {
+  for (const provider of registry) {
+    for (const [method, tool] of Object.entries(provider.tools)) {
+      if (capabilityEffectOf(tool) === null) {
+        throw new CapabilityError(
+          "invalid_context",
+          `${provider.name}.${method} was not built by auditedCapability with an effect classification, so it has no budget, no audit and no write guard. Define it with auditedCapability(ctx, namespace, method, { effect: "read" | "external_write" | "control_write", … }).`,
+        );
+      }
+    }
+  }
+  return registry;
 }

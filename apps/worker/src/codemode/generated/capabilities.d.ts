@@ -23,6 +23,7 @@ type ThreadOutput = {
 }[]
 type SearchMessagesInput = {
     query: string;
+    customerRef?: string;
     limit?: number;
 }
 type SearchMessagesOutput = {
@@ -46,7 +47,7 @@ declare const slack: {
 	thread: (input: ThreadInput) => Promise<ThreadOutput>;
 
 	/**
-	 * Search previously ingested messages within the scope this run already has.
+	 * Search previously ingested messages for this conversation's customer, or for the one named by customerRef in an internal chat.
 	 */
 	searchMessages: (input: SearchMessagesInput) => Promise<SearchMessagesOutput>;
 
@@ -56,9 +57,18 @@ declare const slack: {
 	reply: (input: ReplyInput) => Promise<ReplyOutput>;
 }
 
+type FindCustomersInput = {
+    query: string;
+    limit?: number;
+}
+type FindCustomersOutput = {
+    customerRef: string;
+    label: string;
+}[]
 type RecallInput = {
     query: string;
     scope?: "customer" | "org";
+    customerRef?: string;
     limit?: number;
 }
 type RecallOutput = {
@@ -77,7 +87,12 @@ type CiteOutput = {
 
 declare const memory: {
 	/**
-	 * Recall previously recorded facts. Scope 'customer' stays within this run's customer; 'org' covers shared engineering knowledge.
+	 * Look up which customer an internal question is about. Returns opaque references usable only in this execution; pass one as customerRef to recall or slack.searchMessages. Unavailable in a customer conversation, which is already scoped.
+	 */
+	findCustomers: (input: FindCustomersInput) => Promise<FindCustomersOutput>;
+
+	/**
+	 * Recall previously recorded facts. Scope 'customer' stays within this conversation's customer, or the one named by customerRef in an internal chat; 'org' covers shared engineering knowledge.
 	 */
 	recall: (input: RecallInput) => Promise<RecallOutput>;
 

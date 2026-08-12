@@ -46,6 +46,7 @@ const trace = z.strictObject({
 export function makeLangSmithTools(ctx: BindingContext): ToolDescriptors {
   return {
     trace: auditedCapability(ctx, "langsmith", "trace", {
+      effect: "read",
       description:
         "Fetch one recorded run by its identifier. Steps come back as a flat list; rebuild the tree from parentId if you need it.",
       input: z.strictObject({ traceId: z.string().min(1).max(200) }),
@@ -54,6 +55,7 @@ export function makeLangSmithTools(ctx: BindingContext): ToolDescriptors {
     }),
 
     searchTraces: auditedCapability(ctx, "langsmith", "searchTraces", {
+      effect: "read",
       // searchTraces, not search: see the naming note in the Slack binding.
       description:
         "Find recorded runs in the configured project. Use ISO-8601 for 'since'.",

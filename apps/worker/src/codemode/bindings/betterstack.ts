@@ -26,6 +26,7 @@ const monitor = z.strictObject({
 export function makeBetterStackTools(ctx: BindingContext): ToolDescriptors {
   return {
     logs: auditedCapability(ctx, "betterstack", "logs", {
+      effect: "read",
       description:
         "Search collected production logs over a time window. 'since' and 'until' are ISO-8601 instants.",
       input: z.strictObject({
@@ -45,6 +46,7 @@ export function makeBetterStackTools(ctx: BindingContext): ToolDescriptors {
     }),
 
     monitors: auditedCapability(ctx, "betterstack", "monitors", {
+      effect: "read",
       description:
         "List the current up/down state of the configured monitors.",
       // Takes no arguments, but still needs `.default({})`: a model writing

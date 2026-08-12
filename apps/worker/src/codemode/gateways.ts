@@ -120,7 +120,19 @@ export type PublishedFile = {
 export interface SlackGateway {
   /** The current run's conversation, from the D1 system of record. */
   thread(limit: number): Promise<SlackMessage[]>;
-  searchMessages(query: string, limit: number): Promise<SlackMessage[]>;
+  /**
+   * `customerSlug` is a REQUIRED argument, not an optional override, and it is
+   * always a slug the trusted parent resolved — from the run's own D1 channel
+   * policy, or from a reference the host minted after reading the catalog. The
+   * gateway can therefore no longer read `scope.customerSlug` itself, which is
+   * what makes the Chat discovery path expressible without giving the gateway a
+   * second, quieter way to pick a customer.
+   */
+  searchMessages(
+    query: string,
+    limit: number,
+    customerSlug: string,
+  ): Promise<SlackMessage[]>;
   /** Post into the current run only. Targeting is not a parameter. */
   reply(text: string, idempotencyKey: string): Promise<{ ts: string; permalink: string | null }>;
 }

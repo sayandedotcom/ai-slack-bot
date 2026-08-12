@@ -23,6 +23,7 @@ const resourceDescription = z.strictObject({
 export function makeSupabaseTools(ctx: BindingContext): ToolDescriptors {
   return {
     schema: auditedCapability(ctx, "supabase", "schema", {
+      effect: "read",
       description:
         "List the readable resources and their columns. Call this before select to learn what exists.",
       input: z
@@ -33,6 +34,7 @@ export function makeSupabaseTools(ctx: BindingContext): ToolDescriptors {
     }),
 
     select: auditedCapability(ctx, "supabase", "select", {
+      effect: "read",
       description:
         "Read rows from one allowed resource. Filters are structured; free-form query text is not accepted.",
       input: z.strictObject({
