@@ -20,6 +20,8 @@ import { CLAIM_LEASE_MS, PROJECTION_LEASE_MS } from "../agent/limits";
 import {
   agentTurnIdFor,
   assistantUpdateIdFor,
+  finalTurnIdFor,
+  memoryOutboxIdFor,
   isInputResumablePolicy,
   isTerminalGenerationState,
   isWakeSource,
@@ -795,7 +797,24 @@ export function appendTurn(
   validateTurn(input);
   requireState(storage);
 
-  return storage.transactionSync(() => {
+  return storage.transactionSync(() => writeTurn(storage, input, now));
+}
+
+/**
+ * The turn writer, factored out of `appendTurn`'s transaction.
+ *
+ * Callers own the transaction. It exists because `finalizeAnswer` must append
+ * the final assistant turn inside the SAME transaction as the settle, and
+ * calling `appendTurn` from there would open a nested `transactionSync` whose
+ * behaviour under Durable Object SQLite is not part of the documented contract.
+ * One writer, two callers, one set of semantics.
+ */
+function writeTurn(
+  storage: DurableObjectStorage,
+  input: RunTurnInput,
+  now: number,
+): AppendResult {
+  {
     const existing = storage.sql
       .exec<{ event_seq: number }>("SELECT event_seq FROM turns WHERE id = ?", input.id)
       .toArray();
@@ -856,7 +875,7 @@ export function appendTurn(
       scheduling: scheduled.scheduling,
       statusEvent: scheduled.statusEvent,
     };
-  });
+  }
 }
 
 /**
@@ -2111,43 +2130,59 @@ export function checkpointStepMessages(
   return storage.transactionSync(() => {
     if (!isCurrentClaim(storage, fence)) return { outcome: "stale_claim" };
 
-    const already = storage.sql
-      .exec<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM model_messages
-         WHERE generation_id = ? AND global_step = ? AND kind = 'response'`,
-        fence.generationId,
-        input.globalStep,
-      )
-      .one().n;
-    if (already > 0) return { outcome: "already_checkpointed" };
-
-    const attempt = readDriver(storage).attempt;
-    input.messages.forEach((message, index) => {
-      storage.sql.exec(
-        `INSERT INTO model_messages
-           (generation_id, attempt, global_step, message_index, kind, source_event_seq,
-            claim_epoch, message_json, created_at)
-         VALUES (?, ?, ?, ?, 'response', NULL, ?, ?, ?)`,
-        fence.generationId,
-        attempt,
-        input.globalStep,
-        index,
-        fence.claimEpoch,
-        serializeMessage(message),
-        now,
-      );
-    });
-
-    storage.sql.exec(
-      `UPDATE agent_generations SET
-         step_count = MAX(step_count, ?), updated_at = ?
-       WHERE id = ?`,
-      input.globalStep + 1,
-      now,
-      fence.generationId,
-    );
-    return { outcome: "checkpointed", inserted: input.messages.length };
+    return writeStepMessages(storage, fence, input.globalStep, input.messages, now);
   });
+}
+
+/**
+ * The step-checkpoint writer, factored out for the same reason `writeTurn` is:
+ * `finalizeAnswer` must persist the terminal step's response messages inside
+ * the one atomic transaction that also appends the final turn and settles the
+ * generation. Callers own the transaction and the claim check.
+ */
+function writeStepMessages(
+  storage: DurableObjectStorage,
+  fence: ClaimFence,
+  globalStep: number,
+  messages: readonly unknown[],
+  now: number,
+): StepCheckpointOutcome {
+  const already = storage.sql
+    .exec<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM model_messages
+       WHERE generation_id = ? AND global_step = ? AND kind = 'response'`,
+      fence.generationId,
+      globalStep,
+    )
+    .one().n;
+  if (already > 0) return { outcome: "already_checkpointed" };
+
+  const attempt = readDriver(storage).attempt;
+  messages.forEach((message, index) => {
+    storage.sql.exec(
+      `INSERT INTO model_messages
+         (generation_id, attempt, global_step, message_index, kind, source_event_seq,
+          claim_epoch, message_json, created_at)
+       VALUES (?, ?, ?, ?, 'response', NULL, ?, ?, ?)`,
+      fence.generationId,
+      attempt,
+      globalStep,
+      index,
+      fence.claimEpoch,
+      serializeMessage(message),
+      now,
+    );
+  });
+
+  storage.sql.exec(
+    `UPDATE agent_generations SET
+       step_count = MAX(step_count, ?), updated_at = ?
+     WHERE id = ?`,
+    globalStep + 1,
+    now,
+    fence.generationId,
+  );
+  return { outcome: "checkpointed", inserted: messages.length };
 }
 
 /**
@@ -2431,35 +2466,52 @@ export function appendAssistantUpdate(
       return { outcome: "stale_claim" };
     }
 
-    const createdAt = input.createdAt ?? now;
-    const update: AssistantUpdate = {
-      id,
-      generationId: input.generationId,
-      attempt: input.attempt,
-      state: input.state,
-      ...(input.delta !== undefined ? { delta: input.delta.slice(0, ASSISTANT_DELTA_MAX) } : {}),
-      ...(input.error !== undefined ? { error: input.error.slice(0, ASSISTANT_ERROR_MAX) } : {}),
-      createdAt,
-    };
-    const seq = nextSeq(storage);
-    const event: RunEvent = { seq, type: "assistant_update", update };
-
-    writeEvent(storage, event, createdAt);
-    storage.sql.exec(
-      `INSERT INTO assistant_batches (id, generation_id, attempt, event_seq, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      id,
-      update.generationId,
-      update.attempt,
-      seq,
-      createdAt,
-    );
-    touchState(storage, createdAt);
-    // Coalesced, never one projection per batch.
-    touchRunIndex(storage, createdAt);
-
-    return { outcome: "appended", event };
+    return { outcome: "appended", event: writeAssistantBatch(storage, input, now) };
   });
+}
+
+/**
+ * The assistant-batch writer. Callers own the transaction, the replay check and
+ * the claim check.
+ *
+ * Factored out so `finalizeAnswer` can flush the trailing partial delta and
+ * append the terminal `completed` update inside the same transaction that
+ * appends the final turn — which is what makes "the customer's draft is
+ * replaced by exactly one durable turn" atomic rather than a sequence of
+ * separate commits a crash can land in the middle of.
+ */
+function writeAssistantBatch(
+  storage: DurableObjectStorage,
+  input: AssistantUpdateInput,
+  now: number,
+): RunEvent {
+  const createdAt = input.createdAt ?? now;
+  const update: AssistantUpdate = {
+    id: assistantUpdateIdFor(input.generationId, input.attempt, input.batchSeq),
+    generationId: input.generationId,
+    attempt: input.attempt,
+    state: input.state,
+    ...(input.delta !== undefined ? { delta: input.delta.slice(0, ASSISTANT_DELTA_MAX) } : {}),
+    ...(input.error !== undefined ? { error: input.error.slice(0, ASSISTANT_ERROR_MAX) } : {}),
+    createdAt,
+  };
+  const seq = nextSeq(storage);
+  const event: RunEvent = { seq, type: "assistant_update", update };
+
+  writeEvent(storage, event, createdAt);
+  storage.sql.exec(
+    `INSERT INTO assistant_batches (id, generation_id, attempt, event_seq, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    update.id,
+    update.generationId,
+    update.attempt,
+    seq,
+    createdAt,
+  );
+  touchState(storage, createdAt);
+  // Coalesced, never one projection per batch.
+  touchRunIndex(storage, createdAt);
+  return event;
 }
 
 function validateAssistantUpdate(input: AssistantUpdateInput): void {
@@ -2642,6 +2694,247 @@ export function finalizeGeneration(
       driverPhase: "idle",
       settledThroughSeq,
     };
+  });
+}
+
+/**
+ * Everything a settled successful answer must commit, in ONE transaction.
+ *
+ * This is the plan's eight-step finalization, and the reason it is one function
+ * rather than eight calls is the failure it exists to make impossible: a crash
+ * between "the final turn is durable" and "the generation is settled" leaves a
+ * run that answers the same message twice, and a crash the other way round
+ * leaves a settled generation with no answer in it at all.
+ *
+ * Ordered exactly as the plan lists them:
+ *
+ *  1. flush the trailing assistant delta;
+ *  2. persist the terminal step's response messages if not already checkpointed;
+ *  3. compare pending and included input cursors — atomically, which is the whole
+ *     point: a steer that commits before this transaction opens is seen, and one
+ *     that commits after it closes is ordered after the final;
+ *  4. append `agent:{generation}:final` once;
+ *  5. append the completed assistant update;
+ *  6. update the concise local run summary;
+ *  7. set generation completed, driver idle and the public run status idle;
+ *  8. persist the immutable local `run_index` and `memory_outbox` projection jobs.
+ *
+ * NOTHING here touches D1, Zep, the network or an alarm. The projection jobs
+ * written by step 8 are durable local rows; the alarm projector reads them
+ * AFTER this transaction has committed. That is what makes "a D1 or vendor
+ * failure cannot roll back or re-bill a completed local answer" a structural
+ * property rather than a promise: there is no external call inside the
+ * transaction that could fail it, and the projector cannot reach back in.
+ */
+export type FinalizeAnswerInput = {
+  attempt: number;
+  /** The terminal answer text. Only the terminal step's text; never narration. */
+  finalText: string;
+  /** The concise local run summary for the dashboard list. */
+  summary: string;
+  /**
+   * Slack origin: the final turn is INTERNAL run narration, not a customer
+   * message. Customer output happens only through `slack.reply` (invariant 4),
+   * so the harness must never send this text.
+   */
+  internalNarration: boolean;
+  /** Trailing buffered delta, flushed as step 1. Omitted when the buffer is empty. */
+  pendingDelta?: string;
+  /** Batch sequence for the trailing delta. Ignored when `pendingDelta` is absent. */
+  deltaBatchSeq: number;
+  /** Batch sequence for the terminal (`completed`/`superseded`) update. */
+  terminalBatchSeq: number;
+  /** The terminal provider step's index and response messages, for step 2. */
+  globalStep: number;
+  responseMessages?: readonly unknown[];
+  now?: number;
+};
+
+export type FinalizeAnswerOutcome =
+  | {
+      outcome: "finalized";
+      events: RunEvent[];
+      turnId: string;
+      settledThroughSeq: number;
+    }
+  | {
+      /**
+       * Fresher trusted input exists. The final is NOT appended and the
+       * generation is NOT settled: the same generation continues, which is what
+       * keeps its Code Mode effect scope coherent (invariant 14).
+       */
+      outcome: "superseded";
+      events: RunEvent[];
+      pendingThroughSeq: number;
+      includedThroughSeq: number;
+    }
+  | { outcome: "already_final"; events: RunEvent[]; turnId: string }
+  | { outcome: "stale_claim" };
+
+export function finalizeAnswer(
+  storage: DurableObjectStorage,
+  fence: ClaimFence,
+  input: FinalizeAnswerInput,
+): FinalizeAnswerOutcome {
+  const now = input.now ?? Date.now();
+  const state = requireState(storage);
+  const turnId = finalTurnIdFor(fence.generationId);
+
+  return storage.transactionSync(() => {
+    const generation = readGeneration(storage, fence.generationId);
+    if (!generation) return { outcome: "stale_claim" };
+
+    // Checked before the fence: a redelivered finalization of an answer this
+    // generation already committed is answered with what is there, whoever asks.
+    if (isTerminalGenerationState(generation.state)) {
+      return { outcome: "already_final", events: [], turnId };
+    }
+    if (!isCurrentClaim(storage, fence)) return { outcome: "stale_claim" };
+
+    const events: RunEvent[] = [];
+
+    // 1. Flush the trailing partial batch.
+    if (input.pendingDelta !== undefined && input.pendingDelta.length > 0) {
+      events.push(
+        writeAssistantBatch(
+          storage,
+          {
+            generationId: fence.generationId,
+            attempt: input.attempt,
+            batchSeq: input.deltaBatchSeq,
+            state: "streaming",
+            delta: input.pendingDelta,
+            createdAt: now,
+          },
+          now,
+        ),
+      );
+    }
+
+    // 2. Persist the terminal step's response messages, if the step checkpoint
+    //    did not already. Idempotent by (generation, step).
+    if (input.responseMessages && input.responseMessages.length > 0) {
+      writeStepMessages(storage, fence, input.globalStep, input.responseMessages, now);
+    }
+
+    // 3. The atomic cursor compare.
+    const driver = readDriver(storage);
+    const included = readGeneration(storage, fence.generationId)?.includedThroughSeq
+      ?? generation.includedThroughSeq;
+    if (driver.pendingThroughSeq > included) {
+      events.push(
+        writeAssistantBatch(
+          storage,
+          {
+            generationId: fence.generationId,
+            attempt: input.attempt,
+            batchSeq: input.terminalBatchSeq,
+            state: "superseded",
+            createdAt: now,
+          },
+          now,
+        ),
+      );
+      return {
+        outcome: "superseded",
+        events,
+        pendingThroughSeq: driver.pendingThroughSeq,
+        includedThroughSeq: included,
+      };
+    }
+
+    // 4. The final turn, exactly once. Its id comes from the generation, never
+    //    from a provider message id (invariant 21).
+    const turnResult = writeTurn(
+      storage,
+      {
+        id: turnId,
+        role: "assistant",
+        source: "agent",
+        content: input.finalText,
+        metadata: {
+          generationId: fence.generationId,
+          attempt: input.attempt,
+          // The harness reads THIS, not the origin, so a future surface cannot
+          // acquire send rights by being added to an enum.
+          delivery: input.internalNarration ? "internal_narration" : "visible",
+        },
+        createdAt: now,
+      },
+      now,
+    );
+    events.push(turnResult.event);
+
+    // 5. The terminal assistant update. The client replaces its draft buffer
+    //    with the durable turn above.
+    events.push(
+      writeAssistantBatch(
+        storage,
+        {
+          generationId: fence.generationId,
+          attempt: input.attempt,
+          batchSeq: input.terminalBatchSeq,
+          state: "completed",
+          createdAt: now,
+        },
+        now,
+      ),
+    );
+
+    // 6. The concise local run summary.
+    if (state.summary !== input.summary) {
+      storage.sql.exec(
+        "UPDATE run_state SET summary = ?, updated_at = MAX(updated_at, ?) WHERE singleton = 1",
+        input.summary,
+        now,
+      );
+    }
+
+    // 7. Generation completed, driver idle, run idle. The public status moves
+    //    here rather than in a follow-up call so the dashboard can never show a
+    //    live run whose generation has already settled.
+    const settledThroughSeq = Math.max(driver.settledThroughSeq, driver.pendingThroughSeq);
+    storage.sql.exec(
+      `UPDATE agent_generations SET
+         state = 'completed', settled_through_seq = ?, memory_projection_state = 'pending',
+         finished_at = ?, updated_at = ?
+       WHERE id = ?`,
+      settledThroughSeq,
+      now,
+      now,
+      generation.id,
+    );
+    storage.sql.exec(
+      `UPDATE agent_driver SET
+         phase = 'idle', settled_through_seq = ?, current_generation_id = NULL,
+         current_agent_turn_id = NULL, attempt = 0, retry_count = 0,
+         lease_expires_at = NULL, next_attempt_at = 0, resume_policy = NULL,
+         last_error_code = NULL, last_error_message = NULL, updated_at = ?
+       WHERE singleton = 1`,
+      settledThroughSeq,
+      now,
+    );
+
+    const current = readState(storage);
+    if (current && current.status !== "idle") {
+      const verdict = evaluateTransition(current.status, "idle");
+      if (verdict.ok && verdict.changed) {
+        events.push(writeStatusEvent(storage, current.status, "idle", now));
+      }
+    }
+
+    // 8. The immutable local projection jobs. `writeStatusEvent` already wrote a
+    //    run-index revision when the status moved; a settle that changed no
+    //    status still needs one, because the summary above did change.
+    if (events[events.length - 1]?.type !== "status") writeRunIndexRevision(storage, now);
+    enqueueProjectionJob(
+      storage,
+      "memory_outbox",
+      memoryOutboxIdFor(state.runId, generation.id),
+      now,
+    );
+
+    return { outcome: "finalized", events, turnId, settledThroughSeq };
   });
 }
 

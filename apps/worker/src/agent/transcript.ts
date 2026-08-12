@@ -688,3 +688,100 @@ function assertPairing(groups: readonly Group[]): { ok: true } | { ok: false; de
 function encodedBytes(messages: readonly ModelMessage[]): number {
   return JSON.stringify(messages).length;
 }
+
+// --- discharging the caller's obligation ------------------------------------
+
+export type TailRepair = {
+  messages: ModelMessage[];
+  /** Tool-call ids removed. Empty when nothing needed repairing. */
+  droppedCallIds: string[];
+  /** Assistant messages removed entirely because nothing survived the strip. */
+  droppedMessages: number;
+};
+
+/**
+ * Discharge `unresolvedTailCallIds`.
+ *
+ * `selectModelHistory` reports unanswered trailing tool calls as an OBLIGATION,
+ * not a diagnostic, because Anthropic rejects a request whose last assistant
+ * block is an unanswered `tool_use` — with a 400, after the input tokens have
+ * been paid for. The plan gives the caller exactly two legal ways to discharge
+ * it: re-execute the calls and checkpoint their results, or drop them before
+ * sending. Fabricating a tool result is forbidden outright.
+ *
+ * This is the DROP half, and it is the one the loop uses. Re-execution is the
+ * wrong answer here even though it sounds more faithful: the only way a tail
+ * call goes unanswered is a crash between issuing it and checkpointing its
+ * result, so the host does not know whether the effect happened. Phase 09's
+ * at-most-once ledger would replay a matching effect safely, but an ambiguous
+ * one stays `in_doubt` — and re-issuing from the driver would mean deciding
+ * that on the model's behalf. Dropping asks the model again with the same
+ * evidence, which is a decision it is allowed to make.
+ *
+ * The stripped call is left in `model_messages`. That row is history: it records
+ * that the call was made, and rewriting durable rows to make a request legal is
+ * how a transcript stops describing what happened.
+ */
+export function dropUnresolvedTailCalls(
+  messages: readonly ModelMessage[],
+  unresolvedCallIds: readonly string[],
+): TailRepair {
+  if (unresolvedCallIds.length === 0) {
+    return { messages: [...messages], droppedCallIds: [], droppedMessages: 0 };
+  }
+
+  const targets = new Set(unresolvedCallIds);
+  const droppedCallIds: string[] = [];
+  const out: ModelMessage[] = [];
+  let droppedMessages = 0;
+
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      out.push(message);
+      continue;
+    }
+
+    const kept = message.content.filter((part) => {
+      if (part.type !== "tool-call" || !targets.has(part.toolCallId)) return true;
+      droppedCallIds.push(part.toolCallId);
+      return false;
+    });
+
+    if (kept.length === message.content.length) {
+      out.push(message);
+      continue;
+    }
+    if (kept.length === 0) {
+      // Nothing but the unanswered call. An assistant message with empty content
+      // is itself malformed, so the message goes with it.
+      droppedMessages += 1;
+      continue;
+    }
+    out.push({ ...message, content: kept });
+  }
+
+  // Second pass: a tool result whose call was just removed is now orphaned, and
+  // an orphaned result is rejected exactly as hard as an unanswered call. This
+  // cannot happen while `disableParallelToolUse` holds — an unresolved call is
+  // unresolved precisely because no result exists — but the guarantee is the
+  // provider's, and a repair that quietly depends on it is a repair that breaks
+  // the day it stops holding.
+  const dropped = new Set(droppedCallIds);
+  const repaired: ModelMessage[] = [];
+  for (const message of out) {
+    if (message.role !== "tool") {
+      repaired.push(message);
+      continue;
+    }
+    const kept = message.content.filter(
+      (part) => part.type !== "tool-result" || !dropped.has(part.toolCallId),
+    );
+    if (kept.length === 0) {
+      droppedMessages += 1;
+      continue;
+    }
+    repaired.push({ ...message, content: kept });
+  }
+
+  return { messages: repaired, droppedCallIds, droppedMessages };
+}
