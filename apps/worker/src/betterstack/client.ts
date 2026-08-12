@@ -9,6 +9,15 @@ const MAX_LINES = 200;
 /** Retention on the configured source is 3 days; asking wider just costs time. */
 const MAX_WINDOW_MS = 7 * 86_400_000;
 
+/**
+ * The Uptime API origin. A reviewed constant rather than a `var`, for the same
+ * reason the Linear team is a pin: a redirectable origin carrying
+ * `BETTERSTACK_UPTIME_TOKEN` is an exfiltration path, and this one has no
+ * legitimate reason to differ per environment. `BETTERSTACK_SQL_ENDPOINT` is
+ * configuration because it is genuinely region-scoped; this is not.
+ */
+export const BETTERSTACK_UPTIME_ENDPOINT = "https://uptime.betterstack.com/api/v2";
+
 export type BetterStackConfig = {
   /** ClickHouse-compatible endpoint. Region-scoped and fixed in configuration. */
   sqlEndpoint: string;

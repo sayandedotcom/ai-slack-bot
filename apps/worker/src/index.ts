@@ -3,6 +3,7 @@ import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
 import { backfillApi } from "./api/backfill";
 import { runsApi, runsWs } from "./api/runs";
+import { artifactsApi } from "./api/artifacts";
 import { routeSlackMessageToOwnedRun, wakeSlackRun } from "./run/coordinator";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
@@ -16,28 +17,37 @@ import type { QueuedEvent } from "./slack/types";
 // the two modules form a real cycle.
 export { RunDO } from "./run/do";
 
-export type Env = {
-  DB: D1Database;
-  RUNS: DurableObjectNamespace<import("./run/do").RunDO>;
-  INGEST_QUEUE: Queue;
+/**
+ * Wrangler-generated bindings, plus the two narrow refinements the application
+ * genuinely needs.
+ *
+ * `Cloudflare.Env` in worker-configuration.d.ts is now the AUTHORITY on what
+ * this Worker has. The handwritten map this replaced was a second source of
+ * truth that drifted in the dangerous direction: it omitted `ARTIFACTS`,
+ * `SUPABASE_KEY`, `LINEAR_API_KEY`, `LANGSMITH_API_KEY`, the Better Stack
+ * credentials and every vendor pin — which is why nothing could compose the
+ * capability layer for real until now, and why a composer written against it
+ * would have failed at runtime rather than at `tsc`. Regenerate with
+ * `pnpm --filter @workspace/worker cf-typegen` and never hand-edit the output.
+ *
+ * Two refinements, and only two, each because a generated type is deliberately
+ * less specific than the code needs:
+ *
+ *  - the queue producers carry their job body types, so a `send()` with the
+ *    wrong shape is a typecheck error rather than a poisoned message;
+ *  - the AI Gateway secrets are declared here because they are SECRETS: they
+ *    are not in wrangler.jsonc, so `wrangler types` cannot know about them.
+ *    Optional in the type, and that optionality is safe only because
+ *    `agent/model.ts` refuses to build a model without them — see invariant 39.
+ *
+ * Note what is NOT here: no widened binding, no `[key: string]: unknown`, and
+ * no re-declared platform type. `WorkerLoader`, `R2Bucket` and the rest are
+ * generated platform types.
+ */
+export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   MEMORY_QUEUE: Queue<MemoryJob>;
   TRIAGE_QUEUE: Queue<TriageJob>;
-  ASSETS: Fetcher;
-  // Worker Loader (Phase 09). WorkerLoader is a generated platform type from
-  // worker-configuration.d.ts -- never redeclare it by hand.
-  LOADER: WorkerLoader;
-  SLACK_SIGNING_SECRET: string;
-  SLACK_BOT_TOKEN: string;
-  ZEP_API_KEY: string;
-  ANTHROPIC_API_KEY: string;
-  // The private AI Gateway the agent's Fable calls are routed through. Optional
-  // in the type because the Gateway does not exist yet; the agent's production
-  // composer refuses to build a model without it (see agent/model.ts), so the
-  // optionality can never become a quiet direct-to-Anthropic call.
   AI_GATEWAY_ANTHROPIC_URL?: string;
-  // Cloudflare API token with AI Gateway `Run`, sent as `cf-aig-authorization`
-  // on provider-native Gateway endpoints. A Worker SECRET: it is never written
-  // to wrangler.jsonc, docs, generated types, or a test snapshot.
   AI_GATEWAY_TOKEN?: string;
 };
 
@@ -50,6 +60,10 @@ app.route("/slack", slackEvents);
 app.route("/api", countersApi);
 app.route("/api", backfillApi);
 app.route("/api", runsApi);
+// The read side of files.publish. Under /api so it inherits the same Access
+// application as the dashboard — a published artifact is exactly as private as
+// the run that produced it.
+app.route("/api", artifactsApi);
 // Not JSON, so it is mounted outside /api — but still above the asset
 // catch-all, and still behind the same Access application as the dashboard.
 app.route("/ws", runsWs);
