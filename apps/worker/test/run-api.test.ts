@@ -288,7 +288,8 @@ describe("http api", () => {
       complete: boolean;
     }>();
     expect(body.run.id).toBe(run.id);
-    expect(body.events).toHaveLength(1);
+    // The first message plus the idle -> live status its transaction committed.
+    expect(body.events).toHaveLength(2);
     expect(body.complete).toBe(true);
   });
 
@@ -371,6 +372,121 @@ describe("ws route", () => {
     // /ws is mounted above the catch-all; everything else still falls through.
     const res = await SELF.fetch("https://firefighter.test/api/health");
     expect(res.status).toBe(200);
+  });
+});
+
+describe("run index projection reaches the dashboard", () => {
+  it("shows the newest summary and status in the list", async () => {
+    const { run, stub } = await createChatRun(env, {
+      firstMessage: "why is the deploy stuck?",
+      requestId: "r-1",
+    });
+
+    await stub.setSummary("investigating the stuck deploy");
+    await stub.flushProjections();
+
+    const body = await (
+      await SELF.fetch("https://firefighter.test/api/runs")
+    ).json<{ runs: Array<{ id: string; status: string; summary: string | null }> }>();
+    const listed = body.runs.find((r) => r.id === run.id);
+
+    // Phase 08 wrote the summary locally and only touched updated_at in D1, so
+    // this field was permanently null in the list.
+    expect(listed?.summary).toBe("investigating the stuck deploy");
+    // The first message scheduled work, so the run is live — and the bundled
+    // projection carried both facts across together.
+    expect(listed?.status).toBe("live");
+  });
+
+  it("keeps the newest bundle when two lifecycle changes race", async () => {
+    const { run, stub } = await createChatRun(env, {
+      firstMessage: "look at staging",
+      requestId: "r-1",
+    });
+
+    // Two lifecycle changes with nothing awaited between them: the projector
+    // must land the newest revision, not whichever D1 write returned last.
+    await Promise.all([stub.setSummary("first summary"), stub.setStatus("awaiting_approval")]);
+    await stub.setSummary("second summary");
+    await stub.flushProjections();
+
+    const body = await (
+      await SELF.fetch("https://firefighter.test/api/runs")
+    ).json<{ runs: Array<{ id: string; status: string; summary: string | null }> }>();
+    const listed = body.runs.find((r) => r.id === run.id);
+
+    expect(listed?.summary).toBe("second summary");
+    expect(listed?.status).toBe("awaiting_approval");
+  });
+
+  it("reports idle for a run that has no scheduled work", async () => {
+    const { run } = await createChatRun(env);
+
+    const body = await (
+      await SELF.fetch("https://firefighter.test/api/runs")
+    ).json<{ runs: Array<{ id: string; status: string }> }>();
+
+    // A created run is not a working run.
+    expect(body.runs.find((r) => r.id === run.id)?.status).toBe("idle");
+  });
+});
+
+describe("0006 repairs the phase 08 live default", () => {
+  it("makes GET /api/runs show idle without waking a durable object", async () => {
+    // A row exactly as Phase 08 left it: status 'live' with no driver anywhere.
+    const legacyId = crypto.randomUUID();
+    const legacyKey = slackRunKey("C1", freshThreadTs());
+    await env.DB.prepare(
+      `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, summary,
+                         created_at, updated_at)
+       VALUES (?, ?, 'slack', 'C1', '1720000000.000001', 'live', 0, NULL, 1, 1)`,
+    )
+      .bind(legacyId, legacyKey)
+      .run();
+
+    // The repair as shipped: the statement is taken from the migration file
+    // itself, so this cannot pass against a rewritten one.
+    const migration = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0006"));
+    expect(migration).toBeDefined();
+    const repair = migration!.queries.find((query) => query.trim().startsWith("UPDATE runs"));
+    expect(repair).toBeDefined();
+    await env.DB.prepare(repair!).run();
+
+    const body = await (
+      await SELF.fetch("https://firefighter.test/api/runs")
+    ).json<{ runs: Array<{ id: string; status: string }> }>();
+    expect(body.runs.find((r) => r.id === legacyId)?.status).toBe("idle");
+
+    // And nothing woke: the run's object was never instantiated, so it has no
+    // storage at all — asking D1 is the whole point.
+    const stub = runStubForKey(env.RUNS, legacyKey);
+    expect(await stub.state()).toBeNull();
+  });
+
+  it("leaves statuses that were true alone", async () => {
+    const migration = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0006"))!;
+    const repair = migration.queries.find((query) => query.trim().startsWith("UPDATE runs"))!;
+
+    const ids: Record<string, string> = {};
+    for (const status of ["awaiting_approval", "done", "failed"]) {
+      const id = crypto.randomUUID();
+      ids[status] = id;
+      await env.DB.prepare(
+        `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, summary,
+                           created_at, updated_at)
+         VALUES (?, ?, 'chat', NULL, NULL, ?, 0, NULL, 1, 1)`,
+      )
+        .bind(id, `chat:${id}`, status)
+        .run();
+    }
+    await env.DB.prepare(repair).run();
+
+    for (const [status, id] of Object.entries(ids)) {
+      const row = await env.DB.prepare("SELECT status FROM runs WHERE id = ?")
+        .bind(id)
+        .first<{ status: string }>();
+      expect(row?.status).toBe(status);
+    }
   });
 });
 

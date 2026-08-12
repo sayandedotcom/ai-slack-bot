@@ -55,14 +55,16 @@ function turn(id: string, overrides: Partial<RunTurnInput> = {}): RunTurnInput {
 }
 
 describe("initialization", () => {
-  it("stores the descriptor and starts live", async () => {
+  it("stores the descriptor and starts idle", async () => {
     const { stub, descriptor } = freshRun();
     const state = await inRun(stub, (s) => initializeSession(s, descriptor, 1_000));
 
     expect(state.runId).toBe(descriptor.runId);
     expect(state.key).toBe(descriptor.key);
     expect(state.origin).toBe("chat");
-    expect(state.status).toBe("live");
+    // Idle for every origin from Phase 10 on: a row existing is not the agent
+    // working. `live` is set by the input transaction that schedules work.
+    expect(state.status).toBe("idle");
     expect(state.summary).toBeNull();
     expect(state.createdAt).toBe(1_000);
   });
@@ -186,17 +188,24 @@ describe("idempotency and atomicity", () => {
     expect(second.appended).toBe(false);
     expect(second.event).toEqual(first.event);
     expect(turnCount).toBe(1);
-    expect(eventCount).toBe(1);
+    // The turn, plus the idle -> live status event its own transaction added.
+    // The replay adds neither.
+    expect(eventCount).toBe(2);
   });
 
-  it("gives two distinct turns consecutive seq values", async () => {
+  it("orders two distinct turns by increasing seq", async () => {
     const { stub, descriptor } = freshRun();
-    const [a, b] = await inRun(stub, (s) => {
+    const { a, b, between } = await inRun(stub, (s) => {
       initializeSession(s, descriptor, 1_000);
-      return [appendTurn(s, turn("t-a"), 1_001), appendTurn(s, turn("t-b"), 1_002)];
+      const a = appendTurn(s, turn("t-a"), 1_001);
+      const b = appendTurn(s, turn("t-b"), 1_002);
+      return { a, b, between: listEvents(s, a.event.seq, 100) };
     });
 
-    expect(b.event.seq).toBe(a.event.seq + 1);
+    expect(b.event.seq).toBeGreaterThan(a.event.seq);
+    // Exactly one thing separates them: the live status the first input
+    // scheduled, committed in that same transaction.
+    expect(between.map((e) => e.type)).toEqual(["status", "turn"]);
   });
 
   it("writes neither table for an invalid turn", async () => {
@@ -340,7 +349,7 @@ describe("status", () => {
     const { stub, descriptor } = freshRun();
     const result = await inRun(stub, (s) => {
       initializeSession(s, descriptor, 1_000);
-      if (from !== "live") setStatus(s, from, 1_001);
+      if (from !== "idle") setStatus(s, from, 1_001);
       const before = latestSeq(s);
       const outcome = setStatus(s, to, 1_002);
       return { outcome, appended: latestSeq(s) - before, state: readState(s) };
@@ -373,7 +382,7 @@ describe("status", () => {
     const result = await inRun(stub, (s) => {
       initializeSession(s, descriptor, 1_000);
       const before = latestSeq(s);
-      const outcome = setStatus(s, "live", 1_001);
+      const outcome = setStatus(s, "idle", 1_001);
       return { outcome, appended: latestSeq(s) - before };
     });
 
@@ -393,7 +402,8 @@ describe("bounded reads", () => {
       return listEvents(s, -50, 10_000);
     });
 
-    expect(events).toHaveLength(2);
+    // Two turns plus the live status the first one scheduled.
+    expect(events).toHaveLength(3);
   });
 
   it("honours a small limit and reports the snapshot as incomplete", async () => {
@@ -433,7 +443,8 @@ describe("bounded reads", () => {
       return { first, tail: listEvents(s, first.event.seq, 100) };
     });
 
-    expect(tail).toHaveLength(2);
+    // status(live), t-b, t-c.
+    expect(tail).toHaveLength(3);
     expect(tail.every((e) => e.seq > first.event.seq)).toBe(true);
   });
 });
@@ -483,6 +494,7 @@ describe("durability across eviction", () => {
     await evictDurableObject(stub);
 
     const after = await inRun(stub, (s) => appendTurn(s, turn("t-b"), 1_002).event.seq);
-    expect(after).toBe(before + 1);
+    // +2: the first turn also committed the idle -> live status event.
+    expect(after).toBe(before + 2);
   });
 });

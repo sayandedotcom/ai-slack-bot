@@ -55,6 +55,9 @@ describe("upgrade contract", () => {
 
   it("reports the run status on the sync frame", async () => {
     const { stub } = await freshRun();
+    // A run reaches awaiting_approval from live, and a run is only live once
+    // something scheduled work on it.
+    await stub.setStatus("live");
     await stub.setStatus("awaiting_approval");
 
     const socket = await connect(stub);
@@ -76,26 +79,33 @@ describe("cursor replay", () => {
     const socket = await connect(stub, a.event.seq);
     await syncedCursor(socket);
 
-    expect(syncedEvents(socket).map((e) => e.seq)).toEqual([b.event.seq, c.event.seq]);
+    // The first turn also committed the idle -> live status event, so the
+    // replay is everything above the cursor, not only the later turns.
+    const seqs = syncedEvents(socket).map((e) => e.seq);
+    expect(seqs.every((seq) => seq > a.event.seq)).toBe(true);
+    expect(seqs).toContain(b.event.seq);
+    expect(seqs).toContain(c.event.seq);
   });
 
   it("returns an empty complete sync when the client is current", async () => {
     const { stub } = await freshRun();
-    const a = await stub.appendTurn(turn("t-1"));
+    await stub.appendTurn(turn("t-1"));
+    const current = await stub.cursor();
 
-    const socket = await connect(stub, a.event.seq);
-    expect(await syncedCursor(socket)).toBe(a.event.seq);
+    const socket = await connect(stub, current);
+    expect(await syncedCursor(socket)).toBe(current);
     expect(syncedEvents(socket)).toEqual([]);
   });
 
   it("clamps a cursor from the future instead of muting the run", async () => {
     const { stub } = await freshRun();
-    const a = await stub.appendTurn(turn("t-1"));
+    await stub.appendTurn(turn("t-1"));
+    const current = await stub.cursor();
 
     // Without the clamp the attachment would hold a lastSeq no event ever
     // exceeds, and #broadcast would skip this client forever.
-    const socket = await connect(stub, a.event.seq + 10_000);
-    expect(await syncedCursor(socket)).toBe(a.event.seq);
+    const socket = await connect(stub, current + 10_000);
+    expect(await syncedCursor(socket)).toBe(current);
   });
 
   it("replays the whole run from since=0", async () => {
@@ -106,7 +116,10 @@ describe("cursor replay", () => {
     const socket = await connect(stub);
     await syncedCursor(socket);
 
-    expect(syncedEvents(socket).map((e) => e.seq)).toEqual([a.event.seq, b.event.seq]);
+    const replayed = syncedEvents(socket).map((e) => e.seq);
+    expect(replayed).toEqual([...replayed].sort((x, y) => x - y));
+    expect(replayed).toContain(a.event.seq);
+    expect(replayed).toContain(b.event.seq);
   });
 
   it("includes turn, tool and status events in one ordered stream", async () => {
@@ -124,8 +137,10 @@ describe("cursor replay", () => {
     const socket = await connect(stub);
     await syncedCursor(socket);
 
+    // The second status is the explicit awaiting_approval; the first is the
+    // live transition the input turn committed with itself.
     const events = syncedEvents(socket);
-    expect(events.map((e) => e.type)).toEqual(["turn", "tool_call", "status"]);
+    expect(events.map((e) => e.type)).toEqual(["turn", "status", "tool_call", "status"]);
     expect(events.map((e) => e.seq)).toEqual([...events.map((e) => e.seq)].sort((x, y) => x - y));
   });
 });
@@ -152,9 +167,10 @@ describe("chunked backlog", () => {
     expect(completes).toHaveLength(1);
     expect(frames[frames.length - 1]).toBe(completes[0]);
 
+    // 205 turns plus the live status the first one committed.
     const seqs = syncedEvents(socket).map((e) => e.seq);
-    expect(seqs).toHaveLength(205);
-    expect(new Set(seqs).size).toBe(205);
+    expect(seqs).toHaveLength(206);
+    expect(new Set(seqs).size).toBe(206);
     expect(seqs).toEqual([...seqs].sort((x, y) => x - y));
     expect(cursor).toBe(seqs[seqs.length - 1]);
   }, 30_000);

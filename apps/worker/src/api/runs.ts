@@ -122,8 +122,10 @@ runsApi.post("/runs/:id/turns", async (c) => {
   const parsed = parseClientMessage(raw);
   if (!parsed.ok) return c.json(fail(parsed.code, parsed.message), 400);
 
+  // No pre-emptive setStatus: the `live` transition happens inside the append's
+  // own transaction, so a steer cannot leave the run advertising a loop that
+  // the driver's resume policy will refuse to start.
   const stub = runStubForKey(c.env.RUNS, run.key);
-  if (run.status !== "live") await stub.setStatus("live");
 
   const result = await stub.appendTurn({
     id: `steer:${parsed.message.requestId}`,

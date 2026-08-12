@@ -118,11 +118,28 @@ describe("rpc surface", () => {
   it("reports appended:false for a replayed id without a second event", async () => {
     const { stub } = await freshRun();
     const first = await stub.appendTurn(turn("slack:E1"));
+    // The first input also committed the idle -> live status event, so the
+    // cursor is past the turn already; what matters is that the REPLAY adds
+    // nothing to it.
+    const afterFirst = await stub.cursor();
     const second = await stub.appendTurn(turn("slack:E1"));
 
     expect(second.appended).toBe(false);
     expect(second.event.seq).toBe(first.event.seq);
-    expect(await stub.cursor()).toBe(first.event.seq);
+    expect(await stub.cursor()).toBe(afterFirst);
+  });
+
+  it("schedules one generation for the first input and reuses it for a duplicate", async () => {
+    const { stub } = await freshRun();
+    const first = await stub.appendTurn(turn("slack:E1"));
+    const replay = await stub.appendTurn(turn("slack:E1"));
+
+    expect(first.scheduling.outcome).toBe("allocated");
+    expect(replay.scheduling).toEqual({
+      outcome: "duplicate",
+      generationId: first.scheduling.outcome === "allocated" ? first.scheduling.generationId : null,
+    });
+    expect((await stub.state())?.status).toBe("live");
   });
 
   it("streams tool updates through the same object", async () => {
@@ -160,7 +177,7 @@ describe("rpc surface", () => {
 
   it("reports an idempotent same-state change as eventless", async () => {
     const { stub } = await freshRun();
-    const same = await stub.setStatus("live");
+    const same = await stub.setStatus("idle");
     expect(same).toMatchObject({ ok: true, changed: false, event: null });
   });
 });
@@ -171,6 +188,7 @@ describe("d1 index is kept in step", () => {
     const before = await getRunById(env.DB, record.id);
 
     await stub.appendTurn({ ...turn("t-a"), createdAt: (before?.updatedAt ?? 0) + 60_000 });
+    await stub.flushProjections();
 
     const after = await getRunById(env.DB, record.id);
     expect(after!.updatedAt).toBeGreaterThan(before!.updatedAt);
@@ -182,6 +200,7 @@ describe("d1 index is kept in step", () => {
     const at = created!.updatedAt + 60_000;
 
     await stub.appendTurn({ ...turn("slack:E1"), createdAt: at });
+    await stub.flushProjections();
 
     // Simulate the first attempt having failed after committing the event:
     // rewind the index, then let the queue retry.
@@ -191,6 +210,7 @@ describe("d1 index is kept in step", () => {
 
     const replay = await stub.appendTurn({ ...turn("slack:E1"), createdAt: at });
     expect(replay.appended).toBe(false);
+    await stub.flushProjections();
 
     const repaired = await getRunById(env.DB, record.id);
     expect(repaired!.updatedAt).toBe(at);
@@ -198,10 +218,28 @@ describe("d1 index is kept in step", () => {
 
   it("writes a status change to both stores through one call", async () => {
     const { stub, record } = await freshRun();
+    // awaiting_approval is reached from live: a run parks on an approval while
+    // it is working, never straight out of idle.
+    await stub.setStatus("live");
     await stub.setStatus("awaiting_approval");
 
+    // Local state is durable immediately; D1 is a projection the call does not
+    // await, so the index catches up through the projector.
     expect((await stub.state())?.status).toBe("awaiting_approval");
+    await stub.flushProjections();
     expect((await getRunById(env.DB, record.id))?.status).toBe("awaiting_approval");
+  });
+
+  it("does not await d1 on the local event path", async () => {
+    const { stub, record } = await freshRun();
+    // A D1 outage is simulated by removing the index row entirely: every write
+    // below still has to commit, broadcast and return.
+    await env.DB.prepare("DELETE FROM runs WHERE id = ?").bind(record.id).run();
+
+    await expect(stub.appendTurn(turn("t-outage"))).resolves.toMatchObject({ appended: true });
+    await expect(stub.setStatus("awaiting_approval")).resolves.toMatchObject({ ok: true });
+    await expect(stub.setSummary("still working")).resolves.toMatchObject({ changed: true });
+    expect((await stub.state())?.summary).toBe("still working");
   });
 
   it("does not fail a mutation when the index row is missing", async () => {

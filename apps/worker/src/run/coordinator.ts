@@ -108,10 +108,9 @@ export async function wakeSlackRun(
   });
 
   // A finished thread that earns a new wake reopens the SAME object, keeping
-  // its history, rather than forking a message-scoped second one.
-  const state = await stub.state();
-  if (state && state.status !== "live") await stub.setStatus("live");
-
+  // its history, rather than forking a message-scoped second one. The `live`
+  // transition is NOT made here: it belongs to the same local transaction that
+  // schedules the work, so the run can never read live with nothing scheduled.
   await stub.appendTurn({
     id: `triage:${input.eventId}`,
     role: "system",
@@ -154,8 +153,8 @@ export async function routeSlackMessageToOwnedRun(
     },
   });
 
-  // An interruption makes the run live again: the customer is waiting, even if
-  // the agent had parked on an approval.
-  if (owned.status !== "live") await stub.setStatus("live");
+  // An interruption makes the run live again — the customer is waiting, even if
+  // the agent had parked on an approval — and `appendTurn` has already done it,
+  // atomically with the turn that caused it.
   return true;
 }

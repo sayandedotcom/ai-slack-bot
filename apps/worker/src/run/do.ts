@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../index";
 import type {
+  AssistantUpdateInput,
   RunEvent,
   RunServerMessage,
   RunStatus,
@@ -8,26 +9,42 @@ import type {
   ToolCallUpdateInput,
 } from "./protocol";
 import { parseClientMessage } from "./protocol";
-import { setRunStatus, touchRun } from "./repository";
+import { projectRunIndex } from "./repository";
 import {
+  appendAssistantUpdate,
   appendToolCallUpdate,
   appendTurn,
+  claimProjectionJob,
+  coalesceSupersededRunIndexJobs,
+  completeProjectionJob,
+  countPendingProjectionJobs,
   ensureSchema,
   initializeSession,
   latestSeq,
   listEvents,
+  listRecentTurns,
   listToolCalls,
   listTurns,
+  listTurnsAfter,
+  readDriver,
+  readRunIndexRevision,
+  retryProjectionJob,
   readState,
   setStatus,
   setSummary,
   snapshot,
+  touchRunIndex,
   type AppendResult,
   type RunDescriptor,
   type RunState,
   type SessionSnapshot,
   type StatusResult,
 } from "./session";
+import type {
+  AssistantUpdateOutcome,
+  ClaimFence,
+  DriverState,
+} from "../agent/contracts";
 
 /**
  * The thread-scoped run. One object per origin key — `slack:{channel}:{thread}`
@@ -60,11 +77,19 @@ function eventCreatedAt(event: RunEvent): number {
     case "turn":
       return event.turn.createdAt;
     case "tool_call":
+    case "assistant_update":
       return event.update.createdAt;
     case "status":
       return event.createdAt;
   }
 }
+
+/** How many revisions one drain pass will carry before yielding. */
+const PROJECTION_DRAIN_MAX = 8;
+const PROJECTION_LEASE_MS = 30_000;
+const PROJECTION_BACKOFF_MS = 15_000;
+
+export type ProjectionFlush = { projected: number; failed: number; pending: number };
 
 export class RunDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -96,11 +121,13 @@ export class RunDO extends DurableObject<Env> {
 
     const { requestId, content } = parsed.message;
     try {
-      // Steering a parked or finished run resumes it. Every status reaches
-      // `live` legally, so this needs no special-casing per source status.
-      const current = readState(this.ctx.storage)?.status;
-      if (current && current !== "live") await this.setStatus("live");
-
+      // No pre-emptive setStatus here any more. Steering a parked or finished
+      // run still resumes it, but the `live` transition now happens INSIDE the
+      // append's transaction, so there is no window where the run reads live
+      // with nothing scheduled — and a steer that is refused by the driver's
+      // resume policy (a spend ceiling, a pending reconciliation) no longer
+      // advertises a loop that will not start.
+      //
       // The server assigns role and source. The parser has already refused any
       // client-supplied value, so a browser cannot pose as the customer or as
       // an approval decision.
@@ -213,8 +240,23 @@ export class RunDO extends DurableObject<Env> {
     return latestSeq(this.ctx.storage);
   }
 
+  /** Oldest-first, unchanged Phase 08 behaviour. See `recentTurns` for a long run. */
   turns(limit?: number) {
     return listTurns(this.ctx.storage, limit);
+  }
+
+  /** The NEWEST turns, oldest-first. What a long run's reader almost always wants. */
+  recentTurns(limit?: number) {
+    return listRecentTurns(this.ctx.storage, limit);
+  }
+
+  turnsAfter(afterEventSeq: number, limit?: number) {
+    return listTurnsAfter(this.ctx.storage, afterEventSeq, limit);
+  }
+
+  /** Private driver state, for operator inspection and the Task 3 alarm. */
+  driver(): DriverState {
+    return readDriver(this.ctx.storage);
   }
 
   toolCalls() {
@@ -234,6 +276,26 @@ export class RunDO extends DurableObject<Env> {
   async appendToolCallUpdate(input: ToolCallUpdateInput): Promise<AppendResult> {
     const result = appendToolCallUpdate(this.ctx.storage, input);
     return this.#afterCommit(result);
+  }
+
+  /**
+   * One streamed assistant batch, committed then broadcast.
+   *
+   * Only an `appended` outcome broadcasts. A redelivered batch is `replayed`
+   * and returns the sequence it already has, so an at-least-once alarm cannot
+   * show the customer the same sentence twice; a `stale_claim` outcome writes
+   * and sends nothing at all.
+   */
+  async appendAssistantUpdate(
+    fence: ClaimFence,
+    input: AssistantUpdateInput,
+  ): Promise<AssistantUpdateOutcome> {
+    const result = appendAssistantUpdate(this.ctx.storage, fence, input);
+    if (result.outcome === "appended") {
+      this.#broadcast(result.event);
+      this.#kickProjection();
+    }
+    return result;
   }
 
   /**
@@ -260,40 +322,156 @@ export class RunDO extends DurableObject<Env> {
       };
     }
 
-    // Synchronous section ends here. Broadcast before the first await.
+    // Synchronous section ends here. Broadcast, then hand D1 to the projector
+    // WITHOUT awaiting it: the status is already durable locally, and a D1
+    // outage must not make a status change fail or hang.
     if (result.event) this.#broadcast(result.event);
-
-    const state = readState(this.ctx.storage);
-    if (state) await setRunStatus(this.env.DB, state.runId, result.status);
+    this.#kickProjection();
     return { ok: true, changed: result.changed, status: result.status, event: result.event };
   }
 
-  async setSummary(summary: string): Promise<void> {
-    setSummary(this.ctx.storage, summary);
-    const state = readState(this.ctx.storage);
-    if (state) await touchRun(this.env.DB, state.runId, Date.now());
+  /**
+   * The run list's one-line description.
+   *
+   * Phase 08 wrote this locally and then called `touchRun()`, which only moves
+   * `updated_at` — the summary never reached D1 and the dashboard stayed blank.
+   * The local write now allocates a run-index revision and the projector
+   * carries status and summary over together, conditionally.
+   */
+  async setSummary(summary: string): Promise<{ changed: boolean; revision: number | null }> {
+    const result = setSummary(this.ctx.storage, summary);
+    this.#kickProjection();
+    return result;
   }
 
   /**
-   * Runs in the same continuation as the commit that produced `result`, then
-   * does its I/O. The order is load-bearing:
+   * Runs in the same continuation as the commit that produced `result`. The
+   * order is load-bearing:
    *
-   *   transactionSync (durable) -> broadcast (ordered) -> await D1 (index)
+   *   transactionSync (durable) -> broadcast (ordered) -> queue D1 (index)
    *
-   * Broadcasting AFTER the awaited D1 write would let two concurrent appends
+   * Broadcasting AFTER an awaited D1 write would let two concurrent appends
    * deliver out of order. The skip rule in `#broadcast` would then drop the
    * lower seq permanently, because a skipped event is never retried and the
    * client's next reconnect asks for the higher cursor it already recorded.
+   *
+   * Nothing here awaits D1 at all any more. The index work is already a durable
+   * local job by the time this runs, so the projector can fail, retry, or wait
+   * for the next alarm without the model or tool loop noticing. A D1 outage
+   * during a nested capability's start/end events must not stall the
+   * continuation that is holding a customer's answer.
    */
   async #afterCommit(result: AppendResult): Promise<AppendResult> {
-    if (result.appended) this.#broadcast(result.event);
+    if (result.appended) {
+      this.#broadcast(result.event);
+      // The live transition, when this input scheduled work. It was committed
+      // in the same transaction and holds the next seq, so it broadcasts second
+      // and in order.
+      if (result.statusEvent) this.#broadcast(result.statusEvent);
+    }
 
-    // Touched even on a retry that appended nothing: the first attempt may have
-    // committed the event and then failed before repairing the index. touchRun
-    // never moves updated_at backwards, so replaying an old event is a no-op.
-    const state = readState(this.ctx.storage);
-    if (state) await touchRun(this.env.DB, state.runId, eventCreatedAt(result.event));
+    // Queued even on a retry that appended nothing: the first attempt may have
+    // committed the event and then died before its index work was delivered, and
+    // a duplicate delivery is the only thing that will ever heal that. A replay
+    // therefore skips the coalescing window and forces a fresh revision — the
+    // D1 apply is still conditional and MAX()-bounded, so it can only repair the
+    // index, never move it backwards.
+    touchRunIndex(
+      this.ctx.storage,
+      eventCreatedAt(result.event),
+      result.appended ? undefined : 0,
+    );
+    this.#kickProjection();
     return result;
+  }
+
+  /**
+   * Start a drain if one is not already running, and do not await it.
+   *
+   * `ctx.waitUntil` keeps the object alive for the write without holding up the
+   * caller. If it fails or is cut short, the job row is still pending and the
+   * alarm-driven projector (Task 3) picks it up — the durable job, not this
+   * best-effort kick, is what guarantees delivery.
+   */
+  #projection: Promise<ProjectionFlush> | null = null;
+
+  #kickProjection(): void {
+    if (this.#projection) return;
+    const drain = this.#drainRunIndex().finally(() => {
+      this.#projection = null;
+    });
+    this.#projection = drain;
+    this.ctx.waitUntil(drain);
+  }
+
+  /**
+   * Deliver pending run-index revisions to D1.
+   *
+   * Exposed because the alarm will own it in Task 3, and because a caller that
+   * genuinely needs the index to be current (a test, an operator endpoint) must
+   * have a way to wait for it that is not "sleep and hope".
+   */
+  async flushProjections(): Promise<ProjectionFlush> {
+    const inFlight = this.#projection;
+    if (inFlight) await inFlight;
+    return this.#drainRunIndex();
+  }
+
+  async #drainRunIndex(): Promise<ProjectionFlush> {
+    const state = readState(this.ctx.storage);
+    if (!state) return { projected: 0, failed: 0, pending: 0 };
+
+    let projected = 0;
+    let failed = 0;
+
+    for (let pass = 0; pass < PROJECTION_DRAIN_MAX; pass += 1) {
+      // Older pending revisions are superseded by the newest pending one, so a
+      // long outage drains in one write instead of hundreds. Claimed jobs are
+      // left alone: they are somebody's in-flight work.
+      coalesceSupersededRunIndexJobs(this.ctx.storage);
+
+      const claim = claimProjectionJob(this.ctx.storage, {
+        kind: "run_index",
+        leaseMs: PROJECTION_LEASE_MS,
+      });
+      if (claim.outcome !== "claimed") break;
+
+      const revision = Number(claim.job.sourceId);
+      const snapshot = Number.isInteger(revision)
+        ? readRunIndexRevision(this.ctx.storage, revision)
+        : null;
+      if (!snapshot) {
+        completeProjectionJob(this.ctx.storage, {
+          id: claim.job.id,
+          claimToken: claim.claimToken,
+        });
+        continue;
+      }
+
+      try {
+        await projectRunIndex(this.env.DB, state.runId, snapshot.revision, snapshot);
+        completeProjectionJob(this.ctx.storage, {
+          id: claim.job.id,
+          claimToken: claim.claimToken,
+        });
+        projected += 1;
+      } catch (error) {
+        retryProjectionJob(this.ctx.storage, {
+          id: claim.job.id,
+          claimToken: claim.claimToken,
+          backoffMs: PROJECTION_BACKOFF_MS,
+          error: error instanceof Error ? error.message : "run index projection failed",
+        });
+        failed += 1;
+        break;
+      }
+    }
+
+    return {
+      projected,
+      failed,
+      pending: countPendingProjectionJobs(this.ctx.storage, "run_index"),
+    };
   }
 
   /**

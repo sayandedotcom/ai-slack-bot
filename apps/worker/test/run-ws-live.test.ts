@@ -79,11 +79,21 @@ describe("live broadcast", () => {
     const expected = [first.event.seq, second.event.seq].sort((x, y) => x - y);
     await nextEvent(socket, expected[1]);
 
-    expect(deliveredSeqs(socket)).toEqual(expected);
+    // The first input also broadcast its idle -> live status, so the stream is
+    // a superset of the two turns; what must hold is that it is strictly
+    // ascending and lost nothing.
+    const delivered = deliveredSeqs(socket);
+    expect(delivered).toEqual([...delivered].sort((x, y) => x - y));
+    expect(new Set(delivered).size).toBe(delivered.length);
+    expect(delivered).toContain(expected[0]);
+    expect(delivered).toContain(expected[1]);
   });
 
   it("broadcasts tool updates and status changes too", async () => {
     const { stub } = await freshRun();
+    // awaiting_approval is reached from live, and a run is live once something
+    // scheduled work on it.
+    await stub.setStatus("live");
     const socket = await connect(stub);
     await syncedCursor(socket);
 
@@ -142,7 +152,10 @@ describe("steering", () => {
       source: "human_steer",
       content: "try staging",
     });
-    expect(ack.seq).toBe(await stub.cursor());
+    // The ack names the turn's own seq. The cursor is one further along,
+    // because the same transaction also committed the idle -> live status.
+    expect(ack.seq).toBe((await stub.cursor()) - 1);
+    expect((await stub.state())?.status).toBe("live");
   });
 
   it("reaches every tab, not just the one that typed", async () => {
@@ -283,8 +296,13 @@ describe("hibernation", () => {
     const second = await stub.appendTurn(turn("t-2"));
     await nextEvent(early, second.event.seq);
 
-    // The attachment survived, so t-1 was not resent after the wake.
-    expect(deliveredSeqs(early)).toEqual([first.event.seq, second.event.seq]);
+    // The attachment survived, so t-1 was not resent after the wake. The status
+    // event between them is the live transition t-1 scheduled.
+    const delivered = deliveredSeqs(early);
+    expect(delivered).toEqual([...delivered].sort((x, y) => x - y));
+    expect(new Set(delivered).size).toBe(delivered.length);
+    expect(delivered[0]).toBe(first.event.seq);
+    expect(delivered[delivered.length - 1]).toBe(second.event.seq);
   });
 });
 

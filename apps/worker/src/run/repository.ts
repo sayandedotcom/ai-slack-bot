@@ -88,11 +88,15 @@ export async function createOrGetRun(
   descriptor: RunDescriptor,
   now = Date.now(),
 ): Promise<RunRecord> {
+  // Created `idle`, for every origin. A row existing is not the agent working:
+  // `live` now means a generation is scheduled, and that transition is made by
+  // the input transaction inside the RunDO, then projected here. Phase 08's
+  // `live` default is repaired by migration 0006.
   await db
     .prepare(
       `INSERT OR IGNORE INTO runs
          (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'live', 0, NULL, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, 'idle', 0, NULL, ?, ?)`,
     )
     .bind(
       crypto.randomUUID(),
@@ -200,10 +204,46 @@ export async function listRuns(
 }
 
 /**
- * Bump recency after a committed session event. Never moves backwards: a queue
- * retry replaying an older event must not make a live run look stale and sink
- * down the dashboard list. A missing row is not an error — the RunDO owns the
- * session, and its mutation must not fail because the index lagged.
+ * Apply one bundled run-index revision, conditionally.
+ *
+ * This is the only writer on the RunDO event path, and it is monotonic by
+ * construction: `projection_seq < ?` means an older revision whose async write
+ * returned late matches zero rows and changes nothing. Two updates in the same
+ * millisecond are ordered too, because the comparison is on the revision, not
+ * on a timestamp that can tie.
+ *
+ * Status, summary and recency travel together on purpose. Projecting them
+ * through separate statements is what let Phase 08's list show a fresh status
+ * beside a stale summary — or, for a summary, nothing at all.
+ *
+ * `updated_at` still uses MAX() so a replayed older revision cannot make a
+ * live run look stale and sink down the dashboard list. A missing row is not an
+ * error: the RunDO owns the session, and its mutation must not fail because the
+ * index lagged.
+ */
+export async function projectRunIndex(
+  db: D1Database,
+  id: string,
+  revision: number,
+  snapshot: { status: RunStatus; summary: string | null; updatedAt: number },
+): Promise<{ applied: boolean }> {
+  const result = await db
+    .prepare(
+      `UPDATE runs SET
+         status = ?, summary = ?, updated_at = MAX(updated_at, ?), projection_seq = ?
+       WHERE id = ? AND projection_seq < ?`,
+    )
+    .bind(snapshot.status, snapshot.summary, snapshot.updatedAt, revision, id, revision)
+    .run();
+  return { applied: (result.meta.changes ?? 0) > 0 };
+}
+
+/**
+ * Bump recency after a committed session event. Never moves backwards.
+ *
+ * Kept as a repository primitive, but NO LONGER on the RunDO's event path: that
+ * path projects a bundled revision through `projectRunIndex` instead, so a
+ * summary reaches D1 at all and two async writes cannot land out of order.
  */
 export async function touchRun(db: D1Database, id: string, at: number): Promise<void> {
   await db

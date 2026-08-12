@@ -6,6 +6,7 @@ import {
   getRunById,
   getRunByKey,
   listRuns,
+  projectRunIndex,
   setRunStatus,
   touchRun,
   RUN_LIST_MAX_LIMIT,
@@ -49,7 +50,8 @@ describe("createOrGetRun", () => {
     expect(run.key).toBe(descriptor.key);
     // Invariant 10: the public id must not be convertible into the DO name.
     expect(descriptor.key).not.toContain(run.id);
-    expect(run.status).toBe("live");
+    // Idle for every origin: creating an index row is not the agent working.
+    expect(run.status).toBe("idle");
     expect(run.shadow).toBe(false);
     expect(run.summary).toBeNull();
   });
@@ -234,6 +236,7 @@ describe("listRuns", () => {
   it("filters by status", async () => {
     const live = await createOrGetRun(env.DB, slackDescriptor("1720000000.123456"));
     const done = await createOrGetRun(env.DB, slackDescriptor("1720000099.123456"));
+    await setRunStatus(env.DB, live.id, "live");
     await setRunStatus(env.DB, done.id, "done");
 
     const listed = await listRuns(env.DB, { status: "live" });
@@ -285,5 +288,88 @@ describe("touchRun and setRunStatus", () => {
     const run = await createOrGetRun(env.DB, chatDescriptor());
     await setRunStatus(env.DB, run.id, "awaiting_approval");
     expect((await getRunById(env.DB, run.id))?.status).toBe("awaiting_approval");
+  });
+});
+
+describe("projectRunIndex", () => {
+  it("carries status, summary and recency across as one bundle", async () => {
+    const run = await createOrGetRun(env.DB, chatDescriptor());
+    const applied = await projectRunIndex(env.DB, run.id, 1, {
+      status: "live",
+      summary: "chasing a stuck deploy",
+      updatedAt: run.updatedAt + 1_000,
+    });
+
+    expect(applied).toEqual({ applied: true });
+    const after = await getRunById(env.DB, run.id);
+    // The Phase 08 bug: setSummary only touched updated_at, so the list stayed
+    // blank no matter how many summaries the run produced.
+    expect(after).toMatchObject({ status: "live", summary: "chasing a stuck deploy" });
+    expect(after?.updatedAt).toBe(run.updatedAt + 1_000);
+  });
+
+  it("ignores an older revision whose write returned late", async () => {
+    const run = await createOrGetRun(env.DB, chatDescriptor());
+    // Reversed completion order: revision 2's write lands first.
+    await projectRunIndex(env.DB, run.id, 2, {
+      status: "done",
+      summary: "finished",
+      updatedAt: run.updatedAt + 2_000,
+    });
+    const stale = await projectRunIndex(env.DB, run.id, 1, {
+      status: "live",
+      summary: "still working",
+      updatedAt: run.updatedAt + 1_000,
+    });
+
+    expect(stale).toEqual({ applied: false });
+    const after = await getRunById(env.DB, run.id);
+    expect(after).toMatchObject({ status: "done", summary: "finished" });
+    expect(after?.updatedAt).toBe(run.updatedAt + 2_000);
+  });
+
+  it("orders two updates that share a millisecond", async () => {
+    const run = await createOrGetRun(env.DB, chatDescriptor());
+    const at = run.updatedAt + 5_000;
+
+    // Identical timestamps. A projector comparing time would tie here and let
+    // whichever write arrived last win, regardless of which was newer.
+    await projectRunIndex(env.DB, run.id, 7, { status: "live", summary: "newer", updatedAt: at });
+    const older = await projectRunIndex(env.DB, run.id, 6, {
+      status: "idle",
+      summary: "older",
+      updatedAt: at,
+    });
+
+    expect(older).toEqual({ applied: false });
+    expect((await getRunById(env.DB, run.id))?.summary).toBe("newer");
+  });
+
+  it("never moves recency backwards even for a newer revision", async () => {
+    const run = await createOrGetRun(env.DB, chatDescriptor());
+    await projectRunIndex(env.DB, run.id, 1, {
+      status: "live",
+      summary: null,
+      updatedAt: run.updatedAt + 9_000,
+    });
+    await projectRunIndex(env.DB, run.id, 2, {
+      status: "idle",
+      summary: null,
+      updatedAt: run.updatedAt + 1_000,
+    });
+
+    const after = await getRunById(env.DB, run.id);
+    expect(after?.status).toBe("idle");
+    expect(after?.updatedAt).toBe(run.updatedAt + 9_000);
+  });
+
+  it("tolerates a missing run so a DO mutation is not failed by its index", async () => {
+    await expect(
+      projectRunIndex(env.DB, crypto.randomUUID(), 1, {
+        status: "live",
+        summary: null,
+        updatedAt: 1_000,
+      }),
+    ).resolves.toEqual({ applied: false });
   });
 });

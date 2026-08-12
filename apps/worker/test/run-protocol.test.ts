@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTIVE_RUN_STATUSES,
+  ASSISTANT_DELTA_MAX,
+  ASSISTANT_ERROR_MAX,
+  ASSISTANT_FLUSH_CHARS,
+  ASSISTANT_FLUSH_MS,
+  ASSISTANT_UPDATE_STATES,
   RUN_STATUSES,
   evaluateTransition,
+  isAssistantUpdateState,
   isRunStatus,
   parseClientMessage,
   STEER_MAX_CONTENT,
+  type AssistantUpdate,
+  type RunEvent,
   type RunStatus,
 } from "../src/run/protocol";
 import {
@@ -295,6 +303,108 @@ describe("client message parser", () => {
     if (!result.ok) {
       expect(typeof result.code).toBe("string");
       expect(result.code.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("assistant updates", () => {
+  it("is exactly the six documented states, in order", () => {
+    expect(ASSISTANT_UPDATE_STATES).toEqual([
+      "started",
+      "streaming",
+      "completed",
+      "superseded",
+      "aborted",
+      "failed",
+    ]);
+    expect(isAssistantUpdateState("streaming")).toBe(true);
+    expect(isAssistantUpdateState("thinking")).toBe(false);
+    expect(isAssistantUpdateState("")).toBe(false);
+  });
+
+  it("keeps the batch thresholds below the hard caps", () => {
+    // The thresholds are the intent — flush at 250ms or 512 characters. The
+    // caps are the defence against a caller that batched badly, or an error
+    // string carrying a whole provider body into the replay log.
+    expect(ASSISTANT_FLUSH_CHARS).toBe(512);
+    expect(ASSISTANT_FLUSH_MS).toBe(250);
+    expect(ASSISTANT_DELTA_MAX).toBeGreaterThan(ASSISTANT_FLUSH_CHARS);
+    expect(ASSISTANT_ERROR_MAX).toBeLessThan(ASSISTANT_DELTA_MAX);
+  });
+
+  it("round-trips every state as a finite, rpc-serializable event", () => {
+    for (const state of ASSISTANT_UPDATE_STATES) {
+      const update: AssistantUpdate = {
+        id: "assistant:gen:abc:0:1",
+        generationId: "gen:abc",
+        attempt: 0,
+        state,
+        ...(state === "streaming" ? { delta: "partial answer" } : {}),
+        ...(state === "failed" ? { error: "provider_unavailable" } : {}),
+        createdAt: 1_700_000_000_000,
+      };
+      const event: RunEvent = { seq: 7, type: "assistant_update", update };
+
+      expect(JSON.parse(JSON.stringify(event))).toEqual(event);
+      // Finite: no cycle, no undefined, nothing that turns into a huge frame.
+      expect(JSON.stringify(event).length).toBeLessThan(1_000);
+    }
+  });
+
+  it("carries no reasoning, thinking, provider body or metadata field", () => {
+    const update: AssistantUpdate = {
+      id: "assistant:gen:abc:0:0",
+      generationId: "gen:abc",
+      attempt: 0,
+      state: "streaming",
+      delta: "hello",
+      createdAt: 1,
+    };
+    // The shape is closed. Anything a provider chunk carries has nowhere to go.
+    expect(Object.keys(update).sort()).toEqual(
+      ["attempt", "createdAt", "delta", "generationId", "id", "state"].sort(),
+    );
+    for (const banned of ["reasoning", "thinking", "signature", "raw", "metadata", "providerBody"]) {
+      expect(banned in update).toBe(false);
+    }
+  });
+
+  it("shares the one seq cursor with turns, tool calls and statuses", () => {
+    // Structural: an assistant update IS a RunEvent, so reconnect replays it
+    // through the existing `since` cursor rather than a second protocol.
+    const events: RunEvent[] = [
+      { seq: 1, type: "status", previousStatus: "idle", status: "live", createdAt: 1 },
+      {
+        seq: 2,
+        type: "assistant_update",
+        update: {
+          id: "assistant:gen:abc:0:0",
+          generationId: "gen:abc",
+          attempt: 0,
+          state: "started",
+          createdAt: 2,
+        },
+      },
+    ];
+    expect(events.map((e) => e.seq)).toEqual([1, 2]);
+  });
+
+  it("cannot be injected by a browser frame", () => {
+    // The client protocol has exactly one message type. A tab cannot author a
+    // server-owned event by naming it.
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "assistant_update", requestId: "r-1", content: "hi" }),
+      ),
+    ).toMatchObject({ ok: false, code: "unknown_type" });
+
+    // Nor by smuggling the server-owned identity fields onto a legal steer.
+    for (const field of ["id", "seq", "createdAt", "metadata", "role", "source"]) {
+      expect(
+        parseClientMessage(
+          JSON.stringify({ type: "steer", requestId: "r-1", content: "hi", [field]: "x" }),
+        ),
+      ).toMatchObject({ ok: false, code: "server_owned_field" });
     }
   });
 });

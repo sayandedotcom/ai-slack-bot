@@ -157,11 +157,84 @@ export type ToolCallUpdate = {
   createdAt: number;
 };
 
+// --- assistant updates -----------------------------------------------------
+
+/**
+ * The life of ONE streamed assistant answer within one generation attempt.
+ *
+ * `superseded` is not a failure: it is what a late steer does to an in-flight
+ * final. The generation continues, so the client drops its draft buffer and
+ * waits for the next `started` rather than showing an error.
+ */
+export const ASSISTANT_UPDATE_STATES = [
+  "started",
+  "streaming",
+  "completed",
+  "superseded",
+  "aborted",
+  "failed",
+] as const;
+
+export type AssistantUpdateState = (typeof ASSISTANT_UPDATE_STATES)[number];
+
+export function isAssistantUpdateState(value: unknown): value is AssistantUpdateState {
+  return (
+    typeof value === "string" && (ASSISTANT_UPDATE_STATES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Flush threshold for accumulated text. 250 ms OR this many characters,
+ * whichever comes first — one SQLite row per token would turn a single answer
+ * into thousands of durable writes and thousands of socket frames (invariant 20).
+ */
+export const ASSISTANT_FLUSH_CHARS = 512;
+export const ASSISTANT_FLUSH_MS = 250;
+
+/**
+ * Hard caps applied when the update is persisted. The flush threshold above is
+ * the intent; these are the defence against a caller that batched badly or an
+ * error string carrying a whole provider body into the replay log.
+ */
+export const ASSISTANT_DELTA_MAX = 8_192;
+export const ASSISTANT_ERROR_MAX = 512;
+
+/**
+ * What the driver hands to the session. The batch `id` is NOT here: it is
+ * derived server-side from generation/attempt/batchSeq, which is what makes an
+ * at-least-once alarm replay return the original event instead of appending a
+ * second copy of the same text.
+ *
+ * There is no `reasoning`, no `thinking`, no provider payload and no open
+ * metadata bag — by construction, not by filtering. Reasoning never reaches a
+ * RunEvent, a log, D1 or Zep (invariant 18).
+ */
+export type AssistantUpdateInput = {
+  generationId: string;
+  attempt: number;
+  batchSeq: number;
+  state: AssistantUpdateState;
+  delta?: string;
+  error?: string;
+  createdAt?: number;
+};
+
+export type AssistantUpdate = {
+  id: string;
+  generationId: string;
+  attempt: number;
+  state: AssistantUpdateState;
+  delta?: string;
+  error?: string;
+  createdAt: number;
+};
+
 // --- stream ----------------------------------------------------------------
 
 export type RunEvent =
   | { seq: number; type: "turn"; turn: RunTurn }
   | { seq: number; type: "tool_call"; update: ToolCallUpdate }
+  | { seq: number; type: "assistant_update"; update: AssistantUpdate }
   | {
       seq: number;
       type: "status";
