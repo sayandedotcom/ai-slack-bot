@@ -83,13 +83,13 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | **02** | Slack Web API — Events API envelopes, signature scheme, `message.channels`, subtypes | Subtype list is long and undocumented in one place; getting it wrong silently ingests noise. | |
 | **04** | Slack Web API — `chat.getPermalink` | Small surface; low risk. | |
 | **05** | Cloudflare Access — self-hosted apps, policy ordering, bypass on paths, `Cf-Access-Jwt-Assertion` + JWKS | Policy **ordering** is the trap. A misordered bypass kills ingest silently. | skill `cloudflare:cloudflare-one` |
-| **06** | **Zep V3** — `graph.create` / `graph.add` / `graph.search`, episode metadata | Highest-risk docs dependency in the build. V2→V3 renamed groups→graphs; the Feb 2026 wave removed params. V2-shaped code looks right and fails. | |
+| **06** | **Zep V3** — `graph.create` / `graph.add` / `graph.search`, episode metadata | Highest-risk docs dependency in the build. V2→V3 renamed groups→graphs; the Feb 2026 wave removed params. V2-shaped code looks right and fails. | [`docs-mcp.getzep.com/mcp`](https://docs-mcp.getzep.com/mcp) |
 | **07** | Anthropic Messages API — structured output, Haiku 4.5 model id, token/cost fields | Model ids and cost accounting; cost is a graded deliverable. | |
-| **07, 10** | Cloudflare AI Gateway — routing, cost/observability | Adopted late (from `agent-os`); no plan detail written yet. | |
+| **07, 10** | Cloudflare AI Gateway — routing, cost/observability | Adopted late (from `agent-os`); Phase 10 now specifies metadata-only logging, retry ownership, and cost reconciliation. | `cloudflare-docs` · skill `cloudflare:cloudflare` |
 | **08** | Durable Objects — WebSocket **hibernation** API, DO SQLite, `idFromName` | Hibernation handlers differ from plain WebSocket handling; getting it wrong burns duration cost silently. | skills `cloudflare:durable-objects`, `cloudflare:agents-sdk` |
 | **09** | Vercel AI SDK + `@ai-sdk/anthropic` — tool loop, streaming | Adopted late; the agent loop's whole shape depends on it. | |
 | **09** | Same Cloudflare Worker Loader surface as Phase 00, now in anger | Current Code Mode package, generated providers, isolation, RPC, and resource limits all changed since the initial sketch. | `cloudflare-docs` · skills `cloudflare:agents-sdk` / `cloudflare:workers-best-practices` |
-| **10** | Anthropic — Fable 5 model id, streaming, prompt caching | Prompt caching matters against the $500 ceiling once voice few-shots and memory recall bloat the system prompt. | |
+| **10** | Anthropic — Fable 5 model id, streaming, refusals, prompt caching | Prompt caching matters against the $500 ceiling; refusal billing/partial-output handling is correctness-sensitive. | Official Claude Platform docs + installed `@ai-sdk/anthropic` types |
 | **12** | Slack OAuth v2 — `authed_user` scopes, install flow | | |
 | **12** | GitHub OAuth / GitHub Apps — user-to-server tokens | Two similar flows with different token semantics; easy to build the wrong one. | |
 | **13** | Slack Block Kit — URL buttons, `conversations.open`, `im:write` | Block Kit JSON is fiddly and fails at runtime, not build time. | |
@@ -101,9 +101,13 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | **20** | GitHub REST — blobs → tree → commit → ref → PR | Six chained calls with easy-to-get-wrong SHA plumbing. Worth live docs. | |
 | **20** | Linear API — issue create/update, team scoping | | |
 
-**Still to find:** Slack (02, 04, 12, 13), **Zep (06)**, Anthropic (07, 10), GitHub (12, 20), Linear (20), Supabase / LangSmith / Better Stack (09), Playwright (19).
+**Still to find:** Slack (02, 04, 12, 13), Anthropic (07, 10), GitHub (12, 20), Linear (20), Supabase / LangSmith / Better Stack (09), Playwright (19).
 
-**If you only chase two:** **Zep** and **GitHub**. Cloudflare is already covered above, and those two are where an invented API costs the most hours — Zep because V2-shaped code compiles and fails, GitHub because the blobs→tree→commit→ref→PR chain has SHA plumbing that is easy to get subtly wrong.
+**Highest-value docs attachments:** **Zep** (now attached above) and GitHub.
+Cloudflare is already covered, and those two are where an invented API costs
+the most hours — Zep because V2-shaped code compiles and fails, GitHub because
+the blobs→tree→commit→ref→PR chain has SHA plumbing that is easy to get subtly
+wrong.
 
 ---
 
@@ -174,14 +178,14 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | 07 | Triage | [full](phase-07-triage.md) | 06 | 3 |
 | 08 | RunDO session core + streaming | [full](phase-08-run-session.md) | 05, 07 | 3 |
 | 09 | Code Mode Tier 1 | [full](phase-09-code-mode-tier-1.md) | 00·T2, 08 | 3 |
-| 10 | Agent loop | below | 09 | 4 |
+| 10 | Agent loop | [full](phase-10-agent-loop.md) | 09 | 4 |
 | 11 | Approval | below | 10 | 4 |
 | 12 | Identity, OAuth, rotation | below | 01 | 4 |
 | 13 | Slack nudge | below | 11, 12 | 4 |
-| 14 | Dashboard shell | below | 05 | 5 |
-| 15 | Run list + live run drawer | below | 08, 14 | 5 |
+| 14 | Dashboard shell | below | 05, 12 | 5 |
+| 15 | Run list + live run drawer | below | 10, 14 | 5 |
 | 16 | Approval card | below | 11, 14 | 5 |
-| 17 | Chat page + citations | below | 06, 08, 14 | 5 |
+| 17 | Chat page + citations | below | 10, 14 | 5 |
 | 18 | Sandbox Tier 2 | below | 00·T1, **monorepo** | 5 |
 | 19 | Ship loop + proof capture | below | 18 | 6 |
 | 20 | PR + ship-loop Linear updates → `web2app-rebuild` `staging` | below | 19 | 6 |
@@ -283,22 +287,52 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 ## Phase 10 — Agent loop
 
-**Goal:** Claude Fable 5 driving Phase 09's single tool inside Phase 08's session.
+**Goal:** A durable Claude Fable 5 loop driving Phase 09's single tool inside
+Phase 08's one session, with lossless steering, replayable streaming, bounded
+cost, crash recovery, and two-sided memory.
 
 **Depends on:** Phase 09 · **Day 4**
 
-**Files:** `src/agent/loop.ts`, `src/agent/prompt/system.ts`, `src/agent/prompt/voice.ts`, `src/agent/prompt/escalation.ts`, `src/agent/model.ts`, `test/agent-*.test.ts`
+**Files:** See [the full Phase 10 plan](phase-10-agent-loop.md). D1 migration
+`0006_agent_loop.sql` stores cross-run model telemetry and the agent-memory
+outbox; active loop coordination remains in RunDO SQLite.
 
 **Tasks:**
-1. **Model client** with streaming, wired to broadcast deltas through Phase 08's protocol.
-2. **System prompt assembly**, in composable sections: identity and on-duty engineer, the generated `.d.ts`, escalation judgment, voice rules, customer memory, thread context.
-3. **The agentic loop:** call → tool → result → call, with a step ceiling and a cost ceiling.
-4. **Both invocation surfaces** proven to produce identical session shapes — a triage-woken run and a human-typed chat run differ only in who wrote turn one.
-5. **Mid-flight steering:** a turn appended while the model is generating is picked up on the next step rather than dropped.
-6. **Cost and token telemetry per run**, surfaced to the dashboard.
-7. **Failure paths:** model error, tool error, and timeout each leave the run in a legible state with something useful on screen.
+1. **Keep RunDO as the sole session authority.** Add an alarm-driven,
+   single-flight driver and exact model transcript checkpoints; do not migrate
+   to `AIChatAgent` after Phase 08 already shipped the session/socket/replay
+   model.
+2. **Repair Phase 09's per-execution seam.** Each `run_code` execution gets a
+   fresh registry, counter, citation cache, and outer-tool-call-scoped audit.
+3. **One Fable loop and one tool.** Use current AI SDK 7 APIs, Fable adaptive
+   thinking with omitted display, AI Gateway metadata-only logging, explicit
+   step/time/spend limits, and no silent fallback.
+4. **Prompt authority is explicit.** Stable policy precedes dynamic context;
+   triage/customer/thread/memory/tool content is delimited untrusted user data.
+   The generated `.d.ts` remains only in the `run_code` description.
+5. **Replayable streaming and recovery.** Batch assistant deltas, preserve
+   provider-valid tool-call/tool-result history, never expose reasoning, and
+   commit the final assistant turn exactly once.
+6. **Lossless steering.** Inputs append immediately and enter before the next
+   step. A steer during the final provider response supersedes that draft and
+   schedules one same-generation continuation.
+7. **Telemetry and both sides of memory.** D1 records model/token/cache/cost
+   metadata; a bounded outbox projects agent asks/actions/drafts/outcomes to
+   Zep with exact Slack citation sources.
+8. **Failure matrix.** Crash/duplicate alarm, refusal, provider/tool timeout,
+   abort, malformed history, step ceiling, and cost ceiling all leave a visible,
+   recoverable state.
+9. **Secure cross-customer Chat lookup.** Internal Chat discovers only
+   D1-known customers through execution-local opaque references; Slack-origin
+   runs remain pinned. The canonical “what happened with PulseFit?” query must
+   return exact stored Slack citations.
 
-**Exit criteria:** Ask a question in a `live` test channel; a correct, human-sounding reply arrives in-thread within minutes. Steering mid-run visibly changes what it does next.
+**Exit criteria:** A Chat run and a triage-woken `#test-firedrill` run use the
+same durable loop and stream. Chat settles a correct answer; live steering
+changes the next step and a late steer supersedes/continues without loss. The
+Slack-origin run safely stops at `identity_unavailable` rather than using the
+bot token. A real user-token Slack reply is an integrated Phase 13 criterion,
+after Phase 11 adds escalation and Phase 12 adds identity.
 
 ---
 
@@ -308,19 +342,19 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Depends on:** Phase 10 · **Day 4**
 
-**Files:** `src/approval/escalate.ts`, `src/approval/transitions.ts`, `src/api/approvals.ts`, `migrations/0006_approvals.sql`, `src/db/counters.ts` (modify: real `escalated`), `test/approval-*.test.ts`
+**Files:** `src/approval/escalate.ts`, `src/approval/transitions.ts`, `src/api/approvals.ts`, `migrations/0007_approvals.sql`, `src/db/counters.ts` (modify: real `escalated`), `test/approval-*.test.ts`
 
 **Tasks:**
-1. **`approvals` table** per spec §9.
-2. **`escalate()` returns immediately.** It does not block — a Worker Loader isolate cannot be parked for hours. Test that the code block completes and the run transitions to `awaiting_approval`.
+1. **`approvals` table for `slack_reply` drafts only.** Dashboard approval never gates Linear, PR creation, review, or merge; PR review remains on GitHub.
+2. **`escalate({ kind: "slack_reply", ... })` returns immediately.** It does not block — a Worker Loader isolate cannot be parked for hours. Test that the code block completes and the run transitions to `awaiting_approval`; reject any other approval kind.
 3. **Disjoint transitions, one module:** `pending` written by the DO; `approved | edited | rejected` only by `PATCH /api/approvals/:id`; `withdrawn` only by the DO. Test that each illegal transition is rejected.
 4. **Resolution injects a turn** via Phase 08's `appendTurn`. A rejection with a reason becomes something the agent answers.
-5. **The Worker performs the send** on approve/edit, using the on-duty engineer's user token. The agent never sends escalated content itself.
+5. **Approve/edit resolves a send intent through an injected sender.** Phase 11 tests this with a fake actor/sender; Phase 13 supplies the real on-duty user-token integration. The agent never sends escalated content itself.
 6. **Interruption behavior:** a new customer message on a run with a pending approval wakes the agent immediately and offers `withdraw(id)`.
 7. **Rejections write to both stores** — D1 keeps draft, edit diff and reason; Zep's org graph keeps the derived lesson.
 8. **Real `escalated` counter.**
 
-**Exit criteria:** A committal reply parks; a clarifying question sends. Four scoping messages cost zero clicks. An edit sends the edited text and stores the diff.
+**Exit criteria:** A committal Slack draft parks and the driver stops before another model step. The dashboard can approve/edit/reject through a fake sender, and an edit stores the diff. Real user-token sending is the integrated Phase 13 exit. A multi-turn scoping conversation costs at most one approval click, never one click per message. Approval records gate Slack drafts only; Linear/PR review remains on its owning surface.
 
 ---
 
@@ -330,7 +364,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Depends on:** Phase 01 · **Day 4**
 
-**Files:** `src/identity/roster.ts`, `src/identity/rotation.ts`, `src/identity/crypto.ts`, `src/oauth/slack.ts`, `src/oauth/github.ts`, `src/db/identities.ts`, `migrations/0007_identities.sql`, `test/rotation.test.ts`, `test/oauth-*.test.ts`
+**Files:** `src/identity/roster.ts`, `src/identity/rotation.ts`, `src/identity/crypto.ts`, `src/oauth/slack.ts`, `src/oauth/github.ts`, `src/db/identities.ts`, `migrations/0008_identities.sql`, `test/rotation.test.ts`, `test/oauth-*.test.ts`
 
 **Tasks:**
 1. **Hardcoded roster:** four fire-fighters, three viewers, seven emails to roles.
@@ -359,8 +393,14 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 3. **`im:write` fallback**, decided by whatever Ronit answers: if the scope is unavailable, the nudge becomes an @-mention in `#eng-firefighter`, which needs only `chat:write`. Both paths implemented and tested; one config flag chooses.
 4. **Deduplication** — one nudge per approval, no re-nudge on reconnect.
 5. **Withdrawal updates the nudge** rather than leaving a dead link to a resolved card.
+6. **Integrated identity/send proof:** approved or edited Slack drafts, plus
+   model-authorized non-escalated clarifying/status replies, resolve the
+   on-duty engineer and send only through that engineer's user token. No bot
+   fallback; dashboard approval still applies only to Slack drafts.
 
-**Exit criteria:** An escalation produces a phone push within seconds, and its button lands on the right approval card.
+**Exit criteria:** An escalation produces a phone push within seconds, its
+button lands on the right approval card, and an approved test-channel reply
+arrives under the on-duty engineer's Slack identity.
 
 ---
 
@@ -368,7 +408,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Goal:** A cold visitor understands the page in 30 seconds.
 
-**Depends on:** Phase 05 · **Day 5**
+**Depends on:** Phases 05, 12 · **Day 5**
 
 **Files:** `apps/dashboard/` (new Vite + React + shadcn app), `src/api/roster.ts`, `apps/worker/wrangler.jsonc` (modify: assets point at the built SPA). Delete `apps/web` (the Next 16 scaffold) — decision D2.
 
@@ -389,7 +429,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Goal:** Watch and steer any run.
 
-**Depends on:** Phases 08, 14 · **Day 5**
+**Depends on:** Phases 10, 14 · **Day 5**
 
 **Files:** `apps/dashboard/src/runs/*`, `src/api/runs.ts` (modify)
 
@@ -401,7 +441,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 5. **Steering composer** — type into a live run.
 6. **Shadow-run affordance** on reference-channel threads (Phase 21 uses it).
 
-**Exit criteria:** Open a running bug fix, watch the tool calls, type a correction, see the agent change course.
+**Exit criteria:** Open a scripted running Phase 10 loop, watch the tool calls, type a correction, and see the next step change course. A real cloud bug-fix run remains the Phase 18–20 integration.
 
 ---
 
@@ -421,7 +461,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 5. **Live withdrawal handling.** A card can vanish under the cursor when the agent withdraws it (spec §5.3); it must disappear with an explanation, never silently.
 6. **Empty state** that reads as reassurance rather than absence.
 
-**Exit criteria:** An escalation appears within a second of `escalate()`. Approve sends as the on-duty engineer. Reject reaches memory.
+**Exit criteria:** An escalation appears within a second of `escalate()`. Approve/edit/reject update through the Phase 11 fake-sender contract and rejection reaches memory. Real on-duty sending is the Phase 13 integration exit.
 
 ---
 
@@ -429,7 +469,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 
 **Goal:** "What happened with X?" answered with links to the actual threads.
 
-**Depends on:** Phases 06, 08, 14 · **Day 5**
+**Depends on:** Phases 10, 14 · **Day 5**
 
 **Files:** `apps/dashboard/src/chat/*`, `src/api/chat.ts`
 
@@ -532,7 +572,7 @@ Expanded to full TDD detail as each dependency clears. Each entry below carries 
 **Files:** `src/handoff/summary.ts`, `apps/dashboard/src/handoff/*`, plus a sweep across all dashboard components
 
 **Tasks:**
-1. **Handoff summary** over the org graph and the run list: what the last three days taught the agent, what is still open, what got rejected and why.
+1. **Handoff summary** through a trusted host aggregator: enumerate the last three days of D1 runs, query each fixed customer graph plus the org graph, and merge what was learned with open/rejected run state. Do not grant a Slack-origin model cross-customer graph access.
 2. **Rendered on the dashboard** at rotation, and posted to `#eng-firefighter`.
 3. **State sweep:** every panel has loading, empty and error states, and every error offers a way forward.
 4. **WebSocket reconnection** under real network loss.
