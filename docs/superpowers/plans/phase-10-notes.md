@@ -602,6 +602,72 @@ losslessly through `response.messages`, which would force Task 4 (transcript
 recovery) to special-case a raw-provider-level replay stitch instead of using
 `response.messages` directly.
 
+#### 4a. Status after Task 4 — the automated half is done, the LIVE half is NOT RUN
+
+Task 4 built the serialize → deserialize → continue proof as an **automated**
+test over realistic fixtures, because this run remains local + automated only by
+the same operator decision recorded at the top of this file. What that test
+proves, and what it does not, stated exactly:
+
+**Proven, locally, in `apps/worker/test/agent-transcript.test.ts`:**
+
+- A Fable-shaped tool-use step — an omitted-thinking `reasoning` part with
+  `text: ""` and an opaque `providerOptions.anthropic.signature`, plus the
+  `run_code` tool call it accompanies, plus the matching tool result — survives
+  `normalizeResponseMessages` → `checkpointStepMessages` → `readModelTranscript`
+  **byte-identically** (`JSON.stringify` equality on the whole message array).
+- The same holds for the `redactedData` variant.
+- The recovered history is accepted by the AI SDK's own prompt standardization:
+  `generateText` against `MockLanguageModelV4` builds a request from it without
+  raising a missing-tool-result error, and the signature arrives at
+  `doGenerateCalls[0].prompt` unchanged.
+- Persisted thinking display text is empty, and checkpointing a step emits **no
+  RunEvent at all**, so no signature or reasoning reaches the replayable stream.
+
+**NOT RUN — still owed, and not implied by any of the above:** whether
+*Anthropic itself* accepts the replayed signature. No live call was made. A
+mock model cannot reject a signature it never verified, so the automated test
+cannot and does not stand in for deferred proof #4 above. Run it as:
+
+```ts
+// scratch-fable-continue.ts — DO NOT COMMIT
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText, tool } from "ai";
+import { z } from "zod";
+
+const model = anthropic("claude-fable-5");
+const providerOptions = {
+  anthropic: { thinking: { type: "adaptive", display: "omitted" }, effort: "high" },
+};
+const tools = {
+  ping: tool({
+    description: "Returns pong.",
+    inputSchema: z.strictObject({}),
+    execute: async () => ({ pong: true }),
+  }),
+};
+
+// 1. Provoke one tool-use step.
+const first = await generateText({ model, tools, providerOptions, stopWhen: () => true,
+  prompt: "Call the ping tool once, then say done." });
+
+// 2. Round-trip its response messages through the real code path.
+import { normalizeResponseMessages } from "./src/agent/transcript";
+const normalized = normalizeResponseMessages(first.response.messages);
+if (normalized.outcome !== "normalized") throw new Error(normalized.reason);
+const recovered = JSON.parse(JSON.stringify(normalized.messages));
+
+// 3. Continue from the recovered history.
+const second = await generateText({ model, tools, providerOptions,
+  messages: [{ role: "user", content: "Call the ping tool once, then say done." }, ...recovered] });
+console.log(second.text, second.finishReason);
+```
+
+**Passing result:** step 3 resolves. **Failing result requiring a stop:** any 400
+mentioning a modified/invalid thinking block signature, or a missing tool result
+— either would mean `normalizeResponseMessages` drops or alters something
+Anthropic requires, and Task 7 must not be built on it until that is fixed.
+
 ### 5. Prompt-cache proof (from the plan's own "Prompt-cache proof" section)
 
 Run the smoke script's first request once, then a second request that repeats
@@ -650,6 +716,10 @@ phase-10-notes.md`").
 | This task's own doc search (new finding, not in the plan) | AI Gateway request-authentication header name | **Ambiguous, unresolved.** Two current Cloudflare docs use `Authorization: Bearer {cf_api_token}` (Anthropic-provider page) and `cf-aig-authorization` (Claude Code integration page) for what appears to be the same "authenticate to the gateway" concern. The plan already picked `cf-aig-authorization`, consistent with the second doc, but this was never exercised live because no Gateway is configured yet. Flagged as deferred live proof #6 above, not resolved here. |
 | This task's own doc search (new finding, not in the plan) | Whether DO constructor re-arming can clobber a newer `setAlarm()` | **Not documented either way.** No Cloudflare doc states the specific race explicitly. Recorded as a design obligation for Task 3, not a documentation gap that further searching will close. |
 | Phase 09 notes, carried forward | `limits.cpuMs` enforcement | **Still "deployed only — unproven."** Not something this task's local-only scope could change; restated as deferred proof #7. |
+
+| Task 4, new finding | `ResponseMessage` is exported from `ai` | **Drift.** `ai@7.0.59` DECLARES `type ResponseMessage = AssistantModelMessage \| ToolModelMessage` at `dist/index.d.ts:176` but does **not** export it (`TS2459: declares 'ResponseMessage' locally, but it is not exported`). `agent/transcript.ts` derives it from the exported `PrepareStepFunction`'s `responseMessages` parameter instead of hand-copying it, so a future change to the union breaks the build. |
+| Task 4, new finding | Provider-level `finishReason` is a string | **Drift against the obvious reading.** `LanguageModelV4FinishReason` (`@ai-sdk/provider@4.0.7`) is an OBJECT: `{ unified: 'stop' \| 'length' \| 'content-filter' \| 'tool-calls' \| 'error' \| 'other'; raw: string \| undefined }`. Good news for the plan's raw-stop-reason requirement — the raw provider reason is structurally available at the provider layer, not only via `providerMetadata`. Task 5 should read it from here. |
+| Task 4, new finding | `LanguageModelV4Usage` matches the flat `LanguageModelUsage` in the plan's table | **Two different types, similar names.** The AI-SDK-level `LanguageModelUsage` is flat (`inputTokens`, `inputTokenDetails.{noCache,cacheRead,cacheWrite}Tokens`) exactly as the plan's Step 3 table records. The PROVIDER-level `LanguageModelV4Usage` nests instead: `inputTokens: { total, noCache, cacheRead, cacheWrite }` and `outputTokens: { total, text, reasoning }`. Neither is wrong; Task 5 must not assume one shape when reading the other. |
 
 **Nothing was invented.** Every table row above is either a confirmation of an
 existing plan claim against a primary source (installed `.d.ts` or live docs),

@@ -256,6 +256,28 @@ describe("decision to wake, and its retry", () => {
   });
 });
 
+describe("the authority of a triage opening", () => {
+  /**
+   * The opening prompt is written BY triage but is made OF customer text: the
+   * triggering message, the thread so far, and recalled memory. Storing it with
+   * `role: "system"` gave every one of those bytes system authority — the exact
+   * confusion invariant 23 exists to forbid.
+   */
+  it("stores the opening as untrusted user input, never as system", async () => {
+    await wakeSlackRun(env, {
+      eventId: "Ev0",
+      channelId: "C1",
+      threadTs,
+      openingPrompt: "Customer asks why exports are empty.",
+    });
+
+    const turns = await runStubForKey(env.RUNS, slackRunKey("C1", threadTs)).turns();
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ role: "user", source: "triage" });
+    expect(turns.some((t) => t.role === "system")).toBe(false);
+  });
+});
+
 describe("a completed thread that earns a new wake", () => {
   it("is not owned before triage, and reopens the same run after it", async () => {
     const first = await wakeSlackRun(env, {

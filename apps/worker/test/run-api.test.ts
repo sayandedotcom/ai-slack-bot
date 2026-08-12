@@ -60,7 +60,9 @@ describe("wakeSlackRun", () => {
     const stub = runStubForKey(env.RUNS, run.key);
     const turns = await stub.turns();
     expect(turns).toHaveLength(1);
-    expect(turns[0]).toMatchObject({ id: "triage:Ev1", role: "system", source: "triage" });
+    // `user`, not `system`: the opening prompt is made of customer text, and the
+    // authority fix in `run/coordinator.ts` is what this asserts.
+    expect(turns[0]).toMatchObject({ id: "triage:Ev1", role: "user", source: "triage" });
   });
 
   it("is idempotent, so a queue replay adds no second run or turn", async () => {
