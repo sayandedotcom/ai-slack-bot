@@ -130,22 +130,24 @@ export function makeBetterStackReader(
         `AND positionCaseInsensitive(toString(raw), {q:String}) > 0 ` +
         `ORDER BY dt DESC LIMIT ${limit} FORMAT JSON`;
 
-      const body = new URLSearchParams({
-        query: sql,
-        param_since: toClickHouse(since),
-        param_until: toClickHouse(until),
-        param_q: input.query,
-      });
+      // Placement is load-bearing. ClickHouse's HTTP interface reads `param_*`
+      // substitutions from the URL ONLY; sending them in a form-encoded body
+      // alongside the query is accepted at the transport level and then fails
+      // with "Substitution `since` is not set". Verified live 2026-08-12.
+      const url = new URL(config.sqlEndpoint);
+      url.searchParams.set("param_since", toClickHouse(since));
+      url.searchParams.set("param_until", toClickHouse(until));
+      url.searchParams.set("param_q", input.query);
 
       let response: Response;
       try {
-        response = await fetch(config.sqlEndpoint, {
+        response = await fetch(url, {
           method: "POST",
           headers: {
             authorization: `Basic ${btoa(`${config.sqlUsername}:${config.sqlPassword}`)}`,
-            "content-type": "application/x-www-form-urlencoded",
+            "content-type": "text/plain",
           },
-          body,
+          body: sql,
         });
       } catch {
         throw upstreamError(0, "log search");

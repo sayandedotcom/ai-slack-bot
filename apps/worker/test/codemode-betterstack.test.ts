@@ -16,15 +16,21 @@ const config = {
   uptimeEndpoint: "https://uptime.betterstack.com/api/v2",
 };
 
-type Sent = { url: string; body: URLSearchParams | null; headers: Headers };
+// ClickHouse splits one request across two places: `param_*` substitutions
+// live in the URL, the SQL itself in the body. Recorded separately here on
+// purpose — a helper that merged them would let a placement bug pass, which is
+// exactly the bug that reached production and only surfaced against the live
+// endpoint.
+type Sent = { url: string; params: URLSearchParams; sql: string | null; headers: Headers };
 let sent: Sent[] = [];
 
 function mockResponse(payload: unknown, status = 200) {
   sent = [];
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+  vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
     sent.push({
       url: String(url),
-      body: init?.body ? new URLSearchParams(String(init.body)) : null,
+      params: new URL(String(url)).searchParams,
+      sql: init?.body === undefined ? null : String(init.body),
       headers: new Headers(init?.headers),
     });
     return new Response(JSON.stringify(payload), { status });
@@ -54,7 +60,7 @@ describe("betterstack.logs time window", () => {
   it("defaults until to now", async () => {
     mockResponse({ data: [] });
     await call(bsTools(), "logs", logsArgs());
-    expect(sent[0].body?.get("param_until")).toBe("2026-08-12 00:00:00.000");
+    expect(sent[0].params.get("param_until")).toBe("2026-08-12 00:00:00.000");
   });
 
   it.each([
@@ -71,7 +77,7 @@ describe("betterstack.logs time window", () => {
   it("normalizes both bounds to UTC", async () => {
     mockResponse({ data: [] });
     await call(bsTools(), "logs", logsArgs({ since: "2026-08-11T05:00:00+02:00" }));
-    expect(sent[0].body?.get("param_since")).toBe("2026-08-11 03:00:00.000");
+    expect(sent[0].params.get("param_since")).toBe("2026-08-11 03:00:00.000");
   });
 });
 
@@ -79,16 +85,31 @@ describe("betterstack.logs query handling", () => {
   it("binds the query as a parameter rather than interpolating it", async () => {
     mockResponse({ data: [] });
     await call(bsTools(), "logs", logsArgs({ query: "'; DROP TABLE logs; --" }));
-    const sql = String(sent[0].body?.get("query"));
+    const sql = String(sent[0].sql);
     expect(sql).toContain("{q:String}");
     expect(sql).not.toContain("DROP TABLE");
-    expect(sent[0].body?.get("param_q")).toBe("'; DROP TABLE logs; --");
+    expect(sent[0].params.get("param_q")).toBe("'; DROP TABLE logs; --");
+  });
+
+  // Regression: every param_* used to ride in a form-encoded body next to the
+  // query. ClickHouse accepted the request and answered "Substitution `since`
+  // is not set", so betterstack.logs() could never return a line. The mocks
+  // could not see it — they only replayed the shape we sent.
+  it("puts substitutions in the URL and the SQL in the body", async () => {
+    mockResponse({ data: [] });
+    await call(bsTools(), "logs", logsArgs());
+    expect(sent[0].sql).toContain("SELECT dt, raw FROM remote(");
+    expect(sent[0].sql).not.toContain("param_since");
+    for (const name of ["param_since", "param_until", "param_q"]) {
+      expect(sent[0].params.get(name), `${name} belongs in the URL`).toBeTruthy();
+    }
+    expect(sent[0].params.get("query"), "the SQL must not also ride in the URL").toBeNull();
   });
 
   it("names only the allowlisted collection", async () => {
     mockResponse({ data: [] });
     await call(bsTools(), "logs", logsArgs());
-    expect(String(sent[0].body?.get("query"))).toContain(`remote(${COLLECTION})`);
+    expect(String(sent[0].sql)).toContain(`remote(${COLLECTION})`);
   });
 
   it.each([
@@ -113,7 +134,7 @@ describe("betterstack.logs query handling", () => {
   it("clamps the line count", async () => {
     mockResponse({ data: [] });
     await call(bsTools(), "logs", logsArgs({ limit: 200 }));
-    expect(String(sent[0].body?.get("query"))).toContain("LIMIT 200");
+    expect(String(sent[0].sql)).toContain("LIMIT 200");
   });
 
   it("sends basic auth, not a bearer token", async () => {

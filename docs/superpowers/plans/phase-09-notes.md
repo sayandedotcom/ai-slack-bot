@@ -360,25 +360,59 @@ Corrected to the `_logs` one. Source `firefighter-worker` (id 2670566) is
 active, in `eu-central-1a` — matching the SQL endpoint — with **3-day** log
 retention, which is why the query window caps at 7 days rather than 30.
 
-### ACTION REQUIRED: the SQL connection cannot see the source
+### RESOLVED: the collection did not exist because nothing had been ingested
 
-Diagnosed by elimination against the live endpoint:
+The earlier read of this — "the SQL connection was never granted the source,
+recreate it" — was **wrong**, and the credentials in `.dev.vars` were correct
+all along. Corrected 2026-08-12 by two controls the first diagnosis lacked:
 
-- `SELECT 1` → **works**, so the credentials authenticate and the endpoint and
-  region are right;
-- every collection for this source — `_logs`, `_metrics`, `_s3` — fails;
-- `system.named_collections` → `Not enough privileges`, so it cannot be
-  enumerated from this connection;
-- Better Stack's own tooling fails identically, so it is not a query-syntax
-  problem.
+1. A **fresh** connection, created through Better Stack's own API and scoped to
+   `source_id 2670566`, failed identically: `CLUSTER_DOESNT_EXIST`. A grant
+   problem cannot survive a connection minted against the source itself, so the
+   cause was not the credential.
+2. The **other** source on the same account (`Onboarding • Real-time flights`)
+   answered `count() = 0` rather than erroring — cluster present, zero rows.
 
-The connection predates the source (source created 2026-08-11 20:34 UTC) and was
-never granted it. **Fix: create a new SQL connection at telemetry.betterstack.com
-→ Integrations → SQL API, then update `BETTERSTACK_SQL_USERNAME` and
-`BETTERSTACK_SQL_PASSWORD`.** The password is shown once. Until then
-`betterstack.logs()` returns `upstream_unavailable` — correctly, and without
-leaking the ClickHouse exception, which names internal collections and the
-connection user.
+The difference between the two sources was ingestion. Better Stack provisions a
+source's storage lazily, on first write; `firefighter-worker` had received
+nothing, because nothing in this repo ships to it — there is no Logpush job and
+no tail Worker. `CLUSTER_DOESNT_EXIST` means *empty*, not *forbidden*.
+
+Posting a single line to `s2670566.eu-central-1a.betterstackdata.com` returned
+`202`, and both the pre-existing and the fresh credentials then queried the
+collection successfully. No connection was recreated and no secret changed.
+
+**Still outstanding, and a separate matter:** nothing routes Worker logs into
+this source. Until Logpush or a tail Worker exists, `betterstack.logs()` is
+wired correctly but searches a source only manual probes have written to.
+
+### The parameter-placement bug the mocks could not see
+
+Making the collection resolvable immediately exposed a real defect in
+`src/betterstack/client.ts`. Every request had carried the SQL *and* its
+`param_*` substitutions together in one `application/x-www-form-urlencoded`
+body. ClickHouse reads substitutions from the **URL only**: it accepted the
+request and answered
+
+```
+Code: 456. DB::Exception: Substitution `since` is not set. (UNKNOWN_QUERY_PARAMETER)
+```
+
+so `betterstack.logs()` could never have returned a line, under any credential.
+Fixed by putting `param_since` / `param_until` / `param_q` in the URL and
+sending the SQL as a `text/plain` body.
+
+Worth naming plainly: 46 tests covered this function and none could fail. They
+asserted against a `fetch` mock that replayed whatever shape we sent, so the
+suite verified our intent against itself. `test/codemode-betterstack.test.ts`
+now records URL parameters and body separately and pins the placement, but the
+general lesson stands — a mock cannot tell you the other side agrees.
+
+Verified live 2026-08-12 with the real `makeBetterStackReader`: `logs()` returns
+the probe line with `at`/`level`/`message` populated, and the injection control
+(`' OR 1=1 --` as the query term) returns **0 rows** rather than everything,
+proving `{q:String}` is bound and not interpolated. `monitors()` returns only
+the four allowlisted fields.
 
 ### The monitor allowlist is not theoretical
 
@@ -392,11 +426,15 @@ allowlist and spreads nothing.
 
 ### Credentials that appeared in tooling output
 
-While diagnosing, two values were echoed by Better Stack's own tooling into this
-session's transcript: the **source ingest token** for `firefighter-worker`, and
-the **SQL connection username** (in a privileges error). Neither is the SQL
-password. Rotate them if the transcript is shared; the SQL connection is being
-recreated anyway.
+While diagnosing, three values were echoed by Better Stack's own tooling into
+this session's transcript: the **source ingest token** for `firefighter-worker`,
+the **SQL connection username** (in a privileges error), and a **temporary
+connection's username and password** minted by `create_cloud_connection` during
+the 2026-08-12 re-diagnosis — that one expires an hour after issue and needs no
+action. Neither of the first two is the SQL password, but the ingest token grants
+write access to the log source and the correction above shows it still works.
+Rotate both if the transcript is shared. Note that the SQL connection is **not**
+being recreated after all, so its username stays valid until rotated.
 
 ---
 
@@ -576,7 +614,7 @@ approvals. Phase 09 deliberately uses only `runCode` + `DynamicWorkerExecutor`:
 | `slack.reply` | always `identity_unavailable`. Phase 12 supplies the per-engineer token; it must never fall back to `SLACK_BOT_TOKEN` |
 | `supabase.*` | correct but **answers nothing**: the project has no tables, so `PRODUCTION_ALLOWLIST` is empty |
 | `langsmith.*` | correct but the pinned project has **zero runs**; normalization has never seen a real trace |
-| `betterstack.logs` | correct but the **SQL connection cannot see the source** — recreate the connection (Task 11) |
+| `betterstack.logs` | **working live** as of 2026-08-12, after fixing `param_*` placement; but nothing ships Worker logs into the source yet, so it searches near-empty data |
 | `betterstack.monitors` | working against the live account |
 | `linear.*` | working; verified live including duplicate-id reconciliation |
 | `slack.thread` / `searchMessages` | working, but two of three channels have ingested **zero** messages — the bot is likely not a member |
