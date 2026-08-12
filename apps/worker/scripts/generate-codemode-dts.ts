@@ -13,7 +13,12 @@ import { fileURLToPath } from "node:url";
 
 import { renderCapabilityDeclarations } from "../src/codemode/dts";
 import { buildRegistry } from "../src/codemode/registry";
-import { PRODUCTION_LIMITS, type CodeModeScope } from "../src/codemode/contracts";
+import {
+  alwaysFresh,
+  PRODUCTION_LIMITS,
+  type CodeModeScope,
+} from "../src/codemode/contracts";
+import { newCodeExecution } from "../src/codemode/bindings/shared";
 import type { CapabilityDependencies } from "../src/codemode/gateways";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -68,6 +73,22 @@ const silentAudit = {
   async failed() {},
 };
 
+/**
+ * A throwaway execution, for the same reason the gateways above are
+ * unreachable: rendering reads schemas, so nothing here is ever charged,
+ * audited or resolved. It is built through the production constructor rather
+ * than hand-rolled so a field added to `CodeExecution` cannot leave this script
+ * silently constructing a half-built one.
+ */
+const renderExecution = () =>
+  newCodeExecution({
+    outerToolCallId: "render",
+    audit: silentAudit,
+    guard: alwaysFresh(),
+    limits: PRODUCTION_LIMITS,
+    clock: () => 0,
+  });
+
 async function main(): Promise<void> {
   const mode = process.argv.includes("--write")
     ? "write"
@@ -84,7 +105,7 @@ async function main(): Promise<void> {
     RENDER_SCOPE,
     unreachableDependencies(),
     PRODUCTION_LIMITS,
-    silentAudit,
+    renderExecution(),
   );
   const rendered = renderCapabilityDeclarations(registry);
 

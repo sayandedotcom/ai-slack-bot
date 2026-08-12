@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRegistry } from "../src/codemode/registry";
 import { makeBetterStackReader, MONITOR_FIELDS } from "../src/betterstack/client";
-import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
+import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 const COLLECTION = "t582255_firefighter_worker_logs";
 const NOW = Date.parse("2026-08-12T00:00:00Z");
@@ -41,7 +41,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 function bsTools(logCollections = config.logCollections) {
   const reader = makeBetterStackReader({ ...config, logCollections }, () => NOW);
   const deps = { ...fakeDeps(), db: env.DB, betterstack: reader };
-  return buildRegistry(slackScope, deps, TEST_LIMITS, fakeAuditSink())
+  return buildRegistry(slackScope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
     .find((p) => p.name === "betterstack")!.tools;
 }
 

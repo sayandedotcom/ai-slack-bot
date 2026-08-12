@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
+import type { JsonObject } from "../../run/protocol";
 import { runEffect } from "../effects";
-import { auditedCapability, type BindingContext } from "../registry";
+import { auditedCapability, effectDeps, type BindingContext } from "../registry";
 
 const level = z.enum(["low", "medium", "high"]);
 
@@ -39,22 +40,31 @@ export function makeLinearTools(ctx: BindingContext): ToolDescriptors {
       }),
       run: async (input) => {
         const description = renderDescription(input.description, input.assessment);
+        // Normalized ONCE and used for both the key and the request, so the key
+        // describes exactly what was sent. The assessment needs no key field of
+        // its own: renderDescription folds it into `description`, which is in
+        // the key already.
+        const labels = normalizeLabels(input.labels);
         // Reserved through the ledger so the idempotency key handed to Linear
         // IS the effect key. Linear accepts a client-supplied issue id and
         // refuses a duplicate, so the two mechanisms agree on what "the same
         // issue" means instead of each having its own opinion.
         return runEffect(
-          { db: ctx.deps.db, clock: ctx.deps.clock },
+          effectDeps(ctx),
           ctx.scope,
           "linear",
           "createIssue",
-          { title: input.title, description },
+          // `labels` is in the key because it changes what gets filed. Omitting
+          // it made two issues that differ only by label one effect: the second
+          // create replayed the first issue's URL and the labels were silently
+          // never applied, with the model told it had succeeded.
+          { title: input.title, description, labels },
           {
             execute: (idempotencyKey) =>
               ctx.deps.linear.createIssue({
                 title: input.title,
                 description,
-                labels: input.labels ?? [],
+                labels,
                 idempotencyKey,
               }),
             // Turns an ambiguous 5xx into a decidable question. The create
@@ -76,9 +86,55 @@ export function makeLinearTools(ctx: BindingContext): ToolDescriptors {
         state: z.string().min(1).max(60).optional(),
       }),
       output: z.strictObject({ id: z.string(), url: z.string() }),
-      run: async (input) => ctx.deps.linear.updateIssue(input),
+      run: async (input) => {
+        // Through the ledger, which it was not before Phase 10 Task 1. An
+        // enabled mutator outside the ledger is fine only while nothing retries
+        // it; the agent loop retries, so a crash between "sent" and "recorded"
+        // would re-apply the edit and add a second entry to the issue's public
+        // activity feed.
+        //
+        // Every field that changes what the edit DOES is in the key, and only
+        // the fields actually supplied: `undefined` has no canonical form, and
+        // "leave the title alone" is a different effect from "set the title to
+        // X", so they must not hash alike.
+        const patch: JsonObject = { issueId: input.issueId };
+        if (input.title !== undefined) patch.title = input.title;
+        if (input.description !== undefined) patch.description = input.description;
+        if (input.state !== undefined) patch.state = input.state;
+
+        return runEffect(
+          effectDeps(ctx),
+          ctx.scope,
+          "linear",
+          "updateIssue",
+          patch,
+          {
+            // No `idempotencyKey` and no `reconcile`, deliberately, and this is
+            // the residual risk to know about: Linear's update mutation takes
+            // no client token, and reading the issue back cannot distinguish
+            // "our edit landed" from "someone else set the same value". So an
+            // ambiguous update stays `in_doubt` for a human rather than being
+            // guessed at. The ledger reservation still gives the property that
+            // matters here — a retry of this turn cannot apply the edit twice.
+            execute: () => ctx.deps.linear.updateIssue(input),
+          },
+        );
+      },
     }),
   };
+}
+
+/**
+ * Sort, de-duplicate and NFC-normalize labels.
+ *
+ * Label ORDER is not meaning, so two orderings must not be two effects — but
+ * `canonical()` preserves array order by design (for arrays where order IS
+ * meaning), so the normalization has to happen here. Applied to the outgoing
+ * request too, otherwise the key would describe something other than what was
+ * sent.
+ */
+function normalizeLabels(labels: string[] | undefined): string[] {
+  return [...new Set((labels ?? []).map((label) => label.normalize("NFC")))].sort();
 }
 
 /**

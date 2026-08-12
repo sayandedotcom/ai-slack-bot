@@ -4,7 +4,7 @@ import { buildRegistry } from "../src/codemode/registry";
 import { makeSupabaseReader } from "../src/supabase/reader";
 import { PRODUCTION_ALLOWLIST, type SupabaseAllowlist } from "../src/supabase/allowlist";
 import type { CodeModeScope } from "../src/codemode/contracts";
-import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
+import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 /** A fixture schema. The production allowlist is empty; see its comment. */
 const ALLOWLIST: SupabaseAllowlist = [
@@ -45,7 +45,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 function supabaseTools(scope: CodeModeScope = slackScope, allowlist = ALLOWLIST) {
   const reader = makeSupabaseReader({ ...config, allowlist }, scope);
   const deps = { ...fakeDeps(), db: env.DB, supabase: reader };
-  return buildRegistry(scope, deps, TEST_LIMITS, fakeAuditSink())
+  return buildRegistry(scope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
     .find((p) => p.name === "supabase")!.tools;
 }
 

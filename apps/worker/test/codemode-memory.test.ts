@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildRegistry } from "../src/codemode/registry";
 import type { CodeModeScope } from "../src/codemode/contracts";
 import type { MemoryFact, MemoryStore } from "../src/memory/store";
-import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
+import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 const uid = () => crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 
@@ -24,7 +24,7 @@ function recordingStore(byGraph: Record<string, MemoryFact[]> = {}) {
 
 function memoryTools(scope: CodeModeScope, store: MemoryStore) {
   const deps = { ...fakeDeps(), db: env.DB, memory: store };
-  return buildRegistry(scope, deps, TEST_LIMITS, fakeAuditSink())
+  return buildRegistry(scope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
     .find((p) => p.name === "memory")!.tools;
 }
 

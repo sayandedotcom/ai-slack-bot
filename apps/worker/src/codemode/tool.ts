@@ -16,10 +16,13 @@ import { runCode } from "@cloudflare/codemode";
 // to be corrected. Do not "fix" this import.
 import { resolveProvider } from "@cloudflare/codemode";
 import type { JsonValue } from "../run/protocol";
-import type {
-  CapabilityAuditSink,
-  CodeModeLimits,
-  CodeModeScope,
+import { newCodeExecution } from "./bindings/shared";
+import {
+  alwaysFresh,
+  type AgentExecutionGuard,
+  type CapabilityAuditSink,
+  type CodeModeLimits,
+  type CodeModeScope,
 } from "./contracts";
 import { renderCapabilityDeclarations } from "./dts";
 import { CapabilityError, safeMessage } from "./errors";
@@ -28,11 +31,35 @@ import { guardLoader } from "./guarded-loader";
 import { makeGuardedExecutor, TRUNCATION_MARK } from "./executor";
 import { buildRegistry } from "./registry";
 
+/**
+ * What the trusted parent knows about one `run_code` call, distilled to the two
+ * facts the capability layer needs: which tool call this is, and whether the
+ * caller is still waiting.
+ *
+ * Both come from the AI SDK's `ToolExecutionOptions`. They are read from it
+ * rather than reconstructed, because a locally invented subset drifts silently
+ * the first time the SDK changes what it supplies.
+ */
+export type CodeExecutionContext = {
+  outerToolCallId: string;
+  abortSignal?: AbortSignal;
+};
+
 export type MakeRunCodeToolInput = {
   scope: CodeModeScope;
   deps: CapabilityDependencies;
   limits: CodeModeLimits;
-  audit: CapabilityAuditSink;
+  /**
+   * One sink per execution, not one sink per tool.
+   *
+   * A factory rather than a value because the sink is where Phase 10 attaches a
+   * `run_code` call's nested activity to that call's record in the RunDO. A
+   * single shared sink cannot say which of an agent loop's ten tool calls an
+   * event belongs to, and by the time that matters someone is reading the log
+   * because something went wrong.
+   */
+  auditForExecution(context: CodeExecutionContext): CapabilityAuditSink;
+  guard: AgentExecutionGuard;
   loader: WorkerLoader;
 };
 
@@ -76,25 +103,50 @@ Available capabilities:
  * which is what makes "the model cannot reach a credential" a structural claim
  * rather than a policy one.
  *
- * A fresh registry per invocation, never cached: provider closures hold the
- * trusted scope, the execution-local fact cache and the call counter, so
- * reusing one across turns would leak all three.
+ * ONE tool instance, MANY executions. An agent loop calls the same instance on
+ * every step, so nothing execution-shaped may be captured by this factory. The
+ * runtime registry, the call budget, the audit sink, the memory citation cache
+ * and the customer references are all built inside `execute` and discarded with
+ * it; `newCodeExecution` is the single place that constructs them. The factory
+ * captures only things that are genuinely constant for the whole run: the
+ * trusted scope, the gateways, the limits, the loader and the guard.
+ *
+ * This comment used to claim "a fresh registry per invocation, never cached"
+ * while the implementation built one registry per FACTORY. The code now matches
+ * the sentence. A comment asserting an isolation property the code does not
+ * have is worse than no comment, because it is what a reviewer trusts instead
+ * of reading the constructor.
  */
 export function makeRunCodeTool(
   input: MakeRunCodeToolInput,
 ): Tool<{ code: string }, CodeModeOutput> {
-  const registry = buildRegistry(input.scope, input.deps, input.limits, countingSink(input.audit));
+  // Schema-only. Its capability closures are never invoked: nothing but
+  // `renderCapabilityDeclarations` ever touches this registry, and it is
+  // deliberately NOT the one handed to runCode(). Rendering needs the input and
+  // output schemas, which do not vary by execution — but the closures around
+  // them hold execution state, so reusing this one is the exact defect above.
+  // It is given a throwaway execution whose audit sink drops everything, so a
+  // future refactor that accidentally executed through it would record nothing
+  // and fail loudly in the audit assertions rather than quietly succeed.
+  const declarationOnlyRegistry = buildRegistry(
+    input.scope,
+    input.deps,
+    input.limits,
+    newCodeExecution({
+      outerToolCallId: "declarations-only",
+      audit: discardingSink(),
+      guard: alwaysFresh(),
+      limits: input.limits,
+      clock: input.deps.clock,
+    }),
+  );
 
   const description = RULES.replace(
     "{{types}}",
-    renderCapabilityDeclarations(registry),
+    renderCapabilityDeclarations(declarationOnlyRegistry),
   );
 
-  const executor = makeGuardedExecutor(
-    guardLoader(input.loader, input.limits),
-    input.limits,
-    input.deps.clock,
-  );
+  const loader = guardLoader(input.loader, input.limits);
 
   return tool({
     description,
@@ -104,9 +156,43 @@ export function makeRunCodeTool(
     inputSchema: z.strictObject({
       code: z.string().min(1).max(input.limits.maxCodeChars),
     }),
-    execute: async ({ code }): Promise<CodeModeOutput> => {
+    execute: async ({ code }, options): Promise<CodeModeOutput> => {
       const startedAt = input.deps.clock();
-      const counter = countedCalls.get(input.audit) ?? { n: 0 };
+      const context: CodeExecutionContext = {
+        outerToolCallId: outerToolCallId(options),
+        abortSignal: options?.abortSignal,
+      };
+
+      const failure = (err: unknown, capabilityCalls: number): CodeModeOutput => ({
+        result: null,
+        logs: [],
+        error: normalizeFailure(err),
+        truncation: { result: false, logs: false },
+        metrics: {
+          durationMs: input.deps.clock() - startedAt,
+          capabilityCalls,
+        },
+      });
+
+      // FIRST, before the isolate and before anything is built for this call.
+      // The cheapest possible refusal: a superseded step should not pay for a
+      // Worker load, and should not open an audit record for work that is not
+      // going to happen.
+      try {
+        await input.guard.assertFresh();
+      } catch (err) {
+        return failure(err, 0);
+      }
+
+      // Everything below belongs to THIS execution and is discarded with it.
+      const execution = newCodeExecution({
+        outerToolCallId: context.outerToolCallId,
+        audit: input.auditForExecution(context),
+        guard: input.guard,
+        limits: input.limits,
+        clock: input.deps.clock,
+        abortSignal: context.abortSignal,
+      });
 
       const finish = (
         partial: Omit<CodeModeOutput, "metrics">,
@@ -114,14 +200,31 @@ export function makeRunCodeTool(
         ...partial,
         metrics: {
           durationMs: input.deps.clock() - startedAt,
-          capabilityCalls: counter.n,
+          // Read off this execution's own counter. The WeakMap-of-sinks
+          // indirection this replaced existed only to reach a count the factory
+          // had already made shared; with per-execution state there is one
+          // obvious number and no way to read someone else's.
+          capabilityCalls: execution.counter.used,
         },
       });
 
       try {
+        const registry = buildRegistry(
+          input.scope,
+          input.deps,
+          input.limits,
+          execution,
+        );
         const output = await runCode({
           code,
-          executor,
+          // Built here rather than once per factory so the race can honour THIS
+          // execution's abort signal without seeing any other execution's.
+          executor: makeGuardedExecutor(
+            loader,
+            input.limits,
+            input.deps.clock,
+            context.abortSignal,
+          ),
           providers: registry.map((provider) =>
             resolveProvider({ name: provider.name, tools: provider.tools }),
           ),
@@ -141,12 +244,7 @@ export function makeRunCodeTool(
         // appending console output. The AI SDK would surface a throw as an
         // exception; returning it as a value keeps it in the model's tool
         // result where the next turn can actually read it.
-        return finish({
-          result: null,
-          logs: [],
-          error: normalizeFailure(err),
-          truncation: { result: false, logs: false },
-        });
+        return failure(err, execution.counter.used);
       }
     },
   });
@@ -170,29 +268,26 @@ function normalizeFailure(err: unknown): string {
 }
 
 /**
- * Counts capability calls without changing `buildRegistry`'s shape.
+ * The outer tool call this execution belongs to.
  *
- * A WeakMap keyed by the caller's own sink, so two concurrent executions cannot
- * see each other's count — the same reason the scope is an argument rather than
- * ambient state.
+ * The AI SDK always supplies one. The fallback is for a host-side caller
+ * driving `execute` directly, and it MINTS rather than reusing a constant:
+ * `cap:unknown:1` from two such calls would collide, which is precisely the
+ * defect the id exists to prevent.
  */
-const countedCalls = new WeakMap<CapabilityAuditSink, { n: number }>();
+function outerToolCallId(options?: { toolCallId?: string }): string {
+  const supplied = options?.toolCallId;
+  return typeof supplied === "string" && supplied.length > 0
+    ? supplied
+    : `local_${crypto.randomUUID()}`;
+}
 
-function countingSink(inner: CapabilityAuditSink): CapabilityAuditSink {
-  const counter = { n: 0 };
-  countedCalls.set(inner, counter);
+/** Accepts and drops every event. Only for the declarations-only registry. */
+function discardingSink(): CapabilityAuditSink {
   return {
-    async started(event) {
-      await inner.started(event);
-    },
-    async completed(event) {
-      counter.n += 1;
-      await inner.completed(event);
-    },
-    async failed(event) {
-      counter.n += 1;
-      await inner.failed(event);
-    },
+    async started() {},
+    async completed() {},
+    async failed() {},
   };
 }
 

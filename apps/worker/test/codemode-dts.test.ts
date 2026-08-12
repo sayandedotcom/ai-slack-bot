@@ -4,9 +4,9 @@ import { resolveProvider as bareResolveProvider } from "@cloudflare/codemode";
 import { describe, expect, it } from "vitest";
 import { buildRegistry } from "../src/codemode/registry";
 import { renderCapabilityDeclarations } from "../src/codemode/dts";
-import { fakeDeps, slackScope, TEST_LIMITS, fakeAuditSink } from "./helpers/codemode";
+import { fakeDeps, slackScope, TEST_LIMITS, fakeAuditSink, testExecution } from "./helpers/codemode";
 
-const registry = () => buildRegistry(slackScope, fakeDeps(), TEST_LIMITS, fakeAuditSink());
+const registry = () => buildRegistry(slackScope, fakeDeps(), TEST_LIMITS, testExecution({ audit: fakeAuditSink() }));
 const toPascal = (s: string) =>
   s.replace(/_([a-z])/g, (_, c) => c.toUpperCase()).replace(/^[a-z]/, (c) => c.toUpperCase());
 
@@ -82,7 +82,7 @@ describe("capability registry", () => {
   it("builds the same namespace set regardless of run context", () => {
     const chat = buildRegistry(
       { ...slackScope, origin: "chat", slackThread: null, customerSlug: null },
-      fakeDeps(), TEST_LIMITS, fakeAuditSink(),
+      fakeDeps(), TEST_LIMITS, testExecution({ audit: fakeAuditSink() }),
     );
     expect(chat.map((p) => p.name)).toEqual(registry().map((p) => p.name));
   });

@@ -18,6 +18,7 @@ export type CapabilityErrorCode =
   | "linear_team_denied"
   | "customer_scope_required"
   | "read_only_violation"
+  | "stale_generation"
   | "effect_in_doubt"
   | "output_too_large"
   | "execution_timeout"
@@ -35,6 +36,20 @@ export type CapabilityErrorCode =
 const RETRYABLE: ReadonlySet<CapabilityErrorCode> = new Set([
   "upstream_unavailable",
 ]);
+
+/**
+ * What model-authored code is told when the run it belongs to has moved on.
+ *
+ * Deliberately says nothing about *what* the newer input is. The steer text is
+ * the next step's business: putting it here would smuggle unreviewed user
+ * content into an error string that also reaches the audit log, and would
+ * invite the model to act on a message it was never formally handed.
+ *
+ * Not retryable. Repeating the same call cannot make this run current again;
+ * the only useful move is to stop and let the next step start.
+ */
+export const STALE_GENERATION_MESSAGE =
+  "newer input arrived for this run, so this execution is no longer current. Stop here rather than retrying; the next step receives the newer input.";
 
 /**
  * What an untranslated host failure becomes on its way to the model.

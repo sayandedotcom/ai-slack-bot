@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
-import { runEffect } from "../effects";
-import { auditedCapability, type BindingContext } from "../registry";
+import { runEffect, sha256Bytes } from "../effects";
+import { auditedCapability, effectDeps, type BindingContext } from "../registry";
 
 /**
  * Hand-written, and the only namespace that is.
@@ -62,16 +62,29 @@ export function makeFilesTools(ctx: BindingContext): ToolDescriptors {
         size: z.number(),
         sha256: z.string(),
       }),
-      run: async (input) =>
+      run: async (input) => {
+        // The CONTENT is part of the effect's identity, not just its name and
+        // length. Without this hash, two different 4KB `evidence.png`s in one
+        // turn share an effect key: the ledger replays the first one's URL for
+        // the second, and the model — and then a customer — is handed the wrong
+        // screenshot with no error anywhere. Hashing here rather than trusting
+        // the publisher's returned digest, because the key has to exist BEFORE
+        // the write it is meant to deduplicate.
+        const sha256 = await sha256Bytes(input.bytes);
         // Through the ledger so the object key IS the effect key: a retry
         // writes the same object and returns the same URL rather than
         // scattering near-duplicate artifacts.
-        runEffect(
-          { db: ctx.deps.db, clock: ctx.deps.clock },
+        return runEffect(
+          effectDeps(ctx),
           ctx.scope,
           "files",
           "publish",
-          { contentType: input.contentType, filename: input.filename, size: input.bytes.byteLength },
+          {
+            contentType: input.contentType,
+            filename: input.filename,
+            size: input.bytes.byteLength,
+            sha256,
+          },
           {
             execute: (idempotencyKey) =>
               ctx.deps.files.publish({
@@ -81,7 +94,8 @@ export function makeFilesTools(ctx: BindingContext): ToolDescriptors {
                 idempotencyKey,
               }),
           },
-        ),
+        );
+      },
     }),
   };
 }

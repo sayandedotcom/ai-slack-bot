@@ -1,11 +1,17 @@
-import type {
-  CapabilityCompleted,
-  CapabilityEvent,
-  CapabilityFailed,
-  CapabilityStarted,
-  CodeModeLimits,
-  CodeModeScope,
+import {
+  alwaysFresh,
+  type AgentExecutionGuard,
+  type CapabilityCompleted,
+  type CapabilityEvent,
+  type CapabilityFailed,
+  type CapabilityStarted,
+  type CodeModeLimits,
+  type CodeModeScope,
 } from "../../src/codemode/contracts";
+import {
+  newCodeExecution,
+  type CodeExecution,
+} from "../../src/codemode/bindings/shared";
 import type { CapabilityDependencies } from "../../src/codemode/gateways";
 
 // Re-exported rather than reimplemented: the call budget is production policy,
@@ -53,6 +59,32 @@ export function fakeAuditSink(): FakeAuditSink {
       events.push(event);
     },
   };
+}
+
+/**
+ * The state of one `run_code` execution, for tests that drive `buildRegistry`
+ * directly instead of going through the tool.
+ *
+ * Built through the production constructor, so a field added to `CodeExecution`
+ * cannot be quietly missing here. Each call mints a distinct outer tool call id
+ * — two executions in one test must never look like the same one, which is the
+ * whole property this helper's callers depend on.
+ */
+export function testExecution(input: {
+  audit: FakeAuditSink;
+  limits?: CodeModeLimits;
+  guard?: AgentExecutionGuard;
+  outerToolCallId?: string;
+  abortSignal?: AbortSignal;
+} ): CodeExecution {
+  return newCodeExecution({
+    outerToolCallId: input.outerToolCallId ?? `call_${crypto.randomUUID()}`,
+    audit: input.audit,
+    guard: input.guard ?? alwaysFresh(),
+    limits: input.limits ?? TEST_LIMITS,
+    clock: () => 0,
+    abortSignal: input.abortSignal,
+  });
 }
 
 /** A well-formed Slack scope. Individual tests override the fields they care about. */

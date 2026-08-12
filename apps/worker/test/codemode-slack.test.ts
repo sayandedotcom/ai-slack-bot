@@ -4,7 +4,7 @@ import { buildRegistry } from "../src/codemode/registry";
 import { makeSlackGateway } from "../src/slack/gateway";
 import { CapabilityError } from "../src/codemode/errors";
 import type { CodeModeScope } from "../src/codemode/contracts";
-import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
+import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 /**
  * Storage is shared across cases and files (test/setup.ts migrates once), so
@@ -55,7 +55,7 @@ const scopeFor = (channelId: string, threadTs: string, runId: string, patch: Par
 /** The real gateway over real D1, with the fakes replaced for this namespace. */
 function slackTools(scope: CodeModeScope) {
   const deps = { ...fakeDeps(), db: env.DB, slack: makeSlackGateway(env.DB, scope) };
-  const registry = buildRegistry(scope, deps, TEST_LIMITS, fakeAuditSink());
+  const registry = buildRegistry(scope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }));
   return registry.find((p) => p.name === "slack")!.tools;
 }
 

@@ -1,10 +1,15 @@
 import type { JsonObject } from "../../run/protocol";
 import type {
+  AgentExecutionGuard,
   CapabilityAuditSink,
   CodeModeLimits,
   CodeModeScope,
 } from "../contracts";
-import { CapabilityError, toCapabilityError } from "../errors";
+import {
+  CapabilityError,
+  STALE_GENERATION_MESSAGE,
+  toCapabilityError,
+} from "../errors";
 
 /**
  * Per-execution call budget.
@@ -39,10 +44,109 @@ export function newCallCounter(limits: CodeModeLimits): CallCounter {
   };
 }
 
-export type AuditDeps = {
-  audit: CapabilityAuditSink;
-  clock: () => number;
+/* ------------------------------------------------- customer references -- */
+
+/**
+ * Maps opaque references to D1-validated customer slugs, for one execution.
+ *
+ * The indirection is the point. A capability that returned a raw slug would let
+ * model-authored code hand that slug back to a *different* capability and read
+ * across customers; a reference is unguessable, minted only from a slug the
+ * host itself validated, and resolvable only inside the execution that minted
+ * it. `crypto.randomUUID()` rather than a counter for exactly that reason —
+ * `cust_1` is guessable, and the second execution would happily resolve it.
+ *
+ * Shared by the `memory` and `slack` namespaces *within* one execution so a
+ * reference minted by one is usable by the other, and by nothing else.
+ *
+ * NOTE: Phase 09 ships no capability that mints one — there is no
+ * `memory.findCustomers` yet. This exists because the execution context is the
+ * only correct owner for it and Task 1 is the task that builds that context;
+ * wiring it into a later namespace must not become an excuse to hang it off the
+ * factory, where it would outlive the execution. Its isolation is tested
+ * directly in test/codemode-isolation.test.ts.
+ */
+export type CustomerReferenceResolver = {
+  /** Mint a reference for a slug the host has already validated. */
+  mint(customerSlug: string): string;
+  /** Resolve a reference minted in THIS execution, or refuse. */
+  resolve(reference: string): string;
 };
+
+export function newCustomerReferenceResolver(): CustomerReferenceResolver {
+  const slugs = new Map<string, string>();
+  return {
+    mint(customerSlug: string): string {
+      const reference = `cust_${crypto.randomUUID()}`;
+      slugs.set(reference, customerSlug);
+      return reference;
+    },
+    resolve(reference: string): string {
+      const slug = slugs.get(reference);
+      if (slug === undefined) {
+        // Names neither the reference nor any slug: the error is read by the
+        // party that supplied the bad reference, and confirming which of two
+        // guesses was closer is itself an oracle.
+        throw new CapabilityError(
+          "invalid_input",
+          "that customer reference was not produced in this execution. Use only references returned to you here.",
+        );
+      }
+      return slug;
+    },
+  };
+}
+
+/* -------------------------------------------------------- one execution -- */
+
+/**
+ * Everything that belongs to ONE `run_code` execution and must never be shared
+ * with a second one.
+ *
+ * This type exists so that "per execution" is a thing you can hold, pass, and
+ * fail to construct — rather than a property of *where* a line of code happens
+ * to sit. Before Phase 10 the registry was built once per factory and every one
+ * of these fields was silently shared by every tool call the agent loop made:
+ * one call budget, one citation cache, one audit stream with colliding ids.
+ */
+export type CodeExecution = {
+  /**
+   * The AI SDK `ToolExecutionOptions.toolCallId` of the `run_code` call these
+   * capability calls sit underneath. Supplied by the trusted parent, never by
+   * model-authored code.
+   */
+  outerToolCallId: string;
+  audit: CapabilityAuditSink;
+  counter: CallCounter;
+  guard: AgentExecutionGuard;
+  customers: CustomerReferenceResolver;
+  clock: () => number;
+  /** The overall operation's signal, where a parent-side wait can honour it. */
+  abortSignal?: AbortSignal;
+};
+
+/**
+ * Build the state for one execution. Every field that could leak between two
+ * tool calls is constructed here, so there is exactly one place to look.
+ */
+export function newCodeExecution(input: {
+  outerToolCallId: string;
+  audit: CapabilityAuditSink;
+  guard: AgentExecutionGuard;
+  limits: CodeModeLimits;
+  clock: () => number;
+  abortSignal?: AbortSignal;
+}): CodeExecution {
+  return {
+    outerToolCallId: input.outerToolCallId,
+    audit: input.audit,
+    counter: newCallCounter(input.limits),
+    guard: input.guard,
+    customers: newCustomerReferenceResolver(),
+    clock: input.clock,
+    abortSignal: input.abortSignal,
+  };
+}
 
 /** Names whose *values* are redacted before they reach an audit record. */
 const SECRET_KEY = /token|secret|password|passwd|api[_-]?key|authorization|cookie|credential/i;
@@ -95,44 +199,53 @@ function serializedLength(value: unknown): number | null {
  * The single chokepoint every capability call passes through.
  *
  * Responsibilities, in order: charge the execution's call budget, record that
- * the call started, run it, and record how it ended. Scope arrives as an
- * argument on every call rather than being read from ambient state — the one
- * refactor most likely to cross two customers' data is a module-global
- * `currentRun`, and there is a test dedicated to preventing it.
+ * the call started, confirm the run still wants this work, run it, and record
+ * how it ended. Scope and execution both arrive as arguments rather than being
+ * read from ambient state — the one refactor most likely to cross two
+ * customers' data is a module-global `currentRun`, and there is a test
+ * dedicated to preventing it.
+ *
+ * The freshness check sits immediately before the host call and after the
+ * budget charge. That order is deliberate: a stale call must still be *counted*
+ * and *recorded*, because "the loop kept calling capabilities on a superseded
+ * generation" is the exact thing an operator needs to be able to see, and a
+ * refusal that leaves no trace is indistinguishable from a call that never
+ * happened.
  *
  * Errors are narrowed on the way out. An adapter is supposed to translate its
  * own upstream failures, but if one does not, collapsing here is what stops an
  * upstream connection string from being handed to model-authored code.
  */
 export async function withCapabilityAudit<T>(
-  deps: AuditDeps,
+  execution: CodeExecution,
   scope: CodeModeScope,
-  counter: CallCounter,
   namespace: string,
   method: string,
   fn: () => Promise<T>,
   args?: JsonObject,
 ): Promise<T> {
+  const { audit, clock, counter } = execution;
   const seq = counter.next();
-  const startedAt = deps.clock();
+  const startedAt = clock();
 
   const base = {
     runId: scope.runId,
     turnId: scope.turnId,
+    callId: `cap:${execution.outerToolCallId}:${seq}`,
     seq,
     namespace,
     method,
     at: startedAt,
   };
 
-  await deps.audit.started({ ...base, kind: "started", args: redactArgs(args) });
+  await audit.started({ ...base, kind: "started", args: redactArgs(args) });
 
   const fail = async (err: unknown): Promise<never> => {
     const safe = toCapabilityError(err);
-    await deps.audit.failed({
+    await audit.failed({
       ...base,
       kind: "failed",
-      durationMs: deps.clock() - startedAt,
+      durationMs: clock() - startedAt,
       code: safe.code,
       message: safe.message,
       retryable: safe.retryable,
@@ -151,6 +264,16 @@ export async function withCapabilityAudit<T>(
     );
   }
 
+  // The last thing before the capability body. Checking here rather than only
+  // at the top of the execution is what bounds the damage of a long program:
+  // an isolate that has been running for ten seconds against superseded input
+  // stops at its next capability call instead of finishing its whole plan.
+  try {
+    await execution.guard.assertFresh();
+  } catch (err) {
+    return fail(err);
+  }
+
   let result: T;
   try {
     result = await fn();
@@ -158,11 +281,16 @@ export async function withCapabilityAudit<T>(
     return fail(err);
   }
 
-  await deps.audit.completed({
+  await audit.completed({
     ...base,
     kind: "completed",
-    durationMs: deps.clock() - startedAt,
+    durationMs: clock() - startedAt,
     resultChars: serializedLength(result),
   });
   return result;
+}
+
+/** The refusal a guard raises. Exported so an implementation cannot misspell it. */
+export function staleGeneration(): CapabilityError {
+  return new CapabilityError("stale_generation", STALE_GENERATION_MESSAGE);
 }

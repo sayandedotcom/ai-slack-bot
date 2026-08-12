@@ -4,7 +4,7 @@ import { canPost, getChannelPolicy } from "../../db/channels";
 import { getRunById } from "../../run/repository";
 import { CapabilityError } from "../errors";
 import { runEffect } from "../effects";
-import { auditedCapability, type BindingContext } from "../registry";
+import { auditedCapability, effectDeps, type BindingContext } from "../registry";
 
 const message = z.strictObject({
   ts: z.string(),
@@ -64,10 +64,14 @@ export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
         // Reserved before the send, so a retry after a transport error replays
         // rather than posting to a customer twice.
         return runEffect(
-          { db: ctx.deps.db, clock: ctx.deps.clock },
+          effectDeps(ctx),
           ctx.scope,
           "slack",
           "reply",
+          // `text` is the only behaviour-changing argument this capability has:
+          // the destination and the identity are properties of the run, fixed
+          // before model code ran, and both are already in the key's envelope
+          // via runId/turnId. There is nothing else to include.
           { text: input.text },
           {
             execute: (idempotencyKey) =>

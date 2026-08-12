@@ -197,6 +197,84 @@ describe("runEffect", () => {
     expect(calls).toBe(2);
   });
 
+  /**
+   * Phase 10 Task 1 Step 5. The agent loop can stop waiting mid-effect. What
+   * must NOT happen is an effect being called failed because the caller lost
+   * interest — that is the one mistake that lets a retry send a customer
+   * message twice.
+   */
+  it("leaves an abandoned wait in doubt rather than failed", async () => {
+    const scope = newScope();
+    const controller = new AbortController();
+
+    // Someone else holds the reservation and never records an outcome, which is
+    // what a Worker dying between "sent" and "recorded" looks like from here.
+    const holder = runEffect(deps(), scope, "slack", "reply", { text: "hi" }, {
+      execute: () => new Promise<never>(() => {}),
+    });
+    void holder.catch(() => {});
+    await new Promise((r) => setTimeout(r, 10));
+
+    const waiter = runEffect(
+      { ...deps(), signal: controller.signal },
+      scope, "slack", "reply", { text: "hi" },
+      { execute: async () => ({ ts: "2.0", permalink: null }) },
+    );
+    controller.abort();
+    await expect(waiter).rejects.toThrow(/effect_in_doubt/);
+
+    // Still reserved by the holder: the abandoned waiter changed nothing.
+    const row = await env.DB.prepare(
+      "SELECT state FROM codemode_effects WHERE run_id = ?",
+    ).bind(scope.runId).first<{ state: string }>();
+    expect(row?.state).toBe("reserved");
+  });
+
+  it("stops waiting promptly once the caller gives up", async () => {
+    const scope = newScope();
+    const controller = new AbortController();
+    const holder = runEffect(deps(), scope, "slack", "reply", { text: "hi" }, {
+      execute: () => new Promise<never>(() => {}),
+    });
+    void holder.catch(() => {});
+    await new Promise((r) => setTimeout(r, 10));
+
+    const started = Date.now();
+    const waiter = runEffect(
+      { ...deps(), signal: controller.signal },
+      scope, "slack", "reply", { text: "hi" },
+      { execute: async () => ({ ts: "2.0", permalink: null }) },
+    );
+    controller.abort();
+    await expect(waiter).rejects.toThrow(/effect_in_doubt/);
+    // The full poll budget is 40 x 5ms; an honoured signal returns well inside it.
+    expect(Date.now() - started).toBeLessThan(150);
+  });
+
+  // stale_generation is raised BEFORE the capability body, so nothing was sent
+  // and the row must be `failed` — reusable — not a permanent `in_doubt`.
+  it("treats a stale-generation refusal as proven un-sent", async () => {
+    const scope = newScope();
+    let calls = 0;
+    const run = (stale: boolean) =>
+      runEffect(deps(), scope, "slack", "reply", { text: "hi" }, {
+        execute: async () => {
+          calls += 1;
+          if (stale) throw new CapabilityError("stale_generation", "newer input arrived");
+          return { ts: "5.0", permalink: null };
+        },
+      });
+    await expect(run(true)).rejects.toThrow(/^stale_generation: /);
+    const row = await env.DB.prepare(
+      "SELECT state FROM codemode_effects WHERE run_id = ?",
+    ).bind(scope.runId).first<{ state: string }>();
+    expect(row?.state).toBe("failed");
+
+    // A later, current generation may still perform it.
+    await expect(run(false)).resolves.toEqual({ ts: "5.0", permalink: null });
+    expect(calls).toBe(2);
+  });
+
   it("records the effect row so a restarted Worker can see it", async () => {
     const scope = newScope();
     await runEffect(deps(), scope, "slack", "reply", { text: "durable" }, {

@@ -40,11 +40,22 @@ const PROVEN_PRE_UPSTREAM: ReadonlySet<CapabilityErrorCode> = new Set([
   "linear_team_denied",
   "customer_scope_required",
   "read_only_violation",
+  // The guard runs immediately BEFORE the capability body, so a stale refusal
+  // proves nothing was sent. It belongs in this set for the same reason
+  // `capability_unavailable` does — and leaving it out would turn every
+  // superseded write into a permanent `in_doubt` a human has to clear.
+  "stale_generation",
 ]);
 
 export type EffectDeps = {
   db: D1Database;
   clock: () => number;
+  /**
+   * The overall operation's signal. Only ever shortens a *wait*; it never
+   * cancels an effect that is already in flight, because a cancelled wait says
+   * nothing about what upstream did.
+   */
+  signal?: AbortSignal;
 };
 
 export type RunEffectOptions<T> = {
@@ -139,14 +150,24 @@ function canonicalJson(value: unknown): string {
   return encoded;
 }
 
-async function sha256Hex(input: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(input),
-  );
+/**
+ * SHA-256 of raw bytes, lowercase hex.
+ *
+ * Exported because an effect key over an artifact has to be a hash of its
+ * CONTENT. A name/type/size tuple aliases two different files of the same
+ * length onto one key, and the ledger would then replay the first file's URL
+ * for the second — silently answering a request for one proof screenshot with
+ * a different one.
+ */
+export async function sha256Bytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  return sha256Bytes(new TextEncoder().encode(input));
 }
 
 /**
@@ -188,7 +209,28 @@ function inDoubt(): CapabilityError {
   );
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Wait, but stop early if the caller has given up.
+ *
+ * Resolves rather than rejects on abort: the decision about what an abandoned
+ * wait *means* belongs to the poll loop, which knows that the row it was
+ * waiting on is someone else's in-flight send.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal === undefined) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
 
 async function readEffect(
   deps: EffectDeps,
@@ -374,7 +416,12 @@ export async function runEffect<T>(
 
       case "reserved":
         // Someone else is mid-flight. Wait for them rather than sending twice.
-        await sleep(POLL_INTERVAL_MS);
+        await sleep(POLL_INTERVAL_MS, deps.signal);
+        // Abandoning the wait does NOT make the effect a failure. Someone is
+        // holding a reservation for a send that may well be landing right now;
+        // the caller merely stopped listening. `in_doubt` is the only honest
+        // answer, and it is the one that keeps a retry from sending twice.
+        if (deps.signal?.aborted === true) throw inDoubt();
         continue;
     }
   }

@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { toSafeJson, validateScope } from "../src/codemode/contracts";
+import {
+  toSafeJson,
+  validateScope,
+  type AgentExecutionGuard,
+  type CapabilityFailed,
+} from "../src/codemode/contracts";
 import { CapabilityError, safeMessage } from "../src/codemode/errors";
-import { withCapabilityAudit } from "../src/codemode/bindings/shared";
-import { fakeAuditSink, newCallCounter, TEST_LIMITS } from "./helpers/codemode";
+import { staleGeneration, withCapabilityAudit } from "../src/codemode/bindings/shared";
+import { fakeAuditSink, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 const slackScope = {
   runId: "run_1",
@@ -147,7 +152,7 @@ describe("withCapabilityAudit", () => {
   it("emits started then completed, in order", async () => {
     const audit = fakeAuditSink();
     const run = () => withCapabilityAudit(
-      { audit, clock: () => 0 }, slackScope, newCallCounter(TEST_LIMITS),
+      testExecution({ audit }), slackScope,
       "slack", "thread", async () => [{ ts: "1.0", text: "hi" }],
     );
     await expect(run()).resolves.toEqual([{ ts: "1.0", text: "hi" }]);
@@ -156,9 +161,8 @@ describe("withCapabilityAudit", () => {
 
   it("emits started then failed exactly once on throw", async () => {
     const audit = fakeAuditSink();
-    const counter = newCallCounter(TEST_LIMITS);
     await expect(withCapabilityAudit(
-      { audit, clock: () => 0 }, slackScope, counter, "slack", "reply",
+      testExecution({ audit }), slackScope, "slack", "reply",
       async () => { throw new CapabilityError("channel_read_only", "no"); },
     )).rejects.toThrow(/channel_read_only/);
     expect(audit.events.map((e) => e.kind)).toEqual(["started", "failed"]);
@@ -169,8 +173,7 @@ describe("withCapabilityAudit", () => {
   it("converts an untranslated upstream error into a safe one", async () => {
     const audit = fakeAuditSink();
     await expect(withCapabilityAudit(
-      { audit, clock: () => 0 }, slackScope, newCallCounter(TEST_LIMITS),
-      "supabase", "query",
+      testExecution({ audit }), slackScope, "supabase", "query",
       async () => { throw new Error("PG connect failed: postgres://u:hunter2@db/prod"); },
     )).rejects.toThrow(/^upstream_unavailable: /);
     expect(JSON.stringify(audit.events)).not.toContain("hunter2");
@@ -178,10 +181,12 @@ describe("withCapabilityAudit", () => {
 
   it("refuses past maxCapabilityCalls before making the host call", async () => {
     const audit = fakeAuditSink();
-    const counter = newCallCounter({ ...TEST_LIMITS, maxCapabilityCalls: 2 });
+    const execution = testExecution({
+      audit, limits: { ...TEST_LIMITS, maxCapabilityCalls: 2 },
+    });
     let hostCalls = 0;
     const call = () => withCapabilityAudit(
-      { audit, clock: () => 0 }, slackScope, counter, "slack", "thread",
+      execution, slackScope, "slack", "thread",
       async () => { hostCalls += 1; return []; },
     );
     await call();
@@ -192,29 +197,40 @@ describe("withCapabilityAudit", () => {
 
   it("counts correctly when reads run concurrently", async () => {
     const audit = fakeAuditSink();
-    const counter = newCallCounter({ ...TEST_LIMITS, maxCapabilityCalls: 10 });
+    const execution = testExecution({
+      audit, limits: { ...TEST_LIMITS, maxCapabilityCalls: 10 },
+    });
     await Promise.all([1, 2, 3, 4].map(() => withCapabilityAudit(
-      { audit, clock: () => 0 }, slackScope, counter, "slack", "thread",
-      async () => [],
+      execution, slackScope, "slack", "thread", async () => [],
     )));
     expect(audit.events.filter((e) => e.kind === "completed")).toHaveLength(4);
   });
 
   it("gives every call in one execution a distinct sequence", async () => {
     const audit = fakeAuditSink();
-    const counter = newCallCounter(TEST_LIMITS);
+    const execution = testExecution({ audit });
     await Promise.all([1, 2, 3, 4].map(() => withCapabilityAudit(
-      { audit, clock: () => 0 }, slackScope, counter, "slack", "thread",
-      async () => [],
+      execution, slackScope, "slack", "thread", async () => [],
     )));
     const seqs = audit.events.filter((e) => e.kind === "started").map((e) => e.seq);
     expect(new Set(seqs).size).toBe(4);
   });
 
+  // The seq alone is not an identity once one agent loop makes many run_code
+  // calls: every execution's first call is seq 1.
+  it("addresses each call by its outer tool call, not just its sequence", async () => {
+    const audit = fakeAuditSink();
+    const execution = testExecution({ audit, outerToolCallId: "call_xyz" });
+    await withCapabilityAudit(execution, slackScope, "slack", "thread", async () => []);
+    await withCapabilityAudit(execution, slackScope, "slack", "thread", async () => []);
+    expect(audit.events.filter((e) => e.kind === "started").map((e) => e.callId))
+      .toEqual(["cap:call_xyz:1", "cap:call_xyz:2"]);
+  });
+
   it("never lets a secret-shaped argument into an audit event", async () => {
     const audit = fakeAuditSink();
     await withCapabilityAudit(
-      { audit, clock: () => 0 }, slackScope, newCallCounter(TEST_LIMITS),
+      testExecution({ audit }), slackScope,
       "slack", "reply", async () => ({ ts: "1.0" }),
       { token: "xoxb-should-never-appear", apiKey: "Bearer abc" },
     );
@@ -230,8 +246,7 @@ describe("withCapabilityAudit", () => {
     const auditA = fakeAuditSink();
     const auditB = fakeAuditSink();
     const call = (scope: typeof a, audit: ReturnType<typeof fakeAuditSink>) =>
-      withCapabilityAudit({ audit, clock: () => 0 }, scope,
-        newCallCounter(TEST_LIMITS), "slack", "thread",
+      withCapabilityAudit(testExecution({ audit }), scope, "slack", "thread",
         async () => { await new Promise((r) => setTimeout(r, 1)); return [scope.customerSlug]; });
 
     const [ra, rb] = await Promise.all([call(a, auditA), call(b, auditB)]);
@@ -239,5 +254,95 @@ describe("withCapabilityAudit", () => {
     expect(rb).toEqual(["globex"]);
     expect(JSON.stringify(auditA.events)).not.toMatch(/globex|run_b|C_B/);
     expect(JSON.stringify(auditB.events)).not.toMatch(/acme|run_a|C_A/);
+  });
+});
+
+/**
+ * The freshness seam. Task 8 supplies the RunDO-generation implementation; what
+ * is provable here is that the chokepoint asks, that a refusal is recorded, and
+ * that the refusal proves nothing left this Worker.
+ */
+describe("the execution guard", () => {
+  const stale: AgentExecutionGuard = {
+    async assertFresh() { throw staleGeneration(); },
+  };
+
+  it("is asked before the capability body runs", async () => {
+    const audit = fakeAuditSink();
+    let hostCalls = 0;
+    await expect(withCapabilityAudit(
+      testExecution({ audit, guard: stale }), slackScope, "slack", "reply",
+      async () => { hostCalls += 1; return { ts: "1.0" }; },
+    )).rejects.toThrow(/^stale_generation: /);
+    expect(hostCalls).toBe(0);              // the send never reached the host
+  });
+
+  it("records the refusal rather than swallowing it", async () => {
+    const audit = fakeAuditSink();
+    await expect(withCapabilityAudit(
+      testExecution({ audit, guard: stale }), slackScope, "slack", "thread",
+      async () => [],
+    )).rejects.toThrow(CapabilityError);
+    // Both events, so an operator can see that a superseded generation kept
+    // calling capabilities — a refusal with no trace looks like no call at all.
+    expect(audit.events.map((e) => e.kind)).toEqual(["started", "failed"]);
+    const failed = audit.events.find((e) => e.kind === "failed") as CapabilityFailed;
+    expect(failed.code).toBe("stale_generation");
+    expect(failed.retryable).toBe(false);
+  });
+
+  it("does not hand the model the newer input's text", async () => {
+    // The steer is the next step's business. Naming it here would put
+    // unreviewed content into an error string that also reaches the audit log.
+    expect(staleGeneration().message).toMatch(/^stale_generation: /);
+    expect(staleGeneration().message).toMatch(/newer input/i);
+    expect(staleGeneration().message.length).toBeLessThan(300);
+  });
+
+  it("counts a refused call against the budget", async () => {
+    const audit = fakeAuditSink();
+    const execution = testExecution({ audit, guard: stale });
+    await expect(withCapabilityAudit(
+      execution, slackScope, "slack", "thread", async () => [],
+    )).rejects.toThrow(/stale_generation/);
+    expect(execution.counter.used).toBe(1);
+  });
+});
+
+describe("customer references are execution-local", () => {
+  it("resolves a reference minted in the same execution", () => {
+    const execution = testExecution({ audit: fakeAuditSink() });
+    const reference = execution.customers.mint("acme");
+    expect(execution.customers.resolve(reference)).toBe("acme");
+  });
+
+  it("does not resolve a reference minted in another execution", () => {
+    const a = testExecution({ audit: fakeAuditSink() });
+    const b = testExecution({ audit: fakeAuditSink() });
+    const reference = a.customers.mint("acme");
+    // The whole point: one tool call's handle is meaningless in the next one.
+    expect(() => b.customers.resolve(reference)).toThrow(/invalid_input/);
+  });
+
+  it("mints unguessable references rather than sequential ones", () => {
+    const execution = testExecution({ audit: fakeAuditSink() });
+    const first = execution.customers.mint("acme");
+    const second = execution.customers.mint("globex");
+    expect(first).not.toBe(second);
+    // `cust_1` would be trivially forgeable from another execution.
+    expect(first).not.toMatch(/_\d+$/);
+  });
+
+  it("names neither the reference nor a slug when it refuses", () => {
+    const a = testExecution({ audit: fakeAuditSink() });
+    const b = testExecution({ audit: fakeAuditSink() });
+    const reference = a.customers.mint("globex");
+    try {
+      b.customers.resolve(reference);
+      expect.unreachable("resolve should have thrown");
+    } catch (err) {
+      expect((err as Error).message).not.toContain(reference);
+      expect((err as Error).message).not.toContain("globex");
+    }
   });
 });

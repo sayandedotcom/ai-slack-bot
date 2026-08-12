@@ -1,16 +1,9 @@
 import type { ToolDescriptor, ToolDescriptors } from "@cloudflare/codemode/ai";
 import type { z } from "zod";
 import type { JsonObject } from "../run/protocol";
-import {
-  newCallCounter,
-  withCapabilityAudit,
-  type CallCounter,
-} from "./bindings/shared";
-import type {
-  CapabilityAuditSink,
-  CodeModeLimits,
-  CodeModeScope,
-} from "./contracts";
+import { withCapabilityAudit, type CodeExecution } from "./bindings/shared";
+import type { CodeModeLimits, CodeModeScope } from "./contracts";
+import type { EffectDeps } from "./effects";
 import { CapabilityError } from "./errors";
 import type { CapabilityDependencies } from "./gateways";
 
@@ -59,9 +52,24 @@ export type BindingContext = {
   scope: CodeModeScope;
   deps: CapabilityDependencies;
   limits: CodeModeLimits;
-  audit: CapabilityAuditSink;
-  counter: CallCounter;
+  /** The state of the ONE `run_code` execution these bindings serve. */
+  execution: CodeExecution;
 };
+
+/**
+ * The ledger's view of one execution.
+ *
+ * A helper rather than three hand-written literals, because the field that is
+ * easiest to forget is `signal` — and a mutator that silently keeps waiting
+ * after the caller gave up is exactly the case Step 5 exists to bound.
+ */
+export function effectDeps(ctx: BindingContext): EffectDeps {
+  return {
+    db: ctx.deps.db,
+    clock: ctx.deps.clock,
+    signal: ctx.execution.abortSignal,
+  };
+}
 
 /* ------------------------------------------------------------- validation -- */
 
@@ -146,9 +154,8 @@ export function auditedCapability<I, O>(
     output: spec.output,
     run: (input: I) =>
       withCapabilityAudit(
-        { audit: ctx.audit, clock: ctx.deps.clock },
+        ctx.execution,
         ctx.scope,
-        ctx.counter,
         namespace,
         method,
         () => spec.run(input),
@@ -160,7 +167,7 @@ export function auditedCapability<I, O>(
 /* --------------------------------------------------------------- registry -- */
 
 /**
- * Assemble the capability surface for one execution.
+ * Assemble the capability surface for ONE execution.
  *
  * The same namespaces are always present, whatever the run looks like. A
  * registry that varied by run would leak the host's classification of the run
@@ -168,21 +175,21 @@ export function auditedCapability<I, O>(
  * exactly that reason. Where a run's context makes a capability unusable —
  * a Chat run has no Slack thread — the capability is still declared and
  * refuses at call time with a code the model can read.
+ *
+ * Call this once per `run_code` execution and never reuse the result. The
+ * closures it returns capture the execution: its call budget, its citation
+ * cache, its customer references, its audit stream. Handing one registry to two
+ * executions merges all four, which is the defect Phase 10 Task 1 repaired —
+ * `execution` is a required argument rather than something built in here so
+ * that reusing one is a thing you have to write down.
  */
 export function buildRegistry(
   scope: CodeModeScope,
   deps: CapabilityDependencies,
   limits: CodeModeLimits,
-  audit: CapabilityAuditSink,
+  execution: CodeExecution,
 ): CapabilityRegistry {
-  // One counter per execution, shared across every namespace.
-  const ctx: BindingContext = {
-    scope,
-    deps,
-    limits,
-    audit,
-    counter: newCallCounter(limits),
-  };
+  const ctx: BindingContext = { scope, deps, limits, execution };
 
   return [
     { name: "slack", tools: makeSlackTools(ctx) },

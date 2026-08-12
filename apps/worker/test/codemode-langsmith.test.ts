@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRegistry } from "../src/codemode/registry";
 import { makeLangSmithReader } from "../src/langsmith/client";
-import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
+import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 const PROJECT = "647f1d2e-bb76-48b3-adad-1d196ca0debe";
 const NOW = Date.parse("2026-08-12T00:00:00Z");
@@ -41,7 +41,7 @@ const run = (patch: Record<string, unknown> = {}) => ({
 function langsmithTools() {
   const reader = makeLangSmithReader(config, () => NOW);
   const deps = { ...fakeDeps(), db: env.DB, langsmith: reader };
-  return buildRegistry(slackScope, deps, TEST_LIMITS, fakeAuditSink())
+  return buildRegistry(slackScope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
     .find((p) => p.name === "langsmith")!.tools;
 }
 

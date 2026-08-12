@@ -2,7 +2,8 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRegistry } from "../src/codemode/registry";
 import { issueIdFromEffectKey, makeLinearGateway } from "../src/linear/client";
-import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
+import type { CodeModeScope } from "../src/codemode/contracts";
+import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
 const TEAM_ID = "3b7d3585-029d-4490-80ce-6a44c6d9f081";
 const OTHER_TEAM = "4a4914d5-f940-4121-a014-171a84b8f8dc";
@@ -36,14 +37,20 @@ const created = (identifier = "FIR-1") => ({
  * rather than reach the mocked transport — which is the ledger working, but
  * would silently hollow out these assertions.
  */
-function linearTools(gateway = makeLinearGateway(config)) {
+const freshScope = (): CodeModeScope => ({
+  ...slackScope,
+  runId: `run_${crypto.randomUUID()}`,
+  turnId: `turn_${crypto.randomUUID()}`,
+});
+
+function linearTools(
+  gateway = makeLinearGateway(config),
+  // A shared scope is what the effect-key tests need: two calls in ONE turn are
+  // the only place an aliasing key can be observed.
+  scope: CodeModeScope = freshScope(),
+) {
   const deps = { ...fakeDeps(), db: env.DB, linear: gateway };
-  const scope = {
-    ...slackScope,
-    runId: `run_${crypto.randomUUID()}`,
-    turnId: `turn_${crypto.randomUUID()}`,
-  };
-  return buildRegistry(scope, deps, TEST_LIMITS, fakeAuditSink())
+  return buildRegistry(scope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() }))
     .find((p) => p.name === "linear")!.tools;
 }
 
@@ -186,6 +193,94 @@ describe("linear.createIssue idempotency", () => {
     await expect(makeLinearGateway(config).createIssue({
       title: "t", description: "d", labels: [], idempotencyKey: "e".repeat(64),
     })).rejects.toThrow(/effect_in_doubt/);
+  });
+});
+
+/**
+ * Phase 10 Task 1 Step 7: every behaviour-changing argument belongs in the
+ * canonical effect key, checked here rather than by reading the binding.
+ */
+describe("linear effect keys name everything that changes the effect", () => {
+  it("does not alias two creates that differ only by label", async () => {
+    const scope = freshScope();
+    const sent = mockTransport([created("FIR-1"), created("FIR-2")]);
+    // `labels` was missing from the key, so the second create replayed the
+    // first issue's URL: the labels were silently never applied and the model
+    // was told it had succeeded.
+    await call(linearTools(makeLinearGateway(config), scope), "createIssue",
+      { ...validCreate, labels: ["bug"] });
+    await call(linearTools(makeLinearGateway(config), scope), "createIssue",
+      { ...validCreate, labels: ["security"] });
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0].variables.labelIds).toEqual(["bug"]);
+    expect(sent[1].variables.labelIds).toEqual(["security"]);
+  });
+
+  it("still replays a genuinely identical create", async () => {
+    const scope = freshScope();
+    const sent = mockTransport([created("FIR-1")]);
+    const args = { ...validCreate, labels: ["bug"] };
+    const a = await call(linearTools(makeLinearGateway(config), scope), "createIssue", args);
+    const b = await call(linearTools(makeLinearGateway(config), scope), "createIssue", args);
+    expect(sent).toHaveLength(1);          // ONE issue filed
+    expect(b).toEqual(a);
+  });
+
+  // Label ORDER is not meaning, so two spellings of one set must not file two
+  // issues. `canonical()` preserves array order by design, so the binding
+  // normalizes before the key is taken.
+  it("treats a reordered label set as the same effect", async () => {
+    const scope = freshScope();
+    const sent = mockTransport([created("FIR-1")]);
+    await call(linearTools(makeLinearGateway(config), scope), "createIssue",
+      { ...validCreate, labels: ["bug", "security"] });
+    await call(linearTools(makeLinearGateway(config), scope), "createIssue",
+      { ...validCreate, labels: ["security", "bug"] });
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("linear.updateIssue goes through the effect ledger", () => {
+  // Each update that actually runs makes two calls: an ownership check, then
+  // the mutation. `rounds(n)` supplies that pair n times, in order.
+  const owned = { data: { issue: { id: "i", team: { id: TEAM_ID } } } };
+  const updated = { data: { issueUpdate: { success: true, issue: { id: "i", url: "https://x" } } } };
+  const rounds = (n: number) => Array.from({ length: n }, () => [owned, updated]).flat();
+
+  it("applies a repeated identical update once", async () => {
+    const scope = freshScope();
+    const sent = mockTransport(rounds(1));
+    const args = { issueId: "i", title: "new title" };
+    const a = await call(linearTools(makeLinearGateway(config), scope), "updateIssue", args);
+    const b = await call(linearTools(makeLinearGateway(config), scope), "updateIssue", args);
+
+    // The replay does not even re-run the ownership check: the whole effect,
+    // including its upstream reads, is answered from the ledger.
+    expect(sent.filter((s) => s.document.includes("issueUpdate"))).toHaveLength(1);
+    expect(b).toEqual(a);
+  });
+
+  it("does not alias two updates that set different fields", async () => {
+    const scope = freshScope();
+    const sent = mockTransport(rounds(2));
+    await call(linearTools(makeLinearGateway(config), scope), "updateIssue",
+      { issueId: "i", title: "one" });
+    await call(linearTools(makeLinearGateway(config), scope), "updateIssue",
+      { issueId: "i", title: "two" });
+    expect(sent.filter((s) => s.document.includes("issueUpdate"))).toHaveLength(2);
+  });
+
+  // "leave the description alone" and "set the description to X" are different
+  // effects and must not hash alike, even when every other field matches.
+  it("does not alias an omitted field with a supplied one", async () => {
+    const scope = freshScope();
+    const sent = mockTransport(rounds(2));
+    await call(linearTools(makeLinearGateway(config), scope), "updateIssue",
+      { issueId: "i", title: "same" });
+    await call(linearTools(makeLinearGateway(config), scope), "updateIssue",
+      { issueId: "i", title: "same", description: "and a body" });
+    expect(sent.filter((s) => s.document.includes("issueUpdate"))).toHaveLength(2);
   });
 });
 

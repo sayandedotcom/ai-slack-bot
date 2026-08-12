@@ -4,7 +4,7 @@ import { runCode, resolveProvider } from "@cloudflare/codemode";
 import { makeRunCodeTool, type CodeModeOutput } from "../src/codemode/tool";
 import { guardLoader } from "../src/codemode/guarded-loader";
 import { makeGuardedExecutor } from "../src/codemode/executor";
-import type { CodeModeScope } from "../src/codemode/contracts";
+import { alwaysFresh, type CodeModeScope } from "../src/codemode/contracts";
 import type { SlackGateway } from "../src/codemode/gateways";
 import { makeSupabaseReader } from "../src/supabase/reader";
 import { PRODUCTION_ALLOWLIST } from "../src/supabase/allowlist";
@@ -41,14 +41,19 @@ function tool(overrides: Partial<Parameters<typeof makeRunCodeTool>[0]> = {}) {
     scope,
     deps: realDeps(scope),
     limits: TEST_LIMITS,
-    audit: fakeAuditSink(),
+    auditForExecution: () => fakeAuditSink(),
+    guard: alwaysFresh(),
     loader: env.LOADER,
     ...overrides,
   });
 }
 
+// A distinct toolCallId per execution, matching what the AI SDK supplies.
 const run = async (t: ReturnType<typeof makeRunCodeTool>, code: string): Promise<CodeModeOutput> =>
-  (await t.execute!({ code }, {} as never)) as CodeModeOutput;
+  (await t.execute!({ code }, {
+    toolCallId: `call_${crypto.randomUUID()}`,
+    messages: [],
+  } as never)) as CodeModeOutput;
 
 /* ------------------------------------------------- Step 1: outbound refusal */
 
@@ -275,7 +280,10 @@ describe("serialization fails safely", () => {
     };
     const audit = fakeAuditSink();
     await run(
-      tool({ deps: { ...fakeDeps(), db: env.DB, slack: trackingSlack }, audit }),
+      tool({
+        deps: { ...fakeDeps(), db: env.DB, slack: trackingSlack },
+        auditForExecution: () => audit,
+      }),
       "async () => { const a = {}; a.self = a; return a; }",
     );
     expect(sent).toEqual([]);                                        // nothing sent

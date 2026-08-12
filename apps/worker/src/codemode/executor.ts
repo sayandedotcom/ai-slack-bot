@@ -162,11 +162,20 @@ function boundLogs(
  *     program in every environment.
  *
  * Never report the parent race's success as evidence that `cpuMs` works.
+ *
+ * `abortSignal` adds a fourth way for the race to end, and it belongs to ONE
+ * execution — which is why an executor is built per `run_code` call rather than
+ * once per factory. It reports `execution_timeout` rather than a new code: from
+ * model-authored code's point of view the program was abandoned before it
+ * finished, which is the same fact whether a clock or the parent decided it.
+ * *Why* the parent stopped waiting is the parent's business and stays out of
+ * the model-visible error set, which is closed on purpose.
  */
 export function makeGuardedExecutor(
   loader: WorkerLoader,
   limits: CodeModeLimits,
   clock: () => number,
+  abortSignal?: AbortSignal,
 ): Executor {
   const inner = new DynamicWorkerExecutor({
     loader,
@@ -217,10 +226,30 @@ export function makeGuardedExecutor(
         // can fail the whole request in workerd.
         timeout.catch(() => {});
 
-        raw = await Promise.race([
+        const abandoned = () =>
+          new CapabilityError(
+            "execution_timeout",
+            "the caller stopped waiting for this program, so it was abandoned before it finished.",
+          );
+        const racers: Array<Promise<ExecuteResult>> = [
           inner.execute(code, providersOrFns, options),
           timeout,
-        ]);
+        ];
+        if (abortSignal !== undefined) {
+          const aborted = new Promise<never>((_, reject) => {
+            if (abortSignal.aborted) {
+              reject(abandoned());
+              return;
+            }
+            abortSignal.addEventListener("abort", () => reject(abandoned()), {
+              once: true,
+            });
+          });
+          aborted.catch(() => {});   // same reason as `timeout.catch` above
+          racers.push(aborted);
+        }
+
+        raw = await Promise.race(racers);
       } catch (err) {
         // The Executor contract says implementations never throw. Everything
         // that escapes the race becomes a value here.

@@ -31,6 +31,40 @@ export type CodeModeScope = {
   } | null;
 };
 
+/* ------------------------------------------------------------- freshness -- */
+
+/**
+ * Asks the trusted parent whether the work about to happen is still wanted.
+ *
+ * Generic on purpose: this module knows nothing about RunDO generations, input
+ * revisions, or steering. It knows only that some authority outside the isolate
+ * can say "stop". Task 8 supplies the implementation that reads the RunDO
+ * generation; until then `alwaysFresh()` is the honest answer.
+ *
+ * The contract is one-way. It is supplied by the parent alongside the scope and
+ * is never serialized into the Dynamic Worker, so model-authored code cannot
+ * name it, call it, or override it — it can only observe that a capability
+ * refused. That is the same trust shape as `CodeModeScope`, and for the same
+ * reason: anything the model can influence is not a control.
+ *
+ * Throws `CapabilityError("stale_generation", …)` when the run has moved on.
+ */
+export interface AgentExecutionGuard {
+  assertFresh(): Promise<void>;
+}
+
+/**
+ * The guard for callers that have no generation to check — every Phase 09 call
+ * site, and every test that is not about staleness.
+ *
+ * Explicit rather than an optional field. A `guard?: AgentExecutionGuard` would
+ * let a Phase 10 call site forget to pass one and silently lose the check;
+ * making it required means every caller states which answer it means.
+ */
+export function alwaysFresh(): AgentExecutionGuard {
+  return { async assertFresh() {} };
+}
+
 /**
  * Caps on a single `run_code` execution. One reviewed production constant;
  * tests inject smaller ones. Nothing the model writes, and no HTTP request,
@@ -242,6 +276,16 @@ export function toSafeJson(value: unknown, limits: CodeModeLimits): JsonValue {
 type CapabilityEventBase = {
   runId: string;
   turnId: string;
+  /**
+   * Identity of this nested call: `cap:{outer run_code tool call id}:{seq}`.
+   *
+   * The outer id is in the string, not just the sequence number. One agent loop
+   * issues many `run_code` calls against one tool instance, and every one of
+   * them starts its sequence at 1 — so a bare `cap:1` collides across calls and
+   * makes the audit trail unreconstructable exactly when something has gone
+   * wrong and someone is trying to read it.
+   */
+  callId: string;
   /** 1-based position of this call within one `run_code` execution. */
   seq: number;
   namespace: string;

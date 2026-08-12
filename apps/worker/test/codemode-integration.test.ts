@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { makeRunCodeTool, type CodeModeOutput } from "../src/codemode/tool";
 import { makeSupabaseReader } from "../src/supabase/reader";
-import type { CodeModeScope } from "../src/codemode/contracts";
+import { alwaysFresh, type CodeModeScope } from "../src/codemode/contracts";
 import {
   fakeAuditSink,
   fakeDeps,
@@ -14,11 +14,19 @@ import {
 // The AI SDK types execute() as PromiseLike<OUT> | AsyncIterable<OUT>, since a
 // tool may stream. Ours never does, so narrow once here rather than at every
 // assertion.
+//
+// A distinct toolCallId per call, because that is what the SDK does and what
+// the nested audit ids are derived from: reusing one would make this helper
+// quietly hide the collision that test/codemode-isolation.test.ts exists to
+// catch.
 const run = async (
   t: ReturnType<typeof makeRunCodeTool>,
   code: string,
 ): Promise<CodeModeOutput> =>
-  (await t.execute!({ code }, {} as never)) as CodeModeOutput;
+  (await t.execute!({ code }, {
+    toolCallId: `call_${crypto.randomUUID()}`,
+    messages: [],
+  } as never)) as CodeModeOutput;
 
 const tool = (
   fixtures: FakeFixtures = {},
@@ -29,7 +37,8 @@ const tool = (
     scope,
     deps: { ...fakeDeps(fixtures), db: env.DB },
     limits: TEST_LIMITS,
-    audit,
+    auditForExecution: () => audit,
+    guard: alwaysFresh(),
     loader: env.LOADER,
   });
 
@@ -130,7 +139,10 @@ describe("chaining capabilities in one execution", () => {
     };
 
     const runCodeTool = makeRunCodeTool({
-      scope, deps, limits: TEST_LIMITS, audit, loader: env.LOADER,
+      scope, deps, limits: TEST_LIMITS,
+      auditForExecution: () => audit,
+      guard: alwaysFresh(),
+      loader: env.LOADER,
     });
 
     const program = `async () => {
@@ -150,7 +162,10 @@ describe("chaining capabilities in one execution", () => {
       };
     }`;
 
-    const out = (await runCodeTool.execute!({ code: program }, {} as never)) as CodeModeOutput;
+    const out = (await runCodeTool.execute!({ code: program }, {
+      toolCallId: "call_chain",
+      messages: [],
+    } as never)) as CodeModeOutput;
 
     expect(out.error).toBeUndefined();
     expect(out.result).toEqual({
@@ -223,6 +238,11 @@ describe("the factory hands out nothing else", () => {
     );
   });
 
+  // Two factories is the WEAK version of this claim and it passed even while
+  // one tool instance shared a counter across every execution. The claim that
+  // matters — one instance, two executions — lives in
+  // test/codemode-isolation.test.ts. This one is kept because it is still true
+  // and cheap, not because it is sufficient.
   it("builds a fresh registry per invocation", async () => {
     // The call budget is per execution: two tools must not share a counter.
     const a = tool();
