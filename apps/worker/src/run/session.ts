@@ -145,9 +145,10 @@ const TOOL_STATES = new Set(["running", "completed", "failed"]);
  *
  * v1 is Phase 08's four tables. v2 adds the Phase 10 agent driver, generation,
  * transcript, telemetry and run-index projection tables. v3 gives the driver a
- * durable retry-backoff time.
+ * durable retry-backoff time. v4 separates the retry budget from the claim
+ * counter.
  */
-export const RUN_SCHEMA_VERSION = 3;
+export const RUN_SCHEMA_VERSION = 4;
 
 type LocalMigration = {
   version: number;
@@ -577,10 +578,32 @@ function applyV3(storage: DurableObjectStorage): void {
   );
 }
 
+/**
+ * v4: the retry budget, kept apart from the claim counter.
+ *
+ * `attempt` increments on every claim, and a claim is not a retry: a steer that
+ * arrives mid-answer continues the same generation and costs a claim, as does a
+ * lease reclaim. It also cannot be reset to make room, because it is part of
+ * the stable identity of everything a claim writes — `stream:{gen}:{attempt}`,
+ * `assistant:{gen}:{attempt}:{batch}`, `usage:{gen}:{attempt}:{step}`. Reusing
+ * a number there would put two different provider streams on one id and make an
+ * at-least-once replay return the wrong event.
+ *
+ * So the budget gets its own counter, incremented only where a failure is
+ * actually rescheduled. Without it, a customer who steered twice would lose
+ * their run to the next transient provider blip, having spent no retries at all.
+ */
+function applyV4(storage: DurableObjectStorage): void {
+  storage.sql.exec(
+    "ALTER TABLE agent_driver ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+  );
+}
+
 const LOCAL_MIGRATIONS: readonly LocalMigration[] = [
   { version: 1, apply: (storage) => applyV1(storage) },
   { version: 2, apply: (storage, now) => applyV2(storage, now) },
   { version: 3, apply: (storage) => applyV3(storage) },
+  { version: 4, apply: (storage) => applyV4(storage) },
 ];
 
 // --- state -----------------------------------------------------------------
@@ -928,6 +951,7 @@ function scheduleInput(
        current_generation_id = ?,
        current_agent_turn_id = ?,
        attempt = 0,
+       retry_count = 0,
        lease_expires_at = NULL,
        last_heartbeat_at = NULL,
        next_attempt_at = 0,
@@ -1703,6 +1727,7 @@ type DriverRow = {
   current_generation_id: string | null;
   current_agent_turn_id: string | null;
   attempt: number;
+  retry_count: number;
   claim_epoch: number;
   lease_expires_at: number | null;
   last_heartbeat_at: number | null;
@@ -1714,7 +1739,7 @@ type DriverRow = {
 };
 
 const DRIVER_COLUMNS = `phase, pending_through_seq, settled_through_seq, current_generation_id,
-  current_agent_turn_id, attempt, claim_epoch, lease_expires_at, last_heartbeat_at,
+  current_agent_turn_id, attempt, retry_count, claim_epoch, lease_expires_at, last_heartbeat_at,
   next_attempt_at, resume_policy, last_error_code, last_error_message, updated_at`;
 
 export function readDriver(storage: DurableObjectStorage): DriverState {
@@ -1735,6 +1760,7 @@ export function readDriver(storage: DurableObjectStorage): DriverState {
     generationId: row.current_generation_id,
     agentTurnId: row.current_agent_turn_id,
     attempt: row.attempt,
+    retryCount: row.retry_count,
     claimEpoch: row.claim_epoch,
     leaseExpiresAt: row.lease_expires_at,
     lastHeartbeatAt: row.last_heartbeat_at,
@@ -1922,6 +1948,8 @@ export function claimGeneration(
       generationId: generation.id,
       agentTurnId: generation.agentTurnId,
       attempt,
+      // Read, never incremented here. A claim is not a retry.
+      retryCount: driver.retryCount,
       firstInputSeq: generation.firstInputSeq,
       includedThroughSeq: generation.includedThroughSeq,
       pendingThroughSeq: driver.pendingThroughSeq,
@@ -2498,6 +2526,9 @@ export function finalizeGeneration(
       // The backoff is persisted, not slept: this attempt is over, and the next
       // one belongs to whichever alarm delivery arrives after `nextAttemptAt`.
       const nextAttemptAt = now + Math.max(0, Math.floor(request.retryAfterMs ?? 0));
+      // The ONLY place the retry budget is spent. Claims do not spend it, and a
+      // continuation does not spend it, because neither is a failure.
+      const retryCount = driver.retryCount + 1;
       storage.sql.exec(
         `UPDATE agent_generations SET state = 'scheduled', updated_at = ? WHERE id = ?`,
         now,
@@ -2506,10 +2537,11 @@ export function finalizeGeneration(
       storage.sql.exec(
         `UPDATE agent_driver SET
            phase = 'scheduled', lease_expires_at = NULL, next_attempt_at = ?,
-           resume_policy = 'retryable', last_error_code = ?, last_error_message = ?,
-           updated_at = ?
+           retry_count = ?, resume_policy = 'retryable', last_error_code = ?,
+           last_error_message = ?, updated_at = ?
          WHERE singleton = 1`,
         nextAttemptAt,
+        retryCount,
         request.errorCode,
         truncateError(request.errorMessage),
         now,
@@ -2518,6 +2550,7 @@ export function finalizeGeneration(
         outcome: "rescheduled",
         generationId: generation.id,
         attempt: driver.attempt,
+        retryCount,
         nextAttemptAt,
       };
     }
@@ -2593,8 +2626,9 @@ export function finalizeGeneration(
     storage.sql.exec(
       `UPDATE agent_driver SET
          phase = 'idle', settled_through_seq = ?, current_generation_id = NULL,
-         current_agent_turn_id = NULL, attempt = 0, lease_expires_at = NULL,
-         next_attempt_at = 0, resume_policy = NULL, last_error_code = NULL,
+         current_agent_turn_id = NULL, attempt = 0, retry_count = 0,
+         lease_expires_at = NULL, next_attempt_at = 0, resume_policy = NULL,
+         last_error_code = NULL,
          last_error_message = NULL,
          updated_at = ?
        WHERE singleton = 1`,

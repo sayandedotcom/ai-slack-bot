@@ -37,6 +37,7 @@ const driverAt = (overrides: Partial<DriverState> = {}): DriverState => ({
   generationId: null,
   agentTurnId: null,
   attempt: 0,
+  retryCount: 0,
   claimEpoch: 0,
   leaseExpiresAt: null,
   lastHeartbeatAt: null,
@@ -413,13 +414,25 @@ describe("retry budget", () => {
     const retry = { outcome: "retry" as const, errorCode: "boom" };
     const limits = { claimLeaseMs: CLAIM_LEASE_MS, maxAttempts: 3, continuationTotalMs: 1 };
 
-    expect(toFinalizeRequest(retry, { attempt: 2 }, limits)).toMatchObject({ kind: "retry" });
-    expect(toFinalizeRequest(retry, { attempt: 3 }, limits)).toMatchObject({
+    // One original attempt plus two retries.
+    expect(toFinalizeRequest(retry, { retryCount: 0 }, limits)).toMatchObject({ kind: "retry" });
+    expect(toFinalizeRequest(retry, { retryCount: 1 }, limits)).toMatchObject({ kind: "retry" });
+    expect(toFinalizeRequest(retry, { retryCount: 2 }, limits)).toMatchObject({
       kind: "failed",
       state: "failed",
       resumePolicy: "requires_input",
       errorCode: "driver_attempts_exhausted",
     });
+  });
+
+  it("bounds the budget by retries, never by how many times work was claimed", () => {
+    const retry = { outcome: "retry" as const, errorCode: "boom" };
+    const limits = { claimLeaseMs: CLAIM_LEASE_MS, maxAttempts: 3, continuationTotalMs: 1 };
+
+    // The regression this guards: a generation steered several times has a high
+    // claim count and an untouched crash budget. Bounding on claims would fail
+    // it on the first blip, having retried nothing.
+    expect(toFinalizeRequest(retry, { retryCount: 0 }, limits)).toMatchObject({ kind: "retry" });
   });
 
   it("continues the same generation when input arrived mid-answer", async () => {
@@ -451,6 +464,115 @@ describe("retry budget", () => {
     expect((await h.storage((s) => claimGeneration(s, { now: h.clock.value }))).outcome).toBe(
       "nothing_scheduled",
     );
+    expect((await h.stub.state())?.status).toBe("idle");
+  });
+});
+
+describe("continuations and retries do not share a counter", () => {
+  /**
+   * The regression: `attempt` counts CLAIMS, and a steer arriving mid-answer
+   * continues the generation and costs one. When the ceiling read `attempt`, a
+   * customer who steered twice had silently spent the whole crash budget, and
+   * the next transient blip terminated their run as `driver_attempts_exhausted`
+   * having retried nothing at all.
+   */
+  it("leaves the retry budget untouched after two mid-answer steers", async () => {
+    const held = new FakeContinuation({ hold: true });
+    const h = await freshDriverRun({ continuation: held });
+    await h.stub.appendTurn(turn("cb-1"));
+
+    // Steer one, landing while the first answer is in flight.
+    const firstRun = h.alarm();
+    await waitFor(() => held.runs === 1, "the first attempt to start");
+    await h.stub.appendTurn(turn("cb-2", { source: "human_steer", content: "also billing" }));
+    held.release();
+    expect((await firstRun).detail).toContain("completed -> continued");
+
+    // Steer two, same again.
+    held.hold();
+    const secondRun = h.alarm();
+    await waitFor(() => held.runs === 2, "the second attempt to start");
+    await h.stub.appendTurn(turn("cb-3", { source: "human_steer", content: "and the logs" }));
+    held.release();
+    expect((await secondRun).detail).toContain("completed -> continued");
+
+    let driver = await h.storage((s) => readDriver(s));
+    expect(driver.attempt).toBe(2);
+    // Two legitimate claims, zero retries: nothing has failed yet.
+    expect(driver.retryCount).toBe(0);
+
+    // Now the first transient blip. It must be RETRIED, not terminal.
+    held.throws(new Error("gateway blip"));
+    const third = await h.alarm();
+
+    expect(held.runs).toBe(3);
+    expect(third.detail).toContain("retry -> rescheduled");
+    driver = await h.storage((s) => readDriver(s));
+    expect(driver.phase).toBe("scheduled");
+    expect(driver.attempt).toBe(3);
+    expect(driver.retryCount).toBe(1);
+    expect(driver.lastErrorCode).toBe("continuation_crashed");
+    // The run is still alive and still visibly working.
+    expect((await h.stub.state())?.status).toBe("live");
+  });
+
+  it("bounds a continuation that settles without consuming its input", async () => {
+    // The mirror image: nothing checks `attempt` on the completed path, so a
+    // continuation that includes none of its pending input would be continued
+    // by the session and re-armed at `now`, forever.
+    const idle = new FakeContinuation({ consumesInput: false });
+    const h = await freshDriverRun({ continuation: idle });
+    await h.stub.appendTurn(turn("np-1"));
+
+    const first = await h.alarm();
+    expect(first.detail).toContain("retry -> rescheduled");
+
+    let driver = await h.storage((s) => readDriver(s));
+    expect(driver.lastErrorCode).toBe("continuation_made_no_progress");
+    expect(driver.retryCount).toBe(1);
+    // Spaced out, not re-armed at once. That is the difference between a
+    // bounded failure and a hot loop that bills for every lap.
+    expect(driver.nextAttemptAt).toBe(h.clock.value + driverRetryBackoffMs(1));
+
+    h.clock.advance(driverRetryBackoffMs(1));
+    await h.alarm();
+    h.clock.advance(driverRetryBackoffMs(2));
+    await h.alarm();
+
+    expect(idle.runs).toBe(DRIVER_MAX_ATTEMPTS);
+    driver = await h.storage((s) => readDriver(s));
+    expect(driver.phase).toBe("failed");
+    expect(driver.lastErrorCode).toBe("driver_attempts_exhausted");
+    expect((await h.stub.state())?.status).toBe("failed");
+
+    // And it stays stopped.
+    h.clock.advance(60_000);
+    expect((await h.alarm()).model).toBe("not_scheduled");
+    expect(idle.runs).toBe(DRIVER_MAX_ATTEMPTS);
+  });
+
+  it("does not punish an attempt that had nothing left to include", async () => {
+    // The legitimate no-movement case the guard must not catch: attempt 1
+    // consumed the input and then crashed, so attempt 2 is claimed with its
+    // cursor already current and quite properly includes nothing.
+    let calls = 0;
+    const continuation = new FakeContinuation().onRun(() => {
+      calls += 1;
+      if (calls === 1) throw new Error("crashed after reading its input");
+    });
+    const h = await freshDriverRun({ continuation });
+    await h.stub.appendTurn(turn("nb-1"));
+
+    expect((await h.alarm()).detail).toContain("retry -> rescheduled");
+    expect((await h.storage((s) => readDriver(s))).retryCount).toBe(1);
+
+    h.clock.advance(driverRetryBackoffMs(1));
+    const second = await h.alarm();
+
+    expect(second.detail).toContain("completed -> settled");
+    const driver = await h.storage((s) => readDriver(s));
+    expect(driver.phase).toBe("idle");
+    expect(driver.retryCount).toBe(0);
     expect((await h.stub.state())?.status).toBe("idle");
   });
 });

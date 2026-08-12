@@ -225,10 +225,17 @@ export function nextAlarmAt(input: {
  * run may spend again, and locking a customer thread behind an operator action
  * for a transient outage is worse than letting the next trusted message start a
  * fresh generation with a fresh effect scope.
+ *
+ * The budget read here is `retryCount`, NOT `attempt`. They are different
+ * numbers on purpose: `attempt` counts claims, and an ordinary steer arriving
+ * mid-answer continues the generation and costs one. Bounding on `attempt`
+ * would mean a customer who steered twice had silently spent the whole crash
+ * budget, so the next transient provider blip would terminate their run as
+ * `driver_attempts_exhausted` having retried nothing at all.
  */
 export function toFinalizeRequest(
   outcome: ContinuationOutcome,
-  claim: Pick<ClaimSnapshot, "attempt">,
+  claim: Pick<ClaimSnapshot, "retryCount">,
   limits: DriverLimits,
 ): FinalizeRequest {
   if (outcome.outcome === "completed") return { kind: "completed" };
@@ -242,13 +249,16 @@ export function toFinalizeRequest(
     };
   }
 
-  if (claim.attempt >= limits.maxAttempts) {
+  // This attempt plus the retries already spent. `maxAttempts` of 3 means one
+  // original attempt and two retries.
+  const attemptsSpent = claim.retryCount + 1;
+  if (attemptsSpent >= limits.maxAttempts) {
     return {
       kind: "failed",
       state: "failed",
       resumePolicy: "requires_input",
       errorCode: "driver_attempts_exhausted",
-      errorMessage: `${outcome.errorCode}: ${outcome.errorMessage ?? "no detail"} (attempt ${claim.attempt} of ${limits.maxAttempts})`,
+      errorMessage: `${outcome.errorCode}: ${outcome.errorMessage ?? "no detail"} (attempt ${attemptsSpent} of ${limits.maxAttempts})`,
     };
   }
   return {
@@ -271,6 +281,51 @@ export function crashOutcome(error: unknown): ContinuationOutcome {
     outcome: "retry",
     errorCode: "continuation_crashed",
     errorMessage: safeErrorText(error, "the continuation threw"),
+  };
+}
+
+/**
+ * Did this attempt fail to consume input it was claimed to answer?
+ *
+ * The hazard is narrow and specific. `finalizeGeneration` continues a
+ * generation whenever pending input sits above the included cursor, and a
+ * continuation re-arms at once — correctly, because the customer is waiting. But
+ * if a continuation reports `completed` having included NOTHING while input was
+ * pending, that same rule re-arms immediately, forever, on a loop that makes no
+ * progress and (with a real provider) bills for every lap.
+ *
+ * The test is both halves together:
+ *
+ *  - there WAS pending input above the included cursor when this attempt was
+ *    claimed, so the attempt was obliged to consume some of it; and
+ *  - the included cursor did not move.
+ *
+ * The first half is what keeps a legitimate case out of it. An attempt claimed
+ * with nothing left to include — a crash retry whose predecessor already put the
+ * input in the transcript — consumes nothing quite properly, and if a steer then
+ * lands mid-answer the generation continues with no movement of its own. That is
+ * progress by someone, and it is not this.
+ *
+ * A violation is treated as a retryable failure rather than a terminal one: it
+ * goes through the same bounded backoff and the same ceiling as a crash, which
+ * turns an unbounded hot loop into three spaced attempts and then a visible
+ * failure.
+ */
+export function continuationMadeNoProgress(
+  claim: Pick<ClaimSnapshot, "pendingThroughSeq" | "includedThroughSeq">,
+  includedThroughSeqNow: number,
+): boolean {
+  return (
+    claim.pendingThroughSeq > claim.includedThroughSeq &&
+    includedThroughSeqNow <= claim.includedThroughSeq
+  );
+}
+
+export function noProgressOutcome(): ContinuationOutcome {
+  return {
+    outcome: "retry",
+    errorCode: "continuation_made_no_progress",
+    errorMessage: "the continuation settled without including any of its pending input",
   };
 }
 

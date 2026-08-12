@@ -190,7 +190,27 @@ export type DriverState = {
   settledThroughSeq: number;
   generationId: string | null;
   agentTurnId: string | null;
+  /**
+   * How many times this generation has been CLAIMED. Monotonic, and never
+   * reset while the generation lives, because it is part of the stable identity
+   * of everything a claim writes: `stream:{gen}:{attempt}`,
+   * `assistant:{gen}:{attempt}:{batch}`, `usage:{gen}:{attempt}:{step}`. Reuse
+   * a number here and two different provider streams collide on one id.
+   *
+   * It is therefore NOT a retry budget: an ordinary steer mid-answer continues
+   * the generation and costs a claim. See `retryCount`.
+   */
   attempt: number;
+  /**
+   * How many times this generation has been RESCHEDULED after a failure.
+   *
+   * This is the number the attempt ceiling bounds. Kept apart from `attempt`
+   * because they answer different questions — "how many streams has this
+   * generation had" versus "how much of its crash budget is gone" — and a
+   * single counter for both means a customer who steers twice loses the run to
+   * the next transient blip.
+   */
+  retryCount: number;
   claimEpoch: number;
   leaseExpiresAt: number | null;
   lastHeartbeatAt: number | null;
@@ -241,7 +261,10 @@ export type ClaimSnapshot = {
   fence: ClaimFence;
   generationId: string;
   agentTurnId: string;
+  /** Claim number. Part of stable write identity; never a budget. */
   attempt: number;
+  /** Retries already spent by this generation. What the attempt ceiling reads. */
+  retryCount: number;
   firstInputSeq: number;
   includedThroughSeq: number;
   pendingThroughSeq: number;
@@ -336,7 +359,13 @@ export type FinalizeOutcome =
       pendingThroughSeq: number;
       includedThroughSeq: number;
     }
-  | { outcome: "rescheduled"; generationId: string; attempt: number; nextAttemptAt: number }
+  | {
+      outcome: "rescheduled";
+      generationId: string;
+      attempt: number;
+      retryCount: number;
+      nextAttemptAt: number;
+    }
   | { outcome: "already_settled"; generationId: string; generationState: GenerationState }
   | { outcome: "stale_claim" };
 

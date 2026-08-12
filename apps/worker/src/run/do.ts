@@ -30,6 +30,7 @@ import {
   listTurnsAfter,
   nextProjectionDueAt,
   readDriver,
+  readGeneration,
   readRunIndexRevision,
   retryProjectionJob,
   readState,
@@ -52,9 +53,11 @@ import type {
   ProjectionJobKind,
 } from "../agent/contracts";
 import {
+  continuationMadeNoProgress,
   crashOutcome,
   deadlineOutcome,
   nextAlarmAt,
+  noProgressOutcome,
   resolveRunPorts,
   safeErrorText,
   toFinalizeRequest,
@@ -665,6 +668,17 @@ export class RunDO extends DurableObject<Env> {
       );
     } catch (error) {
       outcome = crashOutcome(error);
+    }
+
+    // A `completed` that consumed none of the input it was claimed to answer
+    // would be continued by the session and re-armed at once — the same lap,
+    // forever. Bounded here, through the ordinary retry budget, rather than
+    // left to the step ceiling and spend caps that arrive two tasks later.
+    if (outcome.outcome === "completed") {
+      const current = readGeneration(this.ctx.storage, claim.generationId);
+      if (continuationMadeNoProgress(claim, current?.includedThroughSeq ?? claim.includedThroughSeq)) {
+        outcome = noProgressOutcome();
+      }
     }
 
     const request = toFinalizeRequest(outcome, claim, ports.limits);
