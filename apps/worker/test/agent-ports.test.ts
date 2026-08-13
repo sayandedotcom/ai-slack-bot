@@ -239,10 +239,12 @@ describe("the production ports", () => {
     // And the consequence, stated as the composer states it. This is the env a
     // globally installed production continuation would actually be handed.
     //
-    // WHICH code comes back depends on whether this machine's `.dev.vars` fills
-    // in `ANTHROPIC_API_KEY` (CI has no `.dev.vars` at all), so the assertion is
-    // that composition refuses for ABSENT configuration — never that it got as
-    // far as building a provider.
+    // The assertion is that composition refuses for ABSENT configuration —
+    // never that it got as far as building a provider. Deliberately not
+    // narrowed to one code even though `ANTHROPIC_API_KEY` is now a bound
+    // fixture too (`agent-composer.test.ts` > "binds every vendor credential the
+    // composer reads to a synthetic fixture"): what this test owns is the
+    // refusal, not the order the composer happens to check settings in.
     let thrownCode: string | null = null;
     try {
       createProductionModelFactory(env as unknown as ModelEnv);

@@ -29,6 +29,48 @@ export default defineConfig({
           // (they only require a non-empty string) while making the write
           // impossible. Same reasoning as the two Slack fixtures above.
           ZEP_API_KEY: "zep-test-key",
+          // THE SAME FIXTURE PRECEDENCE, FOR EVERY REMAINING VENDOR CREDENTIAL
+          // `makeCapabilityDependencies` READS.
+          //
+          // Until these lines existed, the isolation of this pool from Linear,
+          // Supabase, LangSmith, Better Stack and Anthropic-direct was a
+          // CONVENTION — "no test happens to call those adapters" — rather than
+          // a configuration. `agent/dependencies.ts:168-201` reads all of them
+          // straight off `env`, and `agent-composer.test.ts` builds the real
+          // adapters from the POOL env twice, so on a developer machine those
+          // closures held live credentials from `.dev.vars`. Nothing invoked
+          // them, so nothing leaked; the only thing between a future test and
+          // the live Linear workspace was the write-guard policy matrix, which
+          // is an AUTHORIZATION check, not a credential neutralisation. There is
+          // no `fetchMock` and no miniflare `outboundService` here, so outbound
+          // network is not sealed at pool level either — which is exactly why
+          // the credential has to be the wrong one.
+          //
+          // `.dev.vars.example` documents `LINEAR_API_KEY` as a personal key
+          // with access to all five teams, including live Development.
+          //
+          // Every value is obviously synthetic and shares one prefix so a grep
+          // for `not-a-real-` finds the whole set. A binding overrides
+          // `.dev.vars`, so these win on a machine that has real ones.
+          //
+          // Pinned by `agent-composer.test.ts` > "binds every vendor credential
+          // the composer reads to a synthetic fixture", which asserts EQUALITY
+          // with each value rather than falsiness — `undefined` is falsy too,
+          // and would mean the binding had silently vanished.
+          LINEAR_API_KEY: "not-a-real-linear-key",
+          SUPABASE_KEY: "not-a-real-supabase-key",
+          LANGSMITH_API_KEY: "not-a-real-langsmith-key",
+          BETTERSTACK_SQL_USERNAME: "not-a-real-betterstack-username",
+          BETTERSTACK_SQL_PASSWORD: "not-a-real-betterstack-password",
+          BETTERSTACK_UPTIME_TOKEN: "not-a-real-betterstack-uptime-token",
+          // The provider key itself, for the same reason and one more: with the
+          // Gateway URL bound empty below, `makeTriageRunner` (`triage/run.ts`)
+          // would fall STRAIGHT to api.anthropic.com with whatever key the pool
+          // holds. No test composes it today — every triage suite injects its
+          // own runner — but "no test does" is the convention this block is
+          // replacing. The agent path is unaffected: it refuses at
+          // `missing_gateway_url` before a provider exists either way.
+          ANTHROPIC_API_KEY: "not-a-real-anthropic-key",
           // THE LINE THAT KEEPS THIS SUITE OFF THE REAL MODEL, AND IT IS THIS
           // ONE — not the opt-out below it.
           //

@@ -194,6 +194,14 @@ describe("a capability never receives Env", () => {
       env.ANTHROPIC_API_KEY,
     ].filter((s): s is string => typeof s === "string" && s.length > 0);
 
+    // NON-VACUITY, and it is not decoration. The filter above exists so an
+    // unbound name cannot make `value.includes("")` match every string — but a
+    // walk over an empty list also "finds no credential", perfectly, forever.
+    // Before every one of these eight was bound in `vitest.config.ts`, six came
+    // only from `.dev.vars`, so on a fresh clone this searched for two and
+    // reported success. The count is what makes the pass mean something.
+    expect(secrets).toHaveLength(8);
+
     const found: string[] = [];
     const seen = new WeakSet<object>();
     const walk = (value: unknown, path: string, depth: number): void => {
@@ -214,6 +222,42 @@ describe("a capability never receives Env", () => {
 
     for (const [name, port] of Object.entries(deps)) walk(port, name, 0);
     expect(found).toEqual([]);
+  });
+
+  /**
+   * THE POOL'S ISOLATION FROM THE NON-MODEL VENDORS, AS CONFIGURATION.
+   *
+   * The two tests above build the REAL Linear, Supabase, LangSmith and Better
+   * Stack adapters from the POOL env. That is deliberate — a fake adapter
+   * proves nothing about credential containment — but it means those closures
+   * hold whatever this machine's `.dev.vars` supplies unless something overrides
+   * it. Nothing invokes them today, and "nothing invokes them today" is a
+   * convention, not a guarantee: there is no `fetchMock` and no miniflare
+   * `outboundService` in this pool, so a future test that calls one reaches the
+   * real vendor, and the only thing in its way is the write-guard policy matrix
+   * — an AUTHORIZATION check, which cannot help a READ.
+   *
+   * So the guarantee is the credential itself being wrong. Asserted as EQUALITY
+   * with each fixture, exactly as the Gateway pair is asserted at
+   * `agent-ports.test.ts` > "binds the pool's Gateway settings empty":
+   * `toBeTruthy()` would pass on a real key, and `toBeFalsy()` would pass on a
+   * binding that had vanished.
+   */
+  it("binds every vendor credential the composer reads to a synthetic fixture", () => {
+    expect(env.LINEAR_API_KEY).toBe("not-a-real-linear-key");
+    expect(env.SUPABASE_KEY).toBe("not-a-real-supabase-key");
+    expect(env.LANGSMITH_API_KEY).toBe("not-a-real-langsmith-key");
+    expect(env.BETTERSTACK_SQL_USERNAME).toBe("not-a-real-betterstack-username");
+    expect(env.BETTERSTACK_SQL_PASSWORD).toBe("not-a-real-betterstack-password");
+    expect(env.BETTERSTACK_UPTIME_TOKEN).toBe("not-a-real-betterstack-uptime-token");
+    // Not read by `makeCapabilityDependencies`, bound for a neighbouring reason:
+    // `makeTriageRunner` composes `createAnthropic` from it and, with the
+    // Gateway URL bound empty, would go straight to the provider.
+    expect(env.ANTHROPIC_API_KEY).toBe("not-a-real-anthropic-key");
+    // The two that were already fixtures, restated here so this one test is the
+    // whole list a reader has to check against `agent/dependencies.ts`.
+    expect(env.ZEP_API_KEY).toBe("zep-test-key");
+    expect(env.SLACK_BOT_TOKEN).toBe("xoxb-test");
   });
 });
 
