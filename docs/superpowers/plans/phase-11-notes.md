@@ -544,9 +544,12 @@ second committal `#test-firedrill` message, which no path here can post.
 | Step 1 — migrate, set vars, deploy | **DONE, verified** |
 | Step 2 — escalation parks the run | **DONE, verified live** — run `bca4b327…`, approval `apr:b64f4a23…` |
 | Step 3 — authenticated PATCH approves → `blocked` → honest resumption | **DONE, verified live** |
-| Step 4a — the `escalated` counter moved | **DONE, verified live** — 0 → 1 |
-| Step 4b — a REJECTION's reason + rejected draft reach memory | **NOT RUN** — needs a second committal message |
+| Step 4a — the `escalated` counter moved | **DONE, verified live** — 0 → 3 |
+| Step 4b — a REJECTION's reason + rejected draft reach memory | **DONE, verified live** — run `f723b51f…`, approval `apr:16bb9cc7…` |
 | Step 5 — record evidence | this section |
+
+The only thing in Task 10 never exercised live is an **edit** (`{"action":"edit"}`);
+approve and reject both were. See "Still NOT RUN" at the end of this section.
 
 ### The pre-deploy gate (the phase's second and last full-suite run)
 
@@ -853,45 +856,203 @@ so this is a real 0 → 1 movement. This call is also the live proof that the
 **deploy ordering was correct**: `/api/counters` returns 200 rather than
 erroring on a missing `approvals` table.
 
-### What is still NOT RUN
+### Step 4b — the REJECTION path, proven live
 
-**Step 4b — a rejection's reason and rejected draft reaching memory.** There
-is no Slack write path here, and a second escalation needs a second
-customer message: the approve/reject decision on `apr:b64f4a23…` is
-immutable, so the same card cannot also be rejected.
+A second committal message was posted in `#test-firedrill` (`C0BPGUXG5RS`,
+ts `1786653970.903719`, received 2026-08-13 20:46:11):
 
-This specifically leaves the final whole-branch review's **Important 1**
-(`resolutionTurnContent` appending `The draft that was rejected: …` after the
-reason, so the truncation-first ordering preserves the reason) **proven in
-test only** — `test/memory-outbox.test.ts` covers it, and the mechanism it
-rides on is now proven live by the approved episode above, but the rejected
-branch's own text has not been observed in production.
+> Customer wants us to waive the overage charges on their last invoice — can
+> I tell them we'll do it?
 
-Deliberately **not** worked around: no approval row was hand-inserted into
-production D1 and no Slack event was forged to manufacture a second
-escalation. Either would fabricate evidence for the exact claim this record
-exists to substantiate.
+Again checked rather than assumed. It produced a **distinct** run and a
+**new** approval row:
 
-**What it needs:** one more committal `#test-firedrill` message — a *new*
-question, not a reply in the existing thread, since that thread's run has
-already answered. Same shape as the one that worked (a customer-facing
-commitment the model should not make alone). Then `PATCH` with
-`{"action":"reject","reason":"…"}`, and check the resumed generation's
-`agent_memory_outbox` episode for both the reason and the rejected draft.
+| Identifier | Value |
+| --- | --- |
+| Run id | `f723b51f-41ba-4e09-86f7-710a815952e6` (`slack:C0BPGUXG5RS:1786653970.903719`) — distinct from `bca4b327…` |
+| Approval id | `apr:16bb9cc7-874f-485c-bdb3-d15d7cd2d3a1` |
+| Escalating generation | `gen:fccb2970-5fdd-469d-b568-624826e27fb8` |
+| Resumed generation | `gen:12243c9c-8851-418c-975e-a08b685dbb77` |
+
+Card at park: `decision=pending`, `delivery=none`, `decided_by=NULL`,
+created 20:47:12. Its `why` names the reason honestly — *"Commits Zellify to
+forgoing invoiced revenue. No overage-waiver policy found… Same customer has
+a held refund request… billing authority should decide both together."*
+
+**The reject `PATCH`.** `{"action":"reject","reason":"We do not waive overage
+charges at support level - it sets a precedent we cannot walk back… Any
+actual credit has to be decided by billing, not promised in the thread."}` at
+2026-08-13T20:48:42Z → **HTTP 200**, body carrying `decision:"rejected"`,
+`decidedBy:"sayandeten@gmail.com"`, `rejectReason` stored verbatim,
+`editedText:null`, **`delivery:"none"`**, `resolutionDelivered:true`.
+
+D1 after: `decision=rejected`, `decided_by=sayandeten@gmail.com`,
+**`delivery=none`, `delivery_error=NULL`**, `decided_at=20:48:43`,
+`resolution_delivered_at=20:48:44`. **No send was attempted** — a rejection
+has no outbound text (`outboundText` is `null` on that branch), so the
+delivery column never leaves `none` and the sender is never reached. That is
+the contract, and it is what the row shows.
+
+**Important 1, proven live — this is the finding the live proof existed to
+catch.** The resolution turn (exactly one, id
+`approval:apr:16bb9cc7-874f-485c-bdb3-d15d7cd2d3a1`; turn sources across the
+run are `triage:1, agent:1, approval:1`) reads:
+
+> A human REJECTED the reply you asked to send, and it was not sent.
+>
+> Their reason: [the full reason]
+>
+> Do not send that draft. Treat the reason as a correction: it is what this
+> team will not say to this customer.
+>
+> **The draft that was rejected:** We'll waive the overage charges on your
+> last invoice — …
+
+Measured, not eyeballed: the reason begins at character **82** and the
+rejected draft at character **568** — the draft is **after** the reason,
+which is exactly what the final whole-branch review's Important 1 requires so
+that `EPISODE_LIMITS.asked` truncation eats the draft before the reason.
+Metadata is `{approvalId, decision:"rejected", delivery:"none"}` with no
+`decidedBy`.
+
+**It reached memory, with both halves.** The resumed generation's outbox row
+(`gen:12243c9c…`, graph `customer:firedrill`) reached `state='projected'`,
+`attempts=1`, `last_error=NULL`, Zep `episode_uuid`
+`aa4e4595-2e21-4239-bbb2-b3b53b32c1a0`, projected 20:49:31. Its episode
+`asked` field is **749 characters** and contains the reason at index 81 and
+the rejected draft at index 565 — both present, draft last, and the decider's
+email absent.
+
+**One honest limit on that proof:** at 749 chars the episode is *under* the
+1,000-char `EPISODE_LIMITS.asked` cap, so **nothing was actually truncated**.
+The ordering Important 1 specifies is verified live; the truncation behaviour
+it exists to protect was not exercised, because this reason and draft
+together were short enough to fit. That remains covered by
+`test/memory-outbox.test.ts` only.
+
+**The run resumed and narrated honestly.** Transitions:
+`idle → live → awaiting_approval → live → awaiting_approval`. Post-rejection
+narration:
+
+> Rejected draft is dead — not sent, and I won't resend it. I rewrote the
+> reply to match the reviewer's correction: no waiver from support, no credit
+> promised in-thread (billing's call)… Nothing has gone to the customer yet.
+
+Note it calls the human **"the reviewer"**, never by name.
+
+**Canary sweep over the whole 42-event run:** `sayandeten`, `decidedBy`,
+`decided_by`, `eyJ`, `cf-access`, `CF_Authorization` — all **absent**.
+
+### Invariant 4's freeing behaviour — proven live, but NOT by the pair you'd expect
+
+Worth stating precisely, because the obvious reading is wrong. The fact that
+the *second* escalation (`apr:16bb9cc7…`) opened while `apr:b64f4a23…`
+existed proves **nothing** about the partial unique index: those are two
+different runs, and `idx_approvals_one_open` is UNIQUE on `run_id`, so they
+could never have collided regardless of how the first one settled.
+
+The real live proof arrived by accident, and is stronger. After its rejection
+the model **re-drafted and escalated again on the same run**, producing a
+third row:
+
+| # | Approval | Run | Decision | Delivery | Created |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `apr:b64f4a23-…` | `bca4b327-…` | approved | blocked | 20:35:31 |
+| 2 | `apr:16bb9cc7-…` | `f723b51f-…` | rejected | none | 20:47:12 |
+| 3 | `apr:0ab09578-…` | **`f723b51f-…`** (same run as #2) | pending | none | 20:49:16 |
+
+Rows 2 and 3 share a `run_id`. Row 3 could only be inserted because row 2's
+`decision='rejected'` puts it outside `idx_approvals_one_open`'s predicate
+(which covers `pending`, or `approved`/`edited` whose delivery has not
+reached `sent`/`blocked`/`suppressed`). So the slot really does free on a
+terminal decision, observed in production rather than argued from the DDL.
+
+Still argued-not-observed: that an `approved`+`blocked` row frees the slot for
+its *own* run. Row 1's run never escalated again, so that half remains a
+reading of the live predicate plus `test/approval-repository.test.ts`.
+
+**This also re-proves the phase's judgment goal in the strongest available
+way:** the model treated the rejection as a correction, rewrote the draft to
+match it ("no waiver at support level, offer usage review + tier fit, no
+credit promised"), and escalated the rewrite rather than sending it — because
+it still tells the customer no. It also noted that `slack.reply` is
+unavailable, so approval is the only path to the thread.
+
+### Did the first approval's content leak into the second run?
+
+Checked, because it would be a real defect. **No — and what did cross is the
+memory system working as designed.**
+
+The first run's draft text appears in run `f723b51f…`, and the exact location
+was traced: it is inside a `memory.recall` result, as an extracted
+**customer fact** on the shared `customer:firedrill` graph —
+`{"factId":"d8c740bc-…","fact":"A human can refund the remaining ~11 months
+of the annual plan, pro-rated from today."}`. That is cross-run customer
+context, which is the entire point of the graph, not card state bleeding
+between runs. Corroborating that reading: the first approval's **id**
+(`b64f4a23`) appears nowhere in the second run, so no card projection
+crossed over.
+
+Two things worth keeping:
+
+- **Zep extraction is proven end-to-end, live.** That fact only exists
+  because run 1's episode was projected, Zep extracted from it, and run 2
+  recalled it ~11 minutes later. The memory loop closes in production.
+- **The extraction anonymises correctly.** Zep rendered the decider as
+  *"A human"*, not `sayandeten@gmail.com` — invariant 12 survives not just
+  the turn and the episode but the extracted fact.
+
+**Pending, not claimed:** the *rejection's* own lesson has been projected
+(uuid above) but no later run has yet recalled it, and no `memory.recall`
+from a Chat run was issued to force the question. Recorded as **pending
+extraction**, with the episode contents above as what is actually verified.
+Given the refund fact extracted within ~11 minutes on this same graph, there
+is no reason to expect otherwise — but that is an expectation, not evidence.
+
+### The `escalated` counter — 3, not 2
+
+`GET /api/counters` → `{"heard":4,"ingested":4,"triaged":3,"escalated":3}`.
+Baseline after deploy was **0**. It reads 3 rather than 2 because the
+rejected run escalated a second time with its rewrite; every `approvals` row
+is an escalation by construction (`src/db/counters.ts` counts rows, and
+`escalate` is the only thing that mints one), so 3 rows means 3 asks. The
+counter is behaving exactly as its doc comment says.
+
+### Still NOT RUN
+
+- **An `edit` decision** (`{"action":"edit","text":"…"}`) was never exercised
+  live, so "an edit stores the human's text" is proven in test only
+  (`test/approval-api.test.ts`, `test/approval-e2e.test.ts`). Approve and
+  reject both are proven live.
+- **A live `memory.recall` surfacing the rejection lesson** — pending
+  extraction, see above.
+- **Truncation of an over-length resolution episode** — the ordering is
+  proven live, the truncation is not (the episode fit in 749 of 1,000 chars).
+- The test-matrix rows listed under "Honest status" below that no live
+  scenario reached: CAS loser, immutable decision under delivery failure,
+  viewer/outsider 403, invalid-JWT 401 (unreachable from outside),
+  interruption/withdraw races, shadow suppression.
+
+**Left open deliberately:** approval `apr:0ab09578-…` on run `f723b51f…` is
+`pending` and sitting in the open queue. Deciding it means approving a
+customer-facing reply, which is a fire-fighter's judgment call and not the
+deploying session's to make. It is a real queue item, not debris.
 
 ### Honest status of the test matrix
 
 Every row is proven by the automated suite. These rows are **additionally
-proven live** by the run above: `blocked` delivery, resolution
-(exactly-once, correctly keyed), pause latch, one-open (freeing after
-terminal delivery), the fire-fighter-200 half of `authz`, `security` (the
-canary sweep), and `memory` for the approved path.
+proven live** across the two runs above: `blocked` delivery, resolution
+(exactly-once, correctly keyed, both decisions), pause latch, one open
+approval (row 3 proving the slot frees on a terminal decision, same run),
+the fire-fighter-200 half of `authz`, `security` (two canary sweeps), and
+`memory` for **both** the approved and rejected paths — reason and rejected
+draft included.
 
 Still **live-unverified** and proven in test only: the CAS's concurrent
 loser, immutable decision under delivery failure, viewer-`PATCH` 403,
 outsider 403, invalid-JWT 401 (unreachable from outside — see the negative
-proof above), interruption/withdraw races, shadow suppression, and the
-rejection half of `memory`.
+proof above), interruption/withdraw races, shadow suppression, an `edit`
+decision, and truncation of an over-length resolution episode.
 
 ---
 
