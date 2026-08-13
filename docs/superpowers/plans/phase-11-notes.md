@@ -123,7 +123,7 @@ the time of writing, and a test pins it.
 
 | API / behaviour | Assumption | Pinned by |
 | --- | --- | --- |
-| _(none yet — Task 1 adds the D1 unique-constraint error message text)_ | | |
+| D1's `idx_approvals_one_open` UNIQUE-index violation message | On a real D1 insert that collides with the partial unique index, the thrown error's message contains exactly `UNIQUE constraint failed: approvals.run_id` — D1 names the violation by **column**, not by index name, even though the constraint is a partial unique index and `run_id` alone is not globally unique. `insertApproval` (`src/approval/repository.ts`) matches on this substring to map the violation to `duplicate_open`; anything else propagates. Confirmed empirically against the real workerd D1 pool while implementing Task 1 (`test/approval-repository.test.ts` > "one unsettled approval per run"). | `test/approval-repository.test.ts` |
 
 ---
 
