@@ -12,6 +12,8 @@ beforeEach(async () => {
     // Once `triaged` is a real count, decisions written by triage-consumer.test.ts
     // (created_at = Date.now(), which lands inside these windows) would leak in.
     env.DB.prepare("DELETE FROM triage_decisions"),
+    env.DB.prepare("DELETE FROM approvals"),
+    env.DB.prepare("DELETE FROM runs"),
   ]);
   await env.DB.batch([
     env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind("e1", "C1", "ingested", NOW),
@@ -21,6 +23,27 @@ beforeEach(async () => {
     env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind("e4", "C1", "ingested", NOW - DAY - 1),
   ]);
 });
+
+/** A minimal `runs` row, just enough to satisfy `approvals.run_id`'s FK. */
+async function seedRun(id: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
+     VALUES (?, ?, 'slack', 'C1', '1720000000.000100', 'live', 0, NULL, 1, 1)`,
+  )
+    .bind(id, `slack:C1:${id}`)
+    .run();
+}
+
+/** A minimal `approvals` row, shaped like `escalate` mints one. */
+async function seedApproval(input: { id: string; runId: string; createdAt: number }): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO approvals
+       (id, run_id, generation_id, kind, draft, why, channel_id, thread_ts, created_at, updated_at)
+     VALUES (?, ?, 'gen:1', 'slack_reply', 'draft', 'why', 'C1', '1720000000.000100', ?, ?)`,
+  )
+    .bind(input.id, input.runId, input.createdAt, input.createdAt)
+    .run();
+}
 
 describe("getCounters", () => {
   it("counts heard as every envelope seen in the window", async () => {
@@ -42,6 +65,21 @@ describe("getCounters", () => {
     const c = await getCounters(env.DB, NOW - DAY);
     expect(c.triaged).toBe(0);
     expect(c.escalated).toBe(0);
+  });
+
+  it("counts approvals rows created within the window, one per row regardless of decision", async () => {
+    // Distinct runs: the partial unique index allows only one OPEN approval per
+    // run, and this test is about the counter's window, not that constraint.
+    await seedRun("run1");
+    await seedRun("run2");
+    await seedRun("run3");
+    await seedApproval({ id: "apr:1", runId: "run1", createdAt: NOW });
+    await seedApproval({ id: "apr:2", runId: "run2", createdAt: NOW });
+    // yesterday — must not be counted
+    await seedApproval({ id: "apr:3", runId: "run3", createdAt: NOW - DAY - 1 });
+
+    const c = await getCounters(env.DB, NOW - DAY);
+    expect(c.escalated).toBe(2);
   });
 
   it("counts triage decisions within the window", async () => {

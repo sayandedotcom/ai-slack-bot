@@ -21,13 +21,19 @@ export type PromptSection = {
 };
 
 /**
- * The ten stable instruction sections, in the plan's order.
+ * The nine stable instruction sections, in the plan's order.
  *
  * The order is not decorative. Mission and the one-agent rule come before the
  * tool rules because they say what the tool is FOR; the injection rule comes
  * before the voice rules because a voice instruction read by an attacker-
  * controlled string is the failure this ordering is defending against; the
  * surface policy is last because it is what governs the final message.
+ *
+ * Phase 11: the section that used to sit here explaining that no escalation
+ * capability existed yet is gone, not repurposed — `approval.escalate` and
+ * `approval.withdraw` are real now, declared on `run_code` like any other
+ * capability, and a policy sentence saying otherwise would directly
+ * contradict `escalation_judgment` below and the tool's own doc comments.
  */
 export const STABLE_POLICY_SECTIONS: readonly PromptSection[] = [
   {
@@ -134,28 +140,26 @@ export const STABLE_POLICY_SECTIONS: readonly PromptSection[] = [
     heading: "What sends, what needs a human",
     body: [
       "Send, without asking: clarifying questions, status while a fix is in review,",
-      "anything reversible and non-committal.",
+      "anything reversible and non-committal. Send these yourself with `slack.reply`.",
       "",
       "Needs a human first: committing Zellify to anything, closing a thread, telling",
       "a customer no, quoting a date, and anything that would embarrass the person",
-      "whose name is on the message.",
+      "whose name is on the message. For one of these, call",
+      "`approval.escalate({draft, why})` with the reply you would have sent and why it",
+      "needs review, instead of sending it yourself.",
       "",
-      "Four messages of scoping are cheap. One committal reply is not.",
-    ].join("\n"),
-  },
-  {
-    id: "phase_limitation",
-    heading: "There is no escalation capability yet",
-    body: [
-      "The approval path does not exist in this build. There is no `escalate`, no",
-      "`withdraw`, and no approval card, so you cannot request review of a draft and",
-      "must not behave as though you can.",
+      "Four messages of scoping are cheap. One committal reply is not — that is the",
+      "whole reason the two paths are different tools. Never call `approval.escalate`",
+      "for a clarifying question or a status update; a click per message is the",
+      "failure this rule exists to prevent.",
       "",
-      "When something needs a human first, write the draft as your answer and state",
-      "plainly, in the same message, that it was not sent and why. Never say it was",
-      "escalated, queued, submitted for approval, or is awaiting review. Never invent",
-      "an approval id. An honest \"this needs review and I cannot request it here\" is",
-      "correct; a fabricated workflow is not.",
+      "`escalate` returns immediately; it does not block and it does not wait for a",
+      "decision — the pause happens when you finish your turn, not at the call, so",
+      "keep working the rest of this turn exactly as you would otherwise — gather",
+      "more evidence, answer a different part of the request, or simply stop if the",
+      "escalation was the last thing left to do. If the customer's newest message",
+      "makes an open draft moot before a human decides, call `approval.withdraw()` to",
+      "retract it; you get the human's decision back instead if they already acted.",
     ].join("\n"),
   },
   {
@@ -208,8 +212,8 @@ export const VOICE_EXAMPLES: readonly { bad: string; good: string }[] = [
     good: "Reproduced it on your account — billing report only, other exports are fine. Looking at the query now.",
   },
   {
-    bad: "I have escalated this to the team for approval and it is now awaiting review.",
-    good: "Drafted a reply but didn't send it — it commits us to a date, and I can't get that reviewed from here.",
+    bad: "I've escalated this for approval and it should be reviewed shortly!",
+    good: "Drafted a reply but held it for approval — it commits us to a date.",
   },
 ];
 

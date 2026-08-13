@@ -480,11 +480,11 @@ provable without Task 5 existing.
 
 **Files:** modify `src/agent/prompt/policy.ts`, `src/agent/memory.ts` (episode includes approval outcome — verify it already flows via actions/outcome fields before adding anything), `src/db/counters.ts`; extend `test/agent-prompt.test.ts`, `test/memory-outbox.test.ts`, counters test.
 
-- [ ] **Step 1: Write failing tests.** Prompt snapshot: policy contains the escalate/send distinction (committal, closing a thread, saying no, embarrassment ⇒ escalate; clarifying question, status update ⇒ `slack.reply` directly), names both capabilities, states that escalate returns immediately and the pause happens at turn end, and stays **byte-identical across two builds** (cache safety — it is all constants). Memory: a generation that settled `paused` and was later rejected produces, in the *following* generation's outbox episode, the rejection reason and draft (assert on the episode JSON through the existing outbox test harness); an edit produces the human's text beside the model's. Counter: `escalated` counts `approvals` rows created in the window; the D1 query matches the Phase 05 counter contract shape.
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.** Policy text additions only in the stable block. Counter reads D1, no DO wakes.
-- [ ] **Step 4: Run tests + typecheck.**
-- [ ] **Step 5: Commit:** `feat(approval): teach the judgment, remember the outcome, count the asks`
+- [x] **Step 1: Write failing tests.** Prompt snapshot: policy contains the escalate/send distinction (committal, closing a thread, saying no, embarrassment ⇒ escalate; clarifying question, status update ⇒ `slack.reply` directly), names both capabilities, states that escalate returns immediately and the pause happens at turn end, and stays **byte-identical across two builds** (cache safety — it is all constants). Memory: a generation that settled `paused` and was later rejected produces, in the *following* generation's outbox episode, the rejection reason and draft (assert on the episode JSON through the existing outbox test harness); an edit produces the human's text beside the model's. Counter: `escalated` counts `approvals` rows created in the window; the D1 query matches the Phase 05 counter contract shape.
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement.** Policy text additions only in the stable block. Counter reads D1, no DO wakes.
+- [x] **Step 4: Run tests + typecheck.**
+- [x] **Step 5: Commit:** `feat(approval): teach the judgment, remember the outcome, count the asks`
 
 ### Task 9 — Failure matrix, security sweep, full gate
 

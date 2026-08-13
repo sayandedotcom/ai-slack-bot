@@ -5,7 +5,7 @@ export type Counters = {
   ingested: number;
   /** Triage decisions stored in the window — wakes and non-wakes alike. */
   triaged: number;
-  /** Populated in Phase 11. */
+  /** `approvals` rows opened in the window — every escalation, any decision. */
   escalated: number;
 };
 
@@ -26,10 +26,19 @@ export async function getCounters(db: D1Database, sinceMs: number): Promise<Coun
     .bind(sinceMs)
     .first<{ triaged: number }>();
 
+  // Every row in `approvals` IS an escalation — `escalate` mints the row, and
+  // nothing else does — so counting rows created in the window counts asks,
+  // regardless of what a human later decided. A plain D1 read, matching
+  // invariant 7: reads never wake a DO.
+  const escalatedRow = await db
+    .prepare("SELECT COUNT(*) AS escalated FROM approvals WHERE created_at >= ?")
+    .bind(sinceMs)
+    .first<{ escalated: number }>();
+
   return {
     heard: row?.heard ?? 0,
     ingested: row?.ingested ?? 0,
     triaged: triagedRow?.triaged ?? 0,
-    escalated: 0,
+    escalated: escalatedRow?.escalated ?? 0,
   };
 }

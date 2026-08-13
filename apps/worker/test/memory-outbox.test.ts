@@ -14,9 +14,12 @@ import { ZEP_REQUEST_TIMEOUT_SECONDS } from "../src/memory/zep";
 import { cite } from "../src/memory/cite";
 import { createOrGetRun } from "../src/run/repository";
 import { chatRunKey } from "../src/run/keys";
+import { readGenerationMemory } from "../src/run/session";
 import type { AddEpisodeInput, MemoryStore } from "../src/memory/store";
 import type { AgentEpisode, EpisodeSourceDescriptor } from "../src/memory/episode";
 import type { MemoryJob } from "../src/memory/consumer";
+import type { RunTurnInput } from "../src/run/protocol";
+import { customerTurn, freshLoopRun, mockModel, textStep } from "./helpers/agent-loop";
 
 /**
  * The claim protocol, and the exact shape of the duplicate window it does and
@@ -604,5 +607,114 @@ describe("the cron sweeper", () => {
     expect(row?.state).toBe("retry");
     const due = await listDueOutboxRows(env.DB, { now: now + 1, limit: 50 });
     expect(due.map((r) => r.id)).toContain(id);
+  });
+});
+
+/* ------------------------------------------------ approval outcomes -- */
+
+/**
+ * Phase 11 adds no memory pipeline for approval outcomes — invariant 13 says
+ * they reach memory "through the existing outbox", and this is the proof.
+ *
+ * `appendTurn` already accepts `source: "approval"` (`TURN_SOURCES` in
+ * `run/session.ts`) and it is already in `WAKE_TURN_SOURCES`, so a turn
+ * carrying a rejection reason or an edited draft is not a new kind of input —
+ * it is read by `readAsked()` exactly like a customer message or a steer, and
+ * becomes the `asked` field of whatever generation answers it next. Nothing
+ * downstream (`buildAgentEpisode`, the outbox, the Zep projector) needs to
+ * know approvals exist at all.
+ *
+ * This test cannot exercise the `paused` continuation outcome or a real
+ * dashboard PATCH resolution turn — the driver's reserved `paused` member
+ * (Task 4) and the PATCH handler that builds the resolution turn's content
+ * (Task 5) do not exist yet. What it proves instead is the mechanism they
+ * will both rely on: an `approval`-sourced turn's content is ordinary input,
+ * and ordinary input already flows into the next episode with no extra code.
+ */
+describe("approval outcomes reach memory through the existing outbox", () => {
+  it("carries a rejection reason and the original draft into the FOLLOWING generation's episode", async () => {
+    const harness = await freshLoopRun({
+      origin: "slack",
+      model: mockModel([
+        textStep({ chunks: ["Refund approved, will process by Friday."] }),
+        textStep({ chunks: ["Understood — holding off on any refund promise."] }),
+      ]),
+    });
+
+    await harness.stub.appendTurn(customerTurn("t1", "can I get a refund for this month?"));
+    await harness.alarm();
+
+    // Shaped the way a rejection resolution turn plausibly will be (Task 5's
+    // job to actually construct) — but the shape doesn't matter here. The
+    // property under test is that whatever content lands in an
+    // `approval`-sourced turn reaches the next episode, unconditionally.
+    const rejectionTurn: RunTurnInput = {
+      id: "t2",
+      role: "user",
+      source: "approval",
+      content:
+        'Approval rejected. Reason: needs manager sign-off before any refund promise. ' +
+        'Original draft: "Refund approved, will process by Friday."',
+    };
+    await harness.stub.appendTurn(rejectionTurn);
+    await harness.alarm();
+
+    const generationIds = await harness.storage((storage) =>
+      storage.sql
+        .exec<{ id: string }>("SELECT id FROM agent_generations ORDER BY created_at ASC")
+        .toArray()
+        .map((row) => row.id),
+    );
+    expect(generationIds).toHaveLength(2);
+
+    const secondMemory = await harness.storage((storage) =>
+      readGenerationMemory(storage, generationIds[1]),
+    );
+    expect(secondMemory).not.toBeNull();
+    const episode = JSON.parse(secondMemory?.episodeJson ?? "{}") as { asked: string };
+    expect(episode.asked).toContain("Approval rejected");
+    expect(episode.asked).toContain("needs manager sign-off");
+    expect(episode.asked).toContain("Refund approved, will process by Friday");
+  });
+
+  it("carries an edit's human text beside the model's own draft", async () => {
+    const harness = await freshLoopRun({
+      origin: "slack",
+      model: mockModel([
+        textStep({ chunks: ["We'll ship the fix by end of day."] }),
+        textStep({ chunks: ["Noted — sending the reviewed wording instead."] }),
+      ]),
+    });
+
+    await harness.stub.appendTurn(customerTurn("t1", "when will this be fixed?"));
+    await harness.alarm();
+
+    const editTurn: RunTurnInput = {
+      id: "t2",
+      role: "user",
+      source: "approval",
+      content:
+        'Approval edited. Human text: "We are actively working on a fix, no ETA yet." ' +
+        'Model draft was: "We\'ll ship the fix by end of day."',
+    };
+    await harness.stub.appendTurn(editTurn);
+    await harness.alarm();
+
+    const generationIds = await harness.storage((storage) =>
+      storage.sql
+        .exec<{ id: string }>("SELECT id FROM agent_generations ORDER BY created_at ASC")
+        .toArray()
+        .map((row) => row.id),
+    );
+    expect(generationIds).toHaveLength(2);
+
+    const secondMemory = await harness.storage((storage) =>
+      readGenerationMemory(storage, generationIds[1]),
+    );
+    const episode = JSON.parse(secondMemory?.episodeJson ?? "{}") as { asked: string };
+    // The human's actual words, beside the model's own draft — both present,
+    // because the turn content carries both and `readAsked()` copies it whole.
+    expect(episode.asked).toContain("We are actively working on a fix, no ETA yet");
+    expect(episode.asked).toContain("We'll ship the fix by end of day");
   });
 });

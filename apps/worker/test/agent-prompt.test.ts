@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRunPorts } from "../src/agent/driver";
 import {
   customerTurn,
@@ -331,7 +331,7 @@ describe("the reviewed Anthropic provider options", () => {
 // --- Step 8: the behavioural contract, as prompt text only ------------------
 
 describe("stable policy content", () => {
-  it("has exactly the ten reviewed sections, in order", () => {
+  it("has exactly the nine reviewed sections, in order", () => {
     expect(STABLE_POLICY_SECTIONS.map((section) => section.id)).toEqual([
       "mission",
       "one_generic_agent",
@@ -340,7 +340,6 @@ describe("stable policy content", () => {
       "prompt_injection",
       "voice",
       "escalation_judgment",
-      "phase_limitation",
       "failure_policy",
       "surface_policy",
     ]);
@@ -384,12 +383,34 @@ describe("stable policy content", () => {
     expect(policy).toContain("not branches to select between");
   });
 
-  it("forbids faking an escalation capability that does not exist yet", () => {
+  /**
+   * Phase 11: the capability is real now, so the policy must say how to use
+   * it — not that it doesn't exist. Both capability names appear, and the
+   * non-blocking contract is stated in words a model reading only the prompt
+   * (not the tool's own doc comments) can still act on correctly: a model
+   * that believes `escalate` blocks until a human decides will write
+   * differently-structured, worse code around the call.
+   */
+  it("names both approval capabilities and states escalate does not block", () => {
     const policy = flat(renderStablePolicy());
-    expect(policy).toContain("There is no escalation capability yet");
-    expect(policy).toContain("There is no `escalate`, no `withdraw`, and no approval card");
-    expect(policy).toContain("Never say it was escalated, queued, submitted for approval, or is awaiting review");
-    expect(policy).toContain("Never invent an approval id");
+    expect(policy).toContain("approval.escalate({draft, why})");
+    expect(policy).toContain("approval.withdraw()");
+    expect(policy).toContain("`escalate` returns immediately");
+    expect(policy).toContain("the pause happens when you finish your turn, not at the call, so");
+  });
+
+  /**
+   * The judgment itself, stated as a rule a model can apply per-message: a
+   * clarifying question sends itself, a committal reply gets escalated —
+   * never the reverse, and never "escalate everything to be safe".
+   */
+  it("routes clarifying/status sends through slack.reply and committal replies through escalate", () => {
+    const policy = flat(renderStablePolicy());
+    expect(policy).toContain("Send these yourself with `slack.reply`");
+    expect(policy).toContain(
+      "call `approval.escalate({draft, why})` with the reply you would have sent",
+    );
+    expect(policy).toContain("Never call `approval.escalate` for a clarifying question");
   });
 
   it("states the surface policy both ways round", () => {
@@ -397,6 +418,30 @@ describe("stable policy content", () => {
     expect(policy).toContain("Chat origin: your final text is shown to an engineer");
     expect(policy).toContain("INTERNAL narration");
     expect(policy).toContain("The only thing that reaches a customer is a successful `slack.reply` capability call");
+  });
+
+  /**
+   * Cache safety, not a style check. Every string in `STABLE_POLICY_SECTIONS`
+   * is supposed to be a constant, so re-evaluating the MODULE from scratch —
+   * a fresh `import`, standing in for a second build — and rendering both
+   * copies must produce byte-identical output. `vi.resetModules()` forces a
+   * genuine re-evaluation rather than returning the cached module instance,
+   * so this catches what calling an already-loaded function twice cannot: a
+   * `Date.now()`, a `crypto.randomUUID()`, or a `Set`/object iteration order
+   * baked into a section body at module-eval time. If this ever fails, the
+   * prompt cache is silently broken and every request pays the write
+   * multiplier instead of reusing the cached prefix.
+   */
+  it("renders byte-identically across two independent module builds", async () => {
+    vi.resetModules();
+    const first = await import("../src/agent/prompt/policy");
+    vi.resetModules();
+    const second = await import("../src/agent/prompt/policy");
+
+    expect(second.renderStablePolicy()).toBe(first.renderStablePolicy());
+    expect(JSON.stringify(second.STABLE_POLICY_SECTIONS)).toBe(
+      JSON.stringify(first.STABLE_POLICY_SECTIONS),
+    );
   });
 
   /**

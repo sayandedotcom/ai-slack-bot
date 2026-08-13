@@ -141,3 +141,44 @@ patches both and they may have drifted." Done; one gap found.
 | `WAKE_TURN_SOURCES` includes `"approval"` | Confirmed — the plan's claim holds. |
 | `control_write` exempt from shadow/channel gating | Confirmed at `src/codemode/write-guard.ts:22-26,119`, which names Phase 11 as the owner of the run-state authorization it defers to. |
 | Reserved seams already in place | `src/run/do.ts:128,494,884`, `src/run/session.ts:840,3399`, `src/agent/loop.ts:977`, `src/agent/transcript.ts:287`, `src/codemode/registry.ts:148`, `src/db/counters.ts:8` all name Phase 11 explicitly. |
+
+---
+
+## Task 8 — prompt judgment, memory, counter
+
+**Dependency gap the task brief did not flag, resolved as directed by the
+operator:** Step 1's memory assertion as literally written ("a generation
+that settled `paused` and was later rejected") needs Task 4's reserved
+`paused` outcome and Task 5's PATCH-driven resolution turn. Neither exists
+yet. Per direction, the deferred assertion was **not** faked; instead:
+
+- Verified the claim in invariant 13 directly: `TURN_SOURCES` in
+  `src/run/session.ts:146-153` already accepts `source: "approval"`, and
+  `WAKE_TURN_SOURCES` (`src/agent/contracts.ts:209`, reconfirmed at Task 0)
+  already includes it. `readAsked()` (`src/run/session.ts:3280`) reads every
+  input turn's `content` for the generation it answers, with no source-based
+  filtering. So an approval-sourced turn's content — whatever Task 5 puts in
+  it — reaches the next generation's episode `asked` field through the
+  ordinary path, with zero changes needed in `src/agent/memory.ts` or
+  `src/memory/episode.ts`. No new pipeline was added, matching invariant 13.
+- Proved it empirically instead of arguing it: `test/memory-outbox.test.ts`
+  ("approval outcomes reach memory through the existing outbox") runs a real
+  two-generation loop through `freshLoopRun`, appends a second turn with
+  `source: "approval"` carrying a rejection reason + original draft (and, in
+  a second case, an edit's human text + the model's draft), and asserts both
+  pieces of text land in the second generation's frozen `episodeJson.asked`.
+  Both tests pass against unmodified `src/agent/memory.ts` / `src/memory/episode.ts`
+  — the honest result the operator predicted.
+- **Deferred, not written:** the exact assertion naming `paused` and a real
+  `PATCH`-driven resolution turn. That needs Task 4 (driver `paused` member)
+  and Task 5 (the resolution turn's actual content construction) to exist
+  first. Nothing here should be read as claiming that path is covered — only
+  the underlying mechanism it will rely on.
+
+`src/agent/prompt/policy.ts`'s `phase_limitation` section ("There is no
+escalation capability yet") was **removed**, not edited: Task 3 makes
+`approval.escalate` / `approval.withdraw` real capabilities in this same
+wave, so a policy sentence still claiming they don't exist would directly
+contradict the rewritten `escalation_judgment` section and the tool's own
+declaration doc comments. `STABLE_POLICY_SECTIONS` now has nine sections
+(was ten); `test/agent-prompt.test.ts` updated to match.
