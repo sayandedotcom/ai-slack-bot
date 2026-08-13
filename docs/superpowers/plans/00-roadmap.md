@@ -179,7 +179,7 @@ wrong.
 | 08 | RunDO session core + streaming | [full](phase-08-run-session.md) | 05, 07 | 3 |
 | 09 | Code Mode Tier 1 | [full](phase-09-code-mode-tier-1.md) | 00·T2, 08 | 3 |
 | 10 | Agent loop | [full](phase-10-agent-loop.md) | 09 | 4 |
-| 11 | Approval | below | 10 | 4 |
+| 11 | Approval | [full](phase-11-approval.md) | 10 | 4 |
 | 12 | Identity, OAuth, rotation | below | 01 | 4 |
 | 13 | Slack nudge | below | 11, 12 | 4 |
 | 14 | Dashboard shell | below | 05, 12 | 5 |
@@ -340,21 +340,18 @@ after Phase 11 adds escalation and Phase 12 adds identity.
 
 **Goal:** The agent decides when to ask. What it escalates gates on the dashboard alone.
 
-**Depends on:** Phase 10 · **Day 4**
+**Depends on:** Phase 10 · **Day 4** · Full plan: [phase-11-approval.md](phase-11-approval.md) (rewritten 2026-08-13 against merged Phase 10)
 
-**Files:** `src/approval/escalate.ts`, `src/approval/transitions.ts`, `src/api/approvals.ts`, `migrations/0007_approvals.sql`, `src/db/counters.ts` (modify: real `escalated`), `test/approval-*.test.ts`
+**Shape:** Two `control_write` capabilities inside the one `run_code` tool — `approval.escalate({draft, why})` and `approval.withdraw()`. `escalate` returns immediately and records one open approval; the pause latches at generation finalize via the driver's reserved `paused` outcome (`awaiting_approval`, epoch-fenced). A human decision re-enters the run as `appendTurn({source:"approval"})` — the one inbox, no new resume machinery. The RunDO-local approval record is the coordination authority; the D1 card row is its projection through the existing projection-job machinery (kind `approval_card`).
 
-**Tasks:**
-1. **`approvals` table for `slack_reply` drafts only.** Dashboard approval never gates Linear, PR creation, review, or merge; PR review remains on GitHub.
-2. **`escalate({ kind: "slack_reply", ... })` returns immediately.** It does not block — a Worker Loader isolate cannot be parked for hours. Test that the code block completes and the run transitions to `awaiting_approval`; reject any other approval kind.
-3. **Disjoint transitions, one module:** `pending` written by the DO; `approved | edited | rejected` only by `PATCH /api/approvals/:id`; `withdrawn` only by the DO. Test that each illegal transition is rejected.
-4. **Resolution injects a turn** via Phase 08's `appendTurn`. A rejection with a reason becomes something the agent answers.
-5. **Approve/edit resolves a send intent through an injected sender.** Phase 11 tests this with a fake actor/sender; Phase 13 supplies the real on-duty user-token integration. The agent never sends escalated content itself.
-6. **Interruption behavior:** a new customer message on a run with a pending approval wakes the agent immediately and offers `withdraw(id)`.
-7. **Rejections write to both stores** — D1 keeps draft, edit diff and reason; Zep's org graph keeps the derived lesson.
-8. **Real `escalated` counter.**
+**Decisions this plan fixed against the old sketch:**
+1. **Authorization ships in 11, not 12.** `src/access/jwt.ts` validates `Cf-Access-Jwt-Assertion` against the team JWKS (signature, issuer, AUD, expiry); `src/access/roster.ts` hardcodes the seven emails. Fire-fighters decide; viewers read. Phase 12 inherits both modules unchanged.
+2. **Decision ≠ delivery, and `blocked` unparks.** Decision (`pending → approved|edited|rejected|withdrawn`) is immutable once written. Delivery (`none → sending → sent|blocked|suppressed|in_doubt`) is separate; in Phase 11 the sender is identity-refusing, so delivery terminates `blocked` and the run resumes with an honest "approved; needs manual send" turn instead of parking until Phase 13.
+3. **One *unsettled* approval per run** via a partial unique index (pending, or decided-but-undelivered).
+4. **A human decision is never rolled back**; the decision CAS has exactly one winner (`409 already_decided` for the loser); a decided row whose DO notify failed is repaired by the one-minute sweeper (`resolution_delivered_at`).
+5. Interruption: a customer message wakes the parked run with the pending approval in trusted context; `withdraw` loses gracefully to an already-made decision. Rejections and edits reach the org graph through the existing memory outbox. Real `escalated` counter.
 
-**Exit criteria:** A committal Slack draft parks and the driver stops before another model step. The dashboard can approve/edit/reject through a fake sender, and an edit stores the diff. Real user-token sending is the integrated Phase 13 exit. A multi-turn scoping conversation costs at most one approval click, never one click per message. Approval records gate Slack drafts only; Linear/PR review remains on its owning surface.
+**Exit criteria:** A `#test-firedrill` escalation parks the run; the API approves/edits/rejects with validated identity and one CAS winner; delivery terminates `blocked` with no bot fallback and the run resumes honestly; a multi-turn scoping conversation costs at most one click; rejection reasons reach memory; live proof recorded in `phase-11-notes.md`.
 
 ---
 
@@ -373,7 +370,10 @@ after Phase 11 adds escalation and Phase 12 adds identity.
 4. **Slack OAuth v2** with `authed_user` scopes, state parameter validated against CSRF.
 5. **GitHub OAuth**, per-engineer, tokens encrypted identically.
 6. **`identities` table** and a connect-status API for the dashboard.
-7. **Access JWT → role mapping**, validating `Cf-Access-Jwt-Assertion` against the team JWKS as defense in depth behind Access itself.
+
+> Access JWT validation and the hardcoded roster shipped **early, in Phase 11**
+> (`src/access/jwt.ts`, `src/access/roster.ts`). Phase 12 consumes them
+> unchanged and adds only OAuth, rotation, and token crypto on top.
 
 **Exit criteria:** Two accounts connect end to end. `onDuty` matches the real rotation. No token is readable in D1 without the key.
 
@@ -391,8 +391,9 @@ after Phase 11 adds escalation and Phase 12 adds identity.
 1. **Bot-token DM** to the on-duty engineer. A self-DM sent with the user's own token does not push-notify — that is exactly what the bot token is for.
 2. **Block Kit payload:** draft preview, why the agent escalated, and a **plain URL button** to the dashboard. A URL button needs no interactivity endpoint and no handler code.
 3. **`im:write` fallback**, decided by whatever Ronit answers: if the scope is unavailable, the nudge becomes an @-mention in `#eng-firefighter`, which needs only `chat:write`. Both paths implemented and tested; one config flag chooses.
-4. **Deduplication** — one nudge per approval, no re-nudge on reconnect.
+4. **Deduplication** — one nudge per approval, no re-nudge on reconnect. Phase 11 left the hooks: the `approval_card` projection completing is the nudge trigger, and `idx_approvals_undelivered` is the once-only bookkeeping — no new tables.
 5. **Withdrawal updates the nudge** rather than leaving a dead link to a resolved card.
+5b. **The real sender implements Phase 11's `ApprovalSender`** (`src/approval/sender.ts`): user-token `chat.postMessage` replaces `makeIdentityRefusingSender`, making delivery `sent` reachable and `blocked` extinct.
 6. **Integrated identity/send proof:** approved or edited Slack drafts, plus
    model-authorized non-escalated clarifying/status replies, resolve the
    on-duty engineer and send only through that engineer's user token. No bot
@@ -457,8 +458,8 @@ arrives under the on-duty engineer's Slack identity.
 1. **Card pinned above the fold** — draft, why, thread context, target channel.
 2. **Approve / Edit / Reject.** Edit is inline, not a modal.
 3. **Reject requires a reason** — that reason is training data for Phase 21, not paperwork.
-4. **Optimistic update with rollback** on failure.
-5. **Live withdrawal handling.** A card can vanish under the cursor when the agent withdraws it (spec §5.3); it must disappear with an explanation, never silently.
+4. **Optimistic update with rollback** on failure — keyed off Phase 11's `409 already_decided` contract, which returns the winning decision for the rollback render.
+5. **Live withdrawal handling.** A card can vanish under the cursor when the agent withdraws it (spec §5.3); it must disappear with an explanation, never silently. The signal already exists: the resolution turn is a run event on the existing WebSocket.
 6. **Empty state** that reads as reassurance rather than absence.
 
 **Exit criteria:** An escalation appears within a second of `escalate()`. Approve/edit/reject update through the Phase 11 fake-sender contract and rejection reaches memory. Real on-duty sending is the Phase 13 integration exit.
