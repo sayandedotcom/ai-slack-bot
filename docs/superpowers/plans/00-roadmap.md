@@ -185,7 +185,7 @@ wrong.
 | 14 | Dashboard shell | [full](phase-14-dashboard-shell.md) | 05, 12 (soft) | 5 |
 | 15 | Run list + live run drawer | [full](phase-15-run-list-live-drawer.md) | 10, 14 | 5 |
 | 16 | Approval card | [full](phase-16-approval-card.md) | 11, 14 | 5 |
-| 17 | Chat page + citations | below | 10, 14 | 5 |
+| 17 | Chat page + citations | [full](phase-17-chat-page-citations.md) | 10, 14, 15 | 5 |
 | 18 | Sandbox Tier 2 | below | 00·T1, **monorepo** | 5 |
 | 19 | Ship loop + proof capture | below | 18 | 6 |
 | 20 | PR + ship-loop Linear updates → `web2app-rebuild` `staging` | below | 19 | 6 |
@@ -479,9 +479,9 @@ in flight, then swapped when 12 merges.
 
 **Goal:** "What happened with X?" answered with links to the actual threads.
 
-**Depends on:** Phases 10, 14 · **Day 5**
+**Depends on:** Phases 10, 14, **15** (it reuses 15's `SessionView`/`useRunSession` — a dependency the old sketch omitted) · **Day 5** · Full plan: [phase-17-chat-page-citations.md](phase-17-chat-page-citations.md) (written 2026-08-13)
 
-**Files:** `apps/dashboard/src/chat/*`, `src/api/chat.ts`
+**Files:** `apps/dashboard/src/chat/*` only — **zero worker changes**. The old sketch's `src/api/chat.ts` is not built: `POST /api/runs` (chat origin, idempotent `requestId`) and `GET /api/runs` already cover creation and listing; citations already stream as `memory.cite` tool-call events.
 
 **Tasks:**
 1. **Chat session list and composer**, same session component as runs.
