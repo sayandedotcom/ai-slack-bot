@@ -1107,3 +1107,163 @@ miniflare block: a binding overrides `.dev.vars`, so composition refuses before
 in locally. Pinned by `agent-ports.test.ts` > "binds the pool's Gateway settings
 empty", which asserts `""` rather than falsiness so deleting either line fails
 the suite.
+
+---
+
+## Task 11 — the failure, recovery, concurrency and security matrix
+
+Same operator constraint as every task before it: **local + automated only.** No
+Anthropic call, no AI Gateway call, no deploy, no remote D1 migration, no spend.
+`wrangler deploy --dry-run` was run as a build check and is not a deploy.
+
+### A defect the matrix found: a provider timeout was reported as a cancellation
+
+`streamText()` is handed both this loop's steering `AbortSignal` and the reviewed
+`timeout` policy. When a `firstChunkMs` / `chunkMs` / `stepMs` timer fires, the
+SDK aborts its **own** combined signal and delivers an `abort` stream part — at
+the `consumeStream` seam that is byte-for-byte what a human steer looks like. The
+loop read "abort, with nothing pending" as `run_cancelled`, which is a **visible
+terminal** outcome, so:
+
+- an operator was told a human cancelled a run that had in fact timed out; and
+- the run did **not** get the bounded retry the plan's failure matrix requires
+  for the timeout row.
+
+`agent-loop.test.ts` did not catch it because its timeout case throws an error
+whose *message* contains "timed out" — that reaches `classifyThrown`, a different
+path from the one a real SDK timer takes.
+
+Fixed in `agent/loop.ts` by asking the one question that separates the two: this
+loop's own controller. A steer (and the external signal, which is forwarded into
+the same controller) always leaves `steering.signal.aborted === true`; an abort
+arriving with it `false` can only be a configured timeout. Pinned by
+`agent-failure-matrix.test.ts` > "gives up on a provider that never sends a first
+chunk" and "gives up on a stream that stalls after its first chunk", which drive
+the SDK's real timers with wall-clock delays (the injected `StreamClock` cannot
+move a `setTimeout` inside `ai@7.0.59`).
+
+### Step 8 mutation review — one real gap, found and closed
+
+Ten mutations, each applied, run against the focused suite, and reverted. Nine
+failed a test as required. **One did not:**
+
+> **`disableParallelToolUse: true` → `false` left the ENTIRE suite green** —
+> 68 files / 1296 passed / 2 skipped / 0 failed with the mutation in place.
+
+Invariant 6 was therefore configuration nobody read. That matters more than a
+missing assertion usually does: the plan's own reference-repo survey records
+`AI_MissingToolResultsError` in `rtpa25/self-syncing-agent` as a **measured**
+consequence of allowing parallel outer calls, not a hypothetical one.
+
+Closed by `agent-prompt.test.ts` > "the reviewed Anthropic provider options",
+which pins all four values by equality and then asserts the loop sends exactly
+that object on every provider invocation. The mutation now fails.
+
+A second, narrower finding from mutation 10: `slack.reply` refuses through **two
+independent gates** — `codemode/bindings/slack.ts#assertMayReply` (no resolved
+actor) and `slack/gateway.ts#reply` (the Phase 12 placeholder). Removing only the
+gateway one leaves `agent-composer.test.ts` and `agent-surface-parity.test.ts`
+green, because the binding gate still refuses; six tests fail once both are
+removed. Defence in depth, working as intended, but worth knowing that the
+composer-level tests are not by themselves a guard on the gateway.
+
+### Step 9 — NOT RUN, and why
+
+**Step 9 (the minimum Fable behavior acceptance set) was NOT RUN.** It requires
+live model calls against the reviewed prompt, which the operator decision for
+this implementation run forbids. Nothing in this task's evidence stands in for
+it, and no test here should be read as behavioural acceptance: every provider in
+these suites is a `MockLanguageModelV4` reading a script this repository wrote,
+and a scripted model cannot fail to answer directly, cannot produce an AI tell,
+and cannot ask a bad follow-up question.
+
+**Runnable command shape** (throwaway script, never committed; reads
+`ANTHROPIC_API_KEY`, `AI_GATEWAY_ANTHROPIC_URL` and `AI_GATEWAY_TOKEN` from the
+environment, never printed — and deferred proof #8 above must be done first,
+because the composer fails closed without a Gateway):
+
+```ts
+// scratch-fable-acceptance.ts — DO NOT COMMIT
+import { streamText } from "ai";
+import { createProductionModelFactory } from "./src/agent/model";
+import { buildAgentPrompt, ANTHROPIC_PROVIDER_OPTIONS } from "./src/agent/prompt";
+import { modelCallOptions } from "./src/agent/model";
+
+const handle = createProductionModelFactory(process.env as never)({
+  runId: "run_acceptance", generationId: "gen:acceptance", attempt: 1, surface: "chat",
+});
+
+// Case A — a how-to question. Answer directly, with evidence, no AI tells.
+// Case B — a large request. Ask useful follow-ups; surface value, blocking and
+//          customer weight; promise no date.
+for (const ask of [
+  "how do I re-run a failed export for one customer without touching the others?",
+  "can you rebuild the whole export pipeline so it never drops a job again?",
+]) {
+  const prompt = buildAgentPrompt({ context: /* a real TrustedContext */ null as never, messages: [
+    { role: "user", content: [{ type: "text", text: ask }] },
+  ] });
+  const result = streamText({
+    model: handle.model,
+    instructions: prompt.instructions,
+    messages: prompt.messages,
+    tools: { run_code: /* the real one-tool map, against SAFE FAKE capabilities */ null as never },
+    providerOptions: ANTHROPIC_PROVIDER_OPTIONS,
+    ...modelCallOptions(),
+  });
+  for await (const part of result.stream) void part;
+  console.log(await result.text);
+}
+```
+
+**What a future operator must check, per case:**
+
+| Case | PASS | FAIL |
+| --- | --- | --- |
+| A — how-to question | Answers the question in the first sentence. Names the concrete evidence it used (a log line, a row, a thread), not "I looked into it". No opening pleasantry ("Great question!"), no closing paragraph restating the answer, no "As an AI". Reads as though the on-duty engineer typed it. | Any AI tell; a preamble; an answer that restates the question; a claim with no named evidence; an answer that is a plan to answer. |
+| B — large request | Asks follow-up questions that a reader can see the point of. States platform value, what it is blocking, and customer weight, with the evidence for each. Says explicitly that it will not commit to a date. | Any date, "by end of week", or "soon". A confident single answer with no clarification. Value/blocking/customer-weight judgment omitted or asserted with no evidence. |
+
+Capabilities must be **safe fakes** for this run — the point is the model's
+judgment, not a live write. Store only scores and safe excerpts here; no customer
+content and no raw transcript. Phase 21 expands this into the full evaluation
+harness.
+
+### Honest gaps left by this task
+
+1. **Step 9 is not run** (above). Fable behavioural acceptance remains unproven.
+2. **The canary sweep fakes the vendor adapters.** `agent-canaries.test.ts`
+   injects a synthetic credential into every host env field and proves the host
+   composition leaks none of them into the model call, the RunEvent stream, the
+   turns, the transcript, `agent_model_calls`, the D1 `runs` row, the frozen
+   episode, its source mapping or any log line. It does **not** exercise the real
+   Slack/Zep/Linear/Supabase/LangSmith/Better Stack HTTP adapters, so a real
+   adapter echoing its own credential into an error string would not fail there.
+   That half is covered by `agent-composer.test.ts` > "reaches no credential by
+   walking the whole dependency object graph" and `codemode-security.test.ts` >
+   "exposes no credential, binding or host env to model code" — but neither is a
+   live-response test, and no live response has ever been observed.
+3. **`gatewayHeaders` validates identifier SHAPE, not secrecy.** `OPAQUE_ID` is
+   `[A-Za-z0-9:_.-]{1,128}`, which most credential formats satisfy. The metadata
+   document is safe because the composer never reads a credential into it, not
+   because the validator would catch one. Written into the test rather than
+   asserted away.
+4. **Crash window 3 is proven by construction, not by a killed process.** "After
+   the provider tool call, before the tool starts" leaves no durable checkpoint —
+   `onStepEnd` writes the step only after the tool result exists — so a reclaim
+   necessarily re-sends the same history and may re-issue the call. The test
+   asserts exactly that trace (one tool message at global step 0, written after
+   the result) and leans on `agent-recovery.test.ts` > "replays a Phase 09 effect
+   once across both attempts" for the property that makes the re-issue safe. The
+   vitest pool cannot kill a Durable Object mid-`await`, so no test in this
+   repository observes the window directly.
+5. **The two timeout cases use wall-clock delays.** 1,500 ms of real time against
+   an injected 50 ms limit. That is a 30x margin, not a synchronized clock; on a
+   catastrophically loaded machine they could in principle race. They are the
+   only tests in these suites that are not driven by the injected `FakeClock`,
+   because the SDK's timers are its own `setTimeout` calls.
+6. **An unknown tool name is refused, but the path is not pinned.**
+   `agent-failure-matrix.test.ts` > "fails the step rather than fabricating a
+   result for an unknown tool" asserts the two properties that matter (no answer,
+   no invented tool result in the transcript) and deliberately does not pin
+   *which* terminal path the SDK routes it through, because that is SDK-internal
+   behaviour rather than a decision this repository makes.

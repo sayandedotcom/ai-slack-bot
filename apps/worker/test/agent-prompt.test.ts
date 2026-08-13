@@ -1,6 +1,15 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resetRunPorts } from "../src/agent/driver";
 import {
+  customerTurn,
+  freshLoopRun,
+  mockModel,
+  textStep,
+  toolStep,
+} from "./helpers/agent-loop";
+import {
+  ANTHROPIC_PROVIDER_OPTIONS,
   buildAgentPrompt,
   decodeUntrustedEvidence,
   encodeUntrustedEvidence,
@@ -264,6 +273,58 @@ describe("generated capability declarations", () => {
     };
     const serialized = JSON.stringify(request);
     expect(serialized.split(MARKER).length - 1).toBe(1);
+  });
+});
+
+/* --------------------------------------- the reviewed provider options -- */
+
+/**
+ * The four Anthropic options, pinned by value.
+ *
+ * Not decoration: every one of them is a load-bearing decision that no other
+ * test reads, and a mutation review found that flipping
+ * `disableParallelToolUse` to `false` left the entire suite green. Parallel
+ * outer calls are invariant 6 — and the upstream failure the plan cites
+ * (`AI_MissingToolResultsError` in `rtpa25/self-syncing-agent`) is a MEASURED
+ * consequence of allowing them, not a hypothetical. `display: "omitted"` is
+ * invariant 17/18's provider half; the cache breakpoint is what makes the
+ * stable prefix cacheable at all.
+ */
+describe("the reviewed Anthropic provider options", () => {
+  afterEach(() => {
+    resetRunPorts();
+  });
+
+  it("holds the exact four reviewed values, and nothing else", () => {
+    expect(ANTHROPIC_PROVIDER_OPTIONS).toEqual({
+      anthropic: {
+        thinking: { type: "adaptive", display: "omitted" },
+        effort: "high",
+        disableParallelToolUse: true,
+        cacheControl: { type: "ephemeral", ttl: "5m" },
+      },
+    });
+    expect(Object.keys(ANTHROPIC_PROVIDER_OPTIONS)).toEqual(["anthropic"]);
+  });
+
+  it("is what the loop actually sends, on every provider invocation", async () => {
+    const sent: unknown[] = [];
+    const harness = await freshLoopRun({
+      model: mockModel([
+        toolStep({ toolCallId: "call_1", code: "async () => ({ ok: true })" }),
+        textStep({ chunks: ["done."] }),
+      ]),
+      onModelCall: (callOptions) => {
+        sent.push((callOptions as { providerOptions?: unknown }).providerOptions);
+      },
+    });
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.alarm();
+
+    expect(sent).toHaveLength(2);
+    for (const options of sent) {
+      expect(options).toEqual(ANTHROPIC_PROVIDER_OPTIONS);
+    }
   });
 });
 
