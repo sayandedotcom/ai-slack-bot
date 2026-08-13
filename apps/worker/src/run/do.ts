@@ -664,7 +664,7 @@ export class RunDO extends DurableObject<Env> {
   #projectionKinds(): ProjectionJobKind[] {
     const ports = this.#resolvePorts();
     const kinds: ProjectionJobKind[] = ["run_index"];
-    for (const kind of ["d1_usage", "memory_outbox"] as const) {
+    for (const kind of ["d1_usage", "memory_outbox", "approval_card"] as const) {
       if (ports.projections[kind]) kinds.push(kind);
     }
     return kinds;
@@ -879,13 +879,24 @@ export class RunDO extends DurableObject<Env> {
    * PRIVATE driver phase and stops. Without this mapping a settled run stays
    * `live` on the dashboard forever.
    *
-   * `done` is never set here. Phase 10 has no notion of a conversation being
-   * finished — only of having nothing scheduled — and `awaiting_approval` stays
-   * reserved for Phase 11's approval gate.
+   * `done` is never set here. There is still no notion of a conversation being
+   * finished — only of having nothing scheduled. `awaiting_approval` IS set
+   * here now, and only here: it is Phase 11's approval gate, and it is reached
+   * exclusively from a settle whose finalize latched a pause.
    */
   async #applyFinalizeStatus(finalize: FinalizeOutcome): Promise<void> {
     switch (finalize.outcome) {
       case "settled":
+        // The approval gate. A settle that latched a pause is `idle` on the
+        // DRIVER — there is nothing scheduled and nothing to reclaim, and the
+        // run wakes only through `appendTurn({source:"approval"})` — but it is
+        // `awaiting_approval` to everyone looking at it. The session layer
+        // committed the pause; deciding what the customer-visible state becomes
+        // is this method's job, exactly as it is for every other phase.
+        if (finalize.pausedApprovalId !== undefined) {
+          await this.#applyPublicStatus("awaiting_approval");
+          return;
+        }
         // Three phases, not two. A terminal failure that stranded input the dead
         // generation never read allocates a successor in the same transaction
         // (`UNSEEN_INPUT_WAKE_CODES`), and the public status follows the DRIVER,

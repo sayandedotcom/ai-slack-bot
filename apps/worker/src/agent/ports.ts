@@ -6,6 +6,7 @@ import {
   type ContinuationOutcome,
   type RunPorts,
 } from "./driver";
+import { makeApprovalCardRunner } from "../approval/projection";
 import { makeMemoryOutboxRunner } from "./memory";
 import { makeUsageProjectionRunner } from "./usage";
 import { readState } from "../run/session";
@@ -242,6 +243,13 @@ export function productionRunPorts(env: Env): {
      */
     d1_usage: (ctx, workerEnv) =>
       makeUsageProjectionRunner({ storage: ctx.storage, db: workerEnv.DB }),
+    /**
+     * Phase 11's approval card. Without it an escalation parks the run
+     * locally and the dashboard never learns there is anything to decide —
+     * a run parked on a decision nobody can be asked for.
+     */
+    approval_card: (ctx, workerEnv) =>
+      makeApprovalCardRunner({ storage: ctx.storage, db: workerEnv.DB }),
   };
 
   const report = modelDisposition(env);

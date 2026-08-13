@@ -8,6 +8,7 @@ import {
   type RunDescriptor,
 } from "../../src/run/session";
 import type { RunTurnInput } from "../../src/run/protocol";
+import type { ProjectionJobKind } from "../../src/agent/contracts";
 import {
   installRunPorts,
   type AgentContinuation,
@@ -35,7 +36,9 @@ export class FakeContinuation implements AgentContinuation {
   #open!: () => void;
   #outcome: ContinuationOutcome = { outcome: "completed" };
   #throws: Error | null = null;
-  #onRun: ((claim: ClaimedGeneration) => void | Promise<void>) | null = null;
+  #onRun:
+    | ((claim: ClaimedGeneration, storage: DurableObjectStorage) => void | Promise<void>)
+    | null = null;
   #storage: DurableObjectStorage | null = null;
   #consumesInput: boolean;
 
@@ -87,8 +90,17 @@ export class FakeContinuation implements AgentContinuation {
     return this;
   }
 
-  /** Runs inside the continuation, after the claim, before the outcome. */
-  onRun(hook: (claim: ClaimedGeneration) => void | Promise<void>): this {
+  /**
+   * Runs inside the continuation, after the claim, before the outcome.
+   *
+   * It is handed THIS object's storage, because that is the only way a hook can
+   * write the durable state a real execution would write — an `approval_state`
+   * row, say. Reaching for `runInDurableObject` from in here instead would be a
+   * re-entrant call from inside the object, which does not resolve.
+   */
+  onRun(
+    hook: (claim: ClaimedGeneration, storage: DurableObjectStorage) => void | Promise<void>,
+  ): this {
     this.#onRun = hook;
     return this;
   }
@@ -103,7 +115,10 @@ export class FakeContinuation implements AgentContinuation {
     this.#includePendingInput(claim);
 
     if (this.#gate) await this.#gate;
-    if (this.#onRun) await this.#onRun(claim);
+    if (this.#onRun) {
+      if (!this.#storage) throw new Error("onRun needs storage; call attach() first");
+      await this.#onRun(claim, this.#storage);
+    }
     if (this.#throws) throw this.#throws;
     return this.#outcome;
   }
@@ -210,24 +225,36 @@ export type DriverHarness = {
 export async function freshDriverRun(
   options: {
     continuation?: FakeContinuation | null;
-    projections?: Partial<Record<"run_index" | "d1_usage" | "memory_outbox", AgentProjectionRunner>>;
+    projections?: Partial<Record<ProjectionJobKind, AgentProjectionRunner>>;
     clock?: FakeClock;
     limits?: Partial<{ claimLeaseMs: number; maxAttempts: number; continuationTotalMs: number }>;
+    /**
+     * Make it a SLACK run instead of the default Chat one. Phase 11's approval
+     * card is pinned to a customer thread, so a case about it needs a run that
+     * actually has one — and it must be the real `run_state` channel/thread,
+     * because that is the only source the card is ever built from.
+     */
+    slack?: { channelId: string; threadTs: string };
   } = {},
 ): Promise<DriverHarness> {
-  const key = chatRunKey(crypto.randomUUID());
+  const slack = options.slack ?? null;
+  const key =
+    slack === null
+      ? chatRunKey(crypto.randomUUID())
+      : `slack:${slack.channelId}:${slack.threadTs}`;
+  const origin = slack === null ? ("chat" as const) : ("slack" as const);
   const record = await createOrGetRun(env.DB, {
     key,
-    origin: "chat",
-    channelId: null,
-    threadTs: null,
+    origin,
+    channelId: slack?.channelId ?? null,
+    threadTs: slack?.threadTs ?? null,
   });
   const descriptor: RunDescriptor = {
     runId: record.id,
     key,
-    origin: "chat",
-    channelId: null,
-    threadTs: null,
+    origin,
+    channelId: slack?.channelId ?? null,
+    threadTs: slack?.threadTs ?? null,
   };
 
   const clock = options.clock ?? new FakeClock();

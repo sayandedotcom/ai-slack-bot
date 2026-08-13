@@ -360,6 +360,13 @@ export type GenerationRecord = {
   resumePolicy: ResumePolicy | null;
   lastErrorCode: string | null;
   lastErrorMessage: string | null;
+  /**
+   * The approval this generation parked on, or null. On the ERROR-FREE
+   * terminal fields on purpose: a pause is a successful settle that is waiting
+   * for a human, not a failure, so it must not occupy `lastErrorCode` where an
+   * operator report would render it as something having gone wrong.
+   */
+  pausedApprovalId: string | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -443,9 +450,18 @@ export type FencedAppendOutcome = AssistantUpdateOutcome;
 /**
  * How the driver wants to end this attempt. `retry` is a crash/continuation
  * attempt of the SAME generation, not a hidden provider retry (invariant 27).
+ *
+ * `paused` is Phase 11's approval gate and is deliberately a REQUEST rather
+ * than an instruction: the attempt reports the approval it opened, and
+ * `finalizeGeneration` re-reads the local `approval_state` record inside its
+ * own transaction before parking anything. A continuation that escalated and
+ * then withdrew, or whose approval a human resolved while it was finishing,
+ * settles `completed` — the decision belongs to the one epoch-fenced
+ * transaction that owns every other transition, not to the reporter.
  */
 export type FinalizeRequest =
   | { kind: "completed" }
+  | { kind: "paused"; approvalId: string }
   | {
       kind: "failed";
       state: "failed" | "refused" | "budget_exhausted";
@@ -475,6 +491,19 @@ export type FinalizeOutcome =
       settledThroughSeq: number;
       /** Present only with `driverPhase: "scheduled"`. */
       successorGenerationId?: string;
+      /**
+       * The approval this generation parked on, when the finalize latched a
+       * pause. Present only with `driverPhase: "idle"`, because a parked run
+       * has nothing scheduled and nothing to reclaim — it wakes solely through
+       * `appendTurn({source:"approval"})`.
+       *
+       * It exists because the PUBLIC status of a paused settle is
+       * `awaiting_approval` rather than `idle`, and the session layer
+       * deliberately does not set public status (see `finalizeGeneration`'s
+       * header). Without this field the driver would have to re-read the
+       * generation row to discover what it just committed.
+       */
+      pausedApprovalId?: string;
     }
   | {
       outcome: "continued";
@@ -546,7 +575,19 @@ export type StepUsageRecord = StepUsageInput & {
 
 // --- run-index projection ---------------------------------------------------
 
-export const PROJECTION_JOB_KINDS = ["run_index", "d1_usage", "memory_outbox"] as const;
+export const PROJECTION_JOB_KINDS = [
+  "run_index",
+  "d1_usage",
+  "memory_outbox",
+  /**
+   * One approval card, projected from the local `approval_state` row into D1
+   * so the dashboard can list it. Deliberately the SAME machinery as every
+   * other kind — the same table, the same claim, the same alarm dispatcher —
+   * rather than a second projection path with its own retry semantics to keep
+   * correct.
+   */
+  "approval_card",
+] as const;
 
 export type ProjectionJobKind = (typeof PROJECTION_JOB_KINDS)[number];
 

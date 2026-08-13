@@ -241,6 +241,16 @@ describe("the epoch fence", () => {
         now,
       ).outcome,
       finalize: finalizeGeneration(s, stale, { kind: "completed" }, now).outcome,
+      // Phase 11's pause is refused by the same fence as everything else, and
+      // it is the one that matters most: a superseded claimant that could park
+      // a run would park it on an approval the current claimant knows nothing
+      // about, and nothing would ever unpark it.
+      pause: finalizeGeneration(
+        s,
+        stale,
+        { kind: "paused", approvalId: "apr:stale" },
+        now,
+      ).outcome,
     }));
 
     expect(outcomes).toEqual({
@@ -250,6 +260,7 @@ describe("the epoch fence", () => {
       assistant: "stale_claim",
       capability: "stale_claim",
       finalize: "stale_claim",
+      pause: "stale_claim",
     });
 
     // Nothing of A's reached the durable record, and B is still the owner.

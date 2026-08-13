@@ -79,6 +79,7 @@ import {
   generationFreshnessGuard,
   SteeringAbort,
 } from "./steering";
+import { makeApprovalPort } from "../approval/port";
 import { makeAgentTools, type CapabilityDependencyFactory } from "./dependencies";
 import { makeProvenanceSink } from "./memory";
 import type { AgentExecutionGuard } from "../codemode/contracts";
@@ -170,6 +171,14 @@ export function makeRunEventPort(ctx: DurableObjectState, fence: ClaimFence): Ru
  */
 export type ContinuationPath =
   | "completed"
+  /**
+   * The answer is durable AND this generation left an approval open, so the
+   * run parks `awaiting_approval`. A distinct path from `completed` because
+   * the driver has to report a different public status, not because anything
+   * failed: the pause itself was already latched by `finalizeAnswer`, in the
+   * same transaction as the final turn.
+   */
+  | "paused"
   /** A fresher input landed; the SAME generation continues (invariants 8, 14). */
   | "continuation_requested"
   /** A successor claimed the run mid-stream. This attempt writes nothing more. */
@@ -195,8 +204,10 @@ export type ContinuationResult = {
   /** Safe, host-authored code. Never provider prose and never a stack. */
   errorCode: string | null;
   detail?: string;
-  /** Present only on `completed`. */
+  /** Present only on `completed` and `paused`. */
   finalTurnId?: string;
+  /** Present only on `paused`: the approval the run is parked on. */
+  pausedApprovalId?: string;
 };
 
 /**
@@ -214,6 +225,14 @@ export function toContinuationOutcome(result: ContinuationResult): ContinuationO
     case "continuation_requested":
     case "aborted_stale_claim":
       return { outcome: "completed" };
+    case "paused":
+      // The pause is already durable; this only tells the driver which public
+      // status to apply. A `paused` path with no id would be a bug in
+      // `finalize` below, and reporting `completed` is the safe direction —
+      // the run stays idle rather than parking on an approval nobody named.
+      return result.pausedApprovalId === undefined
+        ? { outcome: "completed" }
+        : { outcome: "paused", approvalId: result.pausedApprovalId };
     case "provider_refusal":
       return {
         outcome: "failed",
@@ -1194,10 +1213,19 @@ async function finalize(input: {
 
   switch (outcome.outcome) {
     case "finalized":
-      return { path: "completed", errorCode: null, finalTurnId: outcome.turnId };
     case "already_final":
-      // A redelivered finalization of an answer that is already durable.
-      return { path: "completed", errorCode: null, finalTurnId: outcome.turnId };
+      // `already_final` is a redelivered finalization of an answer that is
+      // already durable — and it carries the pause the first delivery latched,
+      // so a retry of a parked generation reports the park again instead of
+      // telling the driver the run went idle.
+      return outcome.pausedApprovalId === null
+        ? { path: "completed", errorCode: null, finalTurnId: outcome.turnId }
+        : {
+            path: "paused",
+            errorCode: null,
+            finalTurnId: outcome.turnId,
+            pausedApprovalId: outcome.pausedApprovalId,
+          };
     case "superseded":
       return {
         path: "continuation_requested",
@@ -1435,6 +1463,22 @@ async function composeAndRun(
         generationFreshnessGuard(ctx.storage, claim.fence),
         options.additionalGuard,
       ),
+      // THE REAL APPROVAL PORT, built here because this is the first place
+      // that has all three of its inputs at once: THIS object's storage, the
+      // run's PINNED Slack scope from `run_state`, and the generation whose
+      // escalation it would be. `dependencies.ts` can reach none of them, which
+      // is why the port is handed down rather than composed there.
+      approval: makeApprovalPort({
+        storage: ctx.storage,
+        db: env.DB,
+        runId: state.runId,
+        generationId: claim.generationId,
+        slackThread:
+          state.origin === "slack" && state.channelId !== null && state.threadTs !== null
+            ? { channelId: state.channelId, threadTs: state.threadTs }
+            : null,
+        now: () => (options.clock?.now() ?? Date.now()),
+      }),
       ...(options.dependencies === undefined
         ? {}
         : { dependencies: options.dependencies }),

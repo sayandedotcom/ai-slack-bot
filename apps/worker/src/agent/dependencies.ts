@@ -152,40 +152,6 @@ function closeOver(store: MemoryStore): MemoryStore {
 }
 
 /**
- * A minimal, execution-local stand-in for the real `ApprovalPort`.
- *
- * Task 3 (Phase 11) defines the port and threads it through this composer so
- * the `approval` capability namespace has something to call; the durable
- * implementation — the RunDO SQLite `approval_state` table, the
- * `approval_card` D1 projection, the finalize latch that reads it — belongs
- * to a later task, because it needs a RunDO SQLite schema-v3 migration that
- * does not exist yet. This file must not touch D1 or storage on its own
- * behalf (that is the whole point of the port), so what stands in here is a
- * closure that remembers nothing beyond one `run_code` execution — a fresh
- * one is built per call to `makeCapabilityDependencies`, exactly like every
- * other port below. It is correct WITHIN one execution and is expected to be
- * replaced wholesale, not extended, once the real implementation lands.
- */
-function makeInMemoryApprovalPort(): ApprovalPort {
-  let open: { approvalId: string } | null = null;
-  return {
-    async open(input) {
-      void input; // draft/why belong to the real, storage-backed port (later task).
-      const approvalId = `apr:${crypto.randomUUID()}`;
-      open = { approvalId };
-      return { approvalId };
-    },
-    openApprovalId() {
-      return open?.approvalId ?? null;
-    },
-    async withdraw() {
-      open = null;
-      return { withdrawn: true };
-    },
-  };
-}
-
-/**
  * Build the seven Phase 09 ports, Phase 11's `approval` port, plus the clock
  * and the D1 handle.
  *
@@ -196,7 +162,18 @@ function makeInMemoryApprovalPort(): ApprovalPort {
 export function makeCapabilityDependencies(
   env: Env,
   scope: CodeModeScope,
-  clock: () => number = () => Date.now(),
+  clock: () => number,
+  /**
+   * THE run's approval port. Required, and required positionally rather than
+   * defaulted, because the only safe default would be one that pretends to
+   * work: Task 3 shipped an execution-local stand-in here that forgot every
+   * escalation between `run_code` calls, so the finalize latch never saw one
+   * and no run could ever park. The real port needs THIS object's storage,
+   * which this file cannot reach, so it is built by the loop (which has
+   * `ctx`) and handed down — and a caller that forgets it now fails to
+   * compile instead of silently losing approvals.
+   */
+  approval: ApprovalPort,
 ): CapabilityDependencies {
   return {
     db: env.DB,
@@ -243,7 +220,7 @@ export function makeCapabilityDependencies(
       bucket: env.ARTIFACTS,
       baseUrl: env.ARTIFACTS_BASE_URL,
     }),
-    approval: makeInMemoryApprovalPort(),
+    approval,
     clock,
   };
 }
@@ -261,6 +238,7 @@ export type CapabilityDependencyFactory = (
   env: Env,
   scope: CodeModeScope,
   clock: () => number,
+  approval: ApprovalPort,
 ) => CapabilityDependencies;
 
 export type RunCodeToolInput = {
@@ -278,6 +256,11 @@ export type RunCodeToolInput = {
    */
   provenance?: ProvenanceSink;
   guard: AgentExecutionGuard;
+  /**
+   * The run's approval port, built by the caller because it needs the Durable
+   * Object's own storage. See `makeCapabilityDependencies`.
+   */
+  approval: ApprovalPort;
   limits?: CodeModeLimits;
   clock?: () => number;
   /**
@@ -321,7 +304,12 @@ export async function makeRunCodeToolForRun(
 
   return makeRunCodeTool({
     scope,
-    deps: (input.dependencies ?? makeCapabilityDependencies)(input.env, scope, clock),
+    deps: (input.dependencies ?? makeCapabilityDependencies)(
+      input.env,
+      scope,
+      clock,
+      input.approval,
+    ),
     limits: input.limits ?? PRODUCTION_LIMITS,
     auditForExecution: input.auditForExecution,
     ...(input.provenance === undefined ? {} : { provenance: input.provenance }),

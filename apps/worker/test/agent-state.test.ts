@@ -151,9 +151,9 @@ describe("local schema ledger", () => {
       };
     });
 
-    expect(result.first).toEqual([1, 2, 3, 4, 5]);
-    expect(result.second).toEqual([1, 2, 3, 4, 5]);
-    expect(RUN_SCHEMA_VERSION).toBe(5);
+    expect(result.first).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(result.second).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(RUN_SCHEMA_VERSION).toBe(6);
     // Not re-applied: the ledger row still carries its original timestamp, and
     // the driver singleton was not re-seeded over live state.
     expect(result.after).toBe(result.before);
@@ -226,7 +226,7 @@ describe("local schema ledger", () => {
       };
     });
 
-    expect(after.versions).toEqual([1, 2, 3, 4, 5]);
+    expect(after.versions).toEqual([1, 2, 3, 4, 5, 6]);
     expect(after.events).toBe(before.events);
     expect(after.turns).toBe(before.turns);
     expect(after.cursor).toBe(before.cursor);

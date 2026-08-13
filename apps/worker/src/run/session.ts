@@ -163,8 +163,16 @@ const TOOL_STATES = new Set(["running", "completed", "failed"]);
  * durable retry-backoff time. v4 separates the retry budget from the claim
  * counter. v5 adds generation-local provenance from trusted tool reads, so a
  * settled generation's memory episode can cite the evidence it actually used.
+ * v6 adds Phase 11's local approval record and the generation's pause marker.
+ *
+ * The plan calls Phase 11's addition "schema v3" because it was written when
+ * the local ledger stopped at v2. The VERSION NUMBER is not the contract — the
+ * ledger is — and inserting a second v3 would either be skipped as already
+ * applied or silently reorder a shipped migration. It is v6 here, and the
+ * property the plan actually asks for (the upgrade preserves every Phase 10
+ * row and is idempotent) is what `agent-pause.test.ts` proves.
  */
-export const RUN_SCHEMA_VERSION = 5;
+export const RUN_SCHEMA_VERSION = 6;
 
 type LocalMigration = {
   version: number;
@@ -652,12 +660,133 @@ function applyV5(storage: DurableObjectStorage): void {
   `);
 }
 
+/**
+ * Does this table already have this column?
+ *
+ * `ALTER TABLE ... ADD COLUMN` is the one migration statement with no
+ * `IF NOT EXISTS` form, so v3 and v4 above are safe only because the ledger
+ * never replays them. That is true, and it is also the single assumption whose
+ * failure would brick a live object in the constructor, where there is nobody
+ * to report to. v6 does not rely on it: it asks.
+ */
+function hasColumn(storage: DurableObjectStorage, table: string, column: string): boolean {
+  return storage.sql
+    .exec<{ name: string }>(`PRAGMA table_info(${table})`)
+    .toArray()
+    .some((row) => row.name === column);
+}
+
+/**
+ * v6: the local approval record, and the generation's pause marker.
+ *
+ * `approval_state` is the ONLY thing the generation-finalize latch consults to
+ * decide whether to park a run. It is local and synchronous for exactly that
+ * reason: finalize runs inside `transactionSync`, where a D1 read is not
+ * merely slow but impossible, and a pause that depended on a remote read would
+ * be a transition authority that a network partition can split.
+ *
+ * `generation_id` is on the row rather than derived at projection time. The D1
+ * card is `NOT NULL` in that column, and every other source for it is a lie
+ * waiting to happen: the driver's `current_generation_id` is already NULL by
+ * the time the projector runs, and `agent_generations.paused_approval_id` is
+ * only written if the generation reached its finalize at all — which is
+ * precisely the crash the projection has to survive.
+ *
+ * `paused_approval_id` sits on the generation's ERROR-FREE terminal fields. A
+ * pause is a successful settle that is waiting for a human; putting it in
+ * `last_error_code` would render every parked run as a failure in the operator
+ * report.
+ */
+function applyV6(storage: DurableObjectStorage): void {
+  storage.sql.exec(`
+    CREATE TABLE IF NOT EXISTS approval_state (
+      approval_id   TEXT PRIMARY KEY,
+      generation_id TEXT NOT NULL,
+      state         TEXT NOT NULL CHECK (state IN ('open','resolving','resolved')),
+      draft         TEXT NOT NULL,
+      why           TEXT NOT NULL,
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL
+    );
+  `);
+  // Invariant 4's local half: at most ONE unsettled approval per run. The run
+  // IS this object, so the index needs no run column.
+  //
+  // Indexed on the constant `1`, not on `state`: indexing the column would make
+  // `open` and `resolving` two different keys, and a row in each would satisfy
+  // it — one approval waiting for a human and another already being resolved,
+  // both "unsettled", which is precisely the state the constraint exists to
+  // forbid. A constant collapses the whole unsettled set into one slot.
+  storage.sql.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_state_one_open
+      ON approval_state ((1)) WHERE state IN ('open', 'resolving');
+  `);
+  if (!hasColumn(storage, "agent_generations", "paused_approval_id")) {
+    storage.sql.exec("ALTER TABLE agent_generations ADD COLUMN paused_approval_id TEXT");
+  }
+
+  // `agent_projection_jobs.kind` is a CHECK constraint, and SQLite has no way
+  // to alter one in place: the new `approval_card` kind is unenqueueable until
+  // the table is rebuilt. Doing that here, rather than dropping the constraint
+  // for good, keeps the property the constraint is FOR — a typo'd kind is a
+  // job nothing will ever claim, parked forever with no runner and no error —
+  // on the one queue whose silent parking would leave a run waiting on a human
+  // who was never asked.
+  //
+  // Data-preserving and self-idempotent: it copies every row and it looks at
+  // the shipped schema rather than trusting the ledger, so re-running it on an
+  // object that already has the new constraint is a no-op.
+  const jobsSchema =
+    storage.sql
+      .exec<{ sql: string | null }>(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_projection_jobs'",
+      )
+      .toArray()[0]?.sql ?? "";
+  if (jobsSchema.length > 0 && !jobsSchema.includes("approval_card")) {
+    storage.sql.exec(`
+      CREATE TABLE agent_projection_jobs_v6 (
+        id               TEXT PRIMARY KEY,
+        kind             TEXT NOT NULL CHECK (
+          kind IN ('run_index', 'd1_usage', 'memory_outbox', 'approval_card')
+        ),
+        source_id        TEXT NOT NULL,
+        state            TEXT NOT NULL CHECK (
+          state IN ('pending', 'claimed', 'completed', 'failed')
+        ),
+        claim_token      TEXT,
+        lease_expires_at INTEGER,
+        attempts         INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        next_attempt_at  INTEGER NOT NULL,
+        last_error       TEXT,
+        created_at       INTEGER NOT NULL,
+        updated_at       INTEGER NOT NULL,
+        UNIQUE (kind, source_id)
+      );
+    `);
+    storage.sql.exec(`
+      INSERT INTO agent_projection_jobs_v6
+        (id, kind, source_id, state, claim_token, lease_expires_at, attempts,
+         next_attempt_at, last_error, created_at, updated_at)
+      SELECT id, kind, source_id, state, claim_token, lease_expires_at, attempts,
+             next_attempt_at, last_error, created_at, updated_at
+        FROM agent_projection_jobs;
+    `);
+    storage.sql.exec("DROP TABLE agent_projection_jobs");
+    storage.sql.exec("ALTER TABLE agent_projection_jobs_v6 RENAME TO agent_projection_jobs");
+    storage.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_agent_projection_jobs_due
+        ON agent_projection_jobs (state, next_attempt_at);
+    `);
+  }
+}
+
 const LOCAL_MIGRATIONS: readonly LocalMigration[] = [
   { version: 1, apply: (storage) => applyV1(storage) },
   { version: 2, apply: (storage, now) => applyV2(storage, now) },
   { version: 3, apply: (storage) => applyV3(storage) },
   { version: 4, apply: (storage) => applyV4(storage) },
   { version: 5, apply: (storage) => applyV5(storage) },
+  { version: 6, apply: (storage) => applyV6(storage) },
 ];
 
 // --- state -----------------------------------------------------------------
@@ -1984,6 +2113,7 @@ type GenerationRow = {
   resume_policy: ResumePolicy | null;
   last_error_code: string | null;
   last_error_message: string | null;
+  paused_approval_id: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -1991,7 +2121,7 @@ type GenerationRow = {
 const GENERATION_COLUMNS = `id, agent_turn_id, state, first_input_seq, included_through_seq,
   settled_through_seq, attempt_count, step_count, cost_nano_usd, memory_projection_state,
   started_at, finished_at, resume_policy, last_error_code, last_error_message,
-  created_at, updated_at`;
+  paused_approval_id, created_at, updated_at`;
 
 function toGeneration(row: GenerationRow): GenerationRecord {
   return {
@@ -2010,6 +2140,7 @@ function toGeneration(row: GenerationRow): GenerationRecord {
     resumePolicy: row.resume_policy,
     lastErrorCode: row.last_error_code,
     lastErrorMessage: row.last_error_message,
+    pausedApprovalId: row.paused_approval_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -2719,6 +2850,165 @@ function validateAssistantUpdate(input: AssistantUpdateInput): void {
   }
 }
 
+// --- the local approval record ----------------------------------------------
+
+/**
+ * One human decision this run may be parked on, as this object knows it.
+ *
+ * D1 is the system of record for the DECISION (invariant 6: one writer
+ * surface, the dashboard). This local row is the coordination record: it is
+ * what `approval.escalate` writes synchronously, what the generation-finalize
+ * latch reads to decide whether to park, and what the `approval_card`
+ * projector reads to build the D1 card. Nothing here ever holds a decision.
+ */
+export type ApprovalStateRecord = {
+  approvalId: string;
+  generationId: string;
+  state: "open" | "resolving" | "resolved";
+  draft: string;
+  why: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type ApprovalStateRow = {
+  approval_id: string;
+  generation_id: string;
+  state: ApprovalStateRecord["state"];
+  draft: string;
+  why: string;
+  created_at: number;
+  updated_at: number;
+};
+
+const APPROVAL_STATE_COLUMNS = `approval_id, generation_id, state, draft, why,
+  created_at, updated_at`;
+
+function toApprovalState(row: ApprovalStateRow): ApprovalStateRecord {
+  return {
+    approvalId: row.approval_id,
+    generationId: row.generation_id,
+    state: row.state,
+    draft: row.draft,
+    why: row.why,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Record one open approval. Synchronous and local, because `escalate` must
+ * return to the isolate immediately (invariant 2) and because the finalize
+ * latch that reads it runs inside a transaction that cannot await anything.
+ *
+ * `INSERT` rather than upsert on purpose: re-opening an id that already exists
+ * would silently resurrect a resolved decision. A second OPEN approval is
+ * refused by `idx_approval_state_one_open` — a constraint, not a check some
+ * caller has to remember — and the capability layer refuses it earlier still
+ * (`approval_already_open`) so the model gets a sentence instead of an error.
+ */
+export function putApprovalState(
+  storage: DurableObjectStorage,
+  input: { approvalId: string; generationId: string; draft: string; why: string; now: number },
+): void {
+  storage.sql.exec(
+    `INSERT INTO approval_state
+       (approval_id, generation_id, state, draft, why, created_at, updated_at)
+     VALUES (?, ?, 'open', ?, ?, ?, ?)`,
+    input.approvalId,
+    input.generationId,
+    input.draft,
+    input.why,
+    input.now,
+    input.now,
+  );
+}
+
+/**
+ * THE PAUSE LATCH'S ONE INPUT: the unsettled approval, if any.
+ *
+ * `resolving` counts as open. A decision that has reached D1 but whose
+ * resolution turn has not yet been committed here must keep the run parked —
+ * unparking on the strength of a half-delivered decision is how a run resumes
+ * with no idea what the human chose.
+ */
+export function openApproval(storage: DurableObjectStorage): ApprovalStateRecord | null {
+  const rows = storage.sql
+    .exec<ApprovalStateRow>(
+      `SELECT ${APPROVAL_STATE_COLUMNS} FROM approval_state
+       WHERE state IN ('open', 'resolving')
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .toArray();
+  return rows.length > 0 ? toApprovalState(rows[0]) : null;
+}
+
+export function readApprovalState(
+  storage: DurableObjectStorage,
+  approvalId: string,
+): ApprovalStateRecord | null {
+  const rows = storage.sql
+    .exec<ApprovalStateRow>(
+      `SELECT ${APPROVAL_STATE_COLUMNS} FROM approval_state WHERE approval_id = ?`,
+      approvalId,
+    )
+    .toArray();
+  return rows.length > 0 ? toApprovalState(rows[0]) : null;
+}
+
+/**
+ * Move an approval out of the open set: `resolving` while a decision is being
+ * carried in, `resolved` once it is. Returns whether a row actually moved, so
+ * a caller racing the resolution sweeper can tell a no-op from a transition.
+ *
+ * Never moves BACKWARDS. A late duplicate delivery that tried to put a
+ * `resolved` approval back to `resolving` would re-park a run that has already
+ * been answered.
+ */
+export function resolveApprovalState(
+  storage: DurableObjectStorage,
+  approvalId: string,
+  state: "resolving" | "resolved",
+  now: number,
+): boolean {
+  const allowedFrom = state === "resolving" ? "('open')" : "('open', 'resolving')";
+  storage.sql.exec(
+    `UPDATE approval_state SET state = ?, updated_at = ?
+     WHERE approval_id = ? AND state IN ${allowedFrom}`,
+    state,
+    now,
+    approvalId,
+  );
+  return readApprovalState(storage, approvalId)?.state === state;
+}
+
+/**
+ * Should this settling generation park, and mark it if so.
+ *
+ * Called from INSIDE both settlement transactions, and the placement is the
+ * whole invariant: the decision is made from the local record at commit time,
+ * under the claim fence that has already been checked, in the same transaction
+ * that settles the generation. A continuation that escalated and then withdrew
+ * commits `completed`; a stale claimant never reaches here at all.
+ *
+ * Returns the approval id when the run is to be parked, else null.
+ */
+function latchApprovalPause(
+  storage: DurableObjectStorage,
+  generationId: string,
+  now: number,
+): string | null {
+  const open = openApproval(storage);
+  if (open === null) return null;
+  storage.sql.exec(
+    "UPDATE agent_generations SET paused_approval_id = ?, updated_at = ? WHERE id = ?",
+    open.approvalId,
+    now,
+    generationId,
+  );
+  return open.approvalId;
+}
+
 // --- settlement -------------------------------------------------------------
 
 /**
@@ -2930,6 +3220,24 @@ export function finalizeGeneration(
       now,
       generation.id,
     );
+
+    // THE PAUSE LATCH, and its position is the invariant.
+    //
+    // AFTER the cursor comparison above: input that arrived while the model was
+    // drafting outranks an approval on a draft that is now out of date, so the
+    // generation continues and the approval simply stays open for the next
+    // finalize to find. AFTER the fence check at the top: a superseded claimant
+    // cannot park a run, which is what stops a split brain from parking a run
+    // nobody can then unpark. And from the LOCAL record rather than from
+    // `request.approvalId` — the reporter may have withdrawn it since, and a
+    // remote read is not available inside a `transactionSync` anyway.
+    //
+    // Deliberately not conditional on `request.kind === "paused"`. An attempt
+    // that crashed after `escalate` committed and before it could report
+    // anything is retried, and its successor may well settle plainly
+    // `completed`; the approval is still open and the run must still park.
+    const pausedApprovalId = latchApprovalPause(storage, generation.id, now);
+
     storage.sql.exec(
       `UPDATE agent_driver SET
          phase = 'idle', settled_through_seq = ?, current_generation_id = NULL,
@@ -2948,6 +3256,7 @@ export function finalizeGeneration(
       generationState: "completed",
       driverPhase: "idle",
       settledThroughSeq,
+      ...(pausedApprovalId === null ? {} : { pausedApprovalId }),
     };
   });
 }
@@ -3011,6 +3320,13 @@ export type FinalizeAnswerOutcome =
       events: RunEvent[];
       turnId: string;
       settledThroughSeq: number;
+      /**
+       * The approval this answer parked on, or null. The public status was
+       * already set to `awaiting_approval` inside the transaction; this is how
+       * the LOOP learns to report `paused` to the driver rather than
+       * `completed`, without re-reading state that has moved on.
+       */
+      pausedApprovalId: string | null;
     }
   | {
       /**
@@ -3023,7 +3339,18 @@ export type FinalizeAnswerOutcome =
       pendingThroughSeq: number;
       includedThroughSeq: number;
     }
-  | { outcome: "already_final"; events: RunEvent[]; turnId: string }
+  /**
+   * A redelivered finalization of an answer that is already durable. It
+   * carries the pause the FIRST delivery latched, so an at-least-once retry
+   * of a parked generation reports `paused` again instead of quietly
+   * reporting a completed run to the driver.
+   */
+  | {
+      outcome: "already_final";
+      events: RunEvent[];
+      turnId: string;
+      pausedApprovalId: string | null;
+    }
   | { outcome: "stale_claim" };
 
 export function finalizeAnswer(
@@ -3042,7 +3369,12 @@ export function finalizeAnswer(
     // Checked before the fence: a redelivered finalization of an answer this
     // generation already committed is answered with what is there, whoever asks.
     if (isTerminalGenerationState(generation.state)) {
-      return { outcome: "already_final", events: [], turnId };
+      return {
+        outcome: "already_final",
+        events: [],
+        turnId,
+        pausedApprovalId: generation.pausedApprovalId,
+      };
     }
     if (!isCurrentClaim(storage, fence)) return { outcome: "stale_claim" };
 
@@ -3170,11 +3502,22 @@ export function finalizeAnswer(
       now,
     );
 
+    // THE PAUSE LATCH, in the transaction that actually settles a successful
+    // answer. `finalizeGeneration` carries the same latch for the paths that
+    // never produce an answer; both are needed, because THIS transaction is
+    // the one that ends a completed generation, and a pause decided anywhere
+    // else would be deciding about a generation that is already terminal.
+    //
+    // After step 3's cursor compare for the same reason: fresher input
+    // supersedes the answer AND the pause, and the approval waits.
+    const pausedApprovalId = latchApprovalPause(storage, generation.id, now);
+    const settledStatus: RunStatus = pausedApprovalId === null ? "idle" : "awaiting_approval";
+
     const current = readState(storage);
-    if (current && current.status !== "idle") {
-      const verdict = evaluateTransition(current.status, "idle");
+    if (current && current.status !== settledStatus) {
+      const verdict = evaluateTransition(current.status, settledStatus);
       if (verdict.ok && verdict.changed) {
-        events.push(writeStatusEvent(storage, current.status, "idle", now));
+        events.push(writeStatusEvent(storage, current.status, settledStatus, now));
       }
     }
 
@@ -3209,7 +3552,7 @@ export function finalizeAnswer(
       now,
     );
 
-    return { outcome: "finalized", events, turnId, settledThroughSeq };
+    return { outcome: "finalized", events, turnId, settledThroughSeq, pausedApprovalId };
   });
 }
 

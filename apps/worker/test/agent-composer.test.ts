@@ -11,7 +11,7 @@ import { alwaysFresh } from "../src/codemode/contracts";
 import type { CodeModeOutput } from "../src/codemode/tool";
 import type { Env } from "../src/index";
 import type { RunState } from "../src/run/session";
-import { fakeAuditSink } from "./helpers/codemode";
+import { fakeApprovalPort, fakeAuditSink } from "./helpers/codemode";
 
 /**
  * THE PRODUCTION COMPOSER, not a fake.
@@ -73,6 +73,10 @@ const toolInput = (state: RunState) => ({
   turnId: `agent:gen:${crypto.randomUUID()}`,
   auditForExecution: () => fakeAuditSink(),
   guard: alwaysFresh(),
+  // The REAL port is storage-backed and belongs to a Durable Object; this
+  // suite composes the tool without one. Nothing here escalates, so a double
+  // that only satisfies the required seam is the honest stand-in.
+  approval: fakeApprovalPort(),
 });
 
 const run = async (
@@ -153,7 +157,7 @@ describe("a capability never receives Env", () => {
   it("hands the capability layer exactly ten narrow ports", async () => {
     const { state } = await seedLiveRun();
     const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:x");
-    const deps = makeCapabilityDependencies(workerEnv(), scope);
+    const deps = makeCapabilityDependencies(workerEnv(), scope, () => 0, fakeApprovalPort());
 
     // A binding module that wanted a credential would have to widen this type
     // in a diff somebody signs off. The assertion is on the exact key set
@@ -175,7 +179,7 @@ describe("a capability never receives Env", () => {
   it("reaches no credential by walking the whole dependency object graph", async () => {
     const { state } = await seedLiveRun();
     const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:y");
-    const deps = makeCapabilityDependencies(workerEnv(), scope) as Record<string, unknown>;
+    const deps = makeCapabilityDependencies(workerEnv(), scope, () => 0, fakeApprovalPort()) as Record<string, unknown>;
 
     // Every real secret this composer touches. Searching for the VALUES rather
     // than for string-typed fields is the difference between a test and a

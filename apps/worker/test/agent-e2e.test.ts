@@ -5,7 +5,7 @@ import { alwaysFresh } from "../src/codemode/contracts";
 import { makeAgentTools } from "../src/agent/dependencies";
 import { listEvents, listToolCalls, listTurns, readModelTranscript } from "../src/run/session";
 import type { RunEvent, RunServerMessage } from "../src/run/protocol";
-import { fakeDeps } from "./helpers/codemode";
+import { fakeApprovalPort, fakeDeps } from "./helpers/codemode";
 import {
   customerTurn,
   freshLoopRun,
@@ -144,6 +144,7 @@ describe("the whole loop, against a real Tier 1 isolate", () => {
         async failed() {},
       }),
       guard: alwaysFresh(),
+      approval: fakeApprovalPort(),
       dependencies: () => ({ ...fakeDeps(), db: env.DB, clock: () => 0 }),
     });
 

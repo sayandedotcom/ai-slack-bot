@@ -48,11 +48,19 @@ export type ClaimedGeneration = ClaimSnapshot & {
  * deliberately explicit: a port that returned `void` would force the driver to
  * infer what happened by re-reading state it is not allowed to trust.
  *
- * There is no `paused`/`awaiting_approval` member. That state is reserved for
- * Phase 11 and adding it here "for later" is how it gets set by accident.
+ * `paused` is Phase 11's approval gate, and the comment that used to stand
+ * here — reserving the member and warning that adding it early is how it gets
+ * set by accident — described a real hazard that the shape below is what
+ * answers. Reporting `paused` does NOT park a run. It says only "this attempt
+ * opened an approval", and `finalizeGeneration` re-reads the local
+ * `approval_state` record inside its own epoch-fenced transaction before it
+ * parks anything: a stale claimant is refused, a withdrawn approval settles
+ * `completed`, and fresher input still continues the generation. The member
+ * cannot be "set by accident" because setting it is not what decides.
  */
 export type ContinuationOutcome =
   | { outcome: "completed" }
+  | { outcome: "paused"; approvalId: string }
   | {
       outcome: "failed";
       state: "failed" | "refused" | "budget_exhausted";
@@ -315,6 +323,12 @@ export function toFinalizeRequest(
   limits: DriverLimits,
 ): FinalizeRequest {
   if (outcome.outcome === "completed") return { kind: "completed" };
+  // Carried through unchanged, and deliberately NOT bounded by the attempt
+  // ceiling: a pause is a successful settle waiting on a human, so it spends no
+  // retry budget and cannot exhaust one.
+  if (outcome.outcome === "paused") {
+    return { kind: "paused", approvalId: outcome.approvalId };
+  }
   if (outcome.outcome === "failed") {
     return {
       kind: "failed",
