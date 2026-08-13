@@ -198,6 +198,13 @@ describe("one loop, two surfaces", () => {
     expect(slackTrace.statusEvents).toEqual(chatTrace.statusEvents);
   });
 
+  // NOT the guard on invariant 5, despite the name. It reads the calls the model
+  // actually MADE, so seven extra tools installed in the map but never called
+  // are invisible to it — measured, under Task 11's mutation 4, which added the
+  // seven namespaces as outer tools and left this green. What it does prove is
+  // parity: whatever the surfaces expose, they expose the same one thing. The
+  // real guard on "exactly one outer tool" is `agent-composer.test.ts:92,98`,
+  // which reads the tool map itself.
   it("has exactly one outer tool on both surfaces, and it is run_code", async () => {
     for (const origin of ["chat", "slack"] as const) {
       const harness = await runOne(origin, successScript());

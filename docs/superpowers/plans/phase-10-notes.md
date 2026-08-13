@@ -1231,39 +1231,75 @@ harness.
 ### Honest gaps left by this task
 
 1. **Step 9 is not run** (above). Fable behavioural acceptance remains unproven.
-2. **The canary sweep fakes the vendor adapters.** `agent-canaries.test.ts`
-   injects a synthetic credential into every host env field and proves the host
-   composition leaks none of them into the model call, the RunEvent stream, the
-   turns, the transcript, `agent_model_calls`, the D1 `runs` row, the frozen
-   episode, its source mapping or any log line. It does **not** exercise the real
-   Slack/Zep/Linear/Supabase/LangSmith/Better Stack HTTP adapters, so a real
-   adapter echoing its own credential into an error string would not fail there.
-   That half is covered by `agent-composer.test.ts` > "reaches no credential by
-   walking the whole dependency object graph" and `codemode-security.test.ts` >
-   "exposes no credential, binding or host env to model code" — but neither is a
-   live-response test, and no live response has ever been observed.
+2. **The canary sweep proves less than "the host holds every credential and
+   leaks none of them".** `agent-canaries.test.ts` injects a synthetic
+   credential into every host env field and sweeps the model call, the RunEvent
+   stream, the turns, the transcript, `agent_model_calls`, the D1 `runs` row,
+   the frozen episode, its source mapping and all five console levels. But the
+   harness injects BOTH `dependencies` and `modelFactory`, and those two are the
+   only readers of the eleven canaries in production: `agent/dependencies.ts:170`
+   reads `LINEAR_API_KEY`, `:195` reads `BETTERSTACK_SQL_PASSWORD`, and
+   `makeCapabilityDependencies` as a whole is bypassed, as is
+   `createProductionModelFactory`. **In that run no production code reads any of
+   the eleven canaries at all.** What the sweep genuinely proves is narrower and
+   still worth having: nothing in the non-faked composition — prompt assembly,
+   the Gateway metadata document, the event stream, the D1 telemetry rows, the
+   memory episode, the logs — copies an arbitrary env field into its output. It
+   is a regression guard against a new sink learning to read `env`, not evidence
+   that a credential-holding adapter keeps its credential. It also does **not**
+   exercise the real Slack/Zep/Linear/Supabase/LangSmith/Better Stack HTTP
+   adapters, so a real adapter echoing its own credential into an error string
+   would not fail there. That half is covered by `agent-composer.test.ts` >
+   "reaches no credential by walking the whole dependency object graph" and
+   `codemode-security.test.ts` > "exposes no credential, binding or host env to
+   model code" — but neither is a live-response test, and no live response has
+   ever been observed.
 3. **`gatewayHeaders` validates identifier SHAPE, not secrecy.** `OPAQUE_ID` is
    `[A-Za-z0-9:_.-]{1,128}`, which most credential formats satisfy. The metadata
    document is safe because the composer never reads a credential into it, not
    because the validator would catch one. Written into the test rather than
    asserted away.
-4. **Crash window 3 is proven by construction, not by a killed process.** "After
-   the provider tool call, before the tool starts" leaves no durable checkpoint —
-   `onStepEnd` writes the step only after the tool result exists — so a reclaim
-   necessarily re-sends the same history and may re-issue the call. The test
-   asserts exactly that trace (one tool message at global step 0, written after
-   the result) and leans on `agent-recovery.test.ts` > "replays a Phase 09 effect
-   once across both attempts" for the property that makes the re-issue safe. The
-   vitest pool cannot kill a Durable Object mid-`await`, so no test in this
-   repository observes the window directly.
+4. **Crash window 3 is simulated by lease expiry, not by a killed process** —
+   which is how windows 1, 2 and 4 are simulated too, so it is a property of the
+   pool rather than a hole in this row. `agent-failure-matrix.test.ts` >
+   "reclaims the parked step, re-runs it whole, and files the issue exactly
+   once" parks the first attempt's provider stream inside the `run_code`
+   argument with the harness's `holdAfterToolInput` — the program is on the
+   wire, the tool has not been called, nothing about the step exists durably —
+   then advances the clock past the 150-second lease and lets a second alarm
+   delivery reclaim. Both attempts are the real loop against the real isolate.
+   The observed recovery result: the lost attempt reports `aborted_stale_claim`
+   and settles nothing, one generation and one stable agent turn id survive, the
+   successor re-runs the whole step, `linear.createIssue` reaches the vendor
+   exactly once, and the transcript holds one tool message with no trace of the
+   lost attempt. The cost of the window is the lost attempt's provider call,
+   which is billed unfenced — three usage rows for two logical steps. What is
+   still NOT observed is a process actually dying mid-`await`; the vitest pool
+   cannot do that, and no test in this repository claims otherwise.
 5. **The two timeout cases use wall-clock delays.** 1,500 ms of real time against
    an injected 50 ms limit. That is a 30x margin, not a synchronized clock; on a
    catastrophically loaded machine they could in principle race. They are the
    only tests in these suites that are not driven by the injected `FakeClock`,
    because the SDK's timers are its own `setTimeout` calls.
-6. **An unknown tool name is refused, but the path is not pinned.**
+6. ~~An unknown tool name is refused, but the path is not pinned.~~ **Closed,
+   and it stopped being SDK-internal.** The thrown half of the same matrix row —
+   the registered tool's own host prologue dying, in `codemode/tool.ts`'s
+   unguarded window before either `try` — turned out to be a real defect: the
+   SDK answers an `execute` throw with a synthetic
+   `{ type: "error-text", value: <raw thrown message> }` tool result, the loop
+   ignored `tool-error` entirely, `normalizeResponseMessages` stored the
+   synthetic result, and the model answered on top of it and reached
+   `completed`. `agent/loop.ts`'s `onStepEnd` now refuses any step carrying a
+   `tool-error`, AFTER the response allowlist so an unregistered tool name keeps
+   its precise `malformed_response:unsupported_tool` diagnosis and its
+   `requires_input` settlement. Both halves are pinned:
    `agent-failure-matrix.test.ts` > "fails the step rather than fabricating a
-   result for an unknown tool" asserts the two properties that matter (no answer,
-   no invented tool result in the transcript) and deliberately does not pin
-   *which* terminal path the SDK routes it through, because that is SDK-internal
-   behaviour rather than a decision this repository makes.
+   result for an unknown tool" and > "retries the generation rather than letting
+   the model answer over the failure".
+
+   What remains open, and it is smaller: `withOuterToolEvents` writes the outer
+   `run_code` `started` event but has no `catch`, so a thrown `execute` leaves
+   that tool-call event in `running` forever. The generation itself is settled
+   correctly and the retry writes its own lifecycle, but a dashboard replaying
+   the failed attempt's events sees a call that never ends. Not fixed here
+   because the fix belongs with the outer-event mapper rather than the loop.

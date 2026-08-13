@@ -397,6 +397,22 @@ export async function runContinuation(
      * only be the provider step/first-chunk/inter-chunk/tool timeout. Reporting
      * that as `run_cancelled` told an operator a human cancelled a run that in
      * fact timed out, and made it terminal instead of a bounded retry.
+     *
+     * THE OTHER WAY IN, because the branch above is wider than the `abort`
+     * stream part alone. The `catch` around the whole invocation also routes
+     * here, through `isAbort`, and `isAbort` returns true on
+     * `error.name === "AbortError"` EVEN WHEN THIS CONTROLLER WAS NEVER TOUCHED
+     * — the deliberate fallback for the SDK re-wrapping a timeout's reason on
+     * the way out. That is the correct mapping for a thrown timeout, and it is
+     * why the two entry points share one answer. But it means the real
+     * precondition is not "only a configured timeout aborts this stream", it is
+     * "any `AbortError` reaching this loop with `steering.signal.aborted` false
+     * is a configured timeout". Anything that later introduces a second abort
+     * source into the `streamText` pipeline WITHOUT forwarding it into this
+     * controller — a signal handed straight to a tool, a fetch aborted inside a
+     * capability whose `AbortError` escapes — would be reported as a bounded
+     * provider timeout and silently retried. Forward it into `steering` above,
+     * or give it its own path here.
      */
     result: (): ContinuationResult => {
       if (!steering.signal.aborted) {
@@ -638,6 +654,48 @@ export async function runContinuation(
             detail: normalized.detail,
           });
         }
+
+        // A tool whose `execute` THREW rather than returning a value.
+        //
+        // `run_code` turns every failure it can express into a `CodeModeOutput`
+        // carrying an `error` string — the error-as-value contract the model is
+        // told to read and act on. A THROW therefore means the failure happened
+        // somewhere the tool cannot speak for: the host prologue that builds the
+        // execution before either of the tool's own `try` blocks
+        // (`codemode/tool.ts` — the outer call id, the audit sink, the execution
+        // record), or the SDK refusing the call outright.
+        //
+        // The SDK answers a throw with a SYNTHETIC tool result whose output is
+        // `{ type: "error-text", value: <the raw thrown message> }`, and
+        // `normalizeResponseMessages` above stores that shape happily — it is a
+        // legal `ToolResultOutput`. Left alone, the next step reads a host error
+        // — unsanitized, never through `safeMessage` — as though it were the
+        // tool's answer, and the model writes a final answer on top of a result
+        // nothing produced. That is the fabricated result the failure matrix's
+        // thrown-infrastructure row exists to forbid; measured, and it really
+        // did reach `completed`.
+        //
+        // So fail the step. The provider call above is already billed (money
+        // first), nothing is checkpointed, and `infrastructure_retry` gives the
+        // driver's bounded backoff the whole step to re-run — the same treatment
+        // every other transient host failure gets. `detail` stays host-authored:
+        // the thrown message may be a raw upstream string with a URL in it, and
+        // this field is persisted and shown.
+        //
+        // AFTER the allowlist, deliberately. A model naming a tool that does not
+        // exist also produces a `tool-error`, and that is not infrastructure —
+        // it is a malformed response, it is diagnosed precisely one block up as
+        // `malformed_response:unsupported_tool`, and it settles `requires_input`
+        // rather than spending two more provider calls on a history that will
+        // produce the same bad call again. Ordering is what keeps both true.
+        if (step.content.some((part) => part.type === "tool-error")) {
+          halt({
+            path: "infrastructure_retry",
+            errorCode: "tool_execution_failed",
+            detail: "a tool call ended without a result the model may read",
+          });
+        }
+
         const messages = normalized.outcome === "normalized" ? normalized.messages : [];
 
         const checkpoint = checkpointStepMessages(storage, fence, {
@@ -812,6 +870,12 @@ async function consumeStream(
       // Tool lifecycle, emitted by the execute wrapper rather than from here
       // (see the `tool-call` arm above).
       case "tool-result":
+      // `tool-error` is NOT ignored, it is merely not decided HERE. It arrives
+      // before `finish-step`, and halting on it would skip `onStepEnd` — which
+      // is where the provider call this step already made gets billed. So the
+      // step is allowed to end, money is recorded, and `onStepEnd` refuses to
+      // checkpoint the SDK's synthetic error result. Deciding it in two places
+      // would mean two answers to the same question.
       case "tool-error":
         break;
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelMessage } from "ai";
 import { resetRunPorts } from "../src/agent/driver";
 import { modelCallOptions } from "../src/agent/model";
@@ -50,6 +50,7 @@ const REPLY = 'async () => slack.reply({ text: "hello" })';
 
 afterEach(() => {
   resetRunPorts();
+  vi.restoreAllMocks();
 });
 
 /* ------------------------------------------------------------ the ceiling -- */
@@ -310,6 +311,30 @@ describe("text -> run_code -> result -> final answer", () => {
 
 describe("reasoning never reaches an event, a log or a durable row", () => {
   it("fails the step safely when readable thinking arrives", async () => {
+    // The "a log" half of this describe's name, which nothing used to check.
+    // The property holds by construction — `transcript.ts` reports a character
+    // COUNT rather than the text, and `loop.ts` drops every reasoning stream
+    // part without logging it — but "by construction" is exactly the kind of
+    // claim a refactor breaks silently, and console is the one sink a durable
+    // read cannot see.
+    const logged: string[] = [];
+    for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+        logged.push(
+          args
+            .map((arg) => {
+              if (typeof arg === "string") return arg;
+              try {
+                return JSON.stringify(arg) ?? String(arg);
+              } catch {
+                return String(arg);
+              }
+            })
+            .join(" "),
+        );
+      });
+    }
+
     const model = mockModel([readableReasoningStep()]);
     const harness = await freshLoopRun({ model });
     await harness.stub.appendTurn(customerTurn("t1"));
@@ -324,6 +349,11 @@ describe("reasoning never reaches an event, a log or a durable row", () => {
 
     const transcript = await harness.storage((storage) => readModelTranscript(storage));
     expect(JSON.stringify(transcript)).not.toContain("probably lying");
+
+    // Not one of the five console levels carried the thinking — including the
+    // rejection's own diagnostics, which is where a "helpfully" logged detail
+    // would land.
+    expect(logged.join("\n")).not.toContain("probably lying");
 
     // The billed step is still recorded: the money was spent either way.
     const usage = await harness.storage((storage) => listPendingUsageProjections(storage, 50));

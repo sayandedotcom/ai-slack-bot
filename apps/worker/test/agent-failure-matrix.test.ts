@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelMessage } from "ai";
 import { resetRunPorts } from "../src/agent/driver";
@@ -13,12 +14,14 @@ import {
   errorAfterTextStep,
   errorAfterToolInputStep,
   freshLoopRun,
+  latch,
   mockModel,
   textStep,
   toolStep,
   unknownToolStep,
   usageVariantStep,
 } from "./helpers/agent-loop";
+import { FakeClock } from "./helpers/agent-driver";
 
 /**
  * The rows of the failure matrix that the happy-path suites cannot reach.
@@ -42,6 +45,11 @@ afterEach(() => {
 
 /** Programs the REAL isolate runs. No capability needed, no vendor reached. */
 const TRIVIAL = "async () => ({ ok: true })";
+const ASSESSMENT =
+  '{ platformValue: "low", blocking: "low", customerWeight: "low", evidence: "e" }';
+/** A real `external_write` that goes through Phase 09's effect ledger. */
+const WRITE_ONLY =
+  `async () => linear.createIssue({ title: "t", description: "d", assessment: ${ASSESSMENT} })`;
 
 async function assistantUpdates(
   harness: Awaited<ReturnType<typeof freshLoopRun>>,
@@ -177,6 +185,18 @@ describe("a tool call the composition cannot answer", () => {
     // Whatever path this takes, two things must hold: no answer, and no invented
     // tool result in the durable transcript.
     expect(harness.results[0].path).not.toBe("completed");
+
+    // The terminal path IS pinned now, and only because it stopped being purely
+    // SDK-internal: an unregistered tool name also reaches `onStepEnd` as a
+    // `tool-error`, which the loop refuses generically. The allowlist's precise
+    // diagnosis must keep precedence, because the two settle differently — this
+    // one `requires_input`, the generic one spends two more provider calls on a
+    // bounded retry of a history that will produce the same bad call again.
+    expect(harness.results[0]).toMatchObject({
+      path: "malformed_history",
+      errorCode: "malformed_response:unsupported_tool",
+    });
+
     const turns = await harness.storage((storage) => listTurns(storage));
     expect(turns.filter((turn) => turn.source === "agent")).toHaveLength(0);
 
@@ -184,6 +204,82 @@ describe("a tool call the composition cannot answer", () => {
     const serialized = JSON.stringify(transcript);
     expect(serialized).not.toContain("escalate");
     expect(transcript.every((row) => (row.message as ModelMessage).role !== "tool")).toBe(true);
+  });
+});
+
+/* ------------------------------------- thrown tool infrastructure (row 5) -- */
+
+describe("tool infrastructure that throws instead of returning a failure", () => {
+  /**
+   * The OTHER half of row 5, and the half that is actually about a THROW.
+   *
+   * `unknownToolStep` above is the model naming a tool that was never
+   * registered. This one is the registered tool's own host prologue dying:
+   * `codemode/tool.ts` reads the clock, builds the outer call id, constructs the
+   * audit sink and allocates the execution record BEFORE either of its `try`
+   * blocks, so a failure there escapes `execute` entirely instead of becoming
+   * the `CodeModeOutput.error` value the model is told to read.
+   *
+   * `deps.clock` is the seam this test throws from, because it is the first
+   * thing that prologue touches and the `dependencies` factory is the one
+   * production-typed way to reach it. What is being simulated is not a broken
+   * clock — it is any unknown host failure in that unguarded window, an audit
+   * write or a scope construction included.
+   *
+   * The requirement is the row's, not the implementation's: the generation
+   * retries or fails, and nothing the model would read as a tool answer is
+   * checkpointed. Before the `onStepEnd` tool-error refusal in `agent/loop.ts`
+   * this run COMPLETED — the SDK's synthetic `{ type: "error-text", value: <raw
+   * host message> }` result was stored and the model answered on top of it.
+   */
+  it("retries the generation rather than letting the model answer over the failure", async () => {
+    const model = mockModel([
+      toolStep({ toolCallId: "call_1", code: TRIVIAL }),
+      // Scripted so that a loop which swallowed the failure would visibly reach
+      // an answer, which is exactly the outcome this row forbids.
+      textStep({ chunks: ["the export worker is fine."] }),
+    ]);
+    const harness = await freshLoopRun({
+      model,
+      wrapDeps: (base) => ({
+        ...base,
+        clock: () => {
+          throw new Error("the audit sink could not be constructed");
+        },
+      }),
+    });
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.alarm();
+
+    // Retry or failure — never an answer.
+    expect(harness.results).toHaveLength(1);
+    expect(harness.results[0]).toMatchObject({
+      path: "infrastructure_retry",
+      errorCode: "tool_execution_failed",
+    });
+    const driver = await harness.storage((storage) => readDriver(storage));
+    expect(driver.phase).toBe("scheduled");
+    expect(driver.retryCount).toBe(1);
+
+    // The model was never given a second step to answer from: one provider call.
+    const turns = await harness.storage((storage) => listTurns(storage));
+    expect(turns.filter((turn) => turn.source === "agent")).toHaveLength(0);
+    const updates = await assistantUpdates(harness);
+    expect(updates.at(-1)).toMatchObject({ state: "failed" });
+
+    // NO FABRICATED RESULT. The durable transcript carries the input and
+    // nothing else: no tool message, and no trace of the host error string the
+    // SDK offered in place of a result.
+    const transcript = await harness.storage((storage) => readModelTranscript(storage));
+    expect(transcript.every((row) => (row.message as ModelMessage).role !== "tool")).toBe(true);
+    expect(JSON.stringify(transcript)).not.toContain("audit sink");
+    expect(transcript.every((row) => row.kind === "input")).toBe(true);
+
+    // The provider call the step DID make is still billed. Refusing the result
+    // must not also lose the money that was already spent on it.
+    const billed = await harness.storage((storage) => listPendingUsageProjections(storage, 50));
+    expect(billed).toHaveLength(1);
+    expect(billed[0]!.globalStep).toBe(0);
   });
 });
 
@@ -259,7 +355,7 @@ describe("usage and cache detail variants survive the real adapter", () => {
 /* ------------------------------------- crash window 3: the tool never ran -- */
 
 describe("crash window 3 — the provider asked for a tool that never started", () => {
-  it("re-runs the whole step, because no step checkpoint exists to resume from", async () => {
+  it("writes the step's tool message only at onStepEnd, after the result exists", async () => {
     let calls = 0;
     const model = mockModel(
       [toolStep({ toolCallId: "call_1", code: TRIVIAL }), textStep({ chunks: ["done."] })],
@@ -290,5 +386,151 @@ describe("crash window 3 — the provider asked for a tool that never started", 
     );
     expect(toolMessages).toHaveLength(1);
     expect(toolMessages[0]!.globalStep).toBe(0);
+  });
+
+  /**
+   * The window itself, simulated the way windows 1, 2 and 4 are simulated in
+   * `agent-recovery.test.ts`: not by killing anything, but by letting a claimed
+   * attempt's lease run out where the crash would have happened and letting a
+   * successor reclaim it.
+   *
+   * `holdAfterToolInput` parks the FIRST attempt's provider stream inside the
+   * `run_code` argument — the model's program is on the wire, the tool has not
+   * been called, and nothing about this step exists durably. That is the window.
+   * The clock then jumps past the 150-second lease and a second alarm delivery
+   * reclaims, exactly as `agent-concurrency.test.ts:96` does with a fake
+   * continuation; here both attempts are the REAL loop against the REAL isolate.
+   *
+   * The provider script re-issues the tool call on the reclaim because that is
+   * what a model re-sent the identical history does: nothing was checkpointed,
+   * so the second attempt sees the same conversation the first one did.
+   */
+  it("reclaims the parked step, re-runs it whole, and files the issue exactly once", async () => {
+    const clock = new FakeClock();
+    const parked = latch();
+    const release = latch();
+    const reclaimed = latch();
+    let filed = 0;
+
+    const model = mockModel(
+      [
+        // Attempt 1's step, parked mid-argument and then superseded.
+        toolStep({ toolCallId: "call_lost", code: WRITE_ONLY }),
+        // Attempt 2 re-sends the same history and asks for the same work.
+        toolStep({ toolCallId: "call_kept", code: WRITE_ONLY }),
+        textStep({ chunks: ["filed FF-1 for the stuck deploy."] }),
+      ],
+      {
+        onCall: (call) => {
+          if (call === 2) reclaimed.open();
+        },
+        holdAfterToolInput: async (call) => {
+          if (call !== 1) return;
+          parked.open();
+          await release.wait();
+        },
+      },
+    );
+
+    const harness = await freshLoopRun({
+      model,
+      clock,
+      // Slack, because `linear.createIssue` is a real `external_write` and the
+      // write guard re-reads a live channel policy before it acts.
+      origin: "slack",
+      wrapDeps: (base) => ({
+        ...base,
+        linear: {
+          ...base.linear,
+          async createIssue(...args: Parameters<typeof base.linear.createIssue>) {
+            filed += 1;
+            return base.linear.createIssue(...args);
+          },
+        },
+      }),
+    });
+    await harness.stub.appendTurn(customerTurn("t1"));
+
+    // Attempt 1 claims and parks in the window.
+    const lost = harness.alarm();
+    await parked.wait();
+    expect(await harness.storage((storage) => readDriver(storage))).toMatchObject({
+      phase: "running",
+      attempt: 1,
+    });
+
+    // Its lease runs out where a crashed attempt's would have, and a plain
+    // alarm delivery — no `deleteAlarm`, the platform's own re-delivery — takes
+    // the run over.
+    clock.advance(150_001);
+    const successor = harness.stub.dispatchAlarm();
+    await reclaimed.wait();
+
+    // The successor is attempt 2 of the SAME generation — a reclaim continues
+    // the work rather than forking a second conversation. Read while it is in
+    // flight, because the driver clears `attempt` once the run settles.
+    expect(await harness.storage((storage) => readDriver(storage))).toMatchObject({
+      phase: "running",
+      attempt: 2,
+    });
+
+    // Only now is the lost attempt allowed to finish its stream.
+    release.open();
+    const [lostOutcome] = await Promise.all([lost, successor]);
+    expect(lostOutcome.model).toBe("claimed");
+
+    // THE DOCUMENTED RECOVERY RESULT. The lost attempt settles nothing: the
+    // fence refuses its checkpoint, so it reports `aborted_stale_claim` and the
+    // successor owns the answer.
+    expect(harness.results.map((result) => result.path).sort()).toEqual([
+      "aborted_stale_claim",
+      "completed",
+    ]);
+
+    // ONE generation throughout, so the effect scope — the stable agent turn id
+    // derived from it — never moved. That is what makes re-issuing the tool call
+    // safe rather than merely lucky (agent-recovery.test.ts:134).
+    const generations = await harness.storage((storage) =>
+      storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM agent_generations").one().n,
+    );
+    expect(generations).toBe(1);
+
+    // NO SIDE EFFECT RAN TWICE. The lost attempt's `run_code` never reached the
+    // isolate: the durable freshness guard re-read the claim epoch, found the
+    // successor's, and refused before a capability existed.
+    expect(filed).toBe(1);
+    const effects = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM codemode_effects WHERE run_id = ? AND method = 'createIssue'",
+    )
+      .bind(harness.runId)
+      .first<{ n: number }>();
+    expect(effects?.n).toBe(1);
+
+    // NO FABRICATED TOOL RESULT. The transcript holds the successor's step and
+    // nothing of the lost one — no second tool message, and no trace of the
+    // refusal the lost attempt's own tool call returned to it.
+    const transcript = await harness.storage((storage) => readModelTranscript(storage));
+    const toolMessages = transcript.filter(
+      (row) => (row.message as ModelMessage).role === "tool",
+    );
+    expect(toolMessages).toHaveLength(1);
+    expect(toolMessages[0]!.globalStep).toBe(0);
+    const serialized = JSON.stringify(transcript);
+    expect(serialized).not.toContain("stale_generation");
+    expect(serialized).not.toContain("call_lost");
+
+    // One answer, from the successor.
+    const turns = await harness.storage((storage) => listTurns(storage));
+    const answers = turns.filter((turn) => turn.source === "agent");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]!.content).toBe("filed FF-1 for the stuck deploy.");
+
+    // The cost of the window, stated rather than hidden: the lost attempt's
+    // provider call was made and is billed, unfenced, alongside the two the
+    // successor made. Re-running the step is not free.
+    const billed = await harness.storage((storage) =>
+      listPendingUsageProjections(storage, 50),
+    );
+    expect(billed.map((row) => row.globalStep).sort()).toEqual([0, 0, 1]);
   });
 });
