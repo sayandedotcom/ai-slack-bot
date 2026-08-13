@@ -58,14 +58,25 @@
     // both values are read out of a validated JWT's own claims, not used to
     // authenticate anything themselves. See src/access/jwt.ts.
     "ACCESS_TEAM_DOMAIN": "zellify-firefighter.cloudflareaccess.com",
-    // Placeholder. The real Access application AUD could not be read from this
-    // checkout (release gate G1, docs/superpowers/plans/phase-11-notes.md) --
-    // the application may not even be stood up yet. This is deliberately an
-    // obvious non-value rather than a guess: `makeAccessVerifier` checks `aud`
-    // unconditionally, so a deployed Worker with this placeholder rejects
-    // every JWT instead of admitting anyone. Fails closed; replace only with
-    // the real AUD, never with a fallback that skips the check.
-    "ACCESS_APP_AUD": "UNSET_SEE_PHASE_11_NOTES"
+    // The AUD tag of the `firefighter - Dashboard` self-hosted Access
+    // application (Phase 11 Task 10; this closes release gate G1, see
+    // docs/superpowers/plans/phase-11-notes.md). That application covers the
+    // bare host `firefighter.sayandeten.workers.dev` under the policy
+    // "Zellify staff + temporary personal override", 24-hour session, and it
+    // is the only one of the three sibling applications that gates an
+    // approval route.
+    //
+    // Picking the right sibling is the whole risk here: the other two match
+    // `/oauth` and `/slack` with bypass-for-everyone policies, so pinning
+    // either of THEIR AUDs would make the verifier accept a token minted for
+    // an application that authenticates nobody. `makeAccessVerifier` checks
+    // `aud` unconditionally, which is what turns that distinction into a
+    // real gate rather than a comment.
+    //
+    // Non-secret, like the team domain above: an AUD identifies which
+    // application a token was minted for, it does not authorize anything by
+    // itself. Never replace this with a fallback that skips the check.
+    "ACCESS_APP_AUD": "1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238"
   },
   "assets": {
     "directory": "./public",
