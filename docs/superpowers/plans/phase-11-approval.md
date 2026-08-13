@@ -273,6 +273,50 @@ docs/superpowers/plans/phase-11-notes.md
 
 Risk-first: contracts and CAS before capabilities, pause before API, everything before deploy. Non-negotiable: Tasks 1–8. Cut-if-slipping: Task 7's coalesced-nudge bookkeeping (defer to 13), Task 9's mutation sweep breadth.
 
+### Execution speed rules — READ BEFORE DISPATCHING ANY TASK
+
+These override the per-step commands below wherever they conflict.
+
+1. **Focused tests by exact path, never by pattern.** Run
+   `cd apps/worker && pnpm exec vitest run test/<exact-file>.test.ts`.
+   NEVER `pnpm --filter @workspace/worker test -- <pattern>` during red/green —
+   a pattern that matches nothing (or many files) runs far more than intended;
+   a measured "focused" pattern run cost 71s where the exact-path run costs
+   ~5s. The per-step "Run:" lines below are superseded by this rule.
+2. **One `pnpm exec tsc --noEmit -p tsconfig.json` per task**, at the end —
+   never per step.
+3. **The full suite runs exactly twice in this phase:** once at Task 9 Step 4
+   (the gate), once before the Task 10 deploy. Nowhere else. A subagent that
+   runs the full suite mid-task is burning two minutes for nothing.
+4. **Dispatch = the task's own text + its Interfaces block + this rules
+   section.** A subagent must not re-explore the repo to rediscover what the
+   plan already states; grant it the files named in the task and let it read
+   only those plus their direct imports.
+5. **Review depth is not uniform.** Deep review (read the whole diff): Tasks
+   4, 5, 6 — fencing, idempotency, authz. Light review (skim tests, accept):
+   Tasks 1, 2, 3, 8. Task 7 medium.
+6. **Trivial code skips ceremony.** Where a step's implementation is a
+   constant table or a single query (`roster.ts`, the `escalated` counter),
+   one red/green cycle for the module is enough — do not write a failing test
+   per assertion.
+
+### Parallel wave schedule
+
+Tasks keep their numbers; dispatch them in these waves. Within a wave, run
+subagents CONCURRENTLY — the file sets are disjoint by construction.
+
+| Wave | Tasks (concurrent) | Why safe |
+|---|---|---|
+| A | **1** ∥ **2** | zero shared files (approval/* + migration vs access/*) |
+| B | **3** ∥ **8** | 3 touches codemode/*; 8 touches prompt/policy.ts + counters (needs only Task 1's table) |
+| C | **4** ∥ **6** | 4 touches agent/loop+driver+session/do; 6 touches api/* against the notifier PORT (see Task 6 note) — its only do.ts contact is deferred to wave D |
+| D | **5**, then wire 6's notifier (15 min) | 5 owns do.ts; the wiring step is one composition line |
+| E | **7** | needs 4+5 |
+| F | **9**, then **10** | serial by nature |
+
+Merge order within a wave doesn't matter; rebase conflicts are limited to
+`index.ts` route/wiring lines and are mechanical.
+
 ### Task 0 — Baseline and gates
 
 - [x] **Step 1:** Run the baseline commands from "Repeat at the start of implementation"; record counts in `phase-11-notes.md`.
@@ -398,7 +442,23 @@ Resolution order inside the RPC (each step idempotent on `approvalId`): (1) shad
 
 **Files:** create `src/api/approvals.ts`; modify `src/index.ts` (routes + sweeper extension + verifier composition); create `test/approval-api.test.ts`.
 
-**Interfaces consumed:** repository (Task 1), verifier/roster (Task 2), `resolveApproval` RPC (Task 5).
+**Interfaces consumed:** repository (Task 1), verifier/roster (Task 2), and a
+**notifier port this task defines itself** so it can run concurrently with
+Tasks 4–5:
+
+```ts
+// src/api/approvals.ts
+export interface ResolutionNotifier {
+  notify(input: { runId: string; approvalId: string; decision: "approved"|"edited"|"rejected";
+    outboundText: string|null; rejectReason: string|null; decidedBy: string }): Promise<{ applied: boolean }>;
+}
+```
+
+All Task 6 tests use a fake notifier. The production composition line —
+`notify` calling the RunDO stub's `resolveApproval` (Task 5) — is written as
+the single wave-D wiring step, NOT here. Everything else in this task
+(authz, CAS-through-HTTP, 409/422/404, sweeper re-delivery via the fake) is
+provable without Task 5 existing.
 
 - [ ] **Step 1: Write failing tests.** Through `SELF.fetch` with an injected fake verifier (compose via the same key-scoped test-port pattern the run layer uses): list/card require any team email — a valid JWT for a viewer works, a valid JWT for an outsider email → 403, no/garbage JWT → 401; PATCH as a **viewer** → `403 not_a_firefighter`, row untouched; PATCH approve as a fire-fighter → 200, response carries decision+delivery, and the DO received exactly one `resolveApproval`; concurrent PATCH approve vs reject → one 200, one `409 already_decided` carrying the winner; edit without text / reject without reason → 422; unknown id → 404; **DO notify failure after D1 commit** (inject a failing stub) → PATCH still returns 200 with `resolutionDelivered:false`, the row is decided, and the extended sweeper (invoke `scheduled()` directly in-test) re-delivers via `listUndeliveredResolutions`; reads hit D1 only (assert zero DO invocations for GET).
 - [ ] **Step 2: Run, verify FAIL.**
@@ -432,7 +492,7 @@ Resolution order inside the RPC (each step idempotent on `approvalId`): (1) shad
 
 - [ ] **Step 1: Crash-window tests.** (1) local open committed, D1 card projection pending, worker dies → alarm re-projects, card appears once; (2) D1 decided, DO never notified → sweeper delivers, one resolution turn; (3) delivery `sending`, crash before outcome → re-entry maps to `in_doubt`, never a second send; (4) resolution turn committed, `markResolutionDelivered` failed → sweeper re-invocation is a no-op (idempotent turn id) and repairs the mark.
 - [ ] **Step 2: Security tests.** A forged `resolveApproval`-shaped browser frame over the run WebSocket cannot inject an approval turn (existing `parseClientMessage` rejection extended to the new source); a JWT for a non-roster email can read nothing and decide nothing; secret canaries (existing harness) extended over approval rows, events, and the resolution turn — no JWT material anywhere; `decided_by` appears in D1 and the API but never in model context (the resolution turn carries the decision, not the decider — the model has no business knowing which engineer clicked).
-- [ ] **Step 3: Mutation review (manual, recorded).** Break each and confirm a test fails: drop the partial unique index; skip JWT validation on PATCH; let viewers PATCH; latch the pause from a stale epoch; roll back a decision on delivery failure; deliver from the model's channel argument instead of run state. Record in notes.
+- [ ] **Step 3: Mutation review (manual, recorded, TIMEBOXED to three).** Break each and confirm a test fails: drop the partial unique index; skip JWT validation on PATCH; latch the pause from a stale epoch. Record the other three candidate mutations (viewer PATCH, decision rollback on delivery failure, model-supplied channel) in notes as reviewed-by-reading, not mutation-tested.
 - [ ] **Step 4: Full gate.** `pnpm --filter @workspace/worker test` · `codemode:dts:check` · `typecheck` · `pnpm lint` · `pnpm build` · `wrangler deploy --dry-run`. Compare counts to Task 0 baseline.
 - [ ] **Step 5: Commit:** `test(approval): prove the gate under crashes, races, and forgery`
 
