@@ -33,6 +33,7 @@ import {
   assistantUpdateIdFor,
   finalTurnIdFor,
   memoryOutboxIdFor,
+  isAbsentConfigurationCode,
   isInputResumablePolicy,
   isTerminalGenerationState,
   isWakeSource,
@@ -1038,6 +1039,127 @@ function scheduleInput(
     scheduling: { outcome: "allocated", generationId, agentTurnId, eventSeq: seq },
     statusEvent: goLive(storage, now),
   };
+}
+
+export type OperatorConfigResume =
+  | { outcome: "not_applicable" }
+  | {
+      outcome: "rescheduled";
+      generationId: string;
+      agentTurnId: string;
+      /** The generation the missing configuration killed. Stays terminal. */
+      failedGenerationId: string;
+      statusEvent: RunEvent | null;
+    };
+
+/**
+ * THE EXPLICIT CONFIG RESET, done by the only actor who can do it: the operator
+ * who supplied the configuration.
+ *
+ * The problem this exists for. Wiring the production continuation up means a
+ * deployment with no Gateway settings now CLAIMS a generation and fails
+ * composition terminally as `requires_operator_config` (plan lines 965-966
+ * require absence to fail). That policy is deliberately not input-resumable —
+ * `isInputResumablePolicy`, and the gate in `scheduleInput` — so no customer
+ * message and no human steer can revive the run. Without this function, every
+ * run claimed between "the code deployed" and "the secret landed" is dead
+ * FOREVER, including after the operator fixes it. The behaviour it replaced
+ * (`continuation: null`) parked instead, and a parked run resumed the moment a
+ * continuation existed.
+ *
+ * Plan line 655 says what may wake this policy: "explicit operator/config
+ * reset, never ordinary input". Supplying the configuration IS that reset. So
+ * the reset is not weakened here and no new resume policy is invented — the
+ * failure stays terminal, stays `requires_operator_config`, and stays out of
+ * reach of `appendTurn`. What changes is that the deployment which now HAS the
+ * configuration picks the work back up.
+ *
+ * Every guard below is load-bearing:
+ *
+ *  - `configurationComplete` is the operator's action. While it is false this
+ *    function does nothing at all, so an unconfigured deployment cannot loop.
+ *  - `isAbsentConfigurationCode` is what makes it a one-way transition rather
+ *    than a retry loop. Only ABSENT settings are revivable; a present-but-wrong
+ *    `invalid_gateway_url` is not, because presence is all this check can see
+ *    and a run revived on a malformed value would fail on it again every wake.
+ *  - a `cost_limit` / `budget_exhausted` failure carries the same
+ *    `requires_operator_config` policy and is NOT in that code list, so a run
+ *    spend ceiling is untouched. Nothing here can restart spending that a cap
+ *    stopped.
+ *  - pending input must genuinely be owed. A revived generation with nothing to
+ *    answer would re-run the model over a settled transcript for no reason.
+ *
+ * NO MONEY IS RE-DERIVED. `createProductionModelFactory` throws before any
+ * provider request, before `makeAgentTools`, before a single billed token, so
+ * the failed generation holds no usage rows and no effects. A FRESH generation
+ * is allocated rather than the dead one revived, for two concrete reasons: the
+ * failed one already froze its immutable episode and enqueued its memory-outbox
+ * job (`finalizeGeneration`), which reviving would strand as a lie; and the
+ * inputs it owed are still above `settled_through_seq`, which is precisely the
+ * state `scheduleInput` allocates from. The dead generation stays terminal and
+ * keeps naming the setting, so the operator record of what happened survives.
+ */
+export function resumeAfterOperatorConfig(
+  storage: DurableObjectStorage,
+  options: { configurationComplete: boolean },
+  now = Date.now(),
+): OperatorConfigResume {
+  if (!options.configurationComplete) return { outcome: "not_applicable" };
+
+  return storage.transactionSync(() => {
+    const driver = readDriver(storage);
+    if (driver.phase !== "failed") return { outcome: "not_applicable" };
+    if (driver.resumePolicy !== "requires_operator_config") return { outcome: "not_applicable" };
+    if (!isAbsentConfigurationCode(driver.lastErrorCode)) return { outcome: "not_applicable" };
+    if (driver.generationId === null) return { outcome: "not_applicable" };
+    if (driver.pendingThroughSeq <= driver.settledThroughSeq) return { outcome: "not_applicable" };
+
+    const failedGenerationId = driver.generationId;
+    const failed = readGeneration(storage, failedGenerationId);
+    const generationId = newGenerationId();
+    const agentTurnId = agentTurnIdFor(generationId);
+
+    storage.sql.exec(
+      `INSERT INTO agent_generations
+         (id, agent_turn_id, state, first_input_seq, included_through_seq, created_at, updated_at)
+       VALUES (?, ?, 'scheduled', ?, ?, ?, ?)`,
+      generationId,
+      agentTurnId,
+      // The same first input the dead generation was allocated for, when it can
+      // still be read. Nothing new arrived to move it.
+      failed?.firstInputSeq ?? driver.settledThroughSeq + 1,
+      driver.settledThroughSeq,
+      now,
+      now,
+    );
+    storage.sql.exec(
+      `UPDATE agent_driver SET
+         phase = 'scheduled',
+         current_generation_id = ?,
+         current_agent_turn_id = ?,
+         attempt = 0,
+         retry_count = 0,
+         lease_expires_at = NULL,
+         last_heartbeat_at = NULL,
+         next_attempt_at = 0,
+         resume_policy = NULL,
+         last_error_code = NULL,
+         last_error_message = NULL,
+         updated_at = ?
+       WHERE singleton = 1`,
+      generationId,
+      agentTurnId,
+      now,
+    );
+
+    return {
+      outcome: "rescheduled",
+      generationId,
+      agentTurnId,
+      failedGenerationId,
+      statusEvent: goLive(storage, now),
+    };
+  });
 }
 
 /**

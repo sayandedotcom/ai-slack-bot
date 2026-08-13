@@ -14,6 +14,12 @@ declare global {
       // on which keys a given machine has filled in.
       ZEP_API_KEY: string;
       ANTHROPIC_API_KEY: string;
+      // Bound EMPTY by vitest.config.ts so no env in this pool can compose a
+      // real provider. Optional rather than `string` because a deployed Worker
+      // genuinely may not have them — that absence is the failure plan lines
+      // 965-966 are about, and `src/index.ts` must keep seeing it as possible.
+      AI_GATEWAY_ANTHROPIC_URL?: string;
+      AI_GATEWAY_TOKEN?: string;
     }
   }
 }

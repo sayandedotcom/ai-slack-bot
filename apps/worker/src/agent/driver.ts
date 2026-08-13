@@ -162,6 +162,23 @@ export type RunPorts = {
   limits: DriverLimits;
   /** Injected so a test can advance time past a lease without sleeping for it. */
   now: () => number;
+  /**
+   * Whether THIS deployment's required model configuration is present, i.e.
+   * `modelDisposition(env).status === "ready"`.
+   *
+   * It rides on the ports for the same reason `now` does: the RunDO needs it in
+   * its CONSTRUCTOR, where the only decision that depends on it is made, and a
+   * value read straight from `env` there would be unreachable from a test — the
+   * pool's env is fixed and deliberately unconfigured. It is a plain boolean
+   * rather than the whole report because the constructor needs exactly one bit
+   * and must not acquire a reason to reach into the composer.
+   *
+   * `false` by default, and `false` is the safe direction: it only ever gates
+   * `resumeAfterOperatorConfig`, so a wrong `false` leaves a config-failed run
+   * exactly as dead as it was before this existed, while a wrong `true` would
+   * reschedule work that immediately fails again for free.
+   */
+  modelConfigured: boolean;
 };
 
 export function defaultRunPorts(): RunPorts {
@@ -170,6 +187,7 @@ export function defaultRunPorts(): RunPorts {
     projections: {},
     limits: DEFAULT_DRIVER_LIMITS,
     now: () => Date.now(),
+    modelConfigured: false,
   };
 }
 

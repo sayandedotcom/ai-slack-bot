@@ -1,16 +1,27 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
-import { installRunPorts, resetRunPorts, resolveRunPorts } from "../src/agent/driver";
+import {
+  installRunPorts,
+  resetRunPorts,
+  resolveRunPorts,
+  type RunPorts,
+} from "../src/agent/driver";
 import {
   modelDisposition,
   productionRunPorts,
   resetProductionPortsMemo,
 } from "../src/agent/ports";
-import { memoryOutboxIdFor } from "../src/agent/contracts";
+import { ABSENT_MODEL_CONFIGURATION_CODES, memoryOutboxIdFor } from "../src/agent/contracts";
+import {
+  createProductionModelFactory,
+  ModelCompositionError,
+  type ModelEnv,
+} from "../src/agent/model";
 import { runStubForKey } from "../src/run/keys";
-import { readGenerationMemory, recordStepUsage } from "../src/run/session";
+import { countModelSteps, readGenerationMemory, recordStepUsage } from "../src/run/session";
 import type { MemoryJob } from "../src/memory/consumer";
 import type { Env } from "../src/index";
+import type { RunDO } from "../src/run/do";
 import { customerTurn, freshLoopRun, mockModel, textStep } from "./helpers/agent-loop";
 
 /**
@@ -81,7 +92,11 @@ describe("the production ports", () => {
   it("installs a continuation and both projection runners when the model is configured", () => {
     const { ports, report } = productionRunPorts(configuredEnv());
 
-    expect(report).toEqual({ modelEnabled: true, status: "ready", missingConfiguration: [] });
+    expect(report).toEqual({
+      continuationInstalled: true,
+      status: "ready",
+      missingConfiguration: [],
+    });
     expect(typeof ports.continuation).toBe("function");
     // The two kinds whose absence parks durable work. `run_index` is not here
     // on purpose: the RunDO owns that one directly, because it needs env.DB and
@@ -107,7 +122,7 @@ describe("the production ports", () => {
   it("still composes — and so still fails — when the Gateway URL is absent and nothing opted out", () => {
     const { ports, report } = productionRunPorts(unconfiguredEnv());
 
-    expect(report.modelEnabled).toBe(true);
+    expect(report.continuationInstalled).toBe(true);
     expect(report.status).toBe("configuration_incomplete");
     expect(report.missingConfiguration).toEqual([
       "ANTHROPIC_API_KEY",
@@ -135,7 +150,7 @@ describe("the production ports", () => {
   it("parks model work — but still delivers projections — when explicitly disabled", () => {
     const { ports, report } = productionRunPorts(disabledEnv());
 
-    expect(report.modelEnabled).toBe(false);
+    expect(report.continuationInstalled).toBe(false);
     expect(report.status).toBe("disabled_by_configuration");
     expect(ports.continuation).toBeUndefined();
 
@@ -148,33 +163,93 @@ describe("the production ports", () => {
 
   it("disables only on an explicit 1 or true, so a typo fails loudly instead of parking", () => {
     for (const raw of ["true", "TRUE", " 1 "]) {
-      expect(modelDisposition({ ...configuredEnv(), AGENT_MODEL_DISABLED: raw } as unknown as Env).modelEnabled).toBe(false);
+      const report = modelDisposition({
+        ...configuredEnv(),
+        AGENT_MODEL_DISABLED: raw,
+      } as unknown as Env);
+      expect(report.continuationInstalled).toBe(false);
     }
     for (const raw of ["", "yes", "0", "false", "disabled"]) {
-      expect(modelDisposition({ ...configuredEnv(), AGENT_MODEL_DISABLED: raw } as unknown as Env).modelEnabled).toBe(true);
+      const report = modelDisposition({
+        ...configuredEnv(),
+        AGENT_MODEL_DISABLED: raw,
+      } as unknown as Env);
+      expect(report.continuationInstalled).toBe(true);
     }
   });
 
   /**
-   * THE GUARD THAT KEEPS THIS SUITE OFF THE REAL MODEL.
+   * THE FIRST OF THE TWO GUARDS THAT KEEP THIS SUITE OFF THE REAL MODEL.
    *
    * `.dev.vars` is loaded by this pool and holds a LIVE `ANTHROPIC_API_KEY`.
    * While absence parked, that was survivable; now that absence composes, the
-   * only thing standing between the suite and a real Gateway call is the
-   * pool-wide opt-out. If somebody removes it from vitest.config.ts, or fills
-   * in the two Gateway settings locally, this fails before any money is spent.
+   * pool-wide opt-out is what stops a RunDO built from the POOL env from
+   * installing the production continuation. If somebody removes it from
+   * vitest.config.ts, this fails.
+   *
+   * It is not the whole story, and the case below is the rest of it: four sites
+   * in this repo install the production continuation from an env they built
+   * themselves, which bypasses this flag entirely.
    */
   it("parks model work for the test pool's own env", () => {
     const { ports, report } = productionRunPorts(env as unknown as Env);
 
     expect(report.status).toBe("disabled_by_configuration");
     expect(ports.continuation).toBeUndefined();
+  });
+
+  /**
+   * THE GUARD THAT ACTUALLY CANNOT BE BYPASSED.
+   *
+   * `AGENT_MODEL_DISABLED` only protects a composition that reads the POOL env.
+   * It protects nothing at all for the four call sites that build their own env
+   * and install the production continuation explicitly — the two below in this
+   * file and the two in `run-telemetry.test.ts`, which install GLOBALLY. Those
+   * continuations resolve their env at call time from the Durable Object
+   * (`do.ts`, `ports.continuation?.(this.ctx, this.env)`), so what they compose
+   * against is THIS pool env, opt-out or no opt-out.
+   *
+   * So the line that cannot be defeated is the one below: with the two Gateway
+   * settings bound EMPTY, `createProductionModelFactory` throws
+   * `missing_gateway_url` before `createAnthropic` is ever constructed, and no
+   * provider request can be built no matter which env installed the port or how
+   * many alarm dispatches a test loops over.
+   *
+   * The binding is what makes it true, not `.dev.vars`. Miniflare bindings
+   * override `.dev.vars`, which is the same mechanism that already keeps
+   * `ZEP_API_KEY` off the production memory graph — so the day somebody creates
+   * the private AI Gateway and puts these two settings in `.dev.vars` (a KNOWN
+   * DEFERRED operator step for this repo), the empty bindings still win.
+   */
+  it("binds the pool's Gateway settings empty, so no test env can compose a real provider", () => {
+    // Empty STRING, not undefined: `undefined` would mean the binding is gone
+    // and the pool is inheriting whatever `.dev.vars` happens to hold.
+    expect(env.AI_GATEWAY_ANTHROPIC_URL).toBe("");
+    expect(env.AI_GATEWAY_TOKEN).toBe("");
 
     // The same fixture precedence, pinned for the other live credential the
     // wired ports can now reach: vitest.config.ts's explicit miniflare binding
     // must win over the real key in `.dev.vars`, or a settled generation in any
     // suite writes episodes into the production memory graph.
     expect(env.ZEP_API_KEY).toBe("zep-test-key");
+
+    // And the consequence, stated as the composer states it. This is the env a
+    // globally installed production continuation would actually be handed.
+    //
+    // WHICH code comes back depends on whether this machine's `.dev.vars` fills
+    // in `ANTHROPIC_API_KEY` (CI has no `.dev.vars` at all), so the assertion is
+    // that composition refuses for ABSENT configuration — never that it got as
+    // far as building a provider.
+    let thrownCode: string | null = null;
+    try {
+      createProductionModelFactory(env as unknown as ModelEnv);
+    } catch (error) {
+      thrownCode =
+        error instanceof ModelCompositionError
+          ? error.code
+          : `unexpected:${String(error)}`;
+    }
+    expect(ABSENT_MODEL_CONFIGURATION_CODES).toContain(thrownCode);
   });
 
   it("installs globally, so a keyed test fake still wins for its own run", () => {
@@ -247,6 +322,176 @@ describe("the installed continuation is the real loop", () => {
     expect(driver.phase).toBe("failed");
     expect(driver.lastErrorCode).toBe("missing_gateway_url");
     expect(driver.resumePolicy).toBe("requires_operator_config");
+  });
+});
+
+/**
+ * WHAT HAPPENS TO EVERY RUN CLAIMED BEFORE THE SECRET LANDS.
+ *
+ * The case above is the intended behaviour: absence FAILS, terminally, naming
+ * the setting (plan lines 965-966). But `requires_operator_config` is not
+ * input-resumable — `isInputResumablePolicy`, and the gate in `scheduleInput` —
+ * so on the first production deploy of this wiring, every run claimed between
+ * "the code shipped" and "the operator created the private AI Gateway" was dead
+ * FOREVER. Not paused. Not retried later. Dead, including after the operator did
+ * the exact thing the error code asked them to do.
+ *
+ * Nothing in the plan requires that. Line 655 says `requires_operator_config` is
+ * woken by "explicit operator/config reset, never ordinary input" — supplying
+ * the configuration IS the reset, and the behaviour this wiring replaced
+ * (`continuation: null`) was explicitly recoverable: "the first alarm after the
+ * Gateway is created picks the run up exactly where it was left".
+ *
+ * These cases pin the restored property and, just as importantly, everything it
+ * must NOT do.
+ */
+describe("absent configuration is terminal, but not irreversible", () => {
+  /** A real run, really claimed, really failed on a really-absent Gateway. */
+  async function killedByAbsentGateway() {
+    const harness = await freshLoopRun({
+      model: mockModel([textStep({ chunks: ["The 04:12 deploy dropped the export worker."] })]),
+    });
+    installRunPorts(productionRunPorts(unconfiguredEnv()).ports, { runKey: harness.key });
+
+    await harness.stub.appendTurn(customerTurn("t1", "why are exports empty?"));
+    expect((await harness.alarm()).model).toBe("claimed");
+
+    const driver = await harness.stub.driver();
+    expect(driver.phase).toBe("failed");
+    expect(driver.lastErrorCode).toBe("missing_gateway_url");
+    expect(driver.resumePolicy).toBe("requires_operator_config");
+
+    // NOTHING WAS BILLED. `createProductionModelFactory` throws before the
+    // provider, before `makeAgentTools` and before a single token, so recovery
+    // cannot be re-billing work that never happened.
+    expect(await harness.storage((storage) => countModelSteps(storage))).toBe(0);
+
+    return { harness, deadGenerationId: driver.generationId };
+  }
+
+  /** Put the deployment's configuration in place, the way a deploy does. */
+  async function operatorSuppliesConfiguration(harness: {
+    key: string;
+    ports: Partial<RunPorts>;
+    stub: DurableObjectStub<RunDO>;
+  }) {
+    // The harness's own local ports (a mock provider, no network), plus the one
+    // bit the constructor reads. This stands in for the real deploy, where
+    // `productionRunPorts` sets `modelConfigured` from
+    // `modelDisposition(env).status === "ready"`.
+    installRunPorts({ ...harness.ports, modelConfigured: true }, { runKey: harness.key });
+    // A secret landing IS a new deployment: every object is torn down and
+    // rebuilt. That reconstruction is the moment the run can notice.
+    await evictDurableObject(harness.stub);
+  }
+
+  it("comes back on the first construction after the configuration lands, and answers", async () => {
+    const { harness, deadGenerationId } = await killedByAbsentGateway();
+
+    await operatorSuppliesConfiguration(harness);
+
+    // Reconstructed by this very call. The constructor's recovery ran before
+    // `#armAlarm()`, so there is a generation for the alarm to arm for.
+    const revived = await harness.stub.driver();
+    expect(revived.phase).toBe("scheduled");
+    expect(revived.resumePolicy).toBeNull();
+    expect(revived.lastErrorCode).toBeNull();
+    // A FRESH generation. The dead one already froze its immutable episode and
+    // enqueued its memory-outbox job; reviving it in place would strand both as
+    // a lie about a generation that went on to succeed.
+    expect(revived.generationId).not.toBe(deadGenerationId);
+
+    // ...and it actually answers the message it was killed holding.
+    await harness.alarm();
+    const settled = await harness.stub.driver();
+    expect(settled.phase).toBe("idle");
+
+    const turns = await harness.stub.turns();
+    const answer = turns.find((turn) => turn.role === "assistant");
+    expect(answer?.content).toContain("04:12");
+  });
+
+  it("stays dead while the deployment is still unconfigured", async () => {
+    const { harness, deadGenerationId } = await killedByAbsentGateway();
+
+    // A redeploy that STILL has no Gateway. `modelConfigured` is false, which is
+    // what stops this from becoming a rearm loop against a config that cannot
+    // fix itself: every wake of an unconfigured deployment does nothing at all.
+    installRunPorts({ ...harness.ports, modelConfigured: false }, { runKey: harness.key });
+    await evictDurableObject(harness.stub);
+
+    const driver = await harness.stub.driver();
+    expect(driver.phase).toBe("failed");
+    expect(driver.generationId).toBe(deadGenerationId);
+    expect(driver.lastErrorCode).toBe("missing_gateway_url");
+  });
+
+  it("is not resumed by an ordinary message, even once the configuration is there", async () => {
+    const { harness } = await killedByAbsentGateway();
+
+    // The policy is unchanged and is still enforced where it always was.
+    const blocked = await harness.stub.appendTurn(customerTurn("t2", "any update?"));
+    expect(blocked.scheduling.outcome).toBe("blocked");
+
+    installRunPorts({ ...harness.ports, modelConfigured: true }, { runKey: harness.key });
+    // No eviction: the operator has not deployed anything, so nothing has
+    // reconstructed this object. A message alone must not reach into the reset.
+    const stillBlocked = await harness.stub.appendTurn(customerTurn("t3", "hello?"));
+    expect(stillBlocked.scheduling.outcome).toBe("blocked");
+    expect((await harness.stub.driver()).phase).toBe("failed");
+  });
+
+  /**
+   * THE TWO DISCRIMINATIONS THAT KEEP THIS NARROW.
+   *
+   * `requires_operator_config` also covers a RUN SPEND CEILING, and the whole
+   * reason that policy is not input-resumable is that no ordinary event may
+   * restart spending a cap stopped. And `invalid_gateway_url` means the setting
+   * was PRESENT and wrong, which a presence check cannot see — a run revived on
+   * a malformed value would fail on it again on every single wake.
+   *
+   * Both are excluded by `ABSENT_MODEL_CONFIGURATION_CODES`, and both are
+   * checked here by changing exactly one thing: the persisted error code.
+   */
+  it.each(["cost_limit", "invalid_gateway_url", "unpriced_model"])(
+    "refuses to revive a %s failure, which carries the same policy",
+    async (errorCode) => {
+      const { harness, deadGenerationId } = await killedByAbsentGateway();
+
+      // ONE variable changed. Everything else — phase, policy, cursors, the
+      // pending input — is exactly the state the case above revives from.
+      await harness.storage((storage) =>
+        storage.sql.exec(
+          "UPDATE agent_driver SET last_error_code = ? WHERE singleton = 1",
+          errorCode,
+        ),
+      );
+
+      await operatorSuppliesConfiguration(harness);
+
+      const driver = await harness.stub.driver();
+      expect(driver.phase).toBe("failed");
+      expect(driver.generationId).toBe(deadGenerationId);
+      expect(driver.resumePolicy).toBe("requires_operator_config");
+    },
+  );
+
+  it("refuses to revive a failure whose input was already settled", async () => {
+    const { harness, deadGenerationId } = await killedByAbsentGateway();
+
+    // Nothing is owed. Reviving here would put the model back over a transcript
+    // that has no unanswered question in it.
+    await harness.storage((storage) =>
+      storage.sql.exec(
+        "UPDATE agent_driver SET settled_through_seq = pending_through_seq WHERE singleton = 1",
+      ),
+    );
+
+    await operatorSuppliesConfiguration(harness);
+
+    const driver = await harness.stub.driver();
+    expect(driver.phase).toBe("failed");
+    expect(driver.generationId).toBe(deadGenerationId);
   });
 });
 

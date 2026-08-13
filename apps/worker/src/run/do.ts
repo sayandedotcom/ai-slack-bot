@@ -34,6 +34,7 @@ import {
   readGeneration,
   readRunIndexRevision,
   countModelSteps,
+  resumeAfterOperatorConfig,
   retryProjectionJob,
   readState,
   setStatus,
@@ -203,8 +204,38 @@ export class RunDO extends DurableObject<Env> {
     // permanently unscheduled run that looks healthy. Letting it throw resets
     // the object and lets the platform try again.
     ctx.blockConcurrencyWhile(async () => {
+      this.#resumeAfterOperatorConfig();
       await this.#armAlarm();
     });
+  }
+
+  /**
+   * THE CONFIG RESET, applied at the only moment a deployment's configuration
+   * can have changed under a Durable Object: its construction.
+   *
+   * A run that failed composition for want of the Gateway settings is terminal
+   * and `requires_operator_config`, so no message and no steer can revive it —
+   * correctly, because ordinary input must never bypass that policy. The
+   * operator action that MAY revive it is supplying the configuration, and a
+   * secret landing is a new deployment, which means every object is torn down
+   * and rebuilt. This constructor is therefore the first moment such a run can
+   * observe that the thing which killed it is gone.
+   *
+   * Placed BEFORE `#armAlarm()` deliberately: the reschedule is what gives the
+   * alarm something to arm for, and running it after would leave the revived
+   * generation sitting `scheduled` with no alarm until the next wake.
+   *
+   * Cheap and quiet in the ordinary case. `resumeAfterOperatorConfig` returns
+   * immediately unless the deployment is configured AND this object's driver is
+   * failed on an ABSENT-configuration code, so a healthy object pays one boolean
+   * and one local SELECT. Nothing is broadcast: a cold object has no sockets
+   * yet, and the `live` status event and its run-index revision are committed by
+   * the same transaction for the next reader and the next projection flush.
+   */
+  #resumeAfterOperatorConfig(): void {
+    const ports = this.#resolvePorts();
+    if (!ports.modelConfigured) return;
+    resumeAfterOperatorConfig(this.ctx.storage, { configurationComplete: true }, this.#now());
   }
 
   /**

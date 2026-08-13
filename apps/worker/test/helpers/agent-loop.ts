@@ -5,7 +5,7 @@ import { chatRunKey, runStubForKey, slackRunKey } from "../../src/run/keys";
 import { createOrGetRun } from "../../src/run/repository";
 import type { RunDescriptor } from "../../src/run/session";
 import type { RunTurnInput } from "../../src/run/protocol";
-import { installRunPorts } from "../../src/agent/driver";
+import { installRunPorts, type RunPorts } from "../../src/agent/driver";
 import type { AlarmOutcome, RunDO } from "../../src/run/do";
 import { makeAgentContinuation, type ContinuationResult } from "../../src/agent/loop";
 import { FABLE_5_MODEL_ID } from "../../src/agent/cost";
@@ -337,6 +337,16 @@ export type LoopHarness = {
   alarm: () => Promise<AlarmOutcome>;
   storage: <T>(fn: (storage: DurableObjectStorage) => T) => Promise<T>;
   /**
+   * The exact ports this harness installed, so a test can put them BACK after
+   * temporarily swapping in the production ones.
+   *
+   * Used by the operator-config recovery case, which has to run a real
+   * unconfigured production composition first (to get the terminal failure) and
+   * then a real answer (to prove the run came back) — with no provider in
+   * either half.
+   */
+  ports: Partial<RunPorts>;
+  /**
    * The object's own storage handle, captured when a claim builds the
    * continuation.
    *
@@ -410,8 +420,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
    */
   const clock = options.clock ?? new FakeClock();
 
-  installRunPorts(
-    {
+  const ports: Partial<RunPorts> = {
       /**
        * THE PRODUCTION FACTORY, not a copy of it.
        *
@@ -461,9 +470,8 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
         maxAttempts: 3,
         continuationTotalMs: 8 * 60_000,
       },
-    },
-    { runKey: descriptor.key },
-  );
+  };
+  installRunPorts(ports, { runKey: descriptor.key });
 
   const stub = runStubForKey(env.RUNS, descriptor.key);
   await stub.initialize(descriptor);
@@ -473,6 +481,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
     runId: descriptor.runId,
     stub,
     results,
+    ports,
     alarm: async () => {
       await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
       return stub.dispatchAlarm();

@@ -85,6 +85,39 @@ export function isInputResumablePolicy(policy: ResumePolicy | null): boolean {
 }
 
 /**
+ * THE ONLY `requires_operator_config` FAILURES A CONFIGURATION CHANGE CAN UNDO.
+ *
+ * `ModelCompositionError` codes come in two kinds, and the difference decides
+ * whether a dead run can ever come back:
+ *
+ *  - ABSENT: the setting was not there at all. Listed here. This is the state of
+ *    every deployment between "the code shipped" and "the operator created the
+ *    private AI Gateway", and it is a ONE-WAY transition — supplying the setting
+ *    is the operator action the plan's resume table calls for (plan line 655:
+ *    "explicit operator/config reset, never ordinary input"). Nothing was billed
+ *    when it failed: `createProductionModelFactory` throws before any provider,
+ *    any tool and any customer-visible byte.
+ *  - PRESENT BUT WRONG: `invalid_gateway_url`, `unpriced_model`. Deliberately
+ *    NOT here. Presence is all a cheap check can see, so a run revived on a
+ *    malformed value would fail again on the same value, every wake, forever.
+ *
+ * Kept here rather than in `model.ts` on purpose: `session.ts` and `do.ts` need
+ * this list, and importing `model.ts` from either would put `@ai-sdk/anthropic`
+ * into a module graph that has no business evaluating it (see the note on
+ * `productionContinuation` in `ports.ts`). `agent-ports.test.ts` pins the list
+ * against what the real composer actually throws, so it cannot drift.
+ */
+export const ABSENT_MODEL_CONFIGURATION_CODES = [
+  "missing_anthropic_key",
+  "missing_gateway_url",
+  "missing_gateway_token",
+] as const;
+
+export function isAbsentConfigurationCode(code: string | null): boolean {
+  return code !== null && (ABSENT_MODEL_CONFIGURATION_CODES as readonly string[]).includes(code);
+}
+
+/**
  * Turn provenance that may wake the loop. This is about who the turn came from,
  * never about what it says — there is no topic test anywhere in Phase 10.
  * `agent` and `system` are absent on purpose: the loop's own output must not

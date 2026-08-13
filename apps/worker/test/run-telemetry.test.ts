@@ -382,14 +382,14 @@ describe("the parked deployment is visible to an operator", () => {
     const response = await SELF.fetch(`https://x/api/runs/${created.id}`);
     const body = (await response.json()) as {
       driver: { state: string; error: string | null };
-      model: { modelEnabled: boolean; status: string; missingConfiguration: string[] };
+      model: { continuationInstalled: boolean; status: string; missingConfiguration: string[] };
     };
 
     // The run looks perfectly healthy on its own terms...
     expect(body.driver.state).toBe("scheduled");
     expect(body.driver.error).toBeNull();
     // ...and this is the field that says nothing is ever going to claim it.
-    expect(body.model.modelEnabled).toBe(false);
+    expect(body.model.continuationInstalled).toBe(false);
     expect(body.model.status).toBe("disabled_by_configuration");
   });
 
@@ -399,7 +399,7 @@ describe("the parked deployment is visible to an operator", () => {
 
     const body = (await response.json()) as {
       ok: boolean;
-      model: { modelEnabled: boolean; status: string; missingConfiguration: string[] };
+      model: { continuationInstalled: boolean; status: string; missingConfiguration: string[] };
     };
     // `ok` stays pure liveness: an existing uptime monitor keeps its meaning.
     expect(body.ok).toBe(true);

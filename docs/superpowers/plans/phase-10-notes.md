@@ -1041,3 +1041,67 @@ throughout, and a fake cannot fail to extract, cannot lag, and cannot duplicate.
     within two minutes with no alarm involvement. **FAIL:** no scheduled
     invocations appear — the recovery backstop does not exist and DLQ'd
     projections are unrecoverable.
+
+## Task 10 — wiring both surfaces to one loop
+
+### The first deploy under this wiring will kill runs, and how they come back
+
+Wiring `productionRunPorts` up changed what an unconfigured deployment does with
+model work. It used to PARK (`continuation: null`): the generation stayed
+`scheduled`, and the first alarm after the Gateway existed picked it up. It now
+COMPOSES and FAILS, because plan lines 965-966 require absence to fail and a
+dashboard full of `live` runs with `error: null` is not a failure anybody sees.
+
+That failure is terminal and `requires_operator_config`, which is deliberately
+**not** input-resumable (`INPUT_RESUMABLE_POLICIES`). So between the first
+deploy of this commit and the operator step still open above ("DEFERRED OPERATOR
+STEP: the Gateway does not exist yet"), **every run claimed is failed with
+`missing_gateway_url`, and no customer message and no human steer will revive
+it.** That is intended. What is *not* intended — and what
+`resumeAfterOperatorConfig` fixes — is that it used to stay dead even after the
+operator did the thing the error code asked for.
+
+**What an on-call person needs to know:**
+
+- The reset is automatic once the configuration lands. Supplying
+  `ANTHROPIC_API_KEY`, `AI_GATEWAY_ANTHROPIC_URL` and `AI_GATEWAY_TOKEN` as
+  Worker secrets redeploys the Worker, every RunDO is reconstructed, and
+  `RunDO`'s constructor allocates a fresh generation for the input the dead one
+  was holding. No D1 edit, no backfill tool, no support ticket.
+- It is a CONSTRUCTION-time reset, not a timer. A run comes back the first time
+  anything touches its object after the deploy: a customer message, a Slack
+  event, or a dashboard read of that run (`GET /api/runs/:id` resolves the
+  stub). A run nobody ever touches again stays failed — which is exactly the
+  reach the old parking behaviour had, since a parked run armed no alarm either.
+  If a sweep is ever wanted, it is a new operator tool, not a cadence.
+- It only undoes ABSENCE. `ABSENT_MODEL_CONFIGURATION_CODES` is the whole list:
+  `missing_anthropic_key`, `missing_gateway_url`, `missing_gateway_token`. A run
+  spend ceiling (`cost_limit`) carries the same `requires_operator_config`
+  policy and is **not** revived by this — raising a cap is still a deliberate
+  act. Neither is `invalid_gateway_url`: the value was present and wrong, a
+  presence check cannot tell it got better, and reviving on it would re-fail on
+  every wake.
+- Nothing is re-billed. `createProductionModelFactory` throws before any
+  provider request, before `makeAgentTools` and before a single token, so a
+  config-killed generation holds no usage rows and no effects. The dead
+  generation stays terminal (it already froze its episode and enqueued its
+  memory-outbox job); a FRESH generation answers the still-pending input.
+- The operator-facing reason code never changes and never carries a value.
+  `driver.error` reads `missing_gateway_url`; `/api/health` and every run
+  snapshot carry `model.status` and `model.missingConfiguration` — setting
+  NAMES only (invariant 39).
+
+### The test pool cannot spend money, and the reason is not `AGENT_MODEL_DISABLED`
+
+`AGENT_MODEL_DISABLED: "true"` in `vitest.config.ts` only stops ports composed
+from the POOL env from installing a continuation. Four sites install the
+production continuation from an env they built themselves (two in
+`agent-ports.test.ts`, two GLOBAL ones in `run-telemetry.test.ts`), and the
+continuation resolves its env at call time from the Durable Object — so the flag
+does nothing for them. The guarantee is instead
+`AI_GATEWAY_ANTHROPIC_URL: ""` and `AI_GATEWAY_TOKEN: ""`, bound in the same
+miniflare block: a binding overrides `.dev.vars`, so composition refuses before
+`createAnthropic` even when a developer machine later fills the Gateway settings
+in locally. Pinned by `agent-ports.test.ts` > "binds the pool's Gateway settings
+empty", which asserts `""` rather than falsiness so deleting either line fails
+the suite.

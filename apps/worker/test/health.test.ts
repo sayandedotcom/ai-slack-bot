@@ -7,6 +7,17 @@ describe("health", () => {
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as { ok: boolean; model: { status: string } };
+    // THE TOP-LEVEL KEY SET, pinned — the same shape pin run-telemetry.test.ts
+    // uses for `driver`.
+    //
+    // Field-by-field checks were not enough. This body is unauthenticated and
+    // crosses to a browser, and the leak canaries that guard it
+    // (run-telemetry.test.ts) only reject `sk-`, `Bearer` and this machine's
+    // `ANTHROPIC_API_KEY` — so a future field carrying, say,
+    // `SLACK_SIGNING_SECRET` would sail through every assertion in both files.
+    // A key-set pin fails the moment the payload grows anything at all, which
+    // makes adding a field a decision somebody has to make on purpose.
+    expect(Object.keys(body).sort()).toEqual(["model", "ok"]);
     // `ok` is still pure liveness and still exactly `true` — an existing uptime
     // monitor keeps its meaning. The composition report is a SIBLING, added so
     // a deployment whose model work is parked stops being invisible outside one

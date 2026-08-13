@@ -69,8 +69,19 @@ const REQUIRED_MODEL_CONFIGURATION = [
 export type ModelStatus = "ready" | "disabled_by_configuration" | "configuration_incomplete";
 
 export type ProductionPortsReport = {
-  /** Whether a continuation was installed at all. */
-  modelEnabled: boolean;
+  /**
+   * Whether a continuation was installed at all — NOT whether model work can
+   * succeed.
+   *
+   * The distinction is the whole reason this field is not called
+   * `modelEnabled` any more. On a deployment with no Gateway settings the
+   * continuation IS installed (that is what makes absence fail loudly instead
+   * of parking silently), so `modelEnabled: true` rendered on `/api/health` as
+   * "model: enabled" for a deployment where every single model call is
+   * guaranteed to fail. `status` is the field that says whether it will work;
+   * this one says only that something is wired.
+   */
+  continuationInstalled: boolean;
   /** A stable operator-facing code. Never carries a configured VALUE. */
   status: ModelStatus;
   /** NAMES of required settings that are absent. Never their values. */
@@ -115,10 +126,14 @@ export function modelDisposition(env: Env): ProductionPortsReport {
   );
 
   if (modelDeliberatelyDisabled(env)) {
-    return { modelEnabled: false, status: "disabled_by_configuration", missingConfiguration };
+    return {
+      continuationInstalled: false,
+      status: "disabled_by_configuration",
+      missingConfiguration,
+    };
   }
   return {
-    modelEnabled: true,
+    continuationInstalled: true,
     status: missingConfiguration.length === 0 ? "ready" : "configuration_incomplete",
     missingConfiguration,
   };
@@ -128,20 +143,32 @@ export function modelDisposition(env: Env): ProductionPortsReport {
  * The real continuation, behind a deferred module load.
  *
  * `loop.ts` and `model.ts` are reached with `await import()` rather than a
- * static import, and the reason is not cold-start micro-optimization — though a
- * Slack ingest request that never touches the model genuinely stops paying to
- * instantiate the Anthropic SDK.
+ * static import, and the reason is a test seam, not cold-start cost.
  *
- * The reason is that a static import here puts `@ai-sdk/anthropic` in the
- * Worker's EAGER module graph, and the Worker entry is instantiated before any
- * test module. `agent-gateway.test.ts` spies on `createAnthropic` to prove the
- * positive half of the credential contract — that `cf-aig-authorization` is
- * actually attached to every provider request, a property whose deletion once
- * left the entire suite green while production called the Gateway
- * unauthenticated. That spy is a module mock, and a module the entry graph has
- * already instantiated cannot be intercepted by one. Wiring the loop up must
- * not cost the one test that can tell "the token was correctly withheld from
- * the snapshot" apart from "the token was never attached at all".
+ * State the reason accurately, because the obvious version of it is FALSE.
+ * `@ai-sdk/anthropic` is already in this Worker's eager module graph and this
+ * import style does nothing about that: `src/index.ts` statically imports
+ * `./triage/run`, whose first line is
+ * `import { createAnthropic } from "@ai-sdk/anthropic"`. Nothing here keeps the
+ * Anthropic SDK out of a cold start, and claiming otherwise would be a comment
+ * a reader could disprove in one grep.
+ *
+ * What it does keep out is `src/agent/model.ts` — this module's OWN
+ * evaluation. `src/index.ts` imports `modelDisposition` from this file, so this
+ * file IS eager; a static `import "./model"` here would evaluate `model.ts` as
+ * part of the entry graph, before any test module runs, binding the real
+ * `createAnthropic` for good. `agent-gateway.test.ts` spies on `createAnthropic`
+ * through `vi.mock("@ai-sdk/anthropic")` to prove the positive half of the
+ * credential contract — that `cf-aig-authorization` is actually attached to
+ * every provider request, a property whose deletion once left the entire suite
+ * green while production called the Gateway unauthenticated. A module the entry
+ * graph has already evaluated cannot be re-bound by that mock, so the spy would
+ * record ZERO calls and six cases would fail. (Measured: making this a static
+ * import fails exactly those six.)
+ *
+ * Wiring the loop up must not cost the one test that can tell "the token was
+ * correctly withheld from the snapshot" apart from "the token was never
+ * attached at all".
  *
  * `run()` is already async and is already built per claimed attempt, so the
  * load costs one resolved promise on a path that is about to call a provider.
@@ -219,10 +246,22 @@ export function productionRunPorts(env: Env): {
 
   const report = modelDisposition(env);
 
+  /**
+   * The one bit `RunDO`'s constructor needs to decide whether a run that died
+   * for want of configuration may be picked back up (`resumeAfterOperatorConfig`).
+   *
+   * `status === "ready"` and not merely "the settings are present": a deployment
+   * that deliberately opted out with `AGENT_MODEL_DISABLED` must not revive
+   * anything, because turning model work off is not supplying configuration.
+   */
+  const modelConfigured = report.status === "ready";
+
   // Parking keeps the projections. A deployment that cannot call the model must
   // still drain the memory and usage work its earlier runs committed, or a
   // missing setting quietly becomes lost telemetry and lost memory.
-  if (!report.modelEnabled) return { ports: { projections }, report };
+  if (!report.continuationInstalled) {
+    return { ports: { projections, modelConfigured }, report };
+  }
 
   // Installed even when `missingConfiguration` is non-empty, and that is the
   // plan-mandated behaviour rather than an oversight. `createProductionModelFactory`
@@ -230,7 +269,10 @@ export function productionRunPorts(env: Env): {
   // a missing Gateway URL surfaces as a TERMINAL `requires_operator_config`
   // failure carrying `missing_gateway_url` — visible on the run's own driver
   // state — instead of burning the attempt budget or parking in silence.
-  return { ports: { continuation: productionContinuation, projections }, report };
+  return {
+    ports: { continuation: productionContinuation, projections, modelConfigured },
+    report,
+  };
 }
 
 /**
