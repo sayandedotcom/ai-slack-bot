@@ -185,14 +185,28 @@ export function makeLangSmithReader(
 
     async searchTraces(input): Promise<TraceRef[]> {
       const since = parseSince(input.since, now());
-      const runs = await queryRuns({
+      const fetched = await queryRuns({
         limit: Math.min(Math.max(input.limit, 1), MAX_SEARCH_LIMIT),
         // Root runs only: a search should return traces, not every span inside
         // them, or one busy trace fills the whole result.
         is_root: true,
         ...(since !== null ? { start_time: since } : {}),
-        ...(input.query !== null ? { query: input.query } : {}),
+        // `query` is deliberately NOT forwarded. Upstream it is a freeform
+        // natural-language filter GENERATOR, and it answers plain keywords
+        // like "export" with 400 "Failed to generate filter from freeform
+        // query" — which upstreamError() would then mislabel as the whole
+        // trace service being down (observed live, 2026-08-13). The term is
+        // applied here instead, against the run names of the bounded page the
+        // filterless request returns.
       });
+
+      const term = input.query?.trim().toLowerCase() ?? "";
+      const runs =
+        term === ""
+          ? fetched
+          : fetched.filter((run) =>
+              String(run.name ?? "").toLowerCase().includes(term),
+            );
 
       return runs.map((run) => ({
         traceId: String(run.trace_id ?? run.id ?? ""),

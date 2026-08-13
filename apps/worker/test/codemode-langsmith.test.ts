@@ -164,11 +164,35 @@ describe("langsmith.searchTraces", () => {
     expect(sent[0].body.is_root).toBe(true);
   });
 
-  it("passes a model query as a value, never as a URL", async () => {
-    mockRuns([run()]);
-    await call(langsmithTools(), "searchTraces", { query: "timeout" });
-    expect(sent[0].body.query).toBe("timeout");
-    expect(sent[0].url).not.toContain("timeout");
+  it("never forwards a model query upstream — it filters locally by run name", async () => {
+    // Upstream `query` is a freeform NL filter generator that 400s on plain
+    // keywords ("Failed to generate filter from freeform query", live
+    // 2026-08-13), which upstreamError() would mislabel as the service being
+    // down. The term must not appear anywhere in the request.
+    mockRuns([
+      run({ name: "export-csv-job" }),
+      run({ name: "unrelated-chat" }),
+    ]);
+    const out = (await call(langsmithTools(), "searchTraces", {
+      query: "export",
+    })) as Array<{ name: string }>;
+    expect(sent[0].body.query).toBeUndefined();
+    expect(sent[0].url).not.toContain("export");
+    expect(out.map((r) => r.name)).toEqual(["export-csv-job"]);
+  });
+
+  it("matches the local filter case-insensitively and returns all on blank", async () => {
+    mockRuns([run({ name: "Export-CSV" }), run({ name: "other" })]);
+    const hit = (await call(langsmithTools(), "searchTraces", {
+      query: "EXPORT",
+    })) as Array<{ name: string }>;
+    expect(hit.map((r) => r.name)).toEqual(["Export-CSV"]);
+
+    mockRuns([run({ name: "a" }), run({ name: "b" })]);
+    const all = (await call(langsmithTools(), "searchTraces", {
+      query: "   ",
+    })) as Array<unknown>;
+    expect(all).toHaveLength(2);
   });
 
   it("clamps the limit", async () => {
