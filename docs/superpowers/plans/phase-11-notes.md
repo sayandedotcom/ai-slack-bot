@@ -138,6 +138,7 @@ the time of writing, and a test pins it.
 | `resolveApproval` refuses a decision the D1 row does not carry | Not in the plan. The RPC compares `input.decision` against the row's own `decision` and returns `{applied:false}` on any mismatch (including a still-`pending` row). Without it, any caller could unpark a run with a decision no human made — a second writer surface (invariant 6) reachable from inside the Worker. Refusing leaves `resolution_delivered_at` NULL, so the sweeper keeps re-driving and the failure is visible rather than silent. The TEXT is still taken from the caller's `outboundText`, so a sweeper replay is byte-identical to the original notify. | `test/approval-resolution.test.ts` ("a resolution D1 does not carry") |
 | Shadow is re-read LIVE at delivery and OR-ed with the card's snapshot | The plan says the sender "re-checks" shadow, but `ApprovalSender.send`'s pinned input carries no `shadow` field, so the re-check lives in `resolveApproval` instead — before any sender call, which is what makes "a shadow run's delivery is only ever suppressed" provable as "the sender was never called". A run's `shadow` flag only ratchets false->true, so OR-ing the live `runs` row with the card's snapshot fails closed in both directions (a card projected before the ratchet, or an unreadable `runs` row). | `test/approval-resolution.test.ts` ("suppresses delivery and NEVER calls the sender" — card says false, the live row says true) |
 | The wave-D wiring: `ResolutionNotifier` is composed lazily in `resolvePorts`, like the verifier | Task 6 left `notifier` deliberately `undefined`. `src/approval/notifier.ts` (`makeRunDoResolutionNotifier`) now fills it on first use from `env`, resolving `runId -> runs.key -> runStubForKey -> resolveApproval`. Composed in `resolvePorts` rather than at a route, so both the PATCH handler and the one-minute sweeper get it from one place; every existing test still wins by installing its own notifier first. | `test/approval-resolution.test.ts` ("carries a real PATCH into the owning RunDO" — asserts the DO's own turn and status, because an unwired notifier and a dead DO both read as `resolutionDelivered:false` from the response alone) |
+| Steps 3 and 4 of `resolveApproval` are the REVERSE of the plan's order | The plan orders `appendTurn` before `approval_state -> resolved`. That order has a crash window its own repair path cannot repair: the committed turn has already scheduled a generation, which answers and then RE-PARKS at finalize (the local row is still `open`), and the sweeper's re-drive appends nothing (`writeTurn` returns `appended:false` for a known id) and writes no status — so the run sits `awaiting_approval` until an unrelated customer message wakes it. Settling the local record FIRST makes the same window self-healing: nothing wakes, nothing re-parks, and the sweeper's re-entry commits the turn (id not yet present) with the latch already unable to park. Safe because the only reader of an unsettled row is the pause latch, and a generation racing this one settles without parking — which is the correct end state anyway. Found in review of Task 5. | `test/approval-resolution.test.ts` ("heals on re-entry", and "cannot heal the MIRROR of that window", which pins the reason: `resolveApproval` never writes a run status itself) |
 
 ---
 
@@ -315,3 +316,33 @@ pre-existing test in `test/access-jwt.test.ts` still passes unmodified.
 Recorded here per the dispatch's instruction that silence on this question is
 not an acceptable answer, and revised here per the review that correctly
 rejected the first attempt.
+
+---
+
+## Task 5 — two hazards handed to Phase 13
+
+Neither is reachable in Phase 11 (the production sender refuses before either
+can occur) and neither is a defect in the Task 5 diff. Both need to be answered
+by whoever lands the real Slack sender.
+
+**1. An `in_doubt` delivery leaves the run unable to escalate again, forever.**
+`idx_approvals_one_open` (the plan's own schema, `migrations/0007_approvals.sql`)
+treats a decided approved/edited row as UNSETTLED unless its delivery is
+`sent`, `blocked` or `suppressed`. `in_doubt` is none of those, so the partial
+unique index keeps holding that `run_id` and every later `escalate` on that run
+fails `duplicate_open`. That is arguably correct — a run with an unreconciled
+customer message probably should not be drafting another one — but it is
+currently silent and has no operator path out except editing D1 by hand. Phase
+13 needs either a reconciliation action that moves `in_doubt` to a terminal
+delivery, or an explicit decision that this is the intended dead end.
+
+**2. `#settleDelivery` reports an intention, not a fact, on one impossible
+branch.** `src/run/do.ts` — when the CAS is refused AND the re-read finds no
+row at all, it returns the state it failed to write. Deliberately not "fixed":
+the honest alternative is `in_doubt`, which would be a WORSE lie on the shadow
+path (telling the model a send outcome is unknown when no send was ever
+attempted), and the branch is unreachable while the `approvals` row exists —
+`resolveApproval` read it successfully moments earlier and nothing deletes
+approval rows. The structurally honest fix is for `#settleDelivery` to return
+`null` and the caller to abandon the resolution, which changes crash semantics
+and is not a one-liner. Recorded rather than done.

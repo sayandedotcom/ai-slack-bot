@@ -548,14 +548,18 @@ export class RunDO extends DurableObject<Env> {
    *
    *   1. shadow run  ⇒ delivery `suppressed`, and NO sender call at all;
    *   2. else approved/edited ⇒ D1 `none -> sending`, send, `sending -> ...`;
-   *   3. `appendTurn({ id: "approval:"+approvalId, source: "approval" })`,
-   *      which is the ordinary input transaction and therefore the wake;
-   *   4. the local `approval_state` row ⇒ `resolved`, so the next finalize
+   *   3. the local `approval_state` row ⇒ `resolved`, so the finalize latch
    *      cannot re-park the run on a decision that has already landed;
+   *   4. `appendTurn({ id: "approval:"+approvalId, source: "approval" })`,
+   *      which is the ordinary input transaction and therefore the wake;
    *   5. D1 `resolution_delivered_at`, which retires the sweeper's repair key.
    *
+   * Steps 3 and 4 are the reverse of the plan's order, for a reason argued at
+   * the call site: the plan's order has a crash window the sweeper cannot
+   * repair, and this one is self-healing.
+   *
    * A crash anywhere in that sequence is repaired by the sweeper re-invoking
-   * this method: step 3's turn id makes re-entry append no second turn, and
+   * this method: step 4's turn id makes re-entry append no second turn, and
    * step 2's CAS makes it attempt no second send.
    *
    * THE RUN RESUMES WHATEVER DELIVERY DID — `blocked`, `in_doubt` or
@@ -610,6 +614,35 @@ export class RunDO extends DurableObject<Env> {
         ? { delivery: "none" as ApprovalDelivery, error: null }
         : await this.#deliverApproval(card, finalText, state);
 
+    // THE LOCAL RECORD IS SETTLED BEFORE THE TURN IS COMMITTED, and the order
+    // is the opposite of the plan's — deliberately, because the plan's order
+    // has a crash window its own repair path cannot repair.
+    //
+    // Turn first, then settle: a crash in between leaves a committed
+    // resolution turn beside a still-`open` local row. That turn has already
+    // scheduled a generation, which runs, answers, and at finalize
+    // `latchApprovalPause` finds the open row and parks the run again. The
+    // sweeper's re-drive then appends NOTHING — `writeTurn` returns
+    // `appended:false` for an id it already holds — and nothing here writes a
+    // status, so the run stays `awaiting_approval` until some unrelated
+    // customer message happens to wake it. A repair path that provably cannot
+    // repair is worse than no repair path.
+    //
+    // Settle first, then turn: a crash in between leaves a resolved local row
+    // and no turn, so nothing wakes and nothing re-parks. The sweeper finds
+    // `resolution_delivered_at IS NULL`, re-enters, appends the turn (that id
+    // is not present yet), and the input transaction wakes the run — with the
+    // latch already unable to re-park it. Self-healing in the direction
+    // invariant 9 promises.
+    //
+    // Safe in the window it opens, which is the reason to check rather than
+    // assume: the only reader of an unsettled row is the pause latch, and a
+    // generation racing this one settles WITHOUT parking, which is the correct
+    // end state anyway — the human's decision has landed, and the turn that
+    // carries it is committed microseconds later by this same method or by the
+    // sweeper.
+    const moved = resolveApprovalState(this.ctx.storage, input.approvalId, "resolved", this.#now());
+
     const result = await this.appendTurn({
       id: `approval:${input.approvalId}`,
       role: "user",
@@ -627,13 +660,22 @@ export class RunDO extends DurableObject<Env> {
     });
 
     // `resolveApprovalState` reports whether IT moved the row, not whether the
-    // row is in the asked-for state. A fresh turn beside a row that was
-    // already settled is the one combination worth a line in the log: it means
-    // something else (a withdrawal racing the decision) settled the approval
-    // locally while this resolution was in flight.
-    const moved = resolveApprovalState(this.ctx.storage, input.approvalId, "resolved", this.#now());
-    if (result.appended && !moved) {
-      console.warn("approval resolution: the local record was already settled", {
+    // row is in the asked-for state — which is what makes this pair meaningful
+    // rather than tautological.
+    //
+    // Under the order above, THIS call settling the local row beside a turn
+    // that was already there is the anomalous combination: this method settles
+    // first, so no earlier invocation of it can have left that pair behind. It
+    // means another writer (a `withdraw` that lost to a human decision and put
+    // the row back to `resolving`, or a genuinely interleaved second
+    // resolution) moved it between that turn and this settle.
+    //
+    // The other direction — a fresh turn beside a row somebody had already
+    // settled — is NOT anomalous any more: it is exactly what the sweeper's
+    // repair of a crash between the settle and the turn looks like, and
+    // warning on it would make the healthy repair path noisy.
+    if (moved && !result.appended) {
+      console.warn("approval resolution: the local record moved after its turn was committed", {
         approvalId: input.approvalId,
       });
     }

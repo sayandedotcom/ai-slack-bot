@@ -1,12 +1,22 @@
 import { SELF, env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
 import { installApprovalApiPorts, resetApprovalApiPorts } from "../src/api/approvals";
 import { installRunPorts } from "../src/agent/driver";
 import { makeIdentityRefusingSender, type ApprovalSender } from "../src/approval/sender";
 import type { DecisionInput } from "../src/approval/contracts";
-import { decideApproval, insertApproval, setDelivery } from "../src/approval/repository";
-import { putApprovalState, readApprovalState, readModelTranscript } from "../src/run/session";
+import {
+  decideApproval,
+  insertApproval,
+  listUndeliveredResolutions,
+  setDelivery,
+} from "../src/approval/repository";
+import {
+  putApprovalState,
+  readApprovalState,
+  readModelTranscript,
+  resolveApprovalState,
+} from "../src/run/session";
 import { FakeContinuation, freshDriverRun, turn, type DriverHarness } from "./helpers/agent-driver";
 
 /**
@@ -475,6 +485,228 @@ describe("a replayed resolution (the sweeper repairing a crash)", () => {
     expect(deliveredAt).not.toBeNull();
     expect((await deliveryOf(approvalId))?.resolution_delivered_at).not.toBeNull();
     expect((await h.storage((s) => readApprovalState(s, approvalId)))?.state).toBe("resolved");
+  });
+});
+
+/* ------------------------------------------------------- the crash window -- */
+
+describe("a crash between settling the local record and committing the turn", () => {
+  it("heals on re-entry: the run ends live with exactly one resolution turn", async () => {
+    const sender = recordingSender();
+    const { h, approvalId } = await parkedApproval({ sender });
+    const input = {
+      approvalId,
+      decision: "approved" as const,
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    };
+
+    // The crash, reproduced exactly: step 3 committed (the local record is
+    // settled), step 4 never ran (no turn), so nothing woke the run and
+    // `resolution_delivered_at` is still NULL.
+    await h.storage((s) => resolveApprovalState(s, approvalId, "resolved", h.clock.value));
+    expect(await resolutionTurns(h)).toHaveLength(0);
+    expect((await h.stub.state())?.status).toBe("awaiting_approval");
+
+    // The repair key the one-minute sweeper selects on. Asserted rather than
+    // invoking `scheduled()`, because this pool's D1 is shared across files:
+    // a real sweep would page in whichever undelivered rows other suites left
+    // behind, which makes both the page contents and the sweeper's own
+    // warning output depend on file order. What the sweeper does to THIS row
+    // is re-invoke the RPC, which is the next line.
+    const due = await listUndeliveredResolutions(env.DB, 50);
+    expect(due.map((row) => row.id)).toContain(approvalId);
+
+    expect(await h.stub.resolveApproval(input)).toEqual({ applied: true });
+
+    // The run is genuinely back, and the finalize latch cannot re-park it.
+    expect((await h.stub.state())?.status).toBe("live");
+    expect(await resolutionTurns(h)).toHaveLength(1);
+    expect((await deliveryOf(approvalId))?.resolution_delivered_at).not.toBeNull();
+
+    await h.alarm();
+    expect((await h.stub.state())?.status).not.toBe("awaiting_approval");
+    expect((await h.storage((s) => readApprovalState(s, approvalId)))?.state).toBe("resolved");
+    // Still one send: the delivery CAS does not care which step crashed.
+    expect(sender.calls).toHaveLength(1);
+  });
+
+  it("cannot heal the MIRROR of that window, which is why the order is what it is", async () => {
+    // The state the plan's order (turn first, settle second) leaves behind on
+    // the same crash: a committed resolution turn beside a still-`open` local
+    // record. Re-entry cannot repair it — `writeTurn` returns `appended:false`
+    // for an id it already holds, so no input transaction runs, and this
+    // method deliberately writes no status of its own. The run stays parked
+    // until something unrelated wakes it.
+    //
+    // This case exists to keep that reasoning falsifiable. It is asserting
+    // that `resolveApproval` NEVER writes a run status directly: "repair it
+    // here" is the tempting fix, and it would let this method unpark a run
+    // that is legitimately parked on a newer approval. The real fix is that
+    // the current order makes this state unreachable.
+    const { h, approvalId } = await parkedApproval();
+    const input = {
+      approvalId,
+      decision: "approved" as const,
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    };
+
+    // The turn, committed with the local record left open — i.e. exactly what
+    // a crash after step 4 under the reversed order would leave.
+    await h.stub.appendTurn({
+      id: `approval:${approvalId}`,
+      role: "user",
+      source: "approval",
+      content: "a resolution turn whose local record was never settled",
+    });
+    // The local record is untouched — `parkedApproval` left it `open` — and
+    // the run is put back the way that generation's finalize would leave it.
+    expect((await h.storage((s) => readApprovalState(s, approvalId)))?.state).toBe("open");
+    await h.stub.setStatus("awaiting_approval");
+
+    // Spied, not merely tolerated: this pair is the anomaly the method logs,
+    // and asserting it keeps the suite's output clean at the same time.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await h.stub.resolveApproval(input)).toEqual({ applied: true });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("moved after its turn was committed");
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(await resolutionTurns(h)).toHaveLength(1);
+    expect((await h.stub.state())?.status).toBe("awaiting_approval");
+  });
+});
+
+/* ---------------------------------------------------- the wrong-run guard -- */
+
+describe("a resolution addressed at the wrong run", () => {
+  it("is refused by the owning object, and neither run is touched", async () => {
+    const senderA = recordingSender();
+    const senderB = recordingSender();
+    const a = await parkedApproval({ sender: senderA });
+    const b = await parkedApproval({ sender: senderB });
+
+    // B's object, A's approval. Nothing but a caller bug produces this — the
+    // notifier addresses the object by the run's own key — but the cost of
+    // getting it wrong is one customer's approved text landing in another
+    // customer's conversation.
+    expect(
+      await b.h.stub.resolveApproval({
+        approvalId: a.approvalId,
+        decision: "approved",
+        outboundText: DRAFT,
+        rejectReason: null,
+        decidedBy: FIREFIGHTER,
+      }),
+    ).toEqual({ applied: false });
+
+    expect(senderA.calls).toEqual([]);
+    expect(senderB.calls).toEqual([]);
+    expect(await resolutionTurns(b.h)).toHaveLength(0);
+    expect(await resolutionTurns(a.h)).toHaveLength(0);
+    expect((await b.h.stub.state())?.status).toBe("awaiting_approval");
+    expect((await a.h.stub.state())?.status).toBe("awaiting_approval");
+    // A's approval is untouched: still undelivered, still deliverable.
+    expect(await deliveryOf(a.approvalId)).toMatchObject({
+      delivery: "none",
+      resolution_delivered_at: null,
+    });
+  });
+});
+
+/* ------------------------------------------- the remaining outcome sources -- */
+
+describe("a run with no pinned Slack thread", () => {
+  it("blocks on no_pinned_thread rather than guessing a destination", async () => {
+    // `escalate` refuses to open an approval on a Chat run at all, so this is
+    // unreachable today — but it is the branch that decides what happens when
+    // the only trusted source of a destination is empty, and "guess" must
+    // never be the answer.
+    const sender = recordingSender();
+    const h = await freshDriverRun({ continuation: null });
+    installRunPorts({ approvalSender: sender }, { runKey: h.key });
+
+    const approvalId = `apr:${crypto.randomUUID()}`;
+    await h.storage((s) =>
+      putApprovalState(s, {
+        approvalId,
+        generationId: "gen:no-thread",
+        draft: DRAFT,
+        why: WHY,
+        now: h.clock.value,
+      }),
+    );
+    expect(
+      await insertApproval(env.DB, {
+        id: approvalId,
+        runId: h.runId,
+        generationId: "gen:no-thread",
+        draft: DRAFT,
+        why: WHY,
+        // The card's columns are NOT NULL, so it carries a destination even
+        // though the run it belongs to has none. Precisely why the card is not
+        // allowed to be the source of one.
+        channelId: "CGHOSTCHANNEL",
+        threadTs: "1720000000.000001",
+        shadow: false,
+        now: h.clock.value,
+      }),
+    ).toBe("created");
+    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, h.clock.value);
+
+    expect(
+      await h.stub.resolveApproval({
+        approvalId,
+        decision: "approved",
+        outboundText: DRAFT,
+        rejectReason: null,
+        decidedBy: FIREFIGHTER,
+      }),
+    ).toEqual({ applied: true });
+
+    expect(sender.calls).toEqual([]);
+    expect(await deliveryOf(approvalId)).toMatchObject({
+      delivery: "blocked",
+      delivery_error: "no_pinned_thread",
+    });
+    expect(await resolutionTurns(h)).toHaveLength(1);
+  });
+});
+
+describe("a sender that throws", () => {
+  it("is an unknown outcome, not a retry", async () => {
+    // The one place a naive `catch` would double-post: a throw does not mean
+    // the message failed to reach Slack. Reachable the moment Phase 13's real
+    // sender lands.
+    const sender: ApprovalSender & { calls: SendInput[] } = {
+      calls: [],
+      async send(sendInput) {
+        this.calls.push(sendInput);
+        throw new Error("socket hang up");
+      },
+    };
+    const { h, approvalId } = await parkedApproval({ sender });
+
+    await h.stub.resolveApproval({
+      approvalId,
+      decision: "approved",
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    });
+
+    expect(sender.calls).toHaveLength(1);
+    expect((await deliveryOf(approvalId))?.delivery).toBe("in_doubt");
+    expect((await deliveryOf(approvalId))?.delivery_error).toContain("socket hang up");
+    const resolution = await resolutionTurns(h);
+    expect(resolution[0].content).toContain("unknown");
+    expect((await h.stub.state())?.status).toBe("live");
   });
 });
 
