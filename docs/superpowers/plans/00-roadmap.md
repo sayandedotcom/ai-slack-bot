@@ -181,7 +181,7 @@ wrong.
 | 10 | Agent loop | [full](phase-10-agent-loop.md) | 09 | 4 |
 | 11 | Approval | [full](phase-11-approval.md) | 10 | 4 |
 | 12 | Identity, OAuth, rotation | [full](phase-12-identity-oauth-rotation.md) | 01 | 4 |
-| 13 | Slack nudge | below | 11, 12 | 4 |
+| 13 | Slack nudge | [full](phase-13-slack-nudge-and-send.md) | 11, 12 | 4 |
 | 14 | Dashboard shell | [full](phase-14-dashboard-shell.md) | 05, 12 (soft) | 5 |
 | 15 | Run list + live run drawer | below | 10, 14 | 5 |
 | 16 | Approval card | below | 11, 14 | 5 |
@@ -388,7 +388,7 @@ after Phase 11 adds escalation and Phase 12 adds identity.
 
 **Goal:** Nobody keeps a tab open to find out the agent is waiting.
 
-**Depends on:** Phases 11, 12 · **Day 4**
+**Depends on:** Phases 11, 12 · **Day 4** · Full plan: [phase-13-slack-nudge-and-send.md](phase-13-slack-nudge-and-send.md) (written 2026-08-13)
 
 **Files:** `src/notify/nudge.ts`, `src/notify/blocks.ts`, `test/nudge.test.ts`
 
@@ -396,7 +396,7 @@ after Phase 11 adds escalation and Phase 12 adds identity.
 1. **Bot-token DM** to the on-duty engineer. A self-DM sent with the user's own token does not push-notify — that is exactly what the bot token is for.
 2. **Block Kit payload:** draft preview, why the agent escalated, and a **plain URL button** to the dashboard. A URL button needs no interactivity endpoint and no handler code.
 3. **`im:write` fallback**, decided by whatever Ronit answers: if the scope is unavailable, the nudge becomes an @-mention in `#eng-firefighter`, which needs only `chat:write`. Both paths implemented and tested; one config flag chooses.
-4. **Deduplication** — one nudge per approval, no re-nudge on reconnect. Phase 11 left the hooks: the `approval_card` projection completing is the nudge trigger, and `idx_approvals_undelivered` is the once-only bookkeeping — no new tables.
+4. **Deduplication** — one nudge per approval, no re-nudge on reconnect. Phase 11 left the trigger: the `approval_card` projection completing fires the nudge. Once-only bookkeeping is a `nudged_at` CAS on the approvals row (migration `0009` adds three columns, no new tables) — `idx_approvals_undelivered` stays what it is, resolution-repair bookkeeping.
 5. **Withdrawal updates the nudge** rather than leaving a dead link to a resolved card.
 5b. **The real sender implements Phase 11's `ApprovalSender`** (`src/approval/sender.ts`): user-token `chat.postMessage` replaces `makeIdentityRefusingSender`, making delivery `sent` reachable and `blocked` extinct.
 6. **Integrated identity/send proof:** approved or edited Slack drafts, plus
