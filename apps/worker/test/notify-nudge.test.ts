@@ -23,7 +23,16 @@ import { sendNudge, sweepNudges } from "../src/notify/nudge";
  */
 
 const NOW = Date.parse("2026-08-14T12:00:00Z");
+/** Whose shift `NOW` falls in — the cases that pass `NOW` into `sendNudge`. */
 const ON_DUTY = onDuty(NOW).email;
+/**
+ * The projection hook has no clock to inject, so it nudges whoever is on duty
+ * in REAL time. Shifts are three days wide, so that is a different person from
+ * `ON_DUTY` on most days: `connectOnDuty` seeds both, and the cleanup below
+ * removes both. Without this the DM cases would silently start taking the
+ * fallback branch after 2026-08-16 and this file would fail on a calendar date.
+ */
+const CONNECTED = [...new Set([ON_DUTY, onDuty(Date.now()).email])];
 const SLACK_USER = "U0NDUTY";
 const FALLBACK = "C_FALLBACK";
 const DM_CHANNEL = "D0PENED";
@@ -92,27 +101,46 @@ async function seedApproval(createdAt = NOW): Promise<ApprovalRow> {
 
 /** The on-duty engineer has connected Slack. No token is ever opened for a nudge. */
 async function connectOnDuty(): Promise<void> {
-  await upsertIdentity(
-    env.DB,
-    {
-      email: ON_DUTY,
-      provider: "slack",
-      externalId: SLACK_USER,
-      scopes: "chat:write",
-      tokenCiphertext: "sealed-opaque",
-      connectedAt: NOW,
-    },
-    NOW,
-  );
+  for (const email of CONNECTED) {
+    await upsertIdentity(
+      env.DB,
+      {
+        email,
+        provider: "slack",
+        externalId: SLACK_USER,
+        scopes: "chat:write",
+        tokenCiphertext: "sealed-opaque",
+        connectedAt: NOW,
+      },
+      NOW,
+    );
+  }
 }
 
-beforeEach(async () => {
+/**
+ * Leave the shared D1 as we found it.
+ *
+ * This pool has no `isolatedStorage` (see `test/approval-repository.test.ts`'s
+ * note), so rows written here outlive the file — and the two kinds this file
+ * writes are exactly the two `sweepNudges` feeds on: a pending, unnudged
+ * approval and an `identities` row for the on-duty engineer. Left behind, they
+ * would make `worker.scheduled()` in another suite open a REAL DM against
+ * slack.com with the pool's fake bot token. Cleaning up in an `afterEach` (not
+ * only a `beforeEach`) is what keeps that unreachable.
+ */
+async function cleanD1(): Promise<void> {
   await env.DB.prepare("DELETE FROM approvals").run();
-  await env.DB.prepare("DELETE FROM identities WHERE email = ?").bind(ON_DUTY).run();
-});
+  for (const email of CONNECTED) {
+    await env.DB.prepare("DELETE FROM identities WHERE email = ?").bind(email).run();
+  }
+}
 
-afterEach(() => {
+beforeEach(cleanD1);
+
+afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  await cleanD1();
 });
 
 describe("sendNudge", () => {
@@ -122,7 +150,7 @@ describe("sendNudge", () => {
     await connectOnDuty();
     stubSlack(happySlack);
 
-    expect(await sendNudge(testEnv(), row)).toBe("skipped");
+    expect(await sendNudge(testEnv(), row, NOW)).toBe("skipped");
     expect(sent).toEqual([]);
   });
 
@@ -131,7 +159,7 @@ describe("sendNudge", () => {
     await connectOnDuty();
     stubSlack(happySlack);
 
-    expect(await sendNudge(testEnv(), row)).toBe("sent");
+    expect(await sendNudge(testEnv(), row, NOW)).toBe("sent");
 
     expect(sent.map((s) => s.url)).toEqual([
       "https://slack.com/api/conversations.open",
@@ -155,7 +183,7 @@ describe("sendNudge", () => {
     const row = await seedApproval();
     stubSlack(happySlack);
 
-    expect(await sendNudge(testEnv(), row)).toBe("sent");
+    expect(await sendNudge(testEnv(), row, NOW)).toBe("sent");
 
     expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.postMessage"]);
     expect(sent[0]!.body.channel).toBe(FALLBACK);
@@ -166,7 +194,7 @@ describe("sendNudge", () => {
 
     // Once only: a second attempt loses the CAS and touches no network.
     sent = [];
-    expect(await sendNudge(testEnv(), row)).toBe("skipped");
+    expect(await sendNudge(testEnv(), row, NOW)).toBe("skipped");
     expect(sent).toEqual([]);
   });
 
@@ -175,7 +203,7 @@ describe("sendNudge", () => {
     await connectOnDuty();
     stubSlack(happySlack);
 
-    expect(await sendNudge(testEnv({ NUDGE_MODE: "channel" }), row)).toBe("sent");
+    expect(await sendNudge(testEnv({ NUDGE_MODE: "channel" }), row, NOW)).toBe("sent");
 
     expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.postMessage"]);
     expect(sent[0]!.body.channel).toBe(FALLBACK);
@@ -189,7 +217,7 @@ describe("sendNudge", () => {
       method === "conversations.open" ? { ok: true, channel: { id: DM_CHANNEL } } : { ok: false, error: "channel_not_found" },
     );
 
-    expect(await sendNudge(testEnv(), row)).toBe("failed");
+    expect(await sendNudge(testEnv(), row, NOW)).toBe("failed");
 
     const after = await getApproval(env.DB, row.id);
     expect(after?.nudgedAt).toBeNull();
@@ -203,15 +231,41 @@ describe("sendNudge", () => {
       throw new Error("network down");
     });
 
-    expect(await sendNudge(testEnv(), row)).toBe("failed");
+    expect(await sendNudge(testEnv(), row, NOW)).toBe("failed");
     expect((await getApproval(env.DB, row.id))?.nudgedAt).toBeNull();
+  });
+
+  it("keeps the claim when the DM lands but the bookkeeping write fails", async () => {
+    const row = await seedApproval();
+    await connectOnDuty();
+    stubSlack(happySlack);
+    // Only the `recordNudgeMessage` statement fails; the claim and every read
+    // go through untouched.
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    vi.spyOn(env.DB, "prepare").mockImplementation((query: string) => {
+      // `SET`, not a bare column match: `getApproval`'s SELECT list names the
+      // same column and must keep working.
+      if (query.includes("SET nudge_channel_id")) throw new Error("d1 write failed");
+      return realPrepare(query);
+    });
+
+    // The human has already been DM'd, so this is a SEND — and releasing the
+    // claim here would page them a second time from the sweeper.
+    expect(await sendNudge(testEnv(), row, NOW)).toBe("sent");
+
+    vi.restoreAllMocks();
+    const after = await getApproval(env.DB, row.id);
+    expect(after?.nudgedAt).not.toBeNull();
+    // The `ts` is genuinely lost — a later `chat.update` has no message to
+    // edit. That is the cheap half of the trade this asserts.
+    expect(after?.nudgeTs).toBeNull();
   });
 
   it("fails without claiming anything when no destination is configured", async () => {
     const row = await seedApproval();
     stubSlack(happySlack);
 
-    expect(await sendNudge(testEnv({ NUDGE_FALLBACK_CHANNEL_ID: "" }), row)).toBe("failed");
+    expect(await sendNudge(testEnv({ NUDGE_FALLBACK_CHANNEL_ID: "" }), row, NOW)).toBe("failed");
     expect(sent).toEqual([]);
     expect((await getApproval(env.DB, row.id))?.nudgedAt).toBeNull();
   });

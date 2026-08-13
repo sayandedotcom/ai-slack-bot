@@ -39,6 +39,16 @@ import { nudgeBlocks } from "./blocks";
 const CONVERSATIONS_OPEN_URL = "https://slack.com/api/conversations.open";
 const POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
 
+/**
+ * Ceiling on one Slack request. The projection AWAITS the nudge (see
+ * `makeApprovalCardRunner`), so an un-timed fetch that hangs holds that run's
+ * alarm slot for as long as the socket stays open. Eight seconds is long
+ * enough for a slow-but-alive Slack and short enough that the alarm moves on;
+ * an abort lands in the catch below as an ordinary failure, which releases the
+ * claim and leaves the row for the sweeper.
+ */
+const SLACK_TIMEOUT_MS = 8_000;
+
 /** How stale a pending, unnudged card must be before the sweeper retries it. */
 export const NUDGE_RETRY_AFTER_MS = 60_000;
 
@@ -61,6 +71,7 @@ async function slackCall(
       "content-type": "application/json; charset=utf-8",
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
   });
   return (await response.json()) as SlackResponse;
 }
@@ -88,9 +99,19 @@ async function resolveTarget(
  * `"skipped"` means another caller already holds this row's nudge slot —
  * success, not failure. `"failed"` means the slot has been handed back and
  * the sweeper will try again.
+ *
+ * `nowMs` is a parameter, defaulted rather than read inside, for the same
+ * reason it is one on `makeUserTokenSource.onDutyToken`: it decides WHOSE
+ * shift this is. A caller that already fixed the instant it is acting at — the
+ * sweeper, a test — must not get a different engineer from a clock read
+ * microseconds later, or from a suite that outlives a three-day shift boundary.
  */
-export async function sendNudge(env: Env, row: ApprovalRow): Promise<NudgeOutcome> {
-  const now = Date.now();
+export async function sendNudge(
+  env: Env,
+  row: ApprovalRow,
+  nowMs = Date.now(),
+): Promise<NudgeOutcome> {
+  const now = nowMs;
   const mode = env.NUDGE_MODE === "channel" ? "channel" : "dm";
   const fallbackChannel = env.NUDGE_FALLBACK_CHANNEL_ID?.trim() ?? "";
 
@@ -153,7 +174,17 @@ export async function sendNudge(env: Env, row: ApprovalRow): Promise<NudgeOutcom
       return "failed";
     }
 
-    await recordNudgeMessage(env.DB, row.id, channelId, posted.ts);
+    // OUTSIDE the failure path, deliberately. The DM has landed in a human's
+    // Slack; from here on nothing may release the claim. Letting a failed
+    // bookkeeping write fall into the catch below would hand the slot back
+    // after a SUCCESSFUL send, and the sweeper would DM the engineer a second
+    // time. Losing the `ts` costs a later `chat.update`; losing the claim
+    // costs a duplicate page, and only one of those is recoverable.
+    try {
+      await recordNudgeMessage(env.DB, row.id, channelId, posted.ts);
+    } catch {
+      /* the DM went out; the claim stands */
+    }
     return "sent";
   } catch {
     // The thrown value is deliberately swallowed rather than logged: a failed
@@ -184,8 +215,18 @@ async function release(env: Env, id: string): Promise<void> {
  *
  * Concurrency with a live projection is safe for free — both paths go through
  * `claimNudge`, so the loser sees `"skipped"` and sends nothing. Bounded at
- * `SWEEP_LIMIT` per invocation, and it never throws for an individual row, so
- * one poisoned approval cannot stall the rest of the cron.
+ * `SWEEP_LIMIT` per invocation.
+ *
+ * Each row is attempted inside its OWN try. `sendNudge` swallows Slack
+ * failures but is not throw-proof — its `claimNudge`, and this loop's
+ * `getApproval`, both talk to D1 outside any catch — and without the per-row
+ * guard one D1 hiccup on the first row would skip the other nine AND reject
+ * the whole `scheduled()` invocation, taking the memory and resolution sweeps'
+ * error report with it. The FEED query is deliberately outside: if the sweep
+ * cannot read its own work list, the cron run really did fail and should say so.
+ *
+ * `now` is threaded into `sendNudge` so the age filter and the shift lookup
+ * agree on one instant.
  *
  * Returns how many nudges actually went out, for the caller's log line.
  */
@@ -201,9 +242,15 @@ export async function sweepNudges(env: Env, now = Date.now()): Promise<number> {
 
   let sent = 0;
   for (const { id } of results ?? []) {
-    const row = await getApproval(env.DB, id);
-    if (row === null || row.decision !== "pending") continue;
-    if ((await sendNudge(env, row)) === "sent") sent += 1;
+    try {
+      const row = await getApproval(env.DB, id);
+      if (row === null || row.decision !== "pending") continue;
+      if ((await sendNudge(env, row, now)) === "sent") sent += 1;
+    } catch {
+      // This row is the sweeper's own retry feed — it stays on it, so the next
+      // minute tries again. Nothing here is worth failing the cron over.
+      continue;
+    }
   }
   return sent;
 }
