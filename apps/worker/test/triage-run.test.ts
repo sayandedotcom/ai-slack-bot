@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { triageSchema, haikuCostUsd } from "../src/triage/run";
+import { triageSchema, haikuCostUsd, makeTriageRunner } from "../src/triage/run";
 
 describe("triage schema", () => {
   it("has exactly wake, why, opening_prompt — no type field can ever appear", () => {
@@ -13,6 +13,42 @@ describe("triage schema", () => {
     expect(ok.success).toBe(true);
     const smuggled = triageSchema.strict().safeParse({ wake: true, why: "q", opening_prompt: "p", type: "bug" });
     expect(smuggled.success).toBe(false);
+  });
+});
+
+describe("makeTriageRunner gateway wiring", () => {
+  // Regression: production ran for an hour with AI_GATEWAY_ANTHROPIC_URL set
+  // and no token. The gateway is authenticated, so every triage call 401'd and
+  // the consumer's `catch { message.retry() }` drained the queue to the DLQ
+  // with `outcome: ok` in the logs and nothing in triage_decisions.
+  it("refuses a gateway URL without its token instead of 401ing every message", () => {
+    expect(() =>
+      makeTriageRunner({
+        ANTHROPIC_API_KEY: "sk-ant-test",
+        AI_GATEWAY_ANTHROPIC_URL: "https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic",
+      }),
+    ).toThrow(/AI_GATEWAY_TOKEN/);
+  });
+
+  it("composes with both set, and with neither", () => {
+    expect(() =>
+      makeTriageRunner({
+        ANTHROPIC_API_KEY: "sk-ant-test",
+        AI_GATEWAY_ANTHROPIC_URL: "https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic",
+        AI_GATEWAY_TOKEN: "cfut-test",
+      }),
+    ).not.toThrow();
+    expect(() => makeTriageRunner({ ANTHROPIC_API_KEY: "sk-ant-test" })).not.toThrow();
+  });
+
+  it("treats a blank token as absent, so a cleared secret fails loudly", () => {
+    expect(() =>
+      makeTriageRunner({
+        ANTHROPIC_API_KEY: "sk-ant-test",
+        AI_GATEWAY_ANTHROPIC_URL: "https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic",
+        AI_GATEWAY_TOKEN: "   ",
+      }),
+    ).toThrow(/AI_GATEWAY_TOKEN/);
   });
 });
 

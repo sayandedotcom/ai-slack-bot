@@ -28,12 +28,33 @@ export function haikuCostUsd(usage: { inputTokens: number; outputTokens: number 
 export function makeTriageRunner(env: {
   ANTHROPIC_API_KEY: string;
   AI_GATEWAY_ANTHROPIC_URL?: string;
+  AI_GATEWAY_TOKEN?: string;
 }): TriageRunner {
+  const gatewayUrl = env.AI_GATEWAY_ANTHROPIC_URL?.trim();
+  const gatewayToken = env.AI_GATEWAY_TOKEN?.trim();
+
+  // The gateway is created with authentication ON, so routing through it
+  // without `cf-aig-authorization` is a 401 on EVERY message — which the
+  // consumer's `catch { message.retry() }` turns into a silent drain to the
+  // DLQ. Setting only the URL used to look like a safe opt-in and is not:
+  // the URL is what switches the base URL, and the token is what makes the
+  // switched URL answer. They are one setting in two variables.
+  if (gatewayUrl && !gatewayToken) {
+    throw new Error(
+      "AI_GATEWAY_ANTHROPIC_URL is set without AI_GATEWAY_TOKEN; the gateway is authenticated and would reject every triage call",
+    );
+  }
+
   const anthropic = createAnthropic({
     apiKey: env.ANTHROPIC_API_KEY,
     // When the AI Gateway URL is set (Phase 10 formalizes it), requests route
     // through it for cost observability; unset falls straight to Anthropic.
-    ...(env.AI_GATEWAY_ANTHROPIC_URL ? { baseURL: env.AI_GATEWAY_ANTHROPIC_URL } : {}),
+    ...(gatewayUrl
+      ? {
+          baseURL: gatewayUrl,
+          headers: { "cf-aig-authorization": `Bearer ${gatewayToken}` },
+        }
+      : {}),
   });
 
   return async (input) => {
