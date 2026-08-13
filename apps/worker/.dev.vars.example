@@ -181,4 +181,31 @@ SLACK_CLIENT_SECRET=
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 
+# --------------------------------------------------------------- Phase 13
+#
+# The engineer nudge. These three are NON-SECRET and their real values live in
+# wrangler.jsonc "vars" — a mode flag, a channel id and this Worker's own
+# origin. They are listed here only so a local `wrangler dev` can override one
+# without editing the committed config; leave them blank to use the pinned
+# values. The nudge's credential is SLACK_BOT_TOKEN above, and it is spent in
+# exactly two places: the nudge DM to the on-duty engineer and the chat.update
+# that rewrites that DM once the card is settled. Never a customer message.
+#
+# NUDGE_MODE: "dm" (default) opens a direct message with the on-duty engineer;
+# "channel" posts an @-mention into NUDGE_FALLBACK_CHANNEL_ID instead. Any
+# other value reads as "dm".
+NUDGE_MODE=
+
+# NUDGE_FALLBACK_CHANNEL_ID: the #eng-firefighter channel id. Used in "channel"
+# mode, and whenever the on-duty engineer has no Slack identity row -- fallback
+# beats silence. Pinned EMPTY in wrangler.jsonc because the id is not known to
+# this repo; with no value the nudge is DM-only and an unaddressable card stays
+# on the sweeper's retry feed instead of being posted somewhere unintended.
+NUDGE_FALLBACK_CHANNEL_ID=
+
+# DASHBOARD_BASE_URL: the origin the nudge's "Review" button points at, as
+# `${DASHBOARD_BASE_URL}/?approval=${id}`. Set it to http://localhost:8787 (or
+# your dev origin) if you want a locally clickable button.
+DASHBOARD_BASE_URL=
+
 # Later phases add more. Add each here as its phase introduces it.

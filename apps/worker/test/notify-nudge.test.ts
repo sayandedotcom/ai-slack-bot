@@ -1,12 +1,19 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeApprovalCardRunner } from "../src/approval/projection";
-import { claimNudge, getApproval, insertApproval } from "../src/approval/repository";
+import {
+  claimNudge,
+  decideApproval,
+  getApproval,
+  insertApproval,
+  recordNudgeMessage,
+  withdrawApproval,
+} from "../src/approval/repository";
 import type { ApprovalRow } from "../src/approval/contracts";
 import { upsertIdentity } from "../src/db/identities";
 import { onDuty } from "../src/identity/rotation";
 import type { Env } from "../src/index";
-import { sendNudge, sweepNudges } from "../src/notify/nudge";
+import { sendNudge, sweepNudges, updateNudge } from "../src/notify/nudge";
 
 /**
  * THE ENGINEER NUDGE — Phase 13 Task 4.
@@ -268,6 +275,106 @@ describe("sendNudge", () => {
     expect(await sendNudge(testEnv({ NUDGE_FALLBACK_CHANNEL_ID: "" }), row, NOW)).toBe("failed");
     expect(sent).toEqual([]);
     expect((await getApproval(env.DB, row.id))?.nudgedAt).toBeNull();
+  });
+});
+
+/**
+ * THE CARD REWRITES ITS OWN DM — Phase 13 Task 6.
+ *
+ * The nudge carries a "Review" button. Once a human has decided (or the model
+ * has withdrawn the draft) that button leads to a card that is no longer
+ * actionable, so the message is edited in place. Two properties:
+ *
+ *  1. NO MESSAGE, NO CALL. A nudge that never landed (or whose `ts` was lost —
+ *     see `sendNudge`'s bookkeeping trade) has nothing to edit, and guessing is
+ *     worse than silence.
+ *  2. IT NEVER THROWS. A dead DM must not break approval resolution: the
+ *     human's decision is a fact whether or not Slack accepts the edit.
+ */
+describe("updateNudge", () => {
+  const NUDGE_TS = "1723640000.000100";
+
+  /** A card with a recorded nudge DM, decided by a human. */
+  async function decidedWithNudge(recordMessage = true): Promise<ApprovalRow> {
+    const row = await seedApproval();
+    if (recordMessage) await recordNudgeMessage(env.DB, row.id, DM_CHANNEL, NUDGE_TS);
+    const decided = await decideApproval(env.DB, row.id, { action: "approve" }, "ronit@zellify.com", NOW);
+    expect(decided.result).toBe("decided");
+    return (await getApproval(env.DB, row.id))!;
+  }
+
+  it("edits the recorded nudge message in place with the resolved blocks", async () => {
+    const row = await decidedWithNudge();
+    stubSlack(() => ({ ok: true, ts: NUDGE_TS }));
+
+    await expect(updateNudge(testEnv(), row)).resolves.toBeUndefined();
+
+    expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.update"]);
+    expect(sent[0]!.body.channel).toBe(DM_CHANNEL);
+    expect(sent[0]!.body.ts).toBe(NUDGE_TS);
+    const payload = JSON.stringify(sent[0]!.body.blocks);
+    expect(payload).toContain("Approved by ronit@zellify.com");
+    // The replacement body carries no button — the dead link is the whole
+    // point of this call.
+    expect(payload).not.toContain("button");
+    // The edit is of a BOT-posted engineer DM, so it is the one other place in
+    // this phase that spends the bot token. It must never carry a user token.
+    expect(sent[0]!.authorization).toBe(`Bearer ${env.SLACK_BOT_TOKEN}`);
+  });
+
+  it("names the withdrawal when the model retracted the draft", async () => {
+    const row = await seedApproval();
+    await recordNudgeMessage(env.DB, row.id, DM_CHANNEL, NUDGE_TS);
+    expect((await withdrawApproval(env.DB, row.id, NOW)).result).toBe("withdrawn");
+    const withdrawn = (await getApproval(env.DB, row.id))!;
+    stubSlack(() => ({ ok: true, ts: NUDGE_TS }));
+
+    await updateNudge(testEnv(), withdrawn);
+
+    expect(JSON.stringify(sent[0]!.body.blocks)).toContain("Withdrawn");
+  });
+
+  it("makes no Slack call at all when no nudge message was recorded", async () => {
+    const row = await decidedWithNudge(false);
+    stubSlack(() => ({ ok: true, ts: NUDGE_TS }));
+
+    await updateNudge(testEnv(), row);
+
+    expect(sent).toEqual([]);
+  });
+
+  it("makes no Slack call for a card that is still pending", async () => {
+    const row = await seedApproval();
+    await recordNudgeMessage(env.DB, row.id, DM_CHANNEL, NUDGE_TS);
+    stubSlack(() => ({ ok: true, ts: NUDGE_TS }));
+
+    await updateNudge(testEnv(), (await getApproval(env.DB, row.id))!);
+
+    expect(sent).toEqual([]);
+  });
+
+  it("swallows a Slack refusal", async () => {
+    const row = await decidedWithNudge();
+    stubSlack(() => ({ ok: false, error: "message_not_found" }));
+
+    await expect(updateNudge(testEnv(), row)).resolves.toBeUndefined();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("swallows a thrown request", async () => {
+    const row = await decidedWithNudge();
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("network down");
+    });
+
+    await expect(updateNudge(testEnv(), row)).resolves.toBeUndefined();
+  });
+
+  it("swallows a non-JSON response", async () => {
+    const row = await decidedWithNudge();
+    vi.stubGlobal("fetch", async () => new Response("<html>gateway timeout</html>", { status: 504 }));
+
+    await expect(updateNudge(testEnv(), row)).resolves.toBeUndefined();
   });
 });
 

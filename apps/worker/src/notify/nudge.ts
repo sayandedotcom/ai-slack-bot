@@ -4,7 +4,7 @@ import { claimNudge, getApproval, recordNudgeMessage, releaseNudge } from "../ap
 import { getChannelPolicy } from "../db/channels";
 import { getIdentity } from "../db/identities";
 import { onDuty } from "../identity/rotation";
-import { nudgeBlocks } from "./blocks";
+import { nudgeBlocks, resolvedBlocks } from "./blocks";
 
 /**
  * The escalation nudge: one Block Kit DM to the on-duty engineer, once.
@@ -38,6 +38,7 @@ import { nudgeBlocks } from "./blocks";
 
 const CONVERSATIONS_OPEN_URL = "https://slack.com/api/conversations.open";
 const POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
+const UPDATE_MESSAGE_URL = "https://slack.com/api/chat.update";
 
 /**
  * Ceiling on one Slack request. The projection AWAITS the nudge (see
@@ -206,6 +207,65 @@ async function release(env: Env, id: string): Promise<void> {
     await releaseNudge(env.DB, id);
   } catch {
     /* nothing better to do; see the doc comment */
+  }
+}
+
+/**
+ * Rewrite a nudge whose approval has been settled, so no dead link outlives
+ * its card.
+ *
+ * The nudge's "Review" button points at a dashboard card that is actionable
+ * exactly once. After a decision — or after the model withdrew the draft
+ * because the conversation moved on — that button leads somewhere that can no
+ * longer be acted on, and an engineer scrolling their DMs cannot tell that by
+ * looking. `chat.update` replaces the body with `resolvedBlocks`: what happened,
+ * who did it, and no button.
+ *
+ * BEST-EFFORT, IN THE STRONG SENSE: this returns void and NEVER throws. Its
+ * callers are the resolution path and the withdrawal path, and both have
+ * already committed a fact — a human's decision, or a retraction — that a Slack
+ * outage may not roll back. There is nothing for a caller to handle, so there
+ * is nothing to report; the worst case is a stale DM beside a settled card,
+ * which is exactly the state that existed before this function.
+ *
+ * NO RECORDED MESSAGE, NO CALL. `nudge_channel_id`/`nudge_ts` are null when the
+ * nudge never went out, and also in the narrow case `sendNudge` documents where
+ * the DM landed but its bookkeeping write failed. Both mean the same thing
+ * here: there is no message id to edit, and Slack has no "find the message I
+ * posted" call that would not be a guess.
+ *
+ * This is the SECOND and last place in the phase that spends
+ * `SLACK_BOT_TOKEN`, and it is the same message the first one posted: a bot
+ * cannot edit a message it did not author, so the credential here is forced by
+ * the one in `sendNudge` rather than being a separate decision. Nothing
+ * customer-facing passes through this file.
+ */
+export async function updateNudge(env: Env, row: ApprovalRow): Promise<void> {
+  const channel = row.nudgeChannelId;
+  const ts = row.nudgeTs;
+  if (channel === null || channel === "" || ts === null || ts === "") return;
+  // A pending card has nothing to say that its own nudge does not already say.
+  // Refused here rather than in the callers so a future caller cannot get it
+  // wrong, and because `resolvedBlocks` has no rendering for `pending` at all.
+  if (row.decision === "pending") return;
+
+  try {
+    await slackCall(env, UPDATE_MESSAGE_URL, {
+      channel,
+      ts,
+      // The notification fallback, for clients that render no blocks. It says
+      // only that the card is settled; the decision and the decider are in the
+      // body, where a reader has the surrounding context to read them.
+      text: "This approval has been settled — nothing left to review.",
+      blocks: resolvedBlocks({ decision: row.decision, decidedBy: row.decidedBy }),
+    });
+    // An `ok: false` answer needs no branch: there is no retry that would be
+    // safe (the row's once-only nudge slot has already been spent) and no
+    // caller that could act on the difference.
+  } catch {
+    // Swallowed, and not logged, for the same reason as `sendNudge`'s catch: a
+    // failed Slack request can carry the authorization header in its detail,
+    // and nothing in it changes what happens next.
   }
 }
 

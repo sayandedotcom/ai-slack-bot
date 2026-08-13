@@ -1477,6 +1477,8 @@ async function composeAndRun(
       approval: makeApprovalPort({
         storage: ctx.storage,
         db: env.DB,
+        // For the withdrawal's nudge edit only — see `ApprovalPortInput.env`.
+        env,
         runId: state.runId,
         generationId: claim.generationId,
         slackThread:

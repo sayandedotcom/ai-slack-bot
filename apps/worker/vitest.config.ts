@@ -120,6 +120,22 @@ export default defineConfig({
           // Tests that want the continuation installed opt back IN explicitly,
           // by overriding this to "" in their own env object.
           AGENT_MODEL_DISABLED: "true",
+          // THE NUDGE HAS NOWHERE TO GO IN A TEST, AND THAT IS THE POINT.
+          //
+          // The pool inherits wrangler.jsonc's `vars`, so whatever
+          // NUDGE_FALLBACK_CHANNEL_ID is pinned to in production would be
+          // pinned here too — and `worker.scheduled()`, which several suites
+          // invoke, runs `sweepNudges` over whatever pending, unnudged
+          // approvals the shared D1 happens to hold (this pool has no
+          // isolatedStorage). With a real channel id and an unstubbed `fetch`
+          // that is a post to slack.com. Bound empty, `sendNudge` refuses
+          // before it claims anything, so the fallback branch cannot reach a
+          // real channel from a test no matter what production pins.
+          //
+          // Suites that WANT the fallback branch pass their own value in their
+          // own env object (`test/notify-nudge.test.ts`), which is a stubbed
+          // `fetch` away from Slack by construction.
+          NUDGE_FALLBACK_CHANNEL_ID: "",
         },
       },
     }),

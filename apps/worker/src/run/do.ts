@@ -68,6 +68,7 @@ import type {
   FinalizeOutcome,
   ProjectionJobKind,
 } from "../agent/contracts";
+import { updateNudge } from "../notify/nudge";
 import { abortForNewerInput } from "../agent/steering";
 import { ensureRunPortsInstalled } from "../agent/ports";
 
@@ -692,6 +693,20 @@ export class RunDO extends DurableObject<Env> {
     }
 
     await markResolutionDelivered(this.env.DB, input.approvalId, this.#now());
+
+    // LAST, AND BEST-EFFORT: the engineer's nudge DM still shows a "Review"
+    // button for a card that is now settled. `updateNudge` rewrites it in
+    // place, makes no call at all when no nudge message was recorded, and
+    // never throws — so it cannot turn a delivered resolution into a failed
+    // one. It is after `markResolutionDelivered` deliberately: a slow Slack
+    // must not hold the repair key open, or the sweeper would re-drive a
+    // resolution that has already landed.
+    //
+    // `card` is the row as it stood when this method read it, which is AFTER
+    // the dashboard's D1 CAS committed the decision (the `card.decision !==
+    // input.decision` guard above is what proves that), so it carries the
+    // decision and the decider this edit names.
+    await updateNudge(this.env, card);
     return { applied: true };
   }
 

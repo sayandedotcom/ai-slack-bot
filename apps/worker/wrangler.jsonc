@@ -76,7 +76,34 @@
     // Non-secret, like the team domain above: an AUD identifies which
     // application a token was minted for, it does not authorize anything by
     // itself. Never replace this with a fallback that skips the check.
-    "ACCESS_APP_AUD": "1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238"
+    "ACCESS_APP_AUD": "1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238",
+    // The engineer nudge (Phase 13). All three are non-secret — a mode flag, a
+    // channel id and this Worker's own origin. The credential the nudge spends
+    // is SLACK_BOT_TOKEN, which stays a secret and is used in exactly two
+    // places: the nudge DM and the chat.update that rewrites it once the card
+    // is settled. No customer-facing message may ever take that token.
+    //
+    // "dm" opens a direct message with whoever is on duty; "channel" posts an
+    // @-mention into NUDGE_FALLBACK_CHANNEL_ID instead. The flag exists because
+    // the Slack app's `im:write` scope was an open question (roadmap line 398)
+    // and both paths are implemented, so switching is a config change and not
+    // a deploy of new code.
+    "NUDGE_MODE": "dm",
+    // The #eng-firefighter channel id, used in "channel" mode AND whenever the
+    // on-duty engineer has no Slack identity row — fallback beats silence.
+    //
+    // DELIBERATELY EMPTY, AND THIS IS AN OPERATOR STEP, NOT AN OVERSIGHT: the
+    // channel has no row in `channels` either (scripts/seed-channels.sh says
+    // so explicitly), so its id does not exist anywhere in this repo and
+    // inventing one would point the nudge at whatever conversation that id
+    // happens to name. Empty is the safe reading: `sendNudge` checks it BEFORE
+    // taking the once-only nudge claim, so an unconnected engineer leaves the
+    // card on the sweeper's retry feed rather than burning the slot on a send
+    // that cannot be addressed. Fill it in to enable the fallback.
+    "NUDGE_FALLBACK_CHANNEL_ID": "",
+    // Where the nudge's "Review" button points: `${DASHBOARD_BASE_URL}/?approval=${id}`.
+    // The Worker's own origin — the dashboard is served from it (see "assets").
+    "DASHBOARD_BASE_URL": "https://firefighter.sayandeten.workers.dev"
   },
   "assets": {
     // The dashboard's Vite build output (Phase 14). It replaced ./public, which
