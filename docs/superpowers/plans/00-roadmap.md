@@ -11,7 +11,7 @@ Two different GitHub repos are in play and confusing them wastes real time. **Th
 | Repo | What it is | Role in the build |
 |---|---|---|
 | **[`Zellify/firefighter`](https://github.com/Zellify/firefighter)** | **This repo.** The deliverable. | Everything we write. Already `origin` locally. |
-| **[`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild)** | **The product monorepo.** Zellify's actual codebase — what customers use and what bugs live in. | The agent clones this in the sandbox, fixes bugs in it, and opens PRs **against its `staging` branch**. Read its root `AGENTS.md` first — the brief says so, and it documents local dev setup and PR conventions. |
+| **[`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild)** | **The product monorepo.** Zellify's actual codebase — what customers use and what bugs live in. | The agent clones this in the sandbox, fixes bugs in it, and opens PRs **against its `staging` branch**. Read its root doc first — the brief calls it `AGENTS.md`, but **the file is actually `CLAUDE.md`** (529 lines, confirmed 2026-08-14). It documents local dev setup, the branch flow, and PR conventions. |
 
 Private, so unauthenticated tooling gets a 404 on both. Confirm your invite to `web2app-rebuild` landed by opening it in a browser while signed in.
 
@@ -42,7 +42,7 @@ Every phase's requirements implicitly include this section. Values are copied ve
 - **All ingest writes are idempotent on `event_id`.**
 - **Triage never emits a ticket type.** It emits `{ wake, why, opening_prompt }`. A type field would smuggle the banned pipeline back in.
 - **Tier 1 outbound calls are runtime-refused.** `fetch`, socket connect, and WebSocket globals may exist, but `globalOutbound: null` prevents them reaching the network; the isolate's only useful reach is reviewed RPC capabilities in the parent Worker.
-- **The Tier 2 sandbox holds no write credentials.** It emits artifacts; the Worker performs every write.
+- **The Tier 2 sandbox holds no write credentials.** It emits artifacts; the Worker performs every write. One honest nuance discovered in Phase 18: a *running dev server* does hold dev-tier **read** secrets, because it cannot start without them. That is disjoint from every write path, but it goes in the README rather than being discovered by a reader.
 - **Linear issues are pinned server-side** to team `fire-fighter-testing`. The agent cannot choose the team.
 - **Product PRs target `staging`**, link the Linear issue so it closes on merge, and carry the proof recording.
 - **Customer-facing copy:** direct, technical. No preamble, no "Great question!", no bulleted recap, no closing paragraph restating the answer.
@@ -57,7 +57,7 @@ Three surfaces have training data thin enough that a coding agent will confident
 | Surface | Phases | Why it bites |
 |---|---|---|
 | **Worker Loader** | 09, 10 | Beta. Substantially de-risked by `docs/inspired-from-ronit.md` — the API shape, `globalOutbound: null`, the `ctx.exports`/`RpcTarget` marshalling rules and the cache semantics all come from working code. What remains unknown is whether *your* account has beta access. |
-| **Cloudflare Sandbox** | 18, 19 | `interceptHttps` and `outboundByHost` are confirmed real and in production use. The genuine unknown is whether a `standard-4` container can run **Zellify's** monorepo — nobody has tried. |
+| **Cloudflare Sandbox** | 18, 19 | `interceptHttps` and `outboundByHost` are confirmed real and in production use. The genuine unknown — whether a `standard-4` container can run **Zellify's** monorepo — is Phase 18 Task 1, now that the repo is readable. Reading it surfaced three constraints the spike could not: pnpm is pinned to **9.12.2** (the spike baked 10.33.4), every `dev` script is **Infisical-wrapped** with credentials we were not given, and `apps/web` binds **port 3000** — the sandbox's own control port. |
 | **Zep V3** | 06, 07, 21 | V2's "groups" became V3 "graphs"; the Feb 2026 deprecation wave removed `min_score` from `graph.search()`. V2-shaped code looks correct and fails. |
 
 Every invented API found during a phase goes into that phase's notes. The README's AI-tool notes are a graded deliverable, and this is the raw material.
@@ -96,7 +96,8 @@ Cloudflare's own MCP servers and skills are already available in this workspace 
 | **17, 09** | Supabase — read-only role, query surface | | |
 | **09** | LangSmith — trace fetch / search API | | |
 | **09** | Better Stack — logs query + monitors API | | |
-| **18** | **`Zellify/web2app-rebuild` root `AGENTS.md`** — local dev setup, PR conventions | Not an MCP server, but the same class of dependency: the ship loop has to follow conventions we cannot guess. The brief says read it first. | *(GitHub MCP, or just clone it)* |
+| **18** | **`Zellify/web2app-rebuild` root `CLAUDE.md`** — local dev setup, branch flow, PR conventions (the brief calls it `AGENTS.md`; that file does not exist) | Not an MCP server, but the same class of dependency: the ship loop has to follow conventions we cannot guess. Read 2026-08-14; findings are in the Phase 18 plan's "Ground truth" section. | *(cloned — no MCP needed)* |
+| **18** | **Infisical** — dev-env secrets for the monorepo's `dev` scripts | **Not in the day-0 credential list.** Phase 18 Task 1 asks for a machine identity or a one-time export; without it no dev server starts in the container. | *(ask in `#eng-firefighter`)* |
 | **19** | Playwright — `recordVideo`, browser contexts, headless in container | | |
 | **20** | GitHub REST — blobs → tree → commit → ref → PR | Six chained calls with easy-to-get-wrong SHA plumbing. Worth live docs. | |
 | **20** | Linear API — issue create/update, team scoping | | |
@@ -186,7 +187,7 @@ wrong.
 | 15 | Run list + live run drawer | [full](phase-15-run-list-live-drawer.md) | 10, 14 | 5 |
 | 16 | Approval card | [full](phase-16-approval-card.md) | 11, 14 | 5 |
 | 17 | Chat page + citations | [full](phase-17-chat-page-citations.md) | 10, 14, 15 | 5 |
-| 18 | Sandbox Tier 2 | below | 00·T1, **monorepo** | 5 |
+| 18 | Sandbox Tier 2 | [full](phase-18-sandbox-tier-2.md) | 00·T1, **monorepo** | 5 |
 | 19 | Ship loop + proof capture | below | 18 | 6 |
 | 20 | PR + ship-loop Linear updates → `web2app-rebuild` `staging` | below | 19 | 6 |
 | 21 | Voice, eval harness, shadow mode | [full](phase-21-voice-eval-shadow.md) | 07, 10, 11, 12, 14 | 6 |
@@ -498,19 +499,21 @@ in flight, then swapped when 12 merges.
 
 **Goal:** The agent boots its own machine.
 
-**Depends on:** Phase 00 Task 1 **GO** and access to **[`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild)** · **Day 5**
+**Depends on:** Phase 00 Task 1 **GO** and access to **[`Zellify/web2app-rebuild`](https://github.com/Zellify/web2app-rebuild)** · **Day 5** · Full plan: [phase-18-sandbox-tier-2.md](phase-18-sandbox-tier-2.md) (written 2026-08-14, after reading the monorepo)
 
-**Files:** `sandbox/Dockerfile`, `src/codemode/bindings/sandbox.ts`, `src/sandbox/lifecycle.ts`, `test/sandbox-*.test.ts`
+**Shape:** One container per run (`run:{runId}`) from a **fully baked** image — repo pre-cloned at `staging`, `pnpm install` done, `pnpm build-packages` output present, Chromium ready. A ninth Code Mode namespace, `sandbox`, exposes it. The git remote is a sentinel host whose credential is swapped Worker-side on egress; dev-server secrets are injected per-process by the Worker.
 
-**Tasks:**
-1. **Read `web2app-rebuild`'s root `AGENTS.md` first** — the brief says so, and local dev setup is documented there. Everything in this phase and the next two depends on conventions written down in that file.
-2. **Baked image:** `web2app-rebuild` pre-cloned, pnpm store warm, Chromium preinstalled. This is the difference between a one-minute and an eight-minute repro, and the drill is timed by a human watching a thread.
-3. **`sandbox` binding** exposing `boot`, `exec`, `read`, `write`, `preview`, `diff` — the Phase 09 surface.
-4. **Lifecycle tied to the run**, with idle teardown so a forgotten container does not eat the budget.
-5. **Private clone without a container-held write token**, following the spec §8.3 ladder in order.
-6. **Dev server as a long-running process**, with `tunnels.get(port)` yielding a reachable preview URL.
+**Decisions this plan fixed against the old sketch:**
+1. **The root doc is `CLAUDE.md`, not `AGENTS.md`** — the latter does not exist. It yields twelve constraints the sketch could not know: pnpm pinned to 9.12.2 under `engine-strict`, `pnpm build-packages` mandatory before first dev, Infisical-wrapped dev scripts, `apps/web` on port 3000, a 6 GB heap for the dashboard, Biome-via-Ultracite, and the `staging` branch flow.
+2. **Long work does not fit one execution, so it returns handles.** `PRODUCTION_LIMITS.wallTimeMs` is 20 s and `pnpm test` is minutes. `boot` is idempotent and *is* the poll; `spawn`+`checkProcess` replace a blocking `exec`. Raising the limit toward the 60 s ceiling buys one install and still loses — so the shape changes, not the constant.
+3. **Nine methods, not six** (`boot`, `exec`, `spawn`, `checkProcess`, `killProcess`, `readFile`, `writeFile`, `preview`, `diff`) — a flat namespace like every other, not the spec's `Machine` object, which would marshal a live object across the isolate boundary for nothing.
+4. **A fourth effect class, `sandbox_write`.** Calling `exec` a `read` would be a lie. Shadow runs may boot containers, deliberately — a shadow bug run that cannot reproduce drafts nothing worth measuring.
+5. **`diff()` returns a preview plus an opaque `diffRef`**, with the bytes held server-side under an R2 prefix the public artifacts route refuses. Phase 20 reads the ref; the full diff never enters the model's context, where it could come back altered.
+6. **No `proxyToSandbox()`** — tunnels bypass our origin, and a host-matching interceptor in front of a webhook that must answer in 3 s is risk for no gain.
 
-**Exit criteria:** The agent boots a machine, gets the monorepo dev server serving, and runs the test suite — all from model-authored code.
+**Blocked on one external ask:** Infisical dev-env access (Task 1). Tasks 2–5 and 7 proceed without it; only the dev-server task waits.
+
+**Exit criteria:** The agent boots a machine, gets the monorepo dev server serving, and runs the test suite — all from model-authored code, on a deployed Worker, in a live `#test-firedrill` run. No write credential inside the container, proven by grep.
 
 ---
 
