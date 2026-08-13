@@ -386,9 +386,27 @@ export async function runContinuation(
      * generation carries on with the steer at its next `prepareStep` — and a
      * visible cancellation when nothing is pending. Read from durable state so
      * an evicted object reaches the same answer.
+     *
+     * FIRST, though: was it even ours? `streamText` is given both this signal
+     * and the reviewed `timeout` policy, and when one of those timers fires the
+     * SDK aborts its OWN combined signal and delivers an `abort` stream part
+     * that is indistinguishable at this seam from a steer — except that this
+     * controller was never touched. Steering (and the external signal, which is
+     * forwarded into this same controller above) always leaves
+     * `steering.signal.aborted` true, so an abort arriving with it false can
+     * only be the provider step/first-chunk/inter-chunk/tool timeout. Reporting
+     * that as `run_cancelled` told an operator a human cancelled a run that in
+     * fact timed out, and made it terminal instead of a bounded retry.
      */
-    result: (): ContinuationResult =>
-      abortMeansContinuation(storage, claim.generationId)
+    result: (): ContinuationResult => {
+      if (!steering.signal.aborted) {
+        return {
+          path: "provider_timeout",
+          errorCode: "provider_timeout",
+          detail: "the provider stream was aborted by a configured timeout",
+        };
+      }
+      return abortMeansContinuation(storage, claim.generationId)
         ? {
             path: "continuation_requested",
             errorCode: null,
@@ -398,7 +416,8 @@ export async function runContinuation(
             path: "run_cancelled",
             errorCode: "run_cancelled",
             detail: "the provider stream was aborted with no newer input pending",
-          },
+          };
+    },
   };
 
   // Explicitly annotated, because TypeScript only treats a call as

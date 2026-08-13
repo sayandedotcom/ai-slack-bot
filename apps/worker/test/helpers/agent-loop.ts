@@ -171,6 +171,81 @@ export function errorStep(message: string): LanguageModelV4StreamPart[] {
 }
 
 /**
+ * A step that streams visible text and THEN fails, with no `finish` part.
+ *
+ * The midstream-provider-error row of the failure matrix. `errorStep` fails
+ * before a single chunk, so the draft buffer is empty and "the draft was
+ * terminated rather than promoted" is vacuously true; only this shape puts real
+ * customer-visible text on the wire first.
+ */
+export function errorAfterTextStep(input: {
+  chunks: string[];
+  message: string;
+}): LanguageModelV4StreamPart[] {
+  return [
+    ...head("resp_error_midstream"),
+    { type: "text-start", id: "t1" },
+    ...input.chunks.map(
+      (delta): LanguageModelV4StreamPart => ({ type: "text-delta", id: "t1", delta }),
+    ),
+    { type: "error", error: new Error(input.message) },
+  ];
+}
+
+/**
+ * A step that declares and streams a `run_code` call and then fails, with no
+ * `finish` part and no `tool-call`.
+ *
+ * The other half of "error after text/tool events": here the abort window is
+ * already disarmed by `tool-input-start`, so the failure path has to be reached
+ * with nothing armed.
+ */
+export function errorAfterToolInputStep(input: {
+  toolCallId: string;
+  code: string;
+  message: string;
+}): LanguageModelV4StreamPart[] {
+  const inputJson = JSON.stringify({ code: input.code });
+  return [
+    ...head("resp_error_tool"),
+    { type: "tool-input-start", id: input.toolCallId, toolName: "run_code" },
+    { type: "tool-input-delta", id: input.toolCallId, delta: inputJson },
+    { type: "error", error: new Error(input.message) },
+  ];
+}
+
+/**
+ * A step whose tool call names a tool that is not `run_code`.
+ *
+ * The invalid-tool-result fixture: the SDK has no such tool to execute, so no
+ * result can ever be produced for the call. Nothing may fabricate one.
+ */
+export function unknownToolStep(toolCallId: string): LanguageModelV4StreamPart[] {
+  return [
+    ...head("resp_unknown_tool"),
+    { type: "tool-input-start", id: toolCallId, toolName: "escalate" },
+    { type: "tool-input-delta", id: toolCallId, delta: "{}" },
+    { type: "tool-input-end", id: toolCallId },
+    { type: "tool-call", toolCallId, toolName: "escalate", input: "{}" },
+    finish("tool-calls", "tool_use"),
+  ];
+}
+
+/** Usage/cache detail variants, expressed at the PROVIDER (nested) layer. */
+export function usageVariantStep(usage: {
+  inputTokens: { total: number; noCache: number; cacheRead: number; cacheWrite: number };
+  outputTokens: { total: number; text: number; reasoning: number };
+}): LanguageModelV4StreamPart[] {
+  return [
+    ...head("resp_usage"),
+    { type: "text-start", id: "t1" },
+    { type: "text-delta", id: "t1", delta: "done" },
+    { type: "text-end", id: "t1" },
+    { type: "finish", finishReason: { unified: "stop", raw: "end_turn" }, usage },
+  ];
+}
+
+/**
  * A scripted provider. Each entry is one step's worth of stream parts; the last
  * entry repeats, so a fixture never has to guess how many steps the loop takes.
  */
@@ -203,6 +278,17 @@ export type ModelScript = {
    * armed for abort here: the step has declared work worth keeping.
    */
   holdAfterToolInput?: (call: number) => Promise<void>;
+  /**
+   * Real wall-clock delay before the FIRST provider part.
+   *
+   * The only way to exercise the SDK's own `firstChunkMs` timer: that timer is
+   * `setTimeout` inside `ai`, not our injected `StreamClock`, so a fake clock
+   * cannot move it. Keep the delay small and the injected `firstChunkMs`
+   * smaller, so the test asserts an ordering rather than racing one.
+   */
+  initialDelayMs?: number;
+  /** Real wall-clock delay between provider parts, for `chunkMs`. */
+  chunkDelayMs?: number;
 };
 
 export function mockModel(
@@ -224,8 +310,8 @@ export function mockModel(
       const invocation = call;
       const stream = simulateReadableStream({
         chunks: parts,
-        initialDelayInMs: 0,
-        chunkDelayInMs: 0,
+        initialDelayInMs: script.initialDelayMs ?? 0,
+        chunkDelayInMs: script.chunkDelayMs ?? 0,
       });
       const holdAfterDelta = script.holdAfterDelta;
       const holdAfterToolInput = script.holdAfterToolInput;
