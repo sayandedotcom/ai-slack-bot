@@ -180,9 +180,9 @@ wrong.
 | 09 | Code Mode Tier 1 | [full](phase-09-code-mode-tier-1.md) | 00·T2, 08 | 3 |
 | 10 | Agent loop | [full](phase-10-agent-loop.md) | 09 | 4 |
 | 11 | Approval | [full](phase-11-approval.md) | 10 | 4 |
-| 12 | Identity, OAuth, rotation | below | 01 | 4 |
+| 12 | Identity, OAuth, rotation | [full](phase-12-identity-oauth-rotation.md) | 01 | 4 |
 | 13 | Slack nudge | below | 11, 12 | 4 |
-| 14 | Dashboard shell | below | 05, 12 | 5 |
+| 14 | Dashboard shell | [full](phase-14-dashboard-shell.md) | 05, 12 (soft) | 5 |
 | 15 | Run list + live run drawer | below | 10, 14 | 5 |
 | 16 | Approval card | below | 11, 14 | 5 |
 | 17 | Chat page + citations | below | 10, 14 | 5 |
@@ -359,7 +359,7 @@ after Phase 11 adds escalation and Phase 12 adds identity.
 
 **Goal:** The customer never sees a bot.
 
-**Depends on:** Phase 01 · **Day 4**
+**Depends on:** Phase 01 · **Day 4** · Full plan: [phase-12-identity-oauth-rotation.md](phase-12-identity-oauth-rotation.md) (written 2026-08-13)
 
 > **Parallel-safe with Phase 11.** No shared files: 12 owns `src/identity/*`,
 > `src/oauth/*`, and migration `0008`; 11 owns the driver, RunDO, the registry,
@@ -414,7 +414,7 @@ arrives under the on-duty engineer's Slack identity.
 
 **Goal:** A cold visitor understands the page in 30 seconds.
 
-**Depends on:** Phases 05, 12 · **Day 5** — but the dependency on 12 is
+**Depends on:** Phases 05, 12 · **Day 5** · Full plan: [phase-14-dashboard-shell.md](phase-14-dashboard-shell.md) (written 2026-08-13) — the dependency on 12 is
 **soft**: only the rotation strip (task 3) and connect status (task 4) consume
 it. Scaffold, assets wiring, counters, states, and the Access header (tasks 1,
 2, 5, 6, 7) can be built against a stubbed roster API while 11 and 12 are still
