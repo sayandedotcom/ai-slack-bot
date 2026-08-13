@@ -361,6 +361,11 @@ after Phase 11 adds escalation and Phase 12 adds identity.
 
 **Depends on:** Phase 01 · **Day 4**
 
+> **Parallel-safe with Phase 11.** No shared files: 12 owns `src/identity/*`,
+> `src/oauth/*`, and migration `0008`; 11 owns the driver, RunDO, the registry,
+> and `0007`. Execute 12 in its own worktree while 11 runs, and merge whichever
+> finishes first.
+
 **Files:** `src/identity/roster.ts`, `src/identity/rotation.ts`, `src/identity/crypto.ts`, `src/oauth/slack.ts`, `src/oauth/github.ts`, `src/db/identities.ts`, `migrations/0008_identities.sql`, `test/rotation.test.ts`, `test/oauth-*.test.ts`
 
 **Tasks:**
@@ -409,7 +414,11 @@ arrives under the on-duty engineer's Slack identity.
 
 **Goal:** A cold visitor understands the page in 30 seconds.
 
-**Depends on:** Phases 05, 12 · **Day 5**
+**Depends on:** Phases 05, 12 · **Day 5** — but the dependency on 12 is
+**soft**: only the rotation strip (task 3) and connect status (task 4) consume
+it. Scaffold, assets wiring, counters, states, and the Access header (tasks 1,
+2, 5, 6, 7) can be built against a stubbed roster API while 11 and 12 are still
+in flight, then swapped when 12 merges.
 
 **Files:** `apps/dashboard/` (new Vite + React + shadcn app), `src/api/roster.ts`, `apps/worker/wrangler.jsonc` (modify: assets point at the built SPA). Delete `apps/web` (the Next 16 scaffold) — decision D2.
 
