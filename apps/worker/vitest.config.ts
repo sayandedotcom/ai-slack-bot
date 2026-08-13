@@ -29,6 +29,24 @@ export default defineConfig({
           // (they only require a non-empty string) while making the write
           // impossible. Same reasoning as the two Slack fixtures above.
           ZEP_API_KEY: "zep-test-key",
+          // THE ONE THING THAT KEEPS THIS SUITE OFF THE REAL MODEL.
+          //
+          // The production ports no longer treat missing Gateway settings as
+          // "park quietly" — plan lines 965-966 require absence to FAIL — so
+          // the only thing that stops a RunDO in this pool from composing the
+          // real Fable path is this explicit opt-out. Model work parks; every
+          // projection runner is still installed and still exercised.
+          //
+          // It is not theoretical. The pool loads `.dev.vars`, which holds a
+          // LIVE `ANTHROPIC_API_KEY`; the day somebody fills in
+          // AI_GATEWAY_ANTHROPIC_URL and AI_GATEWAY_TOKEN there, an absence
+          // check would have let the whole suite start spending money. This
+          // line cannot be defeated that way — it is read before any
+          // configuration is looked at.
+          //
+          // Tests that want the continuation installed opt back IN explicitly,
+          // by overriding this to "" in their own env object.
+          AGENT_MODEL_DISABLED: "true",
         },
       },
     }),

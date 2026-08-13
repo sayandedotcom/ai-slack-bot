@@ -4,6 +4,7 @@ import { createChatRun } from "../run/coordinator";
 import { runStubForKey } from "../run/keys";
 import { getRunById, listRuns, readRunUsage, RUN_LIST_MAX_LIMIT } from "../run/repository";
 import { decimalNanoUsd } from "../agent/cost";
+import { modelDisposition } from "../agent/ports";
 import { isRunStatus, parseClientMessage, type RunStatus } from "../run/protocol";
 import type { RunRecord } from "../run/repository";
 
@@ -107,6 +108,19 @@ runsApi.get("/runs/:id", async (c) => {
   return c.json({
     run: publicRun(run),
     driver,
+    // WHY A `scheduled` RUN IS NOT MOVING, if it is not moving.
+    //
+    // `driver.state` cannot answer that on its own: a run parked because this
+    // deployment has no continuation installed and a run genuinely waiting its
+    // turn are both `scheduled` with `error: null`, and telling them apart used
+    // to require reading isolate logs. This is a pure function of `env` — no
+    // Durable Object wake, no D1 read — and it carries configuration NAMES and
+    // a status code only, never a configured value (invariant 39).
+    //
+    // Deliberately a SIBLING of `driver` rather than a field inside it: the
+    // public driver shape is exactly four keys, is asserted to be exactly four
+    // keys, and describes THIS RUN. This describes the deployment.
+    model: modelDisposition(c.env),
     events: snapshot.events,
     cursor: snapshot.cursor,
     complete: snapshot.complete,

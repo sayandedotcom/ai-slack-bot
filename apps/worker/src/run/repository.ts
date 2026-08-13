@@ -82,36 +82,30 @@ function toRecord(row: RunRow): RunRecord {
  * create the losing insert is a no-op and both callers read back the same
  * canonical row. Returning the candidate uuid from a losing insert would hand
  * one caller an id that names nothing.
+ *
+ * ONE INSERT STATEMENT FOR THE `runs` TABLE, and this is it — the version
+ * below adds a shadow ratchet to it and nothing else. This used to be a
+ * verbatim copy of that block: same column list, same ten binds, same read-back
+ * and throw, differing only in whether `shadow` was a literal `0` or a bind. A
+ * column added to `runs` then had to be added in two places, and the day
+ * somebody added it to one of them the two functions would have diverged
+ * silently, because each has its own passing tests.
+ *
+ * The delegation is exact, not approximate. With `mustShadow: false` the bound
+ * `shadow` is `0`, so the INSERT is character-for-character the statement that
+ * was here; and the ratchet statement's WHERE ends in `AND ? = 1` bound to that
+ * same `0`, so it matches ZERO rows on every input — a fresh insert, an
+ * existing unshadowed row, and, the case that would actually be a bug, an
+ * existing SHADOWED row, whose flag is left alone. Nothing here can clear a
+ * shadow, which is what invariant 37 rests on. `run-repository.test.ts` proves
+ * all three against real D1 rather than by reading the SQL.
  */
 export async function createOrGetRun(
   db: D1Database,
   descriptor: RunDescriptor,
   now = Date.now(),
 ): Promise<RunRecord> {
-  // Created `idle`, for every origin. A row existing is not the agent working:
-  // `live` now means a generation is scheduled, and that transition is made by
-  // the input transaction inside the RunDO, then projected here. Phase 08's
-  // `live` default is repaired by migration 0006.
-  await db
-    .prepare(
-      `INSERT OR IGNORE INTO runs
-         (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'idle', 0, NULL, ?, ?)`,
-    )
-    .bind(
-      crypto.randomUUID(),
-      descriptor.key,
-      descriptor.origin,
-      descriptor.channelId,
-      descriptor.threadTs,
-      now,
-      now,
-    )
-    .run();
-
-  const run = await getRunByKey(db, descriptor.key);
-  if (!run) throw new Error(`run vanished immediately after insert: ${descriptor.key}`);
-  return run;
+  return createOrGetRunUnderPolicy(db, descriptor, { mustShadow: false }, now);
 }
 
 /**
@@ -144,8 +138,10 @@ export async function createOrGetRun(
  * observing run posts to a customer.
  *
  * `mustShadow` is computed by the CALLER from `canPost(policy)` so this stays a
- * D1 module with no policy semantics of its own; see `coordinator.ts`, which is
- * the only caller and resolves the policy immediately before calling.
+ * D1 module with no policy semantics of its own; see `coordinator.ts`, which
+ * resolves the policy immediately before calling. The other caller is
+ * `createOrGetRun` above, which passes `mustShadow: false` — the policy-free
+ * create is this create with the ratchet bound off, not a second copy of it.
  */
 export async function createOrGetRunUnderPolicy(
   db: D1Database,
@@ -155,6 +151,10 @@ export async function createOrGetRunUnderPolicy(
 ): Promise<RunRecord> {
   const shadow = options.mustShadow ? 1 : 0;
   await db.batch([
+    // Created `idle`, for every origin. A row existing is not the agent working:
+    // `live` now means a generation is scheduled, and that transition is made by
+    // the input transaction inside the RunDO, then projected here. Phase 08's
+    // `live` default is repaired by migration 0006.
     db
       .prepare(
         `INSERT OR IGNORE INTO runs

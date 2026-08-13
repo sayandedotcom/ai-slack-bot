@@ -2,10 +2,18 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 describe("health", () => {
-  it("responds ok", async () => {
+  it("responds ok, and says whether model work is composable", async () => {
     const res = await SELF.fetch("https://example.com/api/health");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+
+    const body = (await res.json()) as { ok: boolean; model: { status: string } };
+    // `ok` is still pure liveness and still exactly `true` — an existing uptime
+    // monitor keeps its meaning. The composition report is a SIBLING, added so
+    // a deployment whose model work is parked stops being invisible outside one
+    // `console.warn` per isolate. Its contents are pinned in
+    // run-telemetry.test.ts, including the no-leak assertions.
+    expect(body.ok).toBe(true);
+    expect(typeof body.model.status).toBe("string");
   });
 
   it("has the migrated schema", async () => {

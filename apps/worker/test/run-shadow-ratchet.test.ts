@@ -28,7 +28,9 @@ import type { TriageJob } from "../src/triage/consumer";
  * unshadowed implicitly" is not a rule the tests below police; it is a
  * statement about which statements exist.
  *
- * Model work is parked in this pool (no Gateway is configured), so every
+ * Model work is parked in this pool (`AGENT_MODEL_DISABLED` is set for the
+ * whole suite in vitest.config.ts — absence of Gateway settings no longer
+ * parks anything, it fails), so every
  * assertion below reads the D1 row at a point where the generation is scheduled
  * and has never been claimed. "Shadow was set before scheduling" is therefore
  * literal: no model or tool work has run at all.

@@ -28,6 +28,9 @@ beforeEach(async () => {
 function configuredEnv(): Env {
   return {
     ...env,
+    // The pool-wide opt-out (vitest.config.ts) has to be cleared by name for a
+    // test that wants the real continuation installed. See agent-ports.test.ts.
+    AGENT_MODEL_DISABLED: "",
     ANTHROPIC_API_KEY: "sk-ant-test",
     AI_GATEWAY_ANTHROPIC_URL: "https://gateway.ai.cloudflare.com/v1/acct/ff/anthropic",
     AI_GATEWAY_TOKEN: "cf-aig-test",
@@ -357,6 +360,66 @@ describe("the live snapshot's driver state", () => {
     expect(text).not.toContain("leaseExpiresAt");
     expect(text).not.toContain("claimEpoch");
     expect(text).not.toContain(created.key);
+  });
+});
+
+/**
+ * WHY A `scheduled` RUN IS NOT MOVING.
+ *
+ * This pool parks model work, and before this signal existed a parked run was
+ * indistinguishable from a healthy busy one: both are `state: "scheduled"` with
+ * `error: null`, and the only trace of the difference was one `console.warn`
+ * per isolate — invisible to a dashboard and gone by the time anyone asks.
+ *
+ * The composition report is a pure function of `env`, so it costs no Durable
+ * Object wake and no D1 read, and it carries configuration NAMES and a status
+ * code only (invariant 39).
+ */
+describe("the parked deployment is visible to an operator", () => {
+  it("distinguishes a parked run from a busy one, beside the run's own driver state", async () => {
+    const created = await createChat({ firstMessage: "why are exports empty?", requestId: "r1" });
+
+    const response = await SELF.fetch(`https://x/api/runs/${created.id}`);
+    const body = (await response.json()) as {
+      driver: { state: string; error: string | null };
+      model: { modelEnabled: boolean; status: string; missingConfiguration: string[] };
+    };
+
+    // The run looks perfectly healthy on its own terms...
+    expect(body.driver.state).toBe("scheduled");
+    expect(body.driver.error).toBeNull();
+    // ...and this is the field that says nothing is ever going to claim it.
+    expect(body.model.modelEnabled).toBe(false);
+    expect(body.model.status).toBe("disabled_by_configuration");
+  });
+
+  it("serves the same report on /api/health, with no run and no object", async () => {
+    const response = await SELF.fetch("https://x/api/health");
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      ok: boolean;
+      model: { modelEnabled: boolean; status: string; missingConfiguration: string[] };
+    };
+    // `ok` stays pure liveness: an existing uptime monitor keeps its meaning.
+    expect(body.ok).toBe(true);
+    expect(body.model.status).toBe("disabled_by_configuration");
+
+    // NAMES, in a payload that crosses to a browser. WHICH names depends on
+    // what this machine's `.dev.vars` happens to fill in, so the assertion is
+    // that every entry is one of the three known setting names — never
+    // something derived from a value.
+    expect(
+      body.model.missingConfiguration.every((name) =>
+        ["ANTHROPIC_API_KEY", "AI_GATEWAY_ANTHROPIC_URL", "AI_GATEWAY_TOKEN"].includes(name),
+      ),
+    ).toBe(true);
+
+    const text = JSON.stringify(body);
+    // `.dev.vars` holds a live Anthropic key in this pool. It must not be here.
+    if (env.ANTHROPIC_API_KEY) expect(text).not.toContain(env.ANTHROPIC_API_KEY);
+    expect(text).not.toContain("sk-");
+    expect(text).not.toContain("Bearer");
   });
 });
 

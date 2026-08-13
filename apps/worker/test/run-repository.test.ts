@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createOrGetRun,
+  createOrGetRunUnderPolicy,
   findOwnedSlackRun,
   getRunById,
   getRunByKey,
@@ -54,6 +55,60 @@ describe("createOrGetRun", () => {
     expect(run.status).toBe("idle");
     expect(run.shadow).toBe(false);
     expect(run.summary).toBeNull();
+  });
+
+  /**
+   * `createOrGetRun` is now `createOrGetRunUnderPolicy` with the ratchet bound
+   * off, rather than a verbatim second copy of the same INSERT. These three
+   * cases are what makes that safe to have done, and they are written against
+   * real D1 rather than by reading the SQL.
+   *
+   * The third is the one that would actually be a bug. `createOrGetRun` used to
+   * contain no statement that touched `shadow` at all; the delegate contains
+   * one, and if its `AND ? = 1` guard were ever dropped, an ordinary
+   * policy-free create would CLEAR a shadow. Invariant 37 rests on nothing in
+   * this Worker ever setting `shadow` back to 0.
+   */
+  describe("delegates to createOrGetRunUnderPolicy without changing behaviour", () => {
+    it("creates an unshadowed row, exactly as the policy-aware version does", async () => {
+      const direct = await createOrGetRun(env.DB, chatDescriptor());
+      const viaPolicy = await createOrGetRunUnderPolicy(
+        env.DB,
+        chatDescriptor(),
+        { mustShadow: false },
+      );
+
+      expect(direct.shadow).toBe(false);
+      expect(viaPolicy.shadow).toBe(false);
+      expect(direct.status).toBe(viaPolicy.status);
+      expect(direct.summary).toBe(viaPolicy.summary);
+    });
+
+    it("leaves an existing unshadowed row alone", async () => {
+      const descriptor = slackDescriptor();
+      const first = await createOrGetRun(env.DB, descriptor);
+      const again = await createOrGetRun(env.DB, descriptor);
+
+      expect(again.id).toBe(first.id);
+      expect(again.shadow).toBe(false);
+    });
+
+    it("NEVER clears an existing shadow", async () => {
+      const descriptor = slackDescriptor();
+      const shadowed = await createOrGetRunUnderPolicy(env.DB, descriptor, { mustShadow: true });
+      expect(shadowed.shadow).toBe(true);
+
+      // The policy-free create, on a row that is already shadowed. The ratchet
+      // is one-way; this must be a no-op.
+      const after = await createOrGetRun(env.DB, descriptor);
+      expect(after.id).toBe(shadowed.id);
+      expect(after.shadow).toBe(true);
+
+      const row = await env.DB.prepare('SELECT shadow FROM runs WHERE "key" = ?')
+        .bind(descriptor.key)
+        .first<{ shadow: number }>();
+      expect(row?.shadow).toBe(1);
+    });
   });
 
   it("is idempotent on the origin key and keeps the original uuid", async () => {

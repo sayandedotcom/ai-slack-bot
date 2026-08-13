@@ -38,44 +38,91 @@ import { readState } from "../run/session";
  */
 
 /**
- * Whether this deployment is configured to call the model at all.
+ * The settings the production composer needs, BY NAME.
  *
- * Presence only. The AUTHORITY on what a valid Gateway endpoint looks like is
+ * Names only, here and everywhere downstream of here. This array is quoted into
+ * a report that reaches an operator over HTTP; a value never is (invariant 39).
+ *
+ * The AUTHORITY on what a valid Gateway endpoint looks like remains
  * `createProductionModelFactory` — the https scheme, the provider-native host,
- * the refusal to fall back to a direct Anthropic call — and duplicating those
- * rules here would create a second, quietly diverging copy of the one check
- * that stands between us and an unmetered provider call.
- *
- * So the split is: absent configuration PARKS, wrong configuration FAILS.
- *
- * Parking is right for absence because it is recoverable and truthful. The
- * generation stays `scheduled`, the input stays above the settled watermark,
- * and the first alarm after the Gateway is created picks the run up exactly
- * where it was left — which is the state this repository is actually in, since
- * creating the private Gateway is a deferred operator step (see
- * `.dev.vars.example`). Installing a continuation that throws on every claim
- * would instead spend the driver's attempt budget and terminate waiting
- * customer runs as `driver_attempts_exhausted`, naming the run rather than the
- * missing setting.
- *
- * Failing is right for a value that is present but wrong, because that is a
- * mistake somebody made rather than a step nobody has taken yet, and it
- * surfaces through `classifyThrown` as a typed `requires_operator_config`
- * outcome carrying the specific composition error code.
+ * the refusal to fall back to a direct Anthropic call. This list is presence
+ * only, deliberately, because duplicating those rules would create a second,
+ * quietly diverging copy of the one check that stands between us and an
+ * unmetered provider call.
  */
-function hasModelConfiguration(env: Env): boolean {
-  return (
-    (env.ANTHROPIC_API_KEY?.trim() ?? "") !== "" &&
-    (env.AI_GATEWAY_ANTHROPIC_URL?.trim() ?? "") !== "" &&
-    (env.AI_GATEWAY_TOKEN?.trim() ?? "") !== ""
-  );
-}
+const REQUIRED_MODEL_CONFIGURATION = [
+  "ANTHROPIC_API_KEY",
+  "AI_GATEWAY_ANTHROPIC_URL",
+  "AI_GATEWAY_TOKEN",
+] as const;
+
+/**
+ * How this deployment stands with respect to model work.
+ *
+ *  - `ready`: configured; the real continuation is installed.
+ *  - `disabled_by_configuration`: SOMEBODY DELIBERATELY TURNED IT OFF with
+ *    `AGENT_MODEL_DISABLED`. Model work parks; projections still drain.
+ *  - `configuration_incomplete`: nobody turned it off and the settings are not
+ *    there. The continuation is STILL installed, and composition fails loudly
+ *    the first time a generation is claimed.
+ */
+export type ModelStatus = "ready" | "disabled_by_configuration" | "configuration_incomplete";
 
 export type ProductionPortsReport = {
+  /** Whether a continuation was installed at all. */
   modelEnabled: boolean;
-  /** Why model work is parked, when it is. */
-  modelDisabledReason: string | null;
+  /** A stable operator-facing code. Never carries a configured VALUE. */
+  status: ModelStatus;
+  /** NAMES of required settings that are absent. Never their values. */
+  missingConfiguration: string[];
 };
+
+/**
+ * The opt-out. Explicit, and it is an opt-out rather than the old presence
+ * check for one reason: ABSENCE MUST NOT BE A SILENT MODE.
+ *
+ * The gate this replaces asked "is the Gateway configured?" and parked when the
+ * answer was no. That inverts plan lines 965-966, which require the production
+ * composer to FAIL when the Gateway URL is absent: composition was never
+ * attempted, so it could never fail, and a deploy that forgot a secret
+ * presented a dashboard full of `live` runs with `error: null` that would never
+ * move. The only signal was one `console.warn` per isolate.
+ *
+ * Now absence is a loud typed failure and only this flag parks. It is safe in
+ * exactly the direction a flag near a credential has to be: setting it can only
+ * make the agent do LESS. It cannot select a provider, cannot relax the Gateway
+ * host check, and cannot cause a direct-to-Anthropic call — `agent/model.ts`
+ * still refuses everything it refused before. There is no value of this flag
+ * that turns a missing Gateway into a permitted network call.
+ *
+ * Read strictly: only `1` and `true` disable. A typo therefore fails loudly
+ * rather than quietly parking, which is the whole point of the change.
+ */
+function modelDeliberatelyDisabled(env: Env): boolean {
+  const raw = env.AGENT_MODEL_DISABLED?.trim().toLowerCase() ?? "";
+  return raw === "1" || raw === "true";
+}
+
+/**
+ * The composition report, as a pure function of `env`.
+ *
+ * Callable from any isolate — the Worker entry serves it on `/api/health` and
+ * beside every run snapshot, and neither of those has run a RunDO constructor.
+ */
+export function modelDisposition(env: Env): ProductionPortsReport {
+  const missingConfiguration = REQUIRED_MODEL_CONFIGURATION.filter(
+    (name) => (env[name]?.trim() ?? "") === "",
+  );
+
+  if (modelDeliberatelyDisabled(env)) {
+    return { modelEnabled: false, status: "disabled_by_configuration", missingConfiguration };
+  }
+  return {
+    modelEnabled: true,
+    status: missingConfiguration.length === 0 ? "ready" : "configuration_incomplete",
+    missingConfiguration,
+  };
+}
 
 /**
  * The real continuation, behind a deferred module load.
@@ -170,21 +217,20 @@ export function productionRunPorts(env: Env): {
       makeUsageProjectionRunner({ storage: ctx.storage, db: workerEnv.DB }),
   };
 
-  if (!hasModelConfiguration(env)) {
-    return {
-      ports: { projections },
-      report: {
-        modelEnabled: false,
-        modelDisabledReason:
-          "ANTHROPIC_API_KEY, AI_GATEWAY_ANTHROPIC_URL and AI_GATEWAY_TOKEN must all be set before the agent may call the model",
-      },
-    };
-  }
+  const report = modelDisposition(env);
 
-  return {
-    ports: { continuation: productionContinuation, projections },
-    report: { modelEnabled: true, modelDisabledReason: null },
-  };
+  // Parking keeps the projections. A deployment that cannot call the model must
+  // still drain the memory and usage work its earlier runs committed, or a
+  // missing setting quietly becomes lost telemetry and lost memory.
+  if (!report.modelEnabled) return { ports: { projections }, report };
+
+  // Installed even when `missingConfiguration` is non-empty, and that is the
+  // plan-mandated behaviour rather than an oversight. `createProductionModelFactory`
+  // is composed INSIDE `composeAndRun`'s try (see `productionContinuation`), so
+  // a missing Gateway URL surfaces as a TERMINAL `requires_operator_config`
+  // failure carrying `missing_gateway_url` — visible on the run's own driver
+  // state — instead of burning the attempt budget or parking in silence.
+  return { ports: { continuation: productionContinuation, projections }, report };
 }
 
 /**
@@ -209,8 +255,17 @@ export function ensureRunPortsInstalled(env: Env): ProductionPortsReport {
   installRunPorts(built.ports);
   installed = true;
   report = built.report;
-  if (!built.report.modelEnabled) {
-    console.warn(`[agent] model work is parked: ${built.report.modelDisabledReason}`);
+  // A log line, and NOT the operator signal — an isolate log is invisible to the
+  // dashboard and gone by the time anyone asks why a run has not moved. The
+  // signal is `modelDisposition()` on `/api/health` and beside every run
+  // snapshot; this is only here so the reason is in the trace next to the first
+  // affected request.
+  if (built.report.status !== "ready") {
+    console.warn(
+      `[agent] model status ${built.report.status}; missing: ${
+        built.report.missingConfiguration.join(", ") || "nothing"
+      }`,
+    );
   }
   return built.report;
 }

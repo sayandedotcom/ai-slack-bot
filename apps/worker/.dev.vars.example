@@ -43,10 +43,27 @@ ANTHROPIC_API_KEY=
 # `cf-aig-authorization: Bearer <token>`. It is a secret and must never appear
 # in wrangler.jsonc, docs, generated types, or a test snapshot.
 #
-# Local unit tests need neither value: they inject a mock model and never enter
-# the production composer.
+# ABSENCE IS NOT A MODE. A deployed Worker missing these does not park quietly;
+# it composes, fails, and reports `configuration_incomplete` on /api/health and
+# beside every run snapshot, naming the setting (never the value). That is what
+# plan lines 965-966 require, and it replaced a presence check that left a
+# dashboard full of `live` runs which would never move.
+#
+# Local unit tests need neither value: they inject a mock model, and the pool
+# sets AGENT_MODEL_DISABLED so nothing can enter the production composer.
 AI_GATEWAY_ANTHROPIC_URL=
 AI_GATEWAY_TOKEN=
+
+# The explicit model opt-out (agent/ports.ts). Only `1` or `true` disables;
+# anything else, including a typo, leaves model work enabled so a mistake fails
+# loudly. Set it here if you want `wrangler dev` to park model work instead of
+# failing on the missing Gateway above. NEVER set it on a deployed Worker — its
+# absence in production is what makes a missing Gateway URL visible.
+#
+# It cannot widen anything: it can only make the agent do less. There is no
+# value of it that permits a direct, unmetered Anthropic call — agent/model.ts
+# still refuses every URL it refused before.
+AGENT_MODEL_DISABLED=
 
 # Better Stack SQL API connection (Phase 09 Task 11, betterstack.logs()).
 # NOT a bearer token: the log query path is HTTP Basic auth against a

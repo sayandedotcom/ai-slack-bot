@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { modelDisposition } from "./agent/ports";
 import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
 import { backfillApi } from "./api/backfill";
@@ -40,6 +41,11 @@ export { RunDO } from "./run/do";
  *    are not in wrangler.jsonc, so `wrangler types` cannot know about them.
  *    Optional in the type, and that optionality is safe only because
  *    `agent/model.ts` refuses to build a model without them — see invariant 39.
+ *  - `AGENT_MODEL_DISABLED` is the explicit model opt-out read by
+ *    `agent/ports.ts`. It is deliberately NOT in wrangler.jsonc `vars`: a
+ *    deployed Worker must not carry it, so absence in production means "the
+ *    model is supposed to work" and a missing Gateway URL fails loudly instead
+ *    of parking. The local test pool sets it in vitest.config.ts.
  *
  * Note what is NOT here: no widened binding, no `[key: string]: unknown`, and
  * no re-declared platform type. `WorkerLoader`, `R2Bucket` and the rest are
@@ -50,11 +56,24 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   TRIAGE_QUEUE: Queue<TriageJob>;
   AI_GATEWAY_ANTHROPIC_URL?: string;
   AI_GATEWAY_TOKEN?: string;
+  AGENT_MODEL_DISABLED?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.get("/api/health", (c) => c.json({ ok: true }));
+/**
+ * Liveness, plus THE ONE PLACE AN OPERATOR CAN SEE WHY NOTHING IS MOVING.
+ *
+ * `ok` stays pure liveness — an existing uptime monitor must keep meaning what
+ * it meant. `model` is the composition report: `ready`, or the reason it is
+ * not, by configuration NAME. Never a configured value (invariant 39), never
+ * customer text, and no Durable Object is woken to produce it.
+ *
+ * This exists because a deployment whose model work is parked used to be
+ * invisible outside one `console.warn` per isolate: the dashboard showed `live`
+ * runs with `error: null` that were never going to move.
+ */
+app.get("/api/health", (c) => c.json({ ok: true, model: modelDisposition(c.env) }));
 
 // Must stay above the catch-all below, which would otherwise swallow them.
 app.route("/slack", slackEvents);
