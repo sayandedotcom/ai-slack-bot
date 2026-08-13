@@ -53,6 +53,7 @@ function card(runId: string, overrides: Partial<NewApprovalCard> = {}): NewAppro
     channelId: "C1",
     threadTs: "1720000000.123456",
     shadow: false,
+    now: Date.now(),
     ...overrides,
   };
 }

@@ -23,6 +23,15 @@ export type NewApprovalCard = {
   channelId: string;
   threadTs: string;
   shadow: boolean;
+  /**
+   * `created_at`/`updated_at` for the new row, minted by the CALLER.
+   * `insertApproval` never reaches for the wall clock itself — every other
+   * mutating function in this file takes `now` as a required parameter, and
+   * the capability port that calls this one (a later task) is tested against
+   * a controlled clock. A defaulted `Date.now()` here would be exactly the
+   * kind of hidden nondeterminism that surfaces as flakiness downstream.
+   */
+  now: number;
 };
 
 export type DecideApprovalResult =
@@ -111,7 +120,6 @@ const ONE_OPEN_INDEX_ERROR = "UNIQUE constraint failed: approvals.run_id";
 export async function insertApproval(
   db: D1Database,
   card: NewApprovalCard,
-  now = Date.now(),
 ): Promise<"created" | "duplicate_open"> {
   try {
     await db
@@ -130,8 +138,8 @@ export async function insertApproval(
         card.channelId,
         card.threadTs,
         card.shadow ? 1 : 0,
-        now,
-        now,
+        card.now,
+        card.now,
       )
       .run();
     return "created";
