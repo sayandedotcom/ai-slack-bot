@@ -1338,3 +1338,438 @@ harness.
    never runs and no lifecycle is written. That is honest — no tool ran — but it
    means the failure matrix row's "failed tool event" half is satisfied by the
    transcript rather than by the event stream.
+
+---
+
+## Task 12 — the honest Phase 10 exit record
+
+Task 12's ten steps are almost entirely live-infrastructure work: deploy, remote
+D1 migration, live AI Gateway inspection, live Zep, live Slack, real Fable calls.
+Under the same operator constraint that has governed every task in this phase —
+**local + automated only** — **not one of Steps 1 through 10 was run.** No
+deploy, no remote migration, no Anthropic call, no Gateway call, no Zep call, no
+Slack post, no Cloudflare account state read or changed, no spend.
+`wrangler deploy --dry-run` was run as a BUILD check and is not a deploy.
+
+So this task does not claim to have executed Task 12. It produces the exit
+record: the deferred steps written so somebody else can run them, the 19-row
+test matrix adjudicated row by row against tests that were opened and read, the
+ten exit criteria adjudicated bluntly, and the one part of Step 9 that is
+genuinely local — the record of AI-suggested APIs that were wrong.
+
+### The final local gate — measured 2026-08-13, not assumed
+
+Every command run in this worktree at HEAD `6ed8caf`, tree clean.
+
+| Command | Started | Result |
+| --- | --- | --- |
+| `pnpm --filter @workspace/worker test` | 15:55:23 +05:30 | **68 files / 1305 passed / 2 skipped / 0 failed**, 110.14 s, exit 0 |
+| `pnpm --filter @workspace/worker codemode:dts:check` | 15:57:31 | exit 0 — "no control bytes in tracked source", "capability declarations are up to date" |
+| `pnpm --filter @workspace/worker typecheck` | 15:57:32 | `tsc --noEmit`, exit 0, no output |
+| `pnpm typecheck` | 16:02:44 | 3/3 tasks, **0 cached**, 7.048 s, exit 0 |
+| `pnpm lint` | 16:02:52 | 2/2 tasks, **0 cached**, 3.936 s, exit 0 |
+| `pnpm build` | 16:02:57 | 1/1 task, **0 cached**, 6.758 s, exit 0 |
+| `pnpm --filter @workspace/worker exec wrangler deploy --dry-run` | 15:57:40 | built, printed the binding table, "--dry-run: exiting now.", exit 0 |
+
+**The baseline held exactly: 68 / 1305 / 2 / 0**, matching Task 11's final
+measurement. Nothing dropped, so there is no line-by-line drop to explain. The
+known `codemode-security.test.ts > "omitting globalOutbound reaches the
+internet"` flake did not fire.
+
+One honesty note on the last three rows: `pnpm typecheck`, `pnpm lint` and
+`pnpm build` were first served entirely from the Turbo cache (`FULL TURBO`,
+25 ms each), because the tree is byte-identical to the one Task 11 measured.
+They were re-run with `--force` at the timestamps above so the numbers in this
+table are measured work, not a cache hit. `pnpm lint` reporting 2 tasks rather
+than 3 is pre-existing: the worker package defines no `lint` task.
+
+### Step 9's local half — every AI-suggested API that was wrong, and the source that corrected it
+
+This is the one Step 9 bullet that needs no live call, and it is the most
+valuable record this phase produced. Every citation below was **re-resolved
+against the installed packages during Task 12**, not copied forward from the
+ledger. Installed versions at the time of checking: `ai@7.0.59`,
+`@ai-sdk/provider@4.0.7`, `@ai-sdk/anthropic@4.0.37`, `@getzep/zep-cloud@3.27.0`.
+
+| # | The wrong claim, and who made it | What is actually true | The installed source that settled it |
+| --- | --- | --- | --- |
+| A1 | **A controller instruction told Task 5 that the plan's cost table described the wrong usage type, and that `StepResult.usage` was the nested provider `LanguageModelV4Usage`.** The implementer refused and re-read both declarations; the reviewer independently confirmed. | `StepResult.usage` is the **FLAT** `LanguageModelUsage`. The nested provider type never reaches a callback — the SDK converts it. | `ai/dist/index.d.ts:1395` declares `StepResult`; `:1484` types its `usage` as `LanguageModelUsage`; `:320` shows that type is flat (`inputTokens`, `inputTokenDetails.{noCacheTokens,cacheReadTokens,cacheWriteTokens}`). The nested one is `LanguageModelV4Usage` at `@ai-sdk/provider@4.0.7/dist/index.d.ts:2574`, a different package and a different shape. |
+| | **Cost of having complied: every cost row in Phase 10 would have read as a free request.** `normalizeSdkUsage` would have read `usage.inputTokens.total` off a plain number, yielding `undefined → 0` for every token class, on every step, forever. | Pinned so it cannot regress: `apps/worker/test/agent-gateway.test.ts:655` emits the NESTED shape from a `MockLanguageModelV4` and asserts the FLAT shape arrives at `step.usage`; `apps/worker/test/agent-cost.test.ts:501` asserts the adapter reads the flat shape. | |
+| A2 | `ResponseMessage` can be imported from `ai`. | It is **declared but not exported**. `agent/transcript.ts` derives it from the exported `PrepareStepFunction` instead of hand-copying the union, so a future change to the union breaks the build rather than drifting silently. | Declared at `ai/dist/index.d.ts:176` (`type ResponseMessage = AssistantModelMessage \| ToolModelMessage`). The export list at `:9320` does **not** contain it — it does export `PrepareStepFunction`, `StepResult` and `LanguageModelUsage`, so the omission is specific, not a bundling artefact. |
+| A3 | The provider-level `finishReason` is a string. | It is an **object** `{ unified, raw }`. Good news rather than bad: Anthropic's raw `refusal` stop reason is structurally available, with no `providerMetadata` digging. The AI SDK splits it before a callback sees it — `StepResult.finishReason` is the unified enum and `StepResult.rawFinishReason` is `string \| undefined`. | `@ai-sdk/provider@4.0.7/dist/index.d.ts:2536` declares the object, `unified` constrained to six literals. `ai/dist/index.d.ts:1480` is `readonly rawFinishReason: string \| undefined`. |
+| A4 | A throw out of `onStepEnd` will surface to the caller. | **It is completely swallowed.** This was originally established by a reviewer probe; Task 12 found the structural proof, which is stronger. Mitigation in `agent/loop.ts`: record the decided outcome BEFORE throwing and check it after the stream drains. | `ai/dist/index.js:2732-2741` — `notify()` maps every callback through `try { await callback(event) } catch (e) {}`, an **empty catch**. `:9240-9242` is the step-end dispatch that goes through it. |
+| A5 | A `prepareStep` throw behaves the same way as an `onStepEnd` throw. | It does **not**. It is not swallowed; it surfaces as a `TextStreamPart` of `type: "error"` carrying the original error, which the loop's `consumeStream` recovers through `classifyThrown`. | `ai/dist/index.js:9671` is the streaming `await prepareStep(...)` inside `streamStep`. A throw out of `streamStep` is enqueued as `{ type: "error", error }` — `:10054-10059` for a subsequent step, `:10092-10105` for the first step. |
+| A6 | Two current Cloudflare docs contradict each other on the AI Gateway auth header (`Authorization: Bearer` vs `cf-aig-authorization`). | **They were never in conflict** — they describe two different endpoint families. REST API (`api.cloudflare.com/client/v4/...`) takes `Authorization: Bearer <CF API token>`; provider-native (`gateway.ai.cloudflare.com/v1/...`) takes `cf-aig-authorization`, because on that route `Authorization` already belongs to the upstream provider. **This project routes natively**, so the plan's `cf-aig-authorization` is correct. | Cloudflare's [AI Gateway → Authentication](https://developers.cloudflare.com/ai-gateway/configuration/authentication/) page (fetched during Task 5). Enforced in code so the header and the endpoint cannot drift apart: `apps/worker/src/agent/gateway.ts:185-199` and `apps/worker/src/agent/model.ts:97-98,133-137`, which refuse a Gateway URL that is not an `https://gateway.ai.cloudflare.com` host. **Still unverified live** — deferred proof #9. |
+| A7 | `graph.add` retries are safe. | `@getzep/zep-cloud` defaults to **`maxRetries: 2`**, retrying on 408, 429 and any status `>= 500` — precisely the ambiguous statuses where the upstream write may already have succeeded — on a call that has **no idempotency key**. A silent duplicate-episode source. Set to `0` on the real call path; the durable outbox owns retrying instead. | `apps/worker/node_modules/@getzep/zep-cloud/dist/cjs/core/fetcher/requestWithRetries.js:15` (`const DEFAULT_MAX_RETRIES = 2`) and `:26` (`if ([408, 429].includes(response.status) \|\| response.status >= 500)`). |
+| A8 | **A controller instruction told Task 11 that the `tool-error` stream part carries the error object to discriminate on.** The implementer refused and proved otherwise against the installed runtime; the re-reviewer verified and recorded that its own brief had been wrong. | For a call the SDK refused against the tool schema, `tool-error` carries a **STRING**. The deciding error **object** hangs off the `tool-call` part, with `invalid: true`. Only the execute-**throw** path puts a real error object on `tool-error`. | Invalid-call path: `ai/dist/index.js:5818-5823` builds `tool-error` with `error: getErrorMessage4(toolCall.error)`, and `getErrorMessage` is declared `(error: unknown \| undefined): string` at `@ai-sdk/provider@4.0.7/dist/index.d.ts:801`. The object lives on the tool-call part at `ai/dist/index.js:3893-3906`, where `invalid: true` is set at `:3903` — **the only site in the whole bundle**. Throw path: `:3042-3050` puts the real `error` on `tool-error`. |
+
+Two of these eight (A1 and A8) are cases where **an implementer correctly refused
+a controller's SDK claim and was right**, and in both cases complying would have
+shipped a real defect — a phase-wide zero-cost telemetry bug, and a
+misclassification that turned recoverable model self-correction into a burned
+retry budget. The `.d.ts` files alone could not have settled A8; both fields are
+`unknown` there, and the runtime sources are the evidence.
+
+Two more corrections are worth recording even though they are not API drift:
+
+- **`vitest run -- <name>` does not filter in this project** (`npx vitest run
+  <path>` does). Every "focused test" claim before Task 5 was really a
+  full-suite claim — safer, not weaker, but the framing was wrong.
+- **`.gitattributes` needs `diff`, not just `text`.** `text` controls end-of-line
+  normalization only; `diff` is what overrides git's NUL-byte binary
+  auto-detection. Getting this wrong is why control bytes recurred four times,
+  including in `src/files/r2.ts`, a Phase 09 filename-validation regex that had
+  been **binary and unreviewable in every diff since it landed**.
+
+### Steps 1-10 — NOT RUN, recorded as deferred proofs 18-27
+
+Continuing the numbering already used in this file (#1-#7 Task 0, #8-#12 Task 5,
+#13-#16 Task 9, #17 Task 11 — see the reconciliation below). Every entry names
+its prerequisites, a runnable command shape, and a PASS/FAIL rubric precise
+enough to execute. **No secret VALUE appears anywhere below — names only.**
+
+#### 18. Apply the schema safely (Step 1)
+
+**NOT RUN.** Reason: applying a remote D1 migration mutates account state and is
+forbidden by the operator decision for this run.
+
+**Prerequisites:** Cloudflare account authorization; `0006_agent_loop.sql`
+unchanged since review.
+
+```
+# 1. local first
+pnpm --filter @workspace/worker exec wrangler d1 migrations list  <DB_NAME> --local
+pnpm --filter @workspace/worker exec wrangler d1 migrations apply <DB_NAME> --local
+# 2. inspect what is PENDING remotely before touching it
+pnpm --filter @workspace/worker exec wrangler d1 migrations list  <DB_NAME> --remote
+# 3. export the tables 0006 touches, if the current workflow supports it
+pnpm --filter @workspace/worker exec wrangler d1 export <DB_NAME> --remote --output ./pre-0006.sql
+# 4. only then
+pnpm --filter @workspace/worker exec wrangler d1 migrations apply <DB_NAME> --remote
+```
+
+**PASS:** step 2 lists `0006_agent_loop.sql` and nothing numbered above it; step
+4 applies exactly that one file; a follow-up `list --remote` shows zero pending.
+The `runs` repair statement in 0006 (bulk `UPDATE runs SET status='idle' WHERE
+status='live'`) leaves no run stuck `live`.
+**FAIL:** any already-applied migration is re-listed as pending (means the
+tracking table disagrees with the files — **stop**, do not force); any CHECK
+constraint violation; any migration number above 0006 appears, which would mean
+Phase 11 work leaked into this deploy.
+**Never** reuse or edit an applied migration number, and nothing from Phase 11
+(`0007_approvals.sql`, `escalate`, `withdraw`) may be present.
+
+#### 19. Configure secrets/pins and Gateway privacy (Step 2)
+
+**NOT RUN.** Reason: reading and writing Worker secrets and Gateway settings is
+account state.
+
+**Prerequisite: deferred proof #8 — the AI Gateway does not exist yet.** There
+is still **no AI Gateway configured anywhere in this repository**, which Task 0
+established by grep and Task 5 confirmed. #19 cannot start before #8 is done.
+
+Verify **by name only**, never printing a value:
+
+```
+pnpm --filter @workspace/worker exec wrangler secret list
+```
+
+| What to confirm | PASS | FAIL |
+| --- | --- | --- |
+| Anthropic key present | `ANTHROPIC_API_KEY` appears in the name list | absent |
+| Gateway URL/auth present | `AI_GATEWAY_ANTHROPIC_URL` and `AI_GATEWAY_TOKEN` appear | either absent — the composer fails closed with `missing_gateway_url` / `missing_gateway_token` and every run dies `requires_operator_config` |
+| Payload logging disabled per request | the Gateway dashboard shows log payload collection OFF, **and** the per-request header wins regardless: `cf-aig-collect-log-payload: "false"` is sent on every call | any entry in #23 carrying a request or response body |
+| Metadata logs retained | Gateway entries exist and carry token/model/status/cost/duration | no entries at all — then #23 cannot be checked |
+| Model exactly `claude-fable-5` | the Gateway log's model field reads `claude-fable-5` on every entry | any other model id, or a fallback id |
+| Gateway max attempts matches code | dashboard/entry retry count agrees with `cf-aig-max-attempts: "2"` | a dashboard default silently replacing the reviewed policy |
+| No fallback configured | the Gateway has no fallback/universal-endpoint provider chain | any configured fallback — invariant: a refusal must be a visible failure, never a quiet second model |
+
+The header values above are not aspirational; they are pinned by
+`apps/worker/test/agent-gateway.test.ts:114` as an exact map.
+
+#### 20. Deploy and run the real Tier 1 smoke again (Step 3)
+
+**NOT RUN.** Prerequisites: #18, #19.
+
+```
+pnpm --filter @workspace/worker exec wrangler deploy
+# then, through the deployed Worker behind Access, start a run whose program
+# performs a bounded multi-capability read and one direct network attempt.
+```
+
+**PASS:** `run_code` executes a bounded multi-capability read and returns; a
+direct `fetch` from inside the isolate fails in the **loaded** Worker (not only
+under the vitest pool); and the deployed CPU-runaway probe terminates a
+`while (true) {}` program at the configured `cpuMs`.
+**FAIL:** any direct network egress succeeds; or the runaway program is not
+killed by `workerd` itself — that is Phase 09's inherited open item (**deferred
+proof #7**), still unclosed, and Phase 10 must not assume `limits.cpuMs` stops a
+model-authored runaway in production.
+
+#### 21. A real Chat-origin loop (Step 4)
+
+**NOT RUN.** Prerequisites: #18-#20, and #1 (Fable access on the account has
+never been proven).
+
+Start with `POST /api/runs` carrying `firstMessage`; attach two WebSocket
+clients, one from seq 0 and one from a mid-stream cursor; disconnect one and
+reconnect it with `?since=`.
+
+**PASS, all six:** assistant/tool updates stream to both clients; `run_code`
+executes; transcript and usage are checkpointed (`model_messages`,
+`model_step_usage`, and an `agent_model_calls` row in D1); exactly one final
+Chat answer settles; the reconnecting client resumes with no gap and no
+duplicate across a hibernation; exactly one `memory_outbox` projection row
+exists for the generation.
+**FAIL:** two final turns; a gap or a duplicate frame on reconnect; more than
+one outbox row; a `usage` row whose token classes are all zero (that is the A1
+failure mode, and it would mean the flat/nested confusion has re-entered).
+
+This is the live counterpart of `apps/worker/test/agent-e2e.test.ts:53` and
+`:193`, which prove the same sequence against `MockLanguageModelV4`.
+
+#### 22. Live steering (Step 5)
+
+**NOT RUN.** Prerequisite: #21.
+
+Start a deliberately multi-step read; inject a steer through
+`POST /api/runs/:id/turns` (or the WebSocket) **while the first step is still
+streaming**; save the full event timeline. Then repeat with the steer arriving
+during the final text.
+
+**PASS:** the steer is incorporated in order at the next `prepareStep`, and the
+saved timeline shows it; the late steer marks the in-flight draft `superseded`
+and produces **exactly one** same-generation continuation.
+**FAIL:** a steer is dropped, applied twice, or applied out of order; a late
+steer produces a second generation or a second final turn.
+
+Note the automated counterpart is genuinely strong here (`agent-steering.test.ts`
+covers all seven plan rows) — what live running adds is a real provider stream,
+whose timing the harness cannot reproduce.
+
+#### 23. AI Gateway privacy and cache behaviour (Step 6)
+
+**NOT RUN.** Prerequisites: #8, #19, #21. **This is the single most important
+deferred proof in the phase**, because it is the only one that can answer the
+plan's own review question "Are Gateway payloads definitely absent, not merely
+assumed absent?" — today they are assumed.
+
+Inspect the actual Gateway log entries for the runs from #21.
+
+| Item | PASS | FAIL |
+| --- | --- | --- |
+| Metadata contains only opaque scalar IDs | exactly the four keys `run`, `generation`, `attempt`, `surface`, all scalars | any customer slug, email, Slack coordinate, prompt fragment or credential-shaped value |
+| Payload bodies absent | no request body and no response body on any entry | any prompt or completion text present — **stop and treat as an incident**; Fable's 30-day provider retention is already accepted, Gateway payload retention is not |
+| Gateway response caching skipped | entries show cache skipped (this is `cf-aig-skip-cache: "true"`, and is unrelated to Anthropic prompt caching) | any entry served from the Gateway response cache — one customer's answer could reach another |
+| Metadata retained | token counts, model, status, cost and duration all present | missing, which would make invariant 32's reconciliation source useless |
+| A second stable-prefix turn reports cache-read tokens | see #10 | see #10 |
+| D1 usage ≈ Gateway billing | the two agree, or every difference is explained | an unexplained difference — expect and document the known ones: a crash between provider billing and the local checkpoint undercounts locally (see #12), and a reclaimed stale attempt legitimately produces more usage rows than logical steps |
+
+#### 24. `#test-firedrill` Slack-origin safety smoke (Step 7)
+
+**NOT RUN.** Prerequisites: #18-#20. **Use the ungated test channel only.**
+
+Post a triage-shaped message in `#test-firedrill` and let it wake the loop.
+
+**PASS:** the run enters the identical loop/session shape as a Chat run; a
+useful internal draft and tool trace stream to the dashboard; a `slack.reply`
+attempt stops at **`identity_unavailable`**; **no customer-visible message is
+posted by the bot.** Save this evidence for the Phase 12 handoff.
+**FAIL:** any bot-posted reply in any channel; a `slack.reply` that succeeds by
+falling back to the bot token; or a run shape that differs from Chat's.
+
+`identity_unavailable` is the **correct** Phase 10 result, not a defect. It is
+refused through two independent gates —
+`apps/worker/src/codemode/bindings/slack.ts#assertMayReply` (no resolved actor)
+and `apps/worker/src/slack/gateway.ts#reply` (the Phase 12 placeholder) — and
+removing only one leaves the other refusing.
+
+#### 25. Verify memory (Step 8)
+
+**NOT RUN.** Prerequisites: #21, plus a real `ZEP_API_KEY` on the deployed
+Worker. Subsumes and supersedes nothing; it is the end-to-end version of #13 and
+#15, which remain the narrower component proofs.
+
+After Zep extraction latency (Phase 06 measured roughly 5.5 minutes; poll, do
+not assert immediately), recall the completed Chat/test run.
+
+**PASS:** the bounded action/outcome episode exists in the right graph; a
+`memory.recall` returns it; every citation `memory.cite` resolves to a **real
+stored Slack permalink that opens the message the fact came from**. Record the
+observed extraction lag here.
+**FAIL:** no episode; a citation whose permalink 404s; or a fact clearly derived
+from an ingested message that returns no citation at all (safe, but means
+provenance is not being registered on the live path).
+**Record the lag; do not write a timing assertion that will flake.**
+
+#### 26. Record measured cost and operational gaps (Step 9)
+
+**PARTIALLY DONE.** The last bullet — "every AI-suggested API that was wrong and
+the source used to correct it" — is fully local and is the table above. The rest
+needs the live runs from #20-#25 and is **NOT RUN**:
+
+- prompts / steps / token classes / cache hit / cost for each smoke;
+- observed first-token and total latency;
+- the Gateway-versus-local telemetry discrepancy;
+- retry and refusal behaviour actually observed;
+- remaining vendor readiness gaps.
+
+Also still owed and cheap once a live prompt exists: **#11, the byte-per-token
+ratio.** `CONSERVATIVE_BYTES_PER_TOKEN = 2` has never been measured against a
+real Fable prompt, and the densest real input this agent handles (Better Stack
+log rows, ClickHouse result sets) lands near 2.0-2.5 B/tok — against the floor,
+not comfortably above it. The overshoot is bounded at $0.80 either way, so this
+is a number to confirm, not a hole. Store **only scores and safe excerpts** —
+never a secret value, never a raw customer prompt body.
+
+The separate behavioural acceptance set (**#17**, the two Fable judgment cases
+with their PASS/FAIL table) is recorded above under "Task 11 — Step 9 — NOT RUN,
+and why" and is unchanged.
+
+#### 27. The final gate against the deployed revision (Step 10)
+
+**NOT RUN** as a *deployed* gate. The **local** half is done and its exact
+numbers and timestamps are in the table at the top of this section.
+
+What is still owed: run the seven commands against the deployed revision's
+commit, and save the deployment version, the run IDs from #21-#25, and log
+references. **Never save a secret value or a raw customer prompt body here.**
+
+**PASS:** all seven exit 0 at the deployed commit, and the deployment version
+recorded matches the commit the smokes ran against.
+**FAIL:** any command fails, or the recorded version cannot be tied to a commit.
+
+### Reconciliation of the deferred-proof list
+
+The list had drifted. Three things were fixed, and nothing was deleted:
+
+1. **#5 and #10 are the same proof.** Both are "run a second turn with the
+   stable prefix unchanged and assert `cacheReadTokens > 0`". #10 is the
+   stronger statement because it also requires the AI Gateway log half.
+   **#5 is superseded by #10.** Run #10.
+2. **#6 and #9 are the same proof, written on either side of a resolution.** #6
+   was raised in Task 0 while the header name was still ambiguous; Task 5
+   resolved the ambiguity on paper (see A6 above) and restated the live check as
+   #9. **#6 is superseded by #9.** Run #9.
+3. **Task 11's Step 9 was recorded correctly but never numbered**, so it was
+   invisible to anyone reading the list. It is now **#17 — the minimum Fable
+   behavioural acceptance set**, with its script shape and per-case PASS/FAIL
+   table already written above.
+
+Also worth stating so it is not re-raised: Task 10's "DEFERRED OPERATOR STEP:
+the Gateway does not exist yet" is **#8**, not a separate item, and Task 10's
+dynamic-import concern was **closed**, not deferred — the `--dry-run` build
+showed esbuild inlines both modules, so there is no chunk to fail to resolve.
+
+**Count: 27 numbered entries, of which 2 are superseded, leaving 25 live
+actions.**
+
+### The consolidated operator runbook — work top to bottom
+
+An operator picking this up should not have to read six task sections. This is
+every outstanding live proof in dependency order.
+
+| Order | # | What | Depends on |
+| --- | --- | --- | --- |
+| 1 | **8** | Create the AI Gateway; issue a `Run`-scoped token; set `AI_GATEWAY_ANTHROPIC_URL` and `AI_GATEWAY_TOKEN` as Worker secrets | — |
+| 2 | **1** | `claude-fable-5` is accepted by the actual Anthropic account | key present |
+| 3 | **2** | `thinking: adaptive` / `display: "omitted"` behaves as documented — no readable reasoning | #1 |
+| 4 | **3** | Raw stop reason and the classified usage/cache fields are actually present on a real response | #1 |
+| 5 | **9** | `cf-aig-authorization` is accepted live — a 200, not a 401 | #8 |
+| 6 | **19** | Secrets/pins verified by name; Gateway privacy settings; no fallback | #8 |
+| 7 | **18** | Apply `0006_agent_loop.sql` remotely, after inspecting pending | — |
+| 8 | **20** | Deploy; real Tier 1 smoke; direct network still fails in the loaded Worker | #18, #19 |
+| 9 | **7** | Phase 09's deployed CPU-runaway probe (inherited, still open) | #20 |
+| 10 | **21** | A real Chat-origin loop, two clients, six required outcomes | #20, #1 |
+| 11 | **4 / 4a** | Anthropic itself accepts the replayed omitted-thinking signature | #21 |
+| 12 | **22** | Live steering: mid-step, and the late-final `superseded` case | #21 |
+| 13 | **10** | Prompt-cache proof — `cacheReadTokens > 0` on the second turn, in both local telemetry and the Gateway log (supersedes #5) | #21 |
+| 14 | **23** | Gateway privacy and cache behaviour, inspected on real entries | #21 |
+| 15 | **12** | Billing cross-check: D1 usage against Gateway billing, differences explained | #23 |
+| 16 | **11** | Measure the byte-per-token ratio against `CONSERVATIVE_BYTES_PER_TOKEN` | #21 |
+| 17 | **24** | `#test-firedrill` Slack safety smoke — must stop at `identity_unavailable` | #20 |
+| 18 | **13** | A real agent episode is ingested by Zep and becomes searchable; record the lag | live `ZEP_API_KEY` |
+| 19 | **14** | Zep enforces the metadata (10 keys) and `sourceDescription` (500 chars) limits server-side | #13 |
+| 20 | **15** | A recall on a real graph resolves to a real permalink end to end | #13 |
+| 21 | **25** | The end-to-end memory verification for a completed run | #21, #13 |
+| 22 | **16** | The one-minute Cron Trigger actually fires in production | #20 |
+| 23 | **17** | The minimum Fable behavioural acceptance set (two judgment cases) | #8, #1 |
+| 24 | **26** | Record measured cost, latency, telemetry discrepancy, retry/refusal behaviour, vendor gaps | #20-#25 |
+| 25 | **27** | The final gate against the deployed revision | all above |
+
+Superseded and not in the table: **#5** (folded into #10), **#6** (folded
+into #9).
+
+### The Phase 10 test matrix — all 19 rows
+
+The brief's rule: *the phase is not complete unless each row has an automated or
+explicitly live proof.* Every citation below was opened and read during Task 12.
+Where a row is partial, what is covered and what is not is stated separately.
+Paths are relative to `apps/worker/`.
+
+| # | Area | Required proof | Verdict | Evidence |
+| --- | --- | --- | --- | --- |
+| 1 | one generic agent | no classifier/handler branch; Chat and Slack shape-equivalence | **PROVEN (automated)** | `test/agent-surface-parity.test.ts:153` produces both traces and compares them after normalizing only origin-specific trusted metadata; `:186` does the same for failure semantics. The file's own header (`:18-35`) states the property: driver/generation transitions, transcript roles, the assistant-update protocol, the tool-update structure and the usage schema must be byte-identical, and origin may change only how the final text is LABELLED. |
+| 2 | one tool | model request has only `run_code`; declarations occur once | **PROVEN (automated)** | `test/agent-composer.test.ts:92` (exposes `run_code` and nothing else), `:98` (none of the seven namespaces is an outer tool), `:106` (declarations exactly once, in the tool description); `test/agent-prompt.test.ts:267` (exactly once in the whole model request); `test/agent-e2e.test.ts:127` (one entry through the shipping composition). **Do not cite `test/agent-surface-parity.test.ts:208` for this** — despite its title it filters the calls actually MADE, so it passed with seven extra tools installed under Task 11's mutation 4. |
+| 3 | Phase 09 isolation | two executions from one tool instance have isolated counters/cache/audit | **PROVEN (automated)** | `test/codemode-isolation.test.ts:70` (own capability counter), `:88` (per-execution call budget restarts), `:109` (a fact recalled in one execution cannot be cited in another), `:140` (nested capability ids scoped to their outer tool call), `:219` (two concurrent executions of one tool stay independent), `:282` (a customer reference minted in execution A is refused in B). |
+| 4 | durable scheduling | commit-before-alarm failure heals; duplicate alarms single-flight | **PROVEN (automated)** | Healing: `test/agent-driver.test.ts:152` (an idempotent duplicate re-arms, healing a lost post-commit schedule), `test/agent-recovery.test.ts:340` (the alarm re-arms for a job the best-effort kick left behind). Single-flight: `test/agent-concurrency.test.ts:34` (one continuation, every input still pending in order), `:96` (exactly one of two concurrent alarms reclaims an expired lease), `test/agent-isolation.test.ts:373` (a duplicated alarm before, during and after the answer changes nothing). |
+| 5 | stable side effects | exact canonical key dedupes; changed/in-doubt action pauses/reconciles | **PROVEN (automated)** | Dedupe: `test/codemode-effects.test.ts:102` (replays a completed effect without calling upstream), `:113` (two concurrent identical reservations produce exactly one call), `:187` (a later turn may deliberately repeat the same semantic effect — the key includes the turn), `test/agent-recovery.test.ts:134` (one effect across both attempts of a reclaimed generation). In-doubt: `:145` (`effect_in_doubt` when the outcome cannot be proven), `:163` (reconcile resolves it), `:175` (keeps refusing when reconcile proves nothing). Pause: `test/agent-driver.test.ts:349` (an ordinary message may **not** resume an ambiguous mutation). |
+| 6 | transcript recovery | eviction after tool result resumes provider-valid history | **PARTIAL — automated half proven, live half owed (#4/#4a)** | Covered: `test/agent-transcript.test.ts:532` (never splits a tool call from its result), `:558` (never separates a thinking block from its call), `:572` (evicts oldest-first), `:580`/`:594` (protects the unsettled generation, returns `context_limit` rather than truncating it), `:612` (refuses rather than repairing an orphan result), `:632` (never opens on an assistant message), `:732` (evicts a stranded prefix rather than failing the turn), `:348`/`:361` (byte-identical round trip through durable storage), `:373` (continues from the recovered history). **Not covered:** "provider-valid" is validated by the **AI SDK's own prompt standardization against `MockLanguageModelV4`** — a mock cannot reject a signature it never verified. Whether Anthropic accepts it is deferred proof #4/#4a. |
+| 7 | Fable thinking | omitted signature/redacted data private; no reasoning stream | **PARTIAL — automated over fixtures; no live response observed (#2, #3)** | Covered: `test/agent-transcript.test.ts:125` (signature preserved unmodified), `:143` (the `redactedData` variant), `:159` (a step carrying readable reasoning is rejected outright), `:170` (an empty block with no continuation metadata is dropped), `:430` (no reasoning and no signature reaches the RunEvent stream — checkpointing a step emits no event at all); `test/agent-loop.test.ts:313` (the step fails safely when readable thinking arrives). **Not covered:** the fixtures are this repository's model of Fable's shape. No Fable response has ever been seen. |
+| 8 | streaming | batched replay, reconnect without gap, final exactly once | **PROVEN (automated)** | Batching: `test/agent-stream.test.ts:54` (not a row per token), `:69` (flushes on the time threshold), `:89` (a 10,000-token stream stays bounded), `test/agent-e2e.test.ts:282`. Reconnect: `test/agent-e2e.test.ts:193` (mid-stream cursor, no gap, no duplicate), `test/agent-isolation.test.ts:411` (from **every** cursor). Final exactly once: `test/agent-loop.test.ts:616` (a redelivered finalization appends no second turn), `test/agent-e2e.test.ts:115`. |
+| 9 | steering | two ordered steers next step; late steer supersedes and continues | **PROVEN (automated)** | `test/agent-steering.test.ts:153` (both steers taken exactly once, in RunEvent order, at the next `prepareStep`), `:590` (a steer during the final text supersedes the draft, keeps the generation, and answers once **after** the steer), `:812` (ten steers cost one continuation and arrive in order); `test/agent-loop.test.ts:540`/`:591`. **Stated limit:** rows 2 and 8 cannot distinguish "ordered by sequence" from "ordered by arrival", because the RPC assigns `event_seq` at commit so the two coincide; the underlying guarantee rests on `listPendingInputTurns`' `ORDER BY event_seq ASC` plus the unique index on `source_event_seq`. |
+| 10 | concurrency | two runs interleave with no scope, event, usage, or memory leak | **PROVEN (automated)** | `test/agent-isolation.test.ts:58` holds both provider calls open and releases them together so every callback interleaves, then asserts transcript, scope, ids and money stay apart — **including memory** at `:241-262` (each frozen episode belongs to its own run and its own graph) and `:397-404` (exactly one outbox row). `:292` adds that a steer aimed at one run does not cut the other's stream short. |
+| 11 | budgets | time/step/generation spend/run spend all stop before next call | **PARTIAL — three of four stop before the call; the time bound does not, and one field is dead** | Step: `test/agent-loop.test.ts:59`/`:68` (`step_limit` returned **before the provider is invoked**, because `stepCountIs(0)` would never fire), `:93`, `test/agent-failure-matrix.test.ts:393`. Spend, generation and run: `test/agent-cost.test.ts:783`/`:791`/`:803`/`:818` (refuses the step before the call), `:833` (**maximum overshoot is zero** while the byte estimate holds), `test/agent-loop.test.ts:411`. **Time — say this plainly:** there is **no pre-step elapsed-time check in the loop**. `src/run/do.ts:800-805` computes `deadlineAt` and passes it into `continuation.run(...)`, and `src/agent/driver.ts:43` declares it — but **nothing in `src/agent/` reads it**. The wall clock is enforced two other ways: the SDK's own `timeout.totalMs` (`src/agent/model.ts:229`, 8 minutes), and `do.ts:841-855`'s `#withDeadline`, which **abandons** the in-flight continuation rather than stopping it. Per-step and per-chunk timers ARE proven to fire and be classified correctly (`test/agent-failure-matrix.test.ts:136`, `:157`, which drive the SDK's real timers); `totalMs` and `stepMs` firing are exercised by no test. |
+| 12 | retries | SDK zero, Gateway bounded, driver explicit and idempotent | **PROVEN (automated)** | SDK zero: `test/agent-gateway.test.ts:465`. Gateway bounded: `:142` and `:114` pin `cf-aig-max-attempts`, `-retry-delay`, `-backoff` and `-request-timeout` as an exact map, so a dashboard default cannot replace the reviewed policy. Driver explicit: `test/agent-driver.test.ts:363` (backs off, persists a safe error, re-arms, fails visibly when exhausted), `:433` (bounded by retries, never by how many times work was claimed). Idempotent: `test/agent-recovery.test.ts:134`, `:286` (billed usage from a superseded attempt recorded exactly once). |
+| 13 | refusal | HTTP-200 refusal is visible failure, no fallback | **PARTIAL — behaviour proven over a fixture; the HTTP-200 fact is doc-verified, never observed (#1, #3)** | Covered: `test/agent-gateway.test.ts:545` (pre-output — raw refusal surfaced structurally from `rawFinishReason`, usage retained, **cost zero**, and the test asserts explicitly that no fallback model exists to try instead), `:579` (mid-stream — real usage charged, every partial draft discarded), `:606` (neither refusal completes), `:619` (the operator sees a safe message, not the provider's prose), `:624` (a refusal whose raw reason is lost but whose unified reason survives), `:633` (ordinary stop/tool-call/length left alone). **Not covered:** that Anthropic really returns `stop_reason: "refusal"` as HTTP 200 is verified from the Fable 5 launch doc (quoted earlier in this file), not from a response this system received. |
+| 14 | telemetry | all token classes/cost/latency/reason stored idempotently | **PARTIAL — every field but latency is asserted** | Covered: `test/agent-cost.test.ts:197` inserts once, reports the replay as `duplicate`, and reads the D1 row back asserting `input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `reasoning_tokens`, `total_tokens`, `cost_nano_usd`, `finish_reason` **and** `raw_finish_reason`; `:155`/`:169` (local ledger refuses to double a replayed step, treats a different attempt or step as distinct); `:305` (D1 `UNIQUE`, not only local); `:323` (negative tokens/cost refused); `:230` (no prompt, completion, reasoning or tool-body column exists at all). **Not covered:** `latency_ms` is produced (`src/agent/loop.ts:628`), stored (`src/agent/usage.ts:132`, `migrations/0006_agent_loop.sql:46`) and constrained `>= 0`, but **no test asserts its value** — the readback at `test/agent-cost.test.ts:210-227` omits it. Observed first-token and total latency is live work anyway (#26). |
+| 15 | Gateway privacy | metadata-only log, no prompt/completion payload | **PARTIAL — the REQUEST side is proven; what the Gateway RETAINS is not (#23)** | Covered — what we send: `test/agent-gateway.test.ts:114` (the exact reviewed header map), `:127` (payload collection off as the **string** `"false"`, since a boolean could stringify to `"true"` under some serializers), `:135` (response caching skipped), `:152` (at most five scalar metadata values, keys exactly `attempt`/`generation`/`run`/`surface`), `:167` (bounded and byte-stable), `:178` (a customer slug, email, Slack coordinate, prompt or secret is refused as an id), `:202` (the rejected value is not echoed into the error), `:231` (never emits an `authorization` header of any kind); `test/agent-canaries.test.ts:202-243`. **Not covered:** no Gateway log entry has ever been inspected. Two honest limits recorded in Task 11's gaps still stand: `gatewayHeaders` validates identifier **shape**, not secrecy (`OPAQUE_ID` is `[A-Za-z0-9:_.-]{1,128}`, which most credential formats satisfy), and the canary sweep injects both `dependencies` and `modelFactory`, so in that run no production code reads any canary. |
+| 16 | cache | real second turn has cache-read tokens | **AWAITS LIVE — no automated proof exists, and none can (#10)** | A cache read is a provider fact; a `MockLanguageModelV4` reports whatever the fixture says. What IS proven is every **precondition**: `test/agent-prompt.test.ts:199` (stable blocks kept separate from the dynamic one so a prefix can be cached), `:214` (the breakpoint is marked on the **last stable block**), `:407` (the stable prefix is byte-identical regardless of what the customer asked); and the pricing that will consume the result, `test/agent-cost.test.ts:588`/`:604`. Nothing here claims caching works because a header was set. |
+| 17 | memory | one logical outbox; at-least-once Zep, exact permalink source | **PARTIAL — the D1 half is proven end to end; the Zep half is entirely faked (#13, #14, #15, #25)** | Covered: one logical outbox — `test/agent-memory.test.ts:366` (exactly one episode and one outbox job per completed generation), `:476` (re-finalizing changes and duplicates nothing), `test/agent-isolation.test.ts:397-404`. At-least-once with a named duplicate window — `test/memory-outbox.test.ts:147` (exactly one of two concurrent deliveries calls the vendor), `:186` (an expired claimant's completion is refused), `:216` (resumes from a recorded uuid instead of adding twice), `:264` (warns when a retried claim may have left a duplicate). Exact source — `:387` resolves a recalled episode uuid through `zep_episodes` → `memory_episode_sources` → `permalink` and asserts `cite()` returns it; `:420` cites the evidence a Slack run READ rather than the question it answered; `:509` drops a source that resolves to nothing rather than inventing a link. **Not covered:** the Zep client is faked at the `MemoryStore` seam everywhere, and the permalink in `:387` is a **seeded fixture value** (`https://slack.example/...`). A fake cannot fail to extract, cannot lag, and cannot duplicate. |
+| 18 | Slack safety | no actor means no send; bot token never substitutes | **PROVEN (automated); the live channel smoke is #24** | `test/agent-composer.test.ts:223` (`identity_unavailable` on a fully permitted **live** run through the **production** composer), `:238` (**builds no `chat.postMessage` request and never touches the bot token**), `:264` (a shadow run is refused even earlier); `test/agent-surface-parity.test.ts:252`; `test/agent-e2e.test.ts:157` (the shipping composition cannot bypass the host write guard). Defence in depth confirmed by Task 11's mutation 10: removing only `slack/gateway.ts`'s gate leaves the composer tests green because the binding gate still refuses; six tests fail once both are removed. |
+| 19 | failures | every error path leaves terminal update and legal driver/run state | **PROVEN (automated)** | `test/agent-loop.test.ts:432` maps **each path to exactly one driver commitment**; `:367` (refusal → refused generation a steer may resume), `:390` (provider stream error → bounded retry), `:403`, `:411` (spend cap stops rather than buying another step); `test/agent-driver.test.ts:268` (failed on terminal refusal, budget or infrastructure outcome), `:305-360` (the resume-policy gate). The matrix rows themselves: `test/agent-failure-matrix.test.ts:66`/`:102` (a provider error after visible text never promotes the draft), `:136`/`:157` (real provider timers), `:181` (unknown tool → no fabricated result), `:237` (a tool that **threw** → the step is refused, not answered over), `:317` (a schema-refused call → model self-correction with a host-authored output), `:393` (still bounded), `:449` (`context_limit` instead of malformed history), `:568` (crash window 3: reclaim, re-run, file the issue exactly once). **One known incompleteness, already recorded as gap 6:** `withOuterToolEvents` has no `catch`, so a thrown `execute` leaves that outer tool-call event `running` forever — the generation settles correctly and the retry writes its own lifecycle, but a dashboard replaying the failed attempt sees a call that never ends. |
+
+**Matrix summary: 12 rows proven by automated tests; 6 partial with the covered
+and uncovered halves stated; 1 (cache) awaiting live proof entirely.** No row is
+without an automated or explicitly-live proof, which is the brief's bar — but
+seven of the nineteen cannot be called finished until the runbook above is
+executed.
+
+### The ten exit criteria — adjudicated
+
+Blunt, because several of these are written in terms of live behaviour and
+**cannot** honestly be claimed from a local run.
+
+| # | Criterion | Verdict |
+| --- | --- | --- |
+| 1 | A human-first Chat run automatically wakes **Fable 5**, streams to two clients, executes the real Phase 09 `run_code` isolate, and settles one durable answer | **NOT SATISFIED — harness only.** Everything except the provider is proven: `test/agent-e2e.test.ts:53` runs mock model → `run_code` → **real Tier 1 isolate** → result → final answer; `:193` and `test/agent-isolation.test.ts:411` prove two-cursor replay; `test/agent-loop.test.ts:616` proves one durable answer. **"Fable 5" is not proven at any level** — every provider in this repository is a `MockLanguageModelV4`, no Anthropic call has ever been made, and whether `claude-fable-5` is even enabled on the account is unknown (#1). Awaiting #20, #21. |
+| 2 | A triage-woken `#test-firedrill` run enters the identical loop/session shape and safely refuses a customer send; no bot-token fallback | **PARTIALLY SATISFIED — the refusal half is proven, the woken-by-Slack half is not.** Shape equivalence: `test/agent-surface-parity.test.ts:153`. Safe refusal with no bot-token fallback: `test/agent-composer.test.ts:223`, `:238`. **No Slack message has ever woken this loop.** Awaiting #24. |
+| 3 | Steering in order before the next step; a steer during final output marks the draft superseded and causes exactly one same-generation continuation | **SATISFIED by automated proof.** `test/agent-steering.test.ts:153`, `:590`, `:812`; `test/agent-loop.test.ts:540`, `:591`. This is the strongest automated area of the phase — all seven plan rows are covered. Live confirmation against a real provider stream is #22, but the criterion as written is met. |
+| 4 | Duplicate input, alarms, callbacks, reconnects and a simulated crash do not duplicate a final turn, model-step row, logical memory job or exact canonical effect key; changed/ambiguous effects pause | **SATISFIED by automated proof, with one stated limit.** `test/agent-isolation.test.ts:373`, `:411`, `:447`; `test/agent-concurrency.test.ts:34`, `:96`; `test/agent-loop.test.ts:616`; `test/agent-cost.test.ts:197`, `:305`; `test/codemode-effects.test.ts:145`, `:163`; `test/agent-driver.test.ts:349`. **The limit:** "simulated crash" means an expired lease reclaimed by a later alarm (`test/agent-failure-matrix.test.ts:568`, `test/agent-recovery.test.ts:74`/`:106`/`:134`) — the vitest pool cannot kill a Durable Object mid-`await`, and no test in this repository claims otherwise. |
+| 5 | A completed tool exchange can resume from the persisted transcript after object re-entry, with Fable's omitted-thinking opaque metadata unchanged | **SATISFIED IN THE HARNESS ONLY.** Byte-identical round trip proven at `test/agent-transcript.test.ts:348`, `:361`, `:373`. **Whether Anthropic accepts the replayed signature has never been tested** — deferred proof #4/#4a. A mock cannot reject a signature it never verified. |
+| 6 | Assistant deltas are replayable and batched; no reasoning is exposed | **SATISFIED by automated proof for the parts this system controls.** `test/agent-stream.test.ts:54`/`:69`/`:89`; `test/agent-e2e.test.ts:193`/`:282`; `test/agent-transcript.test.ts:430`; `test/agent-loop.test.ts:313`. The residual dependency is on Fable honouring `display: "omitted"` (#2) — the host refuses readable reasoning if it ever arrives, so this fails safe rather than leaking. |
+| 7 | Model/tool/time/refusal/step/cost failures are visible and recoverable | **MOSTLY SATISFIED; the TIME half is the weakest.** Model, tool, refusal, step and cost are all covered (see matrix rows 11, 13, 19). Time: the SDK's first-chunk and chunk timers are proven to fire and to be classified as `provider_timeout` rather than a cancellation (`test/agent-failure-matrix.test.ts:136`, `:157` — a real defect this phase found and fixed), but there is **no loop-level elapsed-time check**, the driver's `deadlineAt` is computed and never read, and `#withDeadline` abandons rather than stops. See matrix row 11. |
+| 8 | D1 contains per-step token/cost telemetry and a bounded agent memory outbox; **Zep receives the semantic episode with exact citation sources** | **HALF SATISFIED.** The D1 half is proven: `test/agent-cost.test.ts:197`, `:305`, `:230`; `test/agent-memory.test.ts:366`. **The Zep half is not satisfied at all — nothing has ever been sent to Zep.** Awaiting #13, #15, #25. |
+| 9 | AI Gateway retains metadata but no request/response payload, and **a real second turn proves prompt-cache reads** | **NOT SATISFIED, and not claimable from a local run.** Neither half. There is **no AI Gateway configured anywhere in this repository** (#8 has never been done), so nothing has been retained or not retained, and no second turn has ever happened. What is proven is only that the request asks for no payload logging and carries opaque ids (matrix row 15), and that the cacheable prefix is correctly placed and stable (matrix row 16). Awaiting #8, #10, #23. |
+| 10 | Full worker tests, Code Mode declaration drift check, typecheck, lint and build pass, **plus the documented deployed smoke tests** | **HALF SATISFIED.** The local half is done and measured — all seven commands exit 0, 68 files / 1305 passed / 2 skipped / 0 failed, numbers and timestamps in the table at the top of this section. **No deployed smoke test has been run**, including Phase 09's inherited CPU-runaway probe (#7). Awaiting #20, #24, #27. |
+
+**Score: 3 satisfied by automated proof (3, 4, 6); 3 satisfied in the harness
+only or half satisfied (2, 5, 8); 2 mostly satisfied with a named weak half (7,
+10); 2 not satisfied (1, 9).**
+
+Preserved from the brief, unchanged and not re-argued: **the old exit "a correct
+reply arrives in Slack" is intentionally not a Phase 10 criterion.** It would
+either fail honestly at `identity_unavailable` or tempt the implementation to
+violate the assignment by speaking as the bot. `slack.reply()` returning
+`identity_unavailable` until Phase 12 is **correct**, and is itself a proof for
+criterion 2. The real user-token Slack send becomes an integrated Phase 13
+criterion, after both approval (Phase 11) and identity (Phase 12) exist.
+
+### What this task did not do
+
+It did not deploy, migrate, call a model, call a Gateway, call Zep, post to
+Slack, read or change any Cloudflare account state, or spend anything. It did
+not touch `apps/worker/src`. It ran no probe. Nothing from Phase 11 is present.
+Every claim above is either a test that was opened and read, a declaration
+resolved in an installed package, or an explicit statement that something was
+not run.
