@@ -368,11 +368,11 @@ export async function listUndeliveredResolutions(db: D1Database, limit: number):
 
 **Interfaces produced:** as in "Authorization seam" above. `AccessJwtError` carries a stable `code`: `missing|malformed|bad_signature|wrong_issuer|wrong_audience|expired`.
 
-- [ ] **Step 1: Write failing tests.** Mint a real RS256 keypair in-test via WebCrypto (`crypto.subtle.generateKey`), export the public JWK, and serve it from a fake JWKS fetcher injected into `makeAccessVerifier` (add an optional `fetchJwks` parameter defaulting to the real fetch — the test seam). Sign JWTs in-test. Cover: valid token → email out; wrong `aud`, wrong `iss`, expired `exp`, garbage token, token signed by a different key → each throws its distinct code; JWKS is fetched once for two verifications (cache); an unknown `kid` triggers exactly one refetch. Roster: `isFirefighter` true for the 4 + the documented override, false for viewers; `isTeamMember` true for all 7 + override.
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.** Verify with `crypto.subtle.verify("RSASSA-PKCS1-v1_5", ...)` over the JOSE signing input; check `iss === "https://{teamDomain}"`, `aud` contains `cfg.aud`, `exp > now`. Extract `email` from the payload. Roster constants with the `// UNCONFIRMED` tag if Task 0 left it.
-- [ ] **Step 4: Run tests, verify PASS.**
-- [ ] **Step 5: Commit:** `feat(access): validate the access jwt and pin the roster`
+- [x] **Step 1: Write failing tests.** Mint a real RS256 keypair in-test via WebCrypto (`crypto.subtle.generateKey`), export the public JWK, and serve it from a fake JWKS fetcher injected into `makeAccessVerifier` (add an optional `fetchJwks` parameter defaulting to the real fetch — the test seam). Sign JWTs in-test. Cover: valid token → email out; wrong `aud`, wrong `iss`, expired `exp`, garbage token, token signed by a different key → each throws its distinct code; JWKS is fetched once for two verifications (cache); an unknown `kid` triggers exactly one refetch. Roster: `isFirefighter` true for the 4 + the documented override, false for viewers; `isTeamMember` true for all 7 + override.
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement.** Verify with `crypto.subtle.verify("RSASSA-PKCS1-v1_5", ...)` over the JOSE signing input; check `iss === "https://{teamDomain}"`, `aud` contains `cfg.aud`, `exp > now`. Extract `email` from the payload. Roster constants with the `// UNCONFIRMED` tag if Task 0 left it.
+- [x] **Step 4: Run tests, verify PASS.**
+- [x] **Step 5: Commit:** `feat(access): validate the access jwt and pin the roster`
 
 ### Task 3 — The `approval` capability namespace
 

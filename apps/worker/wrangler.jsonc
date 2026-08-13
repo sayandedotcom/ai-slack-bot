@@ -53,7 +53,19 @@
     "SUPABASE_URL": "https://uahmoigkzsuwhheohitz.supabase.co",
     // Where a published artifact is fetched from. The Worker's own origin, not
     // an R2 public bucket URL -- see the r2_buckets comment below.
-    "ARTIFACTS_BASE_URL": "https://firefighter.sayandeten.workers.dev/api/artifacts"
+    "ARTIFACTS_BASE_URL": "https://firefighter.sayandeten.workers.dev/api/artifacts",
+    // Cloudflare Access, fronting the dashboard (Phase 11 Task 2). Non-secret:
+    // both values are read out of a validated JWT's own claims, not used to
+    // authenticate anything themselves. See src/access/jwt.ts.
+    "ACCESS_TEAM_DOMAIN": "zellify-firefighter.cloudflareaccess.com",
+    // Placeholder. The real Access application AUD could not be read from this
+    // checkout (release gate G1, docs/superpowers/plans/phase-11-notes.md) --
+    // the application may not even be stood up yet. This is deliberately an
+    // obvious non-value rather than a guess: `makeAccessVerifier` checks `aud`
+    // unconditionally, so a deployed Worker with this placeholder rejects
+    // every JWT instead of admitting anyone. Fails closed; replace only with
+    // the real AUD, never with a fallback that skips the check.
+    "ACCESS_APP_AUD": "UNSET_SEE_PHASE_11_NOTES"
   },
   "assets": {
     "directory": "./public",

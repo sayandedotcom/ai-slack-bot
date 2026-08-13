@@ -1,0 +1,234 @@
+/**
+ * Cloudflare Access JWT verification.
+ *
+ * The dashboard sits behind Cloudflare Access (see README.md, "Access and the
+ * temporary override"). Access puts a signed `Cf-Access-Jwt-Assertion` header
+ * on every request that reaches the origin, but a header being PRESENT is not
+ * the same as it being VALID -- anyone can send an arbitrary header value to
+ * an origin that forgets to check. This module is the check: JWKS signature,
+ * issuer, audience and expiry, all four, every time. There is deliberately no
+ * flag that skips any of them -- see `makeAccessVerifier` below.
+ *
+ * Phase 12 extends this directory with OAuth, token rotation, and more
+ * crypto. Kept narrow here on purpose so that extension doesn't have to
+ * unpick shortcuts.
+ */
+
+/** What a validated token proves. Nothing more -- not role, not session. */
+export interface AccessIdentity {
+  email: string;
+}
+
+export interface AccessVerifier {
+  /** Throws `AccessJwtError` on any failure to validate. */
+  verify(jwt: string): Promise<AccessIdentity>;
+}
+
+/**
+ * The closed set of ways a token can fail to validate. Closed on purpose,
+ * same reasoning as `CapabilityErrorCode` in codemode/errors.ts: callers (and
+ * tests) branch on `code`, so an unlisted failure mode is a silent contract
+ * change.
+ */
+export type AccessJwtErrorCode =
+  | "missing"
+  | "malformed"
+  | "bad_signature"
+  | "wrong_issuer"
+  | "wrong_audience"
+  | "expired";
+
+/**
+ * `message` says why by CODE only -- never the token, a claim value, or any
+ * JWKS material. A caller that logs `err.message` on a verification failure
+ * must not be able to leak a bearer credential by doing so (constraint: no
+ * secret, JWT, or JWKS material in logs, errors, or thrown messages).
+ */
+export class AccessJwtError extends Error {
+  readonly code: AccessJwtErrorCode;
+
+  constructor(code: AccessJwtErrorCode, reason: string) {
+    super(`${code}: ${reason}`);
+    this.name = "AccessJwtError";
+    this.code = code;
+  }
+}
+
+export interface AccessVerifierConfig {
+  /** e.g. "zellify-firefighter.cloudflareaccess.com" -- no scheme, no path. */
+  teamDomain: string;
+  /** The Access application's AUD tag. */
+  aud: string;
+}
+
+type Jwk = JsonWebKey & { kid?: string };
+
+type JwksCache = {
+  keys: Map<string, CryptoKey>;
+  fetchedAt: number;
+};
+
+/** Cache floor. Below this age, a key-miss is the only thing that refetches. */
+const JWKS_CACHE_FLOOR_MS = 60 * 60 * 1000;
+
+function base64UrlToBytes(segment: string): Uint8Array {
+  const padded = segment + "=".repeat((4 - (segment.length % 4)) % 4);
+  const std = padded.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(std);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function base64UrlToText(segment: string): string {
+  return new TextDecoder().decode(base64UrlToBytes(segment));
+}
+
+/**
+ * Builds the verifier. `fetchJwks` is the test seam: it defaults to the
+ * global `fetch`, so the ONLY way to get an `AccessVerifier` in production is
+ * through the real network call -- there is no dev-bypass parameter, and no
+ * env-conditional anywhere in this function that turns off a check. Tests
+ * inject a fake fetcher; they never get a verifier that skips verification.
+ */
+export function makeAccessVerifier(
+  cfg: AccessVerifierConfig,
+  fetchJwks: typeof fetch = fetch,
+): AccessVerifier {
+  const jwksUrl = `https://${cfg.teamDomain}/cdn-cgi/access/certs`;
+
+  let cache: JwksCache | null = null;
+  // Dedupes concurrent loads within one isolate; unrelated to the 1-hour
+  // floor, which governs how OLD a settled cache may be before it counts as
+  // due for a routine refresh.
+  let inflight: Promise<JwksCache> | null = null;
+
+  async function loadJwks(): Promise<JwksCache> {
+    if (inflight) return inflight;
+    inflight = (async () => {
+      let response: Response;
+      try {
+        response = await fetchJwks(jwksUrl);
+      } catch {
+        throw new AccessJwtError("bad_signature", "could not reach the Access JWKS endpoint");
+      }
+      if (!response.ok) {
+        throw new AccessJwtError("bad_signature", "the Access JWKS endpoint returned an error");
+      }
+      let body: { keys?: Jwk[] };
+      try {
+        body = (await response.json()) as { keys?: Jwk[] };
+      } catch {
+        throw new AccessJwtError("bad_signature", "the Access JWKS endpoint returned something unreadable");
+      }
+      const keys = new Map<string, CryptoKey>();
+      for (const jwk of body.keys ?? []) {
+        if (!jwk.kid) continue;
+        const key = await crypto.subtle.importKey(
+          "jwk",
+          jwk,
+          { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+          false,
+          ["verify"],
+        );
+        keys.set(jwk.kid, key);
+      }
+      const next: JwksCache = { keys, fetchedAt: Date.now() };
+      cache = next;
+      return next;
+    })();
+    try {
+      return await inflight;
+    } finally {
+      inflight = null;
+    }
+  }
+
+  /**
+   * Resolves the verification key for `kid`. A key-miss triggers exactly one
+   * refetch -- Access rotates keys, so a `kid` this isolate has never seen is
+   * expected, not an attack. A miss that survives the refetch is real: it
+   * does NOT retry again, so a request hammering an unknown `kid` cannot turn
+   * into an unbounded refetch loop against the JWKS endpoint.
+   */
+  async function resolveKey(kid: string): Promise<CryptoKey> {
+    const isFresh = cache !== null && Date.now() - cache.fetchedAt < JWKS_CACHE_FLOOR_MS;
+    let { keys } = isFresh ? cache! : await loadJwks();
+    let key = keys.get(kid);
+    if (!key) {
+      ({ keys } = await loadJwks());
+      key = keys.get(kid);
+    }
+    if (!key) {
+      throw new AccessJwtError("bad_signature", "no JWKS key matches the token's kid");
+    }
+    return key;
+  }
+
+  return {
+    async verify(jwt: string): Promise<AccessIdentity> {
+      if (!jwt) {
+        throw new AccessJwtError("missing", "no token was supplied");
+      }
+
+      const parts = jwt.split(".");
+      if (parts.length !== 3) {
+        throw new AccessJwtError("malformed", "token is not a three-segment JWS");
+      }
+      const [headerSeg, payloadSeg, sigSeg] = parts;
+
+      let header: { alg?: string; kid?: string };
+      let payload: { iss?: string; aud?: string | string[]; exp?: number; email?: string };
+      try {
+        header = JSON.parse(base64UrlToText(headerSeg)) as typeof header;
+        payload = JSON.parse(base64UrlToText(payloadSeg)) as typeof payload;
+      } catch {
+        throw new AccessJwtError("malformed", "token header or payload is not valid JSON");
+      }
+      if (header.alg !== "RS256" || !header.kid) {
+        throw new AccessJwtError("malformed", "token header is missing alg or kid");
+      }
+
+      let signature: Uint8Array;
+      try {
+        signature = base64UrlToBytes(sigSeg);
+      } catch {
+        throw new AccessJwtError("malformed", "token signature segment is not valid base64url");
+      }
+
+      // Signature first, always -- nothing below this line is trusted until
+      // the JOSE signing input is proven to come from a key the configured
+      // Access team actually publishes.
+      const key = await resolveKey(header.kid);
+      const signingInput = new TextEncoder().encode(`${headerSeg}.${payloadSeg}`);
+      let valid: boolean;
+      try {
+        valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, signingInput);
+      } catch {
+        throw new AccessJwtError("bad_signature", "signature verification failed");
+      }
+      if (!valid) {
+        throw new AccessJwtError("bad_signature", "token signature does not match");
+      }
+
+      if (payload.iss !== `https://${cfg.teamDomain}`) {
+        throw new AccessJwtError("wrong_issuer", "token issuer does not match the configured team domain");
+      }
+
+      const auds = Array.isArray(payload.aud) ? payload.aud : payload.aud ? [payload.aud] : [];
+      if (!auds.includes(cfg.aud)) {
+        throw new AccessJwtError("wrong_audience", "token audience does not match the configured application");
+      }
+
+      if (typeof payload.exp !== "number" || payload.exp <= Math.floor(Date.now() / 1000)) {
+        throw new AccessJwtError("expired", "token has expired");
+      }
+
+      if (typeof payload.email !== "string" || payload.email.length === 0) {
+        throw new AccessJwtError("malformed", "token has no email claim");
+      }
+
+      return { email: payload.email };
+    },
+  };
+}

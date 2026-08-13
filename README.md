@@ -36,6 +36,11 @@ specific application:
 because the author has no `@zellify.app` address. Remove it from the *Dashboard* application's
 policy when the trial ends and the gate becomes `@zellify.app` only.
 
+The same override also lives one layer down, in the Worker's own approval roster
+(`apps/worker/src/access/roster.ts`, Phase 11): it is listed in `FIREFIGHTERS`, not `VIEWERS`,
+because the trial's live proof requires it to `PATCH` an approval. Pull it from **both**
+places — the Access policy above and that file — together.
+
 ### Why the two bypasses are not security holes
 
 Slack cannot authenticate to Access, so a gated `/slack/events` would silently drop every
