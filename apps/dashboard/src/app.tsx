@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { ApprovalsPanel } from "./approvals/approvals-panel";
+import { useApprovals } from "./approvals/use-approvals";
 import { ConnectPanel } from "./components/connect-panel";
 import { CountersPanel } from "./components/counters-panel";
 import { Header, SignedOutPage, useIdentity } from "./components/header";
@@ -73,6 +75,7 @@ function RunSession({ runId, onClose }: { runId: string; onClose: () => void }) 
 export function App() {
   const { identity, error: identityError } = useIdentity();
   const roster = usePoll(getRoster, 60_000);
+  const approvals = useApprovals();
   const [selectedRun, selectRun] = useSelectedRun();
   const closeDrawer = useCallback(() => selectRun(null), [selectRun]);
 
@@ -82,6 +85,16 @@ export function App() {
     <div className="min-h-screen bg-background text-foreground">
       <Header identity={identity} />
       <main className="mx-auto grid max-w-5xl grid-cols-1 gap-4 p-6 md:grid-cols-2">
+        {/* First in the grid, deliberately: a pending escalation is the only
+            thing on this page with a human waiting on the other end of it, so
+            it is pinned above the fold ahead of the rotation and the counters. */}
+        <div data-slot="approvals-panel" className="md:col-span-2">
+          <ApprovalsPanel
+            state={approvals.state}
+            role={identity?.role ?? "viewer"}
+            onDecide={approvals.decideCard}
+          />
+        </div>
         <div className="md:col-span-2">
           <RotationStrip state={roster} />
         </div>
