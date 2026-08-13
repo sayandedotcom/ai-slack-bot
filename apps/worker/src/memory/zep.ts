@@ -1,5 +1,23 @@
-import { ZepClient } from "@getzep/zep-cloud";
+import { ZepClient, ZepError } from "@getzep/zep-cloud";
 import type { AddEpisodeInput, MemoryFact, MemoryStore } from "./store";
+
+/**
+ * A graph nobody has written to yet is EMPTY MEMORY, not an upstream failure.
+ *
+ * Graphs are created lazily by the first write (`addEpisode` -> `ensureGraph`),
+ * so the org graph does not exist until the first internal-channel message or
+ * agent episode lands in it. Searching it before then returned a raw 404 that
+ * the capability layer collapsed to `upstream_unavailable` — the live Phase 10
+ * smoke burned 6 of its capability calls retrying "the upstream is down" when
+ * the truth was "nothing has been learned yet". Only host code ever supplies a
+ * graph id (`graphIdFor`), so a 404 here can never be hiding a model typo.
+ */
+export function isGraphNotFound(e: unknown): boolean {
+  if (e instanceof ZepError && e.statusCode === 404) return true;
+  // The SDK sometimes surfaces transport-level failures as plain Errors; only
+  // trust a message that names the condition, never a bare status number.
+  return e instanceof Error && /\bnot found\b/i.test(e.message);
+}
 
 /**
  * The wall-time ceiling on ONE Zep request.
@@ -89,7 +107,13 @@ export class ZepMemory implements MemoryStore {
   }
 
   async search(graphId: string, query: string, limit = 8): Promise<MemoryFact[]> {
-    const res = await this.client.graph.search({ graphId, query, scope: "edges", limit });
+    let res: Awaited<ReturnType<typeof this.client.graph.search>>;
+    try {
+      res = await this.client.graph.search({ graphId, query, scope: "edges", limit });
+    } catch (e: unknown) {
+      if (isGraphNotFound(e)) return [];
+      throw e;
+    }
     return (res.edges ?? []).map((edge) => ({
       factId: edge.uuid,
       fact: edge.fact,
