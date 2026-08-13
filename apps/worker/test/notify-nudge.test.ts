@@ -1,0 +1,345 @@
+import { env } from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeApprovalCardRunner } from "../src/approval/projection";
+import { claimNudge, getApproval, insertApproval } from "../src/approval/repository";
+import type { ApprovalRow } from "../src/approval/contracts";
+import { upsertIdentity } from "../src/db/identities";
+import { onDuty } from "../src/identity/rotation";
+import type { Env } from "../src/index";
+import { sendNudge, sweepNudges } from "../src/notify/nudge";
+
+/**
+ * THE ENGINEER NUDGE — Phase 13 Task 4.
+ *
+ * Real D1 through the workerd pool, every Slack call through a stubbed
+ * `fetch`. Two properties carry the file:
+ *
+ *  1. EXACTLY ONE nudge per approval, and the enforcement is the `claimNudge`
+ *     CAS in the database — not a flag in an isolate that a crash forgets. A
+ *     replayed projection must not DM a human twice.
+ *  2. A nudge NEVER breaks the projection. The card is the thing a human
+ *     decides from; a Slack outage may not turn a card that landed into a
+ *     card that did not.
+ */
+
+const NOW = Date.parse("2026-08-14T12:00:00Z");
+const ON_DUTY = onDuty(NOW).email;
+const SLACK_USER = "U0NDUTY";
+const FALLBACK = "C_FALLBACK";
+const DM_CHANNEL = "D0PENED";
+
+type Sent = { url: string; body: Record<string, unknown>; authorization: string | null };
+let sent: Sent[] = [];
+
+/** Stub every Slack call, answering per API method. */
+function stubSlack(
+  reply: (method: string, body: Record<string, unknown>) => unknown,
+  status = 200,
+): void {
+  sent = [];
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    const method = String(url).split("/").pop() ?? "";
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    sent.push({ url: String(url), body, authorization: new Headers(init.headers).get("authorization") });
+    return new Response(JSON.stringify(reply(method, body)), { status });
+  });
+}
+
+const happySlack = (method: string): unknown =>
+  method === "conversations.open"
+    ? { ok: true, channel: { id: DM_CHANNEL } }
+    : { ok: true, ts: "1723640000.000100" };
+
+function testEnv(overrides: Record<string, string> = {}): Env {
+  return {
+    ...env,
+    NUDGE_MODE: "dm",
+    NUDGE_FALLBACK_CHANNEL_ID: FALLBACK,
+    DASHBOARD_BASE_URL: "https://dash.example",
+    ...overrides,
+  } as unknown as Env;
+}
+
+async function seedRun(): Promise<string> {
+  const runId = `run_${crypto.randomUUID()}`;
+  await env.DB.prepare(
+    `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
+     VALUES (?, ?, 'slack', 'C_CUST', '1720000000.000100', 'idle', 0, ?, ?)`,
+  )
+    .bind(runId, `slack:${crypto.randomUUID()}`, NOW, NOW)
+    .run();
+  return runId;
+}
+
+/** A pending card in D1, returned as the row `sendNudge` takes. */
+async function seedApproval(createdAt = NOW): Promise<ApprovalRow> {
+  const runId = await seedRun();
+  const id = `apr:${crypto.randomUUID()}`;
+  await insertApproval(env.DB, {
+    id,
+    runId,
+    generationId: `gen:${crypto.randomUUID()}`,
+    draft: "We can refund the last invoice.",
+    why: "customer asked for a refund, this is committal",
+    channelId: "C_CUST",
+    threadTs: "1720000000.000100",
+    shadow: false,
+    now: createdAt,
+  });
+  const row = await getApproval(env.DB, id);
+  return row!;
+}
+
+/** The on-duty engineer has connected Slack. No token is ever opened for a nudge. */
+async function connectOnDuty(): Promise<void> {
+  await upsertIdentity(
+    env.DB,
+    {
+      email: ON_DUTY,
+      provider: "slack",
+      externalId: SLACK_USER,
+      scopes: "chat:write",
+      tokenCiphertext: "sealed-opaque",
+      connectedAt: NOW,
+    },
+    NOW,
+  );
+}
+
+beforeEach(async () => {
+  await env.DB.prepare("DELETE FROM approvals").run();
+  await env.DB.prepare("DELETE FROM identities WHERE email = ?").bind(ON_DUTY).run();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("sendNudge", () => {
+  it("skips without a single Slack call when the row is already claimed", async () => {
+    const row = await seedApproval();
+    expect(await claimNudge(env.DB, row.id, NOW)).toBe(true);
+    await connectOnDuty();
+    stubSlack(happySlack);
+
+    expect(await sendNudge(testEnv(), row)).toBe("skipped");
+    expect(sent).toEqual([]);
+  });
+
+  it("opens a DM with the on-duty engineer and posts the nudge blocks there", async () => {
+    const row = await seedApproval();
+    await connectOnDuty();
+    stubSlack(happySlack);
+
+    expect(await sendNudge(testEnv(), row)).toBe("sent");
+
+    expect(sent.map((s) => s.url)).toEqual([
+      "https://slack.com/api/conversations.open",
+      "https://slack.com/api/chat.postMessage",
+    ]);
+    expect(sent[0]!.body).toMatchObject({ users: SLACK_USER });
+    expect(sent[1]!.body.channel).toBe(DM_CHANNEL);
+    expect(Array.isArray(sent[1]!.body.blocks)).toBe(true);
+    expect(JSON.stringify(sent[1]!.body.blocks)).toContain(`https://dash.example/?approval=${row.id}`);
+    // The nudge is a BOT-token DM to an engineer. It must never carry a
+    // customer-send credential.
+    expect(sent[1]!.authorization).toBe(`Bearer ${env.SLACK_BOT_TOKEN}`);
+
+    const after = await getApproval(env.DB, row.id);
+    expect(after?.nudgeChannelId).toBe(DM_CHANNEL);
+    expect(after?.nudgeTs).toBe("1723640000.000100");
+    expect(after?.nudgedAt).not.toBeNull();
+  });
+
+  it("falls back to the channel, naming the engineer by email, when nobody has connected", async () => {
+    const row = await seedApproval();
+    stubSlack(happySlack);
+
+    expect(await sendNudge(testEnv(), row)).toBe("sent");
+
+    expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.postMessage"]);
+    expect(sent[0]!.body.channel).toBe(FALLBACK);
+    const payload = JSON.stringify(sent[0]!.body);
+    expect(payload).toContain(ON_DUTY);
+    // There is no user id to mention, so there must be no mention syntax at all.
+    expect(payload).not.toContain("<@");
+
+    // Once only: a second attempt loses the CAS and touches no network.
+    sent = [];
+    expect(await sendNudge(testEnv(), row)).toBe("skipped");
+    expect(sent).toEqual([]);
+  });
+
+  it("posts straight to the fallback channel with an <@id> mention in channel mode", async () => {
+    const row = await seedApproval();
+    await connectOnDuty();
+    stubSlack(happySlack);
+
+    expect(await sendNudge(testEnv({ NUDGE_MODE: "channel" }), row)).toBe("sent");
+
+    expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.postMessage"]);
+    expect(sent[0]!.body.channel).toBe(FALLBACK);
+    expect(JSON.stringify(sent[0]!.body)).toContain(`<@${SLACK_USER}>`);
+  });
+
+  it("unclaims the row when Slack refuses, so the sweeper can retry", async () => {
+    const row = await seedApproval();
+    await connectOnDuty();
+    stubSlack((method) =>
+      method === "conversations.open" ? { ok: true, channel: { id: DM_CHANNEL } } : { ok: false, error: "channel_not_found" },
+    );
+
+    expect(await sendNudge(testEnv(), row)).toBe("failed");
+
+    const after = await getApproval(env.DB, row.id);
+    expect(after?.nudgedAt).toBeNull();
+    expect(after?.nudgeTs).toBeNull();
+  });
+
+  it("unclaims the row when the request throws", async () => {
+    const row = await seedApproval();
+    await connectOnDuty();
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("network down");
+    });
+
+    expect(await sendNudge(testEnv(), row)).toBe("failed");
+    expect((await getApproval(env.DB, row.id))?.nudgedAt).toBeNull();
+  });
+
+  it("fails without claiming anything when no destination is configured", async () => {
+    const row = await seedApproval();
+    stubSlack(happySlack);
+
+    expect(await sendNudge(testEnv({ NUDGE_FALLBACK_CHANNEL_ID: "" }), row)).toBe("failed");
+    expect(sent).toEqual([]);
+    expect((await getApproval(env.DB, row.id))?.nudgedAt).toBeNull();
+  });
+});
+
+describe("sweepNudges", () => {
+  it("nudges pending cards older than 60s and leaves fresh ones alone", async () => {
+    const old = await seedApproval(NOW - 120_000);
+    const fresh = await seedApproval(NOW - 10_000);
+    await connectOnDuty();
+    stubSlack(happySlack);
+
+    expect(await sweepNudges(testEnv(), NOW)).toBe(1);
+
+    expect((await getApproval(env.DB, old.id))?.nudgeTs).toBe("1723640000.000100");
+    expect((await getApproval(env.DB, fresh.id))?.nudgedAt).toBeNull();
+  });
+});
+
+/**
+ * The projection hook. A fake storage rather than a live Durable Object: what
+ * is under test is the runner's OUTCOME when the nudge fails, and the two
+ * reads it makes of local state are a fixed pair of SELECTs.
+ */
+function fakeStorage(input: { runId: string; approvalId: string }): DurableObjectStorage {
+  const approvalState = {
+    approval_id: input.approvalId,
+    generation_id: `gen:${crypto.randomUUID()}`,
+    state: "open",
+    draft: "We can refund the last invoice.",
+    why: "customer asked for a refund, this is committal",
+    created_at: NOW,
+    updated_at: NOW,
+  };
+  const runState = {
+    run_id: input.runId,
+    run_key: `slack:${input.runId}`,
+    origin: "slack",
+    channel_id: "C_CUST",
+    thread_ts: "1720000000.000100",
+    status: "awaiting_approval",
+    summary: null,
+    created_at: NOW,
+    updated_at: NOW,
+  };
+  return {
+    sql: {
+      exec: (query: string) => ({
+        toArray: () => (query.includes("approval_state") ? [approvalState] : [runState]),
+      }),
+    },
+  } as unknown as DurableObjectStorage;
+}
+
+describe("the approval_card projection hook", () => {
+  it("still delivers the card when the nudge fails", async () => {
+    const runId = await seedRun();
+    const approvalId = `apr:${crypto.randomUUID()}`;
+    await connectOnDuty();
+    stubSlack(() => ({ ok: false, error: "channel_not_found" }));
+
+    const runner = makeApprovalCardRunner({
+      storage: fakeStorage({ runId, approvalId }),
+      db: env.DB,
+      env: testEnv(),
+    });
+
+    const outcome = await runner.run({
+      job: {
+        id: "pj1",
+        kind: "approval_card",
+        sourceId: approvalId,
+        state: "claimed",
+        claimToken: "t1",
+        leaseExpiresAt: NOW + 1000,
+        attempts: 1,
+        nextAttemptAt: NOW,
+        lastError: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+      claimToken: "t1",
+      runId,
+    });
+
+    expect(outcome).toEqual({ outcome: "delivered" });
+    const card = await getApproval(env.DB, approvalId);
+    expect(card).not.toBeNull();
+    // The failed nudge left the slot free for the sweeper.
+    expect(card?.nudgedAt).toBeNull();
+  });
+
+  it("nudges once when the card projects", async () => {
+    const runId = await seedRun();
+    const approvalId = `apr:${crypto.randomUUID()}`;
+    await connectOnDuty();
+    stubSlack(happySlack);
+
+    const runner = makeApprovalCardRunner({
+      storage: fakeStorage({ runId, approvalId }),
+      db: env.DB,
+      env: testEnv(),
+    });
+    const job = {
+      job: {
+        id: "pj1",
+        kind: "approval_card" as const,
+        sourceId: approvalId,
+        state: "claimed" as const,
+        claimToken: "t1",
+        leaseExpiresAt: NOW + 1000,
+        attempts: 1,
+        nextAttemptAt: NOW,
+        lastError: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+      claimToken: "t1",
+      runId,
+    };
+
+    expect(await runner.run(job)).toEqual({ outcome: "delivered" });
+    const posts = sent.filter((s) => s.url.endsWith("chat.postMessage")).length;
+    expect(posts).toBe(1);
+
+    // A REDELIVERY of the same job — an at-least-once alarm, or a crashed
+    // worker replaying it — must not DM the engineer a second time.
+    expect(await runner.run(job)).toEqual({ outcome: "delivered" });
+    expect(sent.filter((s) => s.url.endsWith("chat.postMessage")).length).toBe(1);
+  });
+});

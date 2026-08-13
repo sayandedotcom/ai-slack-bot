@@ -7,6 +7,8 @@ import {
 import { readApprovalState, readState } from "../run/session";
 import { getRunById } from "../run/repository";
 import { getApproval, insertApproval } from "./repository";
+import { sendNudge } from "../notify/nudge";
+import type { Env } from "../index";
 
 /**
  * The `approval_card` projection: one local `approval_state` row becomes one
@@ -28,8 +30,33 @@ import { getApproval, insertApproval } from "./repository";
 export function makeApprovalCardRunner(input: {
   storage: DurableObjectStorage;
   db: D1Database;
+  /** Needed only by the nudge — the bot token, the mode and the dashboard URL. */
+  env: Env;
 }): AgentProjectionRunner {
-  const { storage, db } = input;
+  const { storage, db, env } = input;
+
+  /**
+   * The escalation nudge, hung off the END of a successful projection.
+   *
+   * Ordering is the point: the card is upserted and committed FIRST, so the
+   * DM the engineer receives can never point at a card the dashboard has not
+   * got. And it is awaited-and-swallowed rather than floated, because a
+   * promise left unawaited inside an alarm can be cancelled when the handler
+   * returns — a nudge that is sometimes cancelled is a page that sometimes
+   * never arrives. `sendNudge` never throws and hands its claim back on
+   * failure, so the worst case here is a row the sweeper picks up sixty
+   * seconds later; what it can NEVER do is turn a delivered card into a
+   * retry.
+   */
+  async function nudge(approvalId: string): Promise<void> {
+    try {
+      const row = await getApproval(db, approvalId);
+      if (row === null || row.decision !== "pending") return;
+      await sendNudge(env, row);
+    } catch {
+      /* the projection already succeeded; see the comment above */
+    }
+  }
 
   return {
     async run(job: ClaimedProjectionJob): Promise<ProjectionOutcome> {
@@ -75,7 +102,10 @@ export function makeApprovalCardRunner(input: {
           now: local.createdAt,
         });
 
-        if (result === "created") return { outcome: "delivered" };
+        if (result === "created") {
+          await nudge(approvalId);
+          return { outcome: "delivered" };
+        }
 
         // `duplicate_open` IS SUCCESS — but only once we know the collision is
         // THIS card. Alarm delivery is at-least-once and a generation retries,
@@ -93,7 +123,14 @@ export function makeApprovalCardRunner(input: {
         // unpark, which is the one outcome this whole feature must not reach.
         // So: retry, visibly, and let the D1 outage clear or a human see it.
         const existing = await getApproval(db, approvalId);
-        if (existing !== null) return { outcome: "delivered" };
+        // A REDELIVERY of this same card. The nudge is attempted again on
+        // purpose: the first pass may have crashed between the insert and the
+        // DM, and `claimNudge` is what makes a second attempt free when it
+        // did not.
+        if (existing !== null) {
+          await nudge(approvalId);
+          return { outcome: "delivered" };
+        }
         return {
           outcome: "retry",
           error: `another unsettled approval already holds run ${job.runId}; this card was not created`,

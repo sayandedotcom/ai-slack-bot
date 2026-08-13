@@ -13,6 +13,7 @@ import { routeSlackMessageToOwnedRun, wakeSlackRun } from "./run/coordinator";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
+import { sweepNudges } from "./notify/nudge";
 import { ZepMemory } from "./memory/zep";
 import { handleTriageBatch, type TriageJob } from "./triage/consumer";
 import { makeTriageRunner } from "./triage/run";
@@ -71,6 +72,18 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   SLACK_CLIENT_SECRET?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  // Phase 13's three, all NON-SECRET `vars` — declared here ahead of the
+  // wrangler.jsonc entries a later task adds, and optional for the same reason
+  // as everything above: the code that reads them must keep treating absence as
+  // possible. `sendNudge` refuses rather than guessing a destination when
+  // `NUDGE_FALLBACK_CHANNEL_ID` is the one it needs and it is empty.
+  /** `"dm"` (default) or `"channel"`. */
+  NUDGE_MODE?: string;
+  /** The #eng-firefighter channel id: used in `channel` mode, and whenever the
+   *  on-duty engineer has no Slack identity row. Fallback beats silence. */
+  NUDGE_FALLBACK_CHANNEL_ID?: string;
+  /** Origin the nudge's "Review" button points at. */
+  DASHBOARD_BASE_URL?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -198,7 +211,17 @@ export default {
    * than swallowing the error and looking healthy.
    */
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    const results = await Promise.allSettled([sweepMemoryOutbox(env), sweepUndeliveredApprovals(env)]);
+    // The third sweep (Phase 13) is the nudge retry feed: a pending card that
+    // has sat unnudged for a minute — because Slack was down, or because the
+    // projection's own attempt failed and handed its claim back — gets one
+    // more attempt. Independent of the other two for exactly the reason stated
+    // above, and safe to run beside a live projection because both go through
+    // the same `claimNudge` CAS.
+    const results = await Promise.allSettled([
+      sweepMemoryOutbox(env),
+      sweepUndeliveredApprovals(env),
+      sweepNudges(env),
+    ]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length > 0) {
       throw new AggregateError(

@@ -28,6 +28,17 @@ import {
 import { freshDriverRun, waitFor } from "./helpers/agent-driver";
 
 /**
+ * The card runner nudges the on-duty engineer (Phase 13). These suites are
+ * about the CARD, not the DM, so they hand it an env with no nudge
+ * destination: `sendNudge` refuses before it claims anything and before it
+ * touches the network, which keeps this file free of live Slack calls no
+ * matter what `identities` rows another suite in the shared D1 left behind.
+ */
+function nudgeless(workerEnv: Env): Env {
+  return { ...workerEnv, NUDGE_MODE: "channel", NUDGE_FALLBACK_CHANNEL_ID: "" };
+}
+
+/**
  * INTERRUPTION AND WITHDRAW — Phase 11 Task 7.
  *
  * Two properties, and the second one is the whole point of the file.
@@ -176,7 +187,7 @@ async function parkedRun(options: {
     {
       projections: {
         approval_card: (ctx, workerEnv) =>
-          makeApprovalCardRunner({ storage: ctx.storage, db: workerEnv.DB }),
+          makeApprovalCardRunner({ storage: ctx.storage, db: workerEnv.DB, env: nudgeless(workerEnv) }),
       },
     },
     { runKey: h.key },

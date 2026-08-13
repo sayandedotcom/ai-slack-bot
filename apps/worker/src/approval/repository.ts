@@ -326,6 +326,19 @@ export async function recordNudgeMessage(
 }
 
 /**
+ * Hand the nudge slot back after a send that did not happen.
+ *
+ * The counterpart to `claimNudge`, and the reason the claim can be taken
+ * before the Slack call rather than after it: a failed attempt puts the row
+ * straight back on `idx_approvals_unnudged` for the sweeper, so the once-only
+ * guarantee costs nothing in deliverability. Unconditional — only the caller
+ * that won the claim ever reaches it.
+ */
+export async function releaseNudge(db: D1Database, id: string): Promise<void> {
+  await db.prepare(`UPDATE approvals SET nudged_at = NULL WHERE id = ?`).bind(id).run();
+}
+
+/**
  * The repair key for invariant 9: decided rows whose resolution turn has not
  * yet reached the DO, for the one-minute `scheduled()` sweeper to re-drive.
  * A `pending` row has nothing to resolve yet and is correctly excluded.

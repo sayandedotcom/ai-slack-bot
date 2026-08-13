@@ -7,6 +7,8 @@ import {
   type RunPorts,
 } from "./driver";
 import { makeApprovalCardRunner } from "../approval/projection";
+import { makeUserTokenSender } from "../approval/sender";
+import { makeUserTokenSource } from "../identity/user-token";
 import { makeMemoryOutboxRunner } from "./memory";
 import { makeUsageProjectionRunner } from "./usage";
 import { readState } from "../run/session";
@@ -247,10 +249,34 @@ export function productionRunPorts(env: Env): {
      * Phase 11's approval card. Without it an escalation parks the run
      * locally and the dashboard never learns there is anything to decide —
      * a run parked on a decision nobody can be asked for.
+     *
+     * `workerEnv` is threaded in whole (Phase 13) because the runner now hangs
+     * the engineer NUDGE off the end of a successful card upsert, and that
+     * needs the bot token, the nudge mode and the dashboard origin. Passing
+     * `env` rather than three unpacked settings keeps the decision about which
+     * of them matter inside the file that sends the message.
      */
     approval_card: (ctx, workerEnv) =>
-      makeApprovalCardRunner({ storage: ctx.storage, db: workerEnv.DB }),
+      makeApprovalCardRunner({ storage: ctx.storage, db: workerEnv.DB, env: workerEnv }),
   };
+
+  /**
+   * THE REAL SENDER, reached from production for the first time here.
+   *
+   * `defaultRunPorts` supplies `makeIdentityRefusingSender()`, which is what
+   * Phase 11 shipped and what several tests still drive — a deployment with no
+   * identities must refuse rather than improvise. Phase 12 built the thing that
+   * makes refusal unnecessary: the on-duty engineer's own encrypted Slack user
+   * token. Until this line, that work had no production call site, so every
+   * approved reply came back `blocked: identity_unavailable` even where an
+   * engineer HAD connected their account.
+   *
+   * Composing it here does not weaken the refusal: `makeUserTokenSource` returns
+   * null when nobody on duty has connected, and `makeUserTokenSender` turns that
+   * null into an honest `blocked`. There is still no bot-token fallback on the
+   * customer-facing path, and no code below this line can reach for one.
+   */
+  const approvalSender = makeUserTokenSender(makeUserTokenSource(env));
 
   const report = modelDisposition(env);
 
@@ -268,7 +294,7 @@ export function productionRunPorts(env: Env): {
   // still drain the memory and usage work its earlier runs committed, or a
   // missing setting quietly becomes lost telemetry and lost memory.
   if (!report.continuationInstalled) {
-    return { ports: { projections, modelConfigured }, report };
+    return { ports: { projections, modelConfigured, approvalSender }, report };
   }
 
   // Installed even when `missingConfiguration` is non-empty, and that is the
@@ -278,7 +304,7 @@ export function productionRunPorts(env: Env): {
   // failure carrying `missing_gateway_url` — visible on the run's own driver
   // state — instead of burning the attempt budget or parking in silence.
   return {
-    ports: { continuation: productionContinuation, projections, modelConfigured },
+    ports: { continuation: productionContinuation, projections, modelConfigured, approvalSender },
     report,
   };
 }

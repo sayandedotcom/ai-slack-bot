@@ -10,6 +10,7 @@ import {
   type ResolutionNotifier,
 } from "../src/api/approvals";
 import { makeApprovalCardRunner } from "../src/approval/projection";
+import type { Env } from "../src/index";
 import { makeRunDoResolutionNotifier } from "../src/approval/notifier";
 import {
   decideApproval,
@@ -28,6 +29,17 @@ import {
   type LoopHarness,
 } from "./helpers/agent-loop";
 import { connect, waitFor as waitForFrame } from "./helpers/run-ws";
+
+/**
+ * The card runner nudges the on-duty engineer (Phase 13). These suites are
+ * about the CARD, not the DM, so they hand it an env with no nudge
+ * destination: `sendNudge` refuses before it claims anything and before it
+ * touches the network, which keeps this file free of live Slack calls no
+ * matter what `identities` rows another suite in the shared D1 left behind.
+ */
+function nudgeless(workerEnv: Env): Env {
+  return { ...workerEnv, NUDGE_MODE: "channel", NUDGE_FALLBACK_CHANNEL_ID: "" };
+}
 
 /**
  * THE PHASE 11 GATE — Task 9.
@@ -144,7 +156,7 @@ async function parkedRun(
     {
       projections: {
         approval_card: (ctx, workerEnv) =>
-          makeApprovalCardRunner({ storage: ctx.storage, db: workerEnv.DB }),
+          makeApprovalCardRunner({ storage: ctx.storage, db: workerEnv.DB, env: nudgeless(workerEnv) }),
       },
       approvalSender: sender,
     },
