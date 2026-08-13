@@ -2972,14 +2972,21 @@ export function resolveApprovalState(
   now: number,
 ): boolean {
   const allowedFrom = state === "resolving" ? "('open')" : "('open', 'resolving')";
-  storage.sql.exec(
-    `UPDATE approval_state SET state = ?, updated_at = ?
-     WHERE approval_id = ? AND state IN ${allowedFrom}`,
-    state,
-    now,
-    approvalId,
+  // `rowsWritten`, NOT a read-back comparison. They differ exactly where it
+  // matters: a second `resolved` on an already-resolved row updates nothing,
+  // and a read-back would still report `true` because the state does equal
+  // what was asked for. Task 5's sweeper re-drives undelivered resolutions and
+  // reads this to tell "I moved it" from "somebody already had" — the whole
+  // point of returning anything at all.
+  return (
+    storage.sql.exec(
+      `UPDATE approval_state SET state = ?, updated_at = ?
+       WHERE approval_id = ? AND state IN ${allowedFrom}`,
+      state,
+      now,
+      approvalId,
+    ).rowsWritten > 0
   );
-  return readApprovalState(storage, approvalId)?.state === state;
 }
 
 /**

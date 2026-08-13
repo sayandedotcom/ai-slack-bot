@@ -6,7 +6,7 @@ import {
 } from "../agent/driver";
 import { readApprovalState, readState } from "../run/session";
 import { getRunById } from "../run/repository";
-import { insertApproval } from "./repository";
+import { getApproval, insertApproval } from "./repository";
 
 /**
  * The `approval_card` projection: one local `approval_state` row becomes one
@@ -75,15 +75,29 @@ export function makeApprovalCardRunner(input: {
           now: local.createdAt,
         });
 
-        // `duplicate_open` IS SUCCESS. Alarm delivery is at-least-once and a
-        // generation retries: the same card is projected twice whenever an
-        // attempt commits the D1 insert and dies before the job is retired.
-        // The partial unique index refusing the second insert means the card
-        // this job exists to create is already there — treating that as an
-        // error would retry a job that can only ever fail, until its budget is
-        // gone, on a run that is correctly parked.
-        void result;
-        return { outcome: "delivered" };
+        if (result === "created") return { outcome: "delivered" };
+
+        // `duplicate_open` IS SUCCESS — but only once we know the collision is
+        // THIS card. Alarm delivery is at-least-once and a generation retries,
+        // so the ordinary case is a redelivery of a card that is already there,
+        // and retrying that until the job's budget is gone would strand a run
+        // that is correctly parked.
+        //
+        // The check is not ceremony, because `idx_approvals_one_open` is on
+        // `run_id`, NOT on `id`: it refuses ANY unsettled card on this run. The
+        // reachable path is a `withdraw` whose local write landed and whose D1
+        // CAS then failed in an outage — the old row stays `pending` while the
+        // local slot is free, the model escalates again, and this insert
+        // collides with the OLD card. Retiring the job there would park the run
+        // on an approval the dashboard has no card for: a run nobody can
+        // unpark, which is the one outcome this whole feature must not reach.
+        // So: retry, visibly, and let the D1 outage clear or a human see it.
+        const existing = await getApproval(db, approvalId);
+        if (existing !== null) return { outcome: "delivered" };
+        return {
+          outcome: "retry",
+          error: `another unsettled approval already holds run ${job.runId}; this card was not created`,
+        };
       } catch (error) {
         // Everything else — a D1 outage, a network failure — is genuinely
         // transient and goes back through the job's own bounded backoff.

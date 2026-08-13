@@ -1,9 +1,12 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
+  appendInputMessages,
   appliedSchemaVersions,
   claimGeneration,
+  enqueueProjectionJob,
   ensureSchema,
+  finalizeAnswer,
   finalizeGeneration,
   listTurns,
   openApproval,
@@ -12,7 +15,9 @@ import {
   readDriver,
   readGeneration,
   readModelTranscript,
+  readState,
   resolveApprovalState,
+  turnEventSeq,
   RUN_SCHEMA_VERSION,
 } from "../src/run/session";
 import { installRunPorts, nextAlarmAt, toFinalizeRequest } from "../src/agent/driver";
@@ -193,6 +198,121 @@ describe("one unsettled approval per run, as a constraint", () => {
   });
 });
 
+describe("the answer-settling transaction latches the pause too", () => {
+  /**
+   * `finalizeAnswer` — not `finalizeGeneration` — is what ends a real
+   * generation that produced an answer: it sets the generation terminal, the
+   * driver idle and the public status, all itself, and the driver's finalize
+   * then reads `already_settled` and can change nothing. Every case above
+   * drives the fake continuation, which never reaches this transaction, so
+   * without this case the production path could be latch-free and the suite
+   * would still be green.
+   */
+  async function claimedRun() {
+    const h = await freshDriverRun({ continuation: null });
+    await h.stub.appendTurn(turn("fa-1"));
+    const claim = await h.storage((s) => claimGeneration(s, { now: h.clock.value }));
+    if (claim.outcome !== "claimed") throw new Error("expected a claim");
+
+    // Consume the input, exactly as a real attempt's first `prepareStep` does.
+    // Without it the cursor compare supersedes every finalize below, which is
+    // correct behaviour and would hide the thing under test.
+    await h.storage((s) => {
+      const seq = turnEventSeq(s, "fa-1");
+      if (seq === null) throw new Error("no input turn");
+      return appendInputMessages(s, claim.claim.fence, {
+        globalStep: 0,
+        messages: [{ sourceEventSeq: seq, message: { role: "user", content: "the deploy is stuck" } }],
+        now: h.clock.value,
+      });
+    });
+    return { h, claim: claim.claim };
+  }
+
+  const answer = (attempt: number, text: string) => ({
+    attempt,
+    finalText: text,
+    summary: text,
+    internalNarration: false,
+    deltaBatchSeq: 0,
+    terminalBatchSeq: 1,
+    globalStep: 0,
+  });
+
+  it("parks the run in the same transaction as the final turn", async () => {
+    const { h, claim } = await claimedRun();
+    await escalateLocally(h, claim.generationId);
+
+    const outcome = await h.storage((s) =>
+      finalizeAnswer(s, claim.fence, { ...answer(claim.attempt, "drafted, and asking"), now: h.clock.value }),
+    );
+    expect(outcome.outcome).toBe("finalized");
+    if (outcome.outcome !== "finalized") throw new Error("unreachable");
+    expect(outcome.pausedApprovalId).toBe(APPROVAL_ID);
+
+    // The public status moved inside that transaction — a dashboard can never
+    // see a settled generation whose run still claims to be working.
+    expect((await h.storage((s) => readState(s)))?.status).toBe("awaiting_approval");
+    expect((await h.storage((s) => readDriver(s))).phase).toBe("idle");
+    expect(
+      (await h.storage((s) => readGeneration(s, claim.generationId)))?.pausedApprovalId,
+    ).toBe(APPROVAL_ID);
+  });
+
+  it("reports the same pause on a redelivered finalization", async () => {
+    const { h, claim } = await claimedRun();
+    await escalateLocally(h, claim.generationId);
+    await h.storage((s) =>
+      finalizeAnswer(s, claim.fence, { ...answer(claim.attempt, "drafted, and asking"), now: h.clock.value }),
+    );
+
+    // An at-least-once redelivery. It must not report a completed run to the
+    // driver, or the run would be un-parked on the dashboard while the
+    // approval is still open.
+    const replay = await h.storage((s) =>
+      finalizeAnswer(s, claim.fence, {
+        ...answer(claim.attempt, "a DIFFERENT answer that must never be written"),
+        now: h.clock.value + 1,
+      }),
+    );
+    expect(replay.outcome).toBe("already_final");
+    if (replay.outcome !== "already_final") throw new Error("unreachable");
+    expect(replay.pausedApprovalId).toBe(APPROVAL_ID);
+    expect((await h.storage((s) => readState(s)))?.status).toBe("awaiting_approval");
+  });
+
+  it("settles idle, as before, when nothing is open", async () => {
+    const { h, claim } = await claimedRun();
+    const outcome = await h.storage((s) =>
+      finalizeAnswer(s, claim.fence, { ...answer(claim.attempt, "answered"), now: h.clock.value }),
+    );
+    expect(outcome.outcome).toBe("finalized");
+    if (outcome.outcome !== "finalized") throw new Error("unreachable");
+    expect(outcome.pausedApprovalId).toBeNull();
+    expect((await h.storage((s) => readState(s)))?.status).toBe("idle");
+  });
+});
+
+describe("resolveApprovalState reports whether IT moved the row", () => {
+  it("is false for a transition that matched nothing", async () => {
+    const h = await freshDriverRun({ continuation: null });
+    await escalateLocally(h, "gen:resolve");
+
+    const moves = await h.storage((s) => ({
+      first: resolveApprovalState(s, APPROVAL_ID, "resolved", h.clock.value),
+      // Already there. Task 5's sweeper re-drives undelivered resolutions and
+      // needs "somebody already had" to read as false, not as a fresh move.
+      again: resolveApprovalState(s, APPROVAL_ID, "resolved", h.clock.value),
+      // Backwards is refused outright.
+      backwards: resolveApprovalState(s, APPROVAL_ID, "resolving", h.clock.value),
+      unknown: resolveApprovalState(s, "apr:never-existed", "resolved", h.clock.value),
+    }));
+
+    expect(moves).toEqual({ first: true, again: false, backwards: false, unknown: false });
+    expect((await h.storage((s) => readApprovalState(s, APPROVAL_ID)))?.state).toBe("resolved");
+  });
+});
+
 /* -------------------------------------------------------- crash recovery -- */
 
 describe("a crash between escalate and finalize still parks", () => {
@@ -341,6 +461,109 @@ describe("the local schema upgrade", () => {
     await escalateLocally(h, "gen:migration", "apr:migration");
     expect((await h.storage((s) => openApproval(s)))?.approvalId).toBe("apr:migration");
   });
+
+  it("carries queued projection jobs through the agent_projection_jobs rebuild", async () => {
+    const h = await freshDriverRun({ continuation: null });
+
+    // Put this object back to its PRE-v6 shape, queued work and all: the
+    // three-kind CHECK is exactly why the table has to be rebuilt, and on a
+    // fresh object the rebuild only ever copies an empty table. Production is
+    // otherwise the first place this copies a live row.
+    const rows = [
+      {
+        id: "run_index:rev-1",
+        kind: "run_index",
+        source_id: "rev-1",
+        state: "pending",
+        claim_token: null,
+        lease_expires_at: null,
+        attempts: 2,
+        next_attempt_at: 4_000,
+        last_error: "d1 was down",
+        created_at: 1_000,
+        updated_at: 2_000,
+      },
+      {
+        id: "memory_outbox:memory:r:g",
+        kind: "memory_outbox",
+        source_id: "memory:r:g",
+        state: "claimed",
+        claim_token: "token-abc",
+        lease_expires_at: 9_999,
+        attempts: 1,
+        next_attempt_at: 0,
+        last_error: null,
+        created_at: 1_500,
+        updated_at: 1_800,
+      },
+    ];
+
+    await h.storage((s) => {
+      s.sql.exec("DROP TABLE agent_projection_jobs");
+      s.sql.exec(`
+        CREATE TABLE agent_projection_jobs (
+          id               TEXT PRIMARY KEY,
+          kind             TEXT NOT NULL CHECK (kind IN ('run_index', 'd1_usage', 'memory_outbox')),
+          source_id        TEXT NOT NULL,
+          state            TEXT NOT NULL CHECK (
+            state IN ('pending', 'claimed', 'completed', 'failed')
+          ),
+          claim_token      TEXT,
+          lease_expires_at INTEGER,
+          attempts         INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+          next_attempt_at  INTEGER NOT NULL,
+          last_error       TEXT,
+          created_at       INTEGER NOT NULL,
+          updated_at       INTEGER NOT NULL,
+          UNIQUE (kind, source_id)
+        );
+      `);
+      for (const row of rows) {
+        s.sql.exec(
+          `INSERT INTO agent_projection_jobs
+             (id, kind, source_id, state, claim_token, lease_expires_at, attempts,
+              next_attempt_at, last_error, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          row.id,
+          row.kind,
+          row.source_id,
+          row.state,
+          row.claim_token,
+          row.lease_expires_at,
+          row.attempts,
+          row.next_attempt_at,
+          row.last_error,
+          row.created_at,
+          row.updated_at,
+        );
+      }
+      s.sql.exec("DELETE FROM _run_schema_migrations WHERE version = ?", RUN_SCHEMA_VERSION);
+      return ensureSchema(s, 2_000);
+    });
+
+    // Every column of every queued job survives. A rebuild that dropped these
+    // would silently lose work the system believes is scheduled — an undelivered
+    // memory episode, a dashboard row that never updates — with nothing left to
+    // report it.
+    const after = await h.storage((s) =>
+      s.sql
+        .exec("SELECT * FROM agent_projection_jobs ORDER BY id ASC")
+        .toArray(),
+    );
+    expect(after).toEqual([...rows].sort((a, b) => a.id.localeCompare(b.id)));
+
+    // And the whole point of the rebuild: the new kind is now insertable.
+    await h.storage((s) => enqueueProjectionJob(s, "approval_card", "apr:after-rebuild", 3_000));
+    expect(
+      await h.storage((s) =>
+        s.sql
+          .exec<{ n: number }>(
+            "SELECT COUNT(*) AS n FROM agent_projection_jobs WHERE kind = 'approval_card'",
+          )
+          .one().n,
+      ),
+    ).toBe(1);
+  });
 });
 
 /* ------------------------------------------------------------ projection -- */
@@ -444,6 +667,41 @@ describe("the approval_card projection", () => {
     expect(await jobRow(h, `approval_card:${approvalId}`)).toMatchObject([
       { state: "completed", attempts: 2 },
     ]);
+  });
+
+  it("retries rather than retiring a job whose collision is a DIFFERENT approval", async () => {
+    const h = await projectingRun();
+    const port = (generationId: string) => (s: DurableObjectStorage) =>
+      makeApprovalPort({
+        storage: s,
+        db: env.DB,
+        runId: h.runId,
+        generationId,
+        slackThread: { channelId: h.descriptor.channelId!, threadTs: THREAD },
+        now: () => h.clock.value,
+      });
+
+    const first = await h.storage(async (s) => (await port("gen:a")(s).open({ draft: "a", why: "a" })).approvalId);
+    await h.alarm();
+    expect(await getApproval(env.DB, first)).not.toBeNull();
+
+    // THE REACHABLE HOLE. `withdraw` writes the local row `resolved` first and
+    // then CASes D1; under a D1 outage the CAS fails, so the card stays
+    // `pending` while the local slot is free. The model escalates again.
+    await h.storage((s) => resolveApprovalState(s, first, "resolved", h.clock.value));
+    const second = await h.storage(async (s) => (await port("gen:b")(s).open({ draft: "b", why: "b" })).approvalId);
+
+    await h.alarm();
+
+    // `idx_approvals_one_open` is on `run_id`, not `id`, so the insert collided
+    // with the OLD card. Retiring the job here would park the run on an
+    // approval the dashboard has no card for.
+    expect(await getApproval(env.DB, second)).toBeNull();
+    const [job] = await jobRow(h, `approval_card:${second}`);
+    expect(job.state).toBe("pending");
+    expect(job.last_error).toContain("already holds run");
+    // And the human's card was not disturbed.
+    expect(await getApproval(env.DB, first)).toMatchObject({ decision: "pending" });
   });
 
   it("retries on an injected D1 failure", async () => {
