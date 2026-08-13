@@ -11,9 +11,9 @@ const toPascal = (s: string) =>
   s.replace(/_([a-z])/g, (_, c) => c.toUpperCase()).replace(/^[a-z]/, (c) => c.toUpperCase());
 
 describe("capability registry", () => {
-  it("exposes exactly the Phase 09 namespaces, in order", () => {
+  it("exposes exactly the Phase 09 namespaces plus Phase 11's approval, in order", () => {
     expect(registry().map((p) => p.name)).toEqual([
-      "slack", "memory", "linear", "supabase", "langsmith", "betterstack", "files",
+      "slack", "memory", "linear", "supabase", "langsmith", "betterstack", "files", "approval",
     ]);
   });
 

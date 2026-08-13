@@ -23,7 +23,9 @@ export type CapabilityErrorCode =
   | "output_too_large"
   | "execution_timeout"
   | "execution_cpu_limit"
-  | "upstream_unavailable";
+  | "upstream_unavailable"
+  | "approval_already_open"
+  | "approval_not_open";
 
 /**
  * Codes where trying the same call again could plausibly succeed.

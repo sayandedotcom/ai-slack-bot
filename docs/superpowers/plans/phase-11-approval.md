@@ -391,11 +391,11 @@ export interface ApprovalPort {
 }
 ```
 
-- [ ] **Step 1: Write failing capability tests.** Through the real registry + a real isolate execution (pattern from `codemode-customers.test.ts`): `escalate` returns `{approvalId, state:"pending"}` and the port recorded it; a second `escalate` in the same or a later execution while one is open → typed `approval_already_open` (and it is in the proven-pre-upstream set — no effect ledger entry); `withdraw` with nothing open → `approval_not_open`; both methods are classified `control_write` (assert via the registry classification test's fixtures); a **shadow** run may escalate (write-guard exemption) — assert no `external_write` denial; `draft`/`why` bounds enforced by Zod host-side.
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.** Two `CapabilityErrorCode` additions with the closed-set test updated. Registry gains the `approval` namespace at the end of the frozen order; `codemode:dts` regenerated and drift-checked. The capability calls `deps.approval.open/withdraw` — it never touches D1 or storage itself.
-- [ ] **Step 4: Run `pnpm --filter @workspace/worker test -- codemode` (full codemode regression) + `codemode:dts:check` + typecheck.**
-- [ ] **Step 5: Commit:** `feat(codemode): let the model park a run for one human decision`
+- [x] **Step 1: Write failing capability tests.** Through the real registry + a real isolate execution (pattern from `codemode-customers.test.ts`): `escalate` returns `{approvalId, state:"pending"}` and the port recorded it; a second `escalate` in the same or a later execution while one is open → typed `approval_already_open` (and it is in the proven-pre-upstream set — no effect ledger entry); `withdraw` with nothing open → `approval_not_open`; both methods are classified `control_write` (assert via the registry classification test's fixtures); a **shadow** run may escalate (write-guard exemption) — assert no `external_write` denial; `draft`/`why` bounds enforced by Zod host-side.
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement.** Two `CapabilityErrorCode` additions with the closed-set test updated. Registry gains the `approval` namespace at the end of the frozen order; `codemode:dts` regenerated and drift-checked. The capability calls `deps.approval.open/withdraw` — it never touches D1 or storage itself.
+- [x] **Step 4: Run `pnpm --filter @workspace/worker test -- codemode` (full codemode regression) + `codemode:dts:check` + typecheck.**
+- [x] **Step 5: Commit:** `feat(codemode): let the model park a run for one human decision`
 
 ### Task 4 — Pause latch and the `paused` outcome
 

@@ -82,3 +82,39 @@ export function outboundText(row: ApprovalRow): string {
   }
   return row.draft;
 }
+
+/**
+ * What the `approval` capability namespace (Task 3) is allowed to touch.
+ *
+ * Deliberately the ONLY seam between model-facing code and approval state.
+ * The capability layer never reads or writes D1 or the RunDO's own storage
+ * directly — it calls this port, and this port is the thing a later task
+ * (RunDO SQLite schema v3, the `approval_state` table, the `approval_card`
+ * D1 projection) implements for real. Task 3's tests run against a plain
+ * test double of this interface; there is no production implementation yet.
+ */
+export interface ApprovalPort {
+  /**
+   * Open one approval for this run: synchronous local write plus an async D1
+   * projection enqueue. Returns the minted id. Callers must check
+   * `openApprovalId()` first — this method does not itself refuse a second
+   * open, because "is one already open" is a question the capability layer
+   * answers host-side, before any call reaches this port at all.
+   */
+  open(input: { draft: string; why: string }): Promise<{ approvalId: string }>;
+  /**
+   * The id of the currently open (unsettled) approval, if any. Synchronous:
+   * this is the local read the generation-finalize latch uses to decide
+   * whether to pause a run, and finalize must never wait on D1 to do it.
+   */
+  openApprovalId(): string | null;
+  /**
+   * Retract the open approval. Loses gracefully: if a human already decided
+   * before the retraction reached this port, the decision wins and comes
+   * back instead of a withdrawal.
+   */
+  withdraw(): Promise<
+    | { withdrawn: true }
+    | { withdrawn: false; decision: Exclude<ApprovalDecision, "pending" | "withdrawn"> }
+  >;
+}

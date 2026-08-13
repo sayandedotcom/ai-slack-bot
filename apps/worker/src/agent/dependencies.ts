@@ -1,4 +1,5 @@
 import type { Tool } from "ai";
+import type { ApprovalPort } from "../approval/contracts";
 import type { Env } from "../index";
 import { BETTERSTACK_UPTIME_ENDPOINT, makeBetterStackReader } from "../betterstack/client";
 import { getChannelPolicy, type ChannelPolicy } from "../db/channels";
@@ -33,7 +34,7 @@ import {
  * The ONE place `Env` becomes capability ports.
  *
  * Everything credential-shaped stops here. A binding module receives
- * `CapabilityDependencies` — seven narrow interfaces and a clock — and has no
+ * `CapabilityDependencies` — eight narrow interfaces and a clock — and has no
  * type-level way to reach a token even by accident; adding one would mean
  * widening `CapabilityDependencies` in a diff somebody has to sign off. The
  * Worker Loader isolate receives less still: `globalOutbound: null` and an
@@ -151,7 +152,42 @@ function closeOver(store: MemoryStore): MemoryStore {
 }
 
 /**
- * Build the seven Phase 09 ports plus the clock and the D1 handle.
+ * A minimal, execution-local stand-in for the real `ApprovalPort`.
+ *
+ * Task 3 (Phase 11) defines the port and threads it through this composer so
+ * the `approval` capability namespace has something to call; the durable
+ * implementation — the RunDO SQLite `approval_state` table, the
+ * `approval_card` D1 projection, the finalize latch that reads it — belongs
+ * to a later task, because it needs a RunDO SQLite schema-v3 migration that
+ * does not exist yet. This file must not touch D1 or storage on its own
+ * behalf (that is the whole point of the port), so what stands in here is a
+ * closure that remembers nothing beyond one `run_code` execution — a fresh
+ * one is built per call to `makeCapabilityDependencies`, exactly like every
+ * other port below. It is correct WITHIN one execution and is expected to be
+ * replaced wholesale, not extended, once the real implementation lands.
+ */
+function makeInMemoryApprovalPort(): ApprovalPort {
+  let open: { approvalId: string } | null = null;
+  return {
+    async open(input) {
+      void input; // draft/why belong to the real, storage-backed port (later task).
+      const approvalId = `apr:${crypto.randomUUID()}`;
+      open = { approvalId };
+      return { approvalId };
+    },
+    openApprovalId() {
+      return open?.approvalId ?? null;
+    },
+    async withdraw() {
+      open = null;
+      return { withdrawn: true };
+    },
+  };
+}
+
+/**
+ * Build the seven Phase 09 ports, Phase 11's `approval` port, plus the clock
+ * and the D1 handle.
  *
  * Scope-dependent ports (Slack, Supabase) take the trust envelope so their
  * reads are pinned to this run; the rest are pinned by configuration. Nothing
@@ -207,6 +243,7 @@ export function makeCapabilityDependencies(
       bucket: env.ARTIFACTS,
       baseUrl: env.ARTIFACTS_BASE_URL,
     }),
+    approval: makeInMemoryApprovalPort(),
     clock,
   };
 }

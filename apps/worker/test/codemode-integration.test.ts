@@ -129,10 +129,18 @@ describe("the tool surface Phase 10 receives", () => {
     expect(description).toMatch(/no network|every call is refused/i);
   });
 
-  // Phase 10's system prompt teaches escalation; the tool must not imply one.
-  it("states no approval policy", () => {
+  // Phase 09/10's system prompt taught escalation informally; the outer
+  // `run_code` tool itself must never imply an AI-SDK-level approval GATE —
+  // that would be a second approval mechanism, which invariant 1 forbids.
+  // Phase 11 legitimately mentions "approval" now: it is the name of a
+  // declared capability namespace (`approval.escalate`/`approval.withdraw`),
+  // rendered into this same description like every other namespace
+  // (invariant 24, "one home for the declarations"). What must never appear
+  // is the SDK's own annotation name, which the registry deliberately never
+  // attaches (see `registry.ts`'s note on `needsApproval`).
+  it("never implies an AI SDK approval gate on the outer tool", () => {
     const description = tool().description ?? "";
-    expect(description).not.toMatch(/approv/i);
+    expect(description).not.toMatch(/needsApproval/i);
   });
 
   it("never puts a credential in the description", () => {

@@ -1,4 +1,5 @@
 import type { MemoryStore } from "../memory/store";
+import type { ApprovalPort } from "../approval/contracts";
 
 /**
  * The narrow interfaces the capability layer talks to, and the shapes it hands
@@ -228,5 +229,12 @@ export type CapabilityDependencies = {
   langsmith: LangSmithReader;
   betterstack: BetterStackReader;
   files: ArtifactPublisher;
+  /**
+   * Phase 11's seam. The `approval` capability namespace calls this and
+   * nothing else — never D1, never the RunDO's own storage directly. The real
+   * storage-backed implementation is a later task's; this port exists so the
+   * capability layer can be built and reviewed against a test double first.
+   */
+  approval: ApprovalPort;
   clock: () => number;
 };

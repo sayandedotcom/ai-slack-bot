@@ -60,6 +60,17 @@ const PROVEN_PRE_UPSTREAM: ReadonlySet<CapabilityErrorCode> = new Set([
   // expensive mistake: without it, a superseded write becomes a permanent
   // `in_doubt` for a human to clear by hand.
   "stale_generation",
+  // Phase 11's `approval` namespace never calls `runEffect` at all — it never
+  // touches D1 or storage itself, calling `deps.approval` instead — so this
+  // entry is a SEAM in the same sense as `stale_generation` above: correct
+  // classification kept for the day a caller routes an approval write through
+  // the ledger, not a live path today. Both `escalate` and `withdraw` refuse
+  // host-side, before their port is ever called, by reading
+  // `openApprovalId()` synchronously — so a repeated `escalate` while one is
+  // open produces this code with no ledger row at all, proven by construction
+  // rather than by this membership.
+  "approval_already_open",
+  "approval_not_open",
 ]);
 
 export type EffectDeps = {

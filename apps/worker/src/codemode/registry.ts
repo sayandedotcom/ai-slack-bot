@@ -19,6 +19,7 @@ import { makeSupabaseTools } from "./bindings/supabase";
 import { makeLangSmithTools } from "./bindings/langsmith";
 import { makeBetterStackTools } from "./bindings/betterstack";
 import { FILES_DECLARATIONS, makeFilesTools } from "./bindings/files";
+import { makeApprovalTools } from "./bindings/approval";
 
 /**
  * The Phase 09 namespace order, frozen.
@@ -35,6 +36,10 @@ export const PHASE_09_NAMESPACES = [
   "langsmith",
   "betterstack",
   "files",
+  // Phase 11's addition. Appended, not inserted — the name stays
+  // `PHASE_09_NAMESPACES` because it is the frozen ORDER's identity, not a
+  // claim about which phase last touched it.
+  "approval",
 ] as const;
 
 /**
@@ -275,6 +280,7 @@ export function buildRegistry(
     { name: "langsmith", tools: makeLangSmithTools(ctx) },
     { name: "betterstack", tools: makeBetterStackTools(ctx) },
     { name: "files", tools: makeFilesTools(ctx), types: FILES_DECLARATIONS },
+    { name: "approval", tools: makeApprovalTools(ctx) },
   ]);
 }
 

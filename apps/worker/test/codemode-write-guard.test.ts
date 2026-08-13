@@ -346,18 +346,25 @@ describe("every capability declares an effect", () => {
       "betterstack.logs": "read",
       "betterstack.monitors": "read",
       "files.publish": "external_write",
+      "approval.escalate": "control_write",
+      "approval.withdraw": "control_write",
     });
   });
 
-  it("has no control writes yet", async () => {
+  it("classifies exactly approval.escalate and approval.withdraw as control writes", async () => {
     // `escalate`/`withdraw` are Phase 11 and carry their own run-state
-    // authority. The class exists here so that when they land they are not
-    // tempted to be classified `read` to get past this guard.
+    // authority, not the shadow/channel matrix above. This is the negative
+    // half of the classification table: nothing else in the registry may be
+    // classified `control_write`, which is what would let a future namespace
+    // sneak an external-looking write past the shadow/channel guard by
+    // borrowing this class instead of being classified honestly.
     const scope = await seedScope({ mode: "live", shadow: false });
-    const effects = registryFor(scope).flatMap((p) =>
-      Object.values(p.tools).map((t) => capabilityEffectOf(t)),
+    const controlWrites = registryFor(scope).flatMap((p) =>
+      Object.entries(p.tools)
+        .filter(([, t]) => capabilityEffectOf(t) === "control_write")
+        .map(([method]) => `${p.name}.${method}`),
     );
-    expect(effects).not.toContain("control_write");
+    expect(controlWrites.sort()).toEqual(["approval.escalate", "approval.withdraw"]);
     expect(CAPABILITY_EFFECTS).toContain("control_write");
   });
 

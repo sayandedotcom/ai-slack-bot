@@ -150,7 +150,7 @@ describe("the model is given exactly one tool", () => {
 /* -------------------------------------------------- no Env for a capability -- */
 
 describe("a capability never receives Env", () => {
-  it("hands the capability layer exactly nine narrow ports", async () => {
+  it("hands the capability layer exactly ten narrow ports", async () => {
     const { state } = await seedLiveRun();
     const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:x");
     const deps = makeCapabilityDependencies(workerEnv(), scope);
@@ -159,6 +159,7 @@ describe("a capability never receives Env", () => {
     // in a diff somebody signs off. The assertion is on the exact key set
     // because an added key is exactly how that would happen quietly.
     expect(Object.keys(deps).sort()).toEqual([
+      "approval",
       "betterstack",
       "clock",
       "db",

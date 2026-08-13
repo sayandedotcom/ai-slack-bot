@@ -48,6 +48,7 @@ function unreachableDependencies(): CapabilityDependencies {
     langsmith: gateway("langsmith") as never,
     betterstack: gateway("betterstack") as never,
     files: gateway("files") as never,
+    approval: gateway("approval") as never,
     clock: () => 0,
   };
 }

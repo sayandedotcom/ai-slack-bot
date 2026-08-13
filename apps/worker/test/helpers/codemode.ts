@@ -178,6 +178,8 @@ export type FakeFixtures = {
   citations?: Array<{ factId: string; fact: string; permalink: string; ts: string }>;
   supabaseRows?: Array<Record<string, string | number | boolean | null>>;
   logLines?: Array<{ at: string; level: string; message: string }>;
+  /** Override the default in-memory `ApprovalPort` double. */
+  approval?: CapabilityDependencies["approval"];
 };
 
 export function fakeDeps(fixtures: FakeFixtures = {}): CapabilityDependencies {
@@ -216,6 +218,33 @@ export function fakeDeps(fixtures: FakeFixtures = {}): CapabilityDependencies {
     files: {
       async publish() { return { url: "https://x", size: 0, sha256: "0".repeat(64) }; },
     },
+    approval: fixtures.approval ?? fakeApprovalPort(),
     clock: () => 0,
+  };
+}
+
+/**
+ * A test double of `ApprovalPort`, in-memory and closed over by the test.
+ *
+ * Namespaced to keep the "which of the seven other adapters made the fixture
+ * odd" question off the table for every suite that only wants a well-behaved
+ * approval port and doesn't care about it.
+ */
+export function fakeApprovalPort(): CapabilityDependencies["approval"] {
+  let open: { approvalId: string } | null = null;
+  return {
+    async open(input) {
+      void input;
+      const approvalId = `apr:${crypto.randomUUID()}`;
+      open = { approvalId };
+      return { approvalId };
+    },
+    openApprovalId() {
+      return open?.approvalId ?? null;
+    },
+    async withdraw() {
+      open = null;
+      return { withdrawn: true };
+    },
   };
 }

@@ -273,3 +273,31 @@ declare const files: {
 	 */
 	publish: (input: PublishInput) => Promise<PublishOutput>;
 }
+
+type EscalateInput = {
+    draft: string;
+    why: string;
+}
+type EscalateOutput = {
+    approvalId: string;
+    state: "pending";
+}
+type WithdrawInput = {}
+type WithdrawOutput = {
+    withdrawn: true;
+} | {
+    withdrawn: false;
+    decision: "approved" | "edited" | "rejected";
+}
+
+declare const approval: {
+	/**
+	 * Park this run for one human decision on one proposed customer Slack reply. Returns immediately; the pause happens when you finish your turn. Escalate when the message is committal, closes a thread, tells a customer no, or could embarrass the engineer whose name is on it. Do NOT escalate clarifying questions or status updates — send those with slack.reply.
+	 */
+	escalate: (input: EscalateInput) => Promise<EscalateOutput>;
+
+	/**
+	 * Retract the open approval, e.g. because the customer's newest message made the draft moot. Loses gracefully: if a human already decided, you get their decision back instead of a withdrawal.
+	 */
+	withdraw: (input: WithdrawInput) => Promise<WithdrawOutput>;
+}
