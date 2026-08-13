@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
 import {
   identityApi,
@@ -35,10 +35,26 @@ const IDENTITY_KEY = randomKeyB64();
 /** The env every request and every `getDecryptedToken` call in this file sees. */
 const testEnv = { ...env, IDENTITY_KEY } as unknown as Env;
 
-beforeEach(async () => {
+/**
+ * Leave the shared D1 as we found it — in an `afterEach`, not only a
+ * `beforeEach`.
+ *
+ * This pool has no `isolatedStorage`, so an `identities` row seeded here
+ * outlives the file, and a row for the on-duty engineer is one of the two
+ * things `sweepNudges` feeds on (see `test/notify-nudge.test.ts`'s note). Left
+ * behind, it is one stale pending approval in some other suite away from
+ * `worker.scheduled()` opening a REAL DM against slack.com with the pool's fake
+ * bot token. Cleaning up on the way out is what keeps that unreachable.
+ */
+async function cleanIdentities(): Promise<void> {
   await env.DB.prepare("DELETE FROM identities").run();
+}
+
+beforeEach(async () => {
+  await cleanIdentities();
   resetIdentityApiPorts();
 });
+afterEach(cleanIdentities);
 
 /**
  * A verifier that treats the raw header value AS the identity: no signing, no

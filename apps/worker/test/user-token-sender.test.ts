@@ -33,11 +33,25 @@ const testEnv = { ...env, IDENTITY_KEY } as unknown as Env;
 const NOW = Date.parse("2026-08-14T00:00:00Z");
 const TOKEN = "xoxp-user-token-do-not-leak";
 
-beforeEach(async () => {
+/**
+ * Leave the shared D1 as we found it — in an `afterEach`, not only a
+ * `beforeEach`.
+ *
+ * This pool has no `isolatedStorage`, so an `identities` row seeded here
+ * outlives the file, and a row for the ON-DUTY engineer is one of the two
+ * things `sweepNudges` feeds on (see `test/notify-nudge.test.ts`'s note). Left
+ * behind, it is one stale pending approval in some other suite away from
+ * `worker.scheduled()` opening a REAL DM against slack.com with the pool's fake
+ * bot token. Cleaning up on the way out is what keeps that unreachable.
+ */
+async function cleanIdentities(): Promise<void> {
   await env.DB.prepare("DELETE FROM identities").run();
-});
-afterEach(() => {
+}
+
+beforeEach(cleanIdentities);
+afterEach(async () => {
   vi.unstubAllGlobals();
+  await cleanIdentities();
 });
 
 async function seedOnDutySlack(patch: { token?: string; ciphertext?: string; externalId?: string } = {}) {

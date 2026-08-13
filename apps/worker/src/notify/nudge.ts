@@ -191,6 +191,18 @@ export async function sendNudge(
     // The thrown value is deliberately swallowed rather than logged: a failed
     // Slack request can carry request detail including the authorization
     // header, and nothing in it changes what happens next.
+    //
+    // NOTE THE ASYMMETRY WITH THE BLOCK TEN LINES ABOVE, which refuses to
+    // release the claim for exactly the failure this one releases it for. That
+    // block runs after Slack CONFIRMED the post (`ok: true` and a `ts`), so a
+    // release there would page a human twice for a message already in their
+    // DMs. Here the post is AMBIGUOUS — the body may not have parsed, or the
+    // 8s abort fired — so the send may or may not have landed, and the choice
+    // is between a possible duplicate page and a possible silent one. This is
+    // an ENGINEER-facing message, so it is resolved the way paging is always
+    // resolved: a duplicate beats silence. (The customer-facing path makes the
+    // opposite call — see `in_doubt` in `src/approval/sender.ts`, which never
+    // re-sends.)
     await release(env, row.id);
     return "failed";
   }
@@ -288,6 +300,13 @@ export async function updateNudge(env: Env, row: ApprovalRow): Promise<void> {
  * `now` is threaded into `sendNudge` so the age filter and the shift lookup
  * agree on one instant.
  *
+ * ONE LINE PER ROW, and it carries the approval id and the outcome word and
+ * NOTHING ELSE. This is a paging feature whose failure mode is silence, so
+ * "sent nothing" has to be visible somewhere other than a `nudged_at IS NULL`
+ * query nobody runs. The strict field list is the same rule the two catches
+ * above obey: a thrown value, a request, a header, or a response body can carry
+ * the bot token, so none of them is ever logged, here or anywhere in this file.
+ *
  * Returns how many nudges actually went out, for the caller's log line.
  */
 export async function sweepNudges(env: Env, now = Date.now()): Promise<number> {
@@ -305,10 +324,15 @@ export async function sweepNudges(env: Env, now = Date.now()): Promise<number> {
     try {
       const row = await getApproval(env.DB, id);
       if (row === null || row.decision !== "pending") continue;
-      if ((await sendNudge(env, row, now)) === "sent") sent += 1;
+      const outcome = await sendNudge(env, row, now);
+      console.warn("nudge sweep", { approvalId: id, outcome });
+      if (outcome === "sent") sent += 1;
     } catch {
       // This row is the sweeper's own retry feed — it stays on it, so the next
-      // minute tries again. Nothing here is worth failing the cron over.
+      // minute tries again. Nothing here is worth failing the cron over. The
+      // thrown value is not logged (see above); the id and the literal outcome
+      // are all this line is allowed to say.
+      console.warn("nudge sweep", { approvalId: id, outcome: "failed" });
       continue;
     }
   }

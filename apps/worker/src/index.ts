@@ -222,6 +222,15 @@ export default {
       sweepUndeliveredApprovals(env),
       sweepNudges(env),
     ]);
+    // The other two sweeps report their own counts from inside themselves
+    // (`console.warn("memory sweep"…)`, `console.warn("approval sweep"…)`);
+    // `sweepNudges` returns its count instead, so the summary line is owed
+    // here. Without it the number is computed and dropped, and a paging feature
+    // that pages nobody looks exactly like one with nothing to do.
+    const nudges = results[2];
+    if (nudges?.status === "fulfilled" && nudges.value > 0) {
+      console.warn("nudge sweep", { sent: nudges.value });
+    }
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length > 0) {
       throw new AggregateError(
