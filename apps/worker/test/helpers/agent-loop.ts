@@ -12,7 +12,11 @@ import { FABLE_5_MODEL_ID } from "../../src/agent/cost";
 import { DEFAULT_AGENT_LIMITS, type AgentLimits } from "../../src/agent/limits";
 import type { ModelHandle } from "../../src/agent/model";
 import type { StreamClock } from "../../src/agent/stream";
-import { alwaysFresh, type AgentExecutionGuard } from "../../src/codemode/contracts";
+import {
+  alwaysFresh,
+  type AgentExecutionGuard,
+  type CodeModeScope,
+} from "../../src/codemode/contracts";
 import type { CodeModeOutput } from "../../src/codemode/tool";
 import { fakeDeps, type FakeFixtures } from "./codemode";
 import type { CapabilityDependencies } from "../../src/codemode/gateways";
@@ -482,7 +486,10 @@ export type LoopOptions = {
    * it is running — the only way to reach "input arrived BETWEEN two capability
    * calls" without a second thread.
    */
-  wrapDeps?: (base: CapabilityDependencies) => CapabilityDependencies;
+  wrapDeps?: (
+    base: CapabilityDependencies,
+    scope: CodeModeScope,
+  ) => CapabilityDependencies;
 };
 
 export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
@@ -530,7 +537,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
           // by `makeAgentContinuation` itself and cannot be switched off here,
           // which is exactly the property invariant 15 needs.
           additionalGuard: options.additionalGuard ?? alwaysFresh(),
-          dependencies: (_env, _scope, depsClock) => {
+          dependencies: (_env, scope, depsClock) => {
             const base: CapabilityDependencies = {
               ...fakeDeps(options.fixtures ?? {}),
               // The write guard re-reads the channel policy and the `runs` row
@@ -539,7 +546,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
               db: workerEnv.DB,
               clock: depsClock,
             };
-            return options.wrapDeps ? options.wrapDeps(base) : base;
+            return options.wrapDeps ? options.wrapDeps(base, scope) : base;
           },
           limits,
           clock,
