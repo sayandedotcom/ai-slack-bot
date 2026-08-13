@@ -183,7 +183,7 @@ wrong.
 | 12 | Identity, OAuth, rotation | [full](phase-12-identity-oauth-rotation.md) | 01 | 4 |
 | 13 | Slack nudge | [full](phase-13-slack-nudge-and-send.md) | 11, 12 | 4 |
 | 14 | Dashboard shell | [full](phase-14-dashboard-shell.md) | 05, 12 (soft) | 5 |
-| 15 | Run list + live run drawer | below | 10, 14 | 5 |
+| 15 | Run list + live run drawer | [full](phase-15-run-list-live-drawer.md) | 10, 14 | 5 |
 | 16 | Approval card | [full](phase-16-approval-card.md) | 11, 14 | 5 |
 | 17 | Chat page + citations | below | 10, 14 | 5 |
 | 18 | Sandbox Tier 2 | below | 00·T1, **monorepo** | 5 |
@@ -439,9 +439,9 @@ in flight, then swapped when 12 merges.
 
 **Goal:** Watch and steer any run.
 
-**Depends on:** Phases 10, 14 · **Day 5**
+**Depends on:** Phases 10, 14 · **Day 5** · Full plan: [phase-15-run-list-live-drawer.md](phase-15-run-list-live-drawer.md) (written 2026-08-13)
 
-**Files:** `apps/dashboard/src/runs/*`, `src/api/runs.ts` (modify)
+**Files:** `apps/dashboard/src/runs/*` only — **zero worker changes**. The old "`src/api/runs.ts` (modify)" was stale: Phase 10 already shipped the list route, the snapshot route, the socket, and the HTTP steer fallback (`POST /api/runs/:id/turns`, idempotent on `steer:{requestId}`).
 
 **Tasks:**
 1. **Run list:** status, customer, one-line summary, live indicator, sorted by activity.
