@@ -1,11 +1,16 @@
 import { SELF, env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installRunPorts, resetRunPorts } from "../src/agent/driver";
 import { renderTrustedContext } from "../src/agent/prompt";
 import { makeApprovalCardRunner } from "../src/approval/projection";
 import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
 import { installApprovalApiPorts, resetApprovalApiPorts } from "../src/api/approvals";
-import { decideApproval, getApproval, insertApproval } from "../src/approval/repository";
+import {
+  decideApproval,
+  getApproval,
+  insertApproval,
+  recordNudgeMessage,
+} from "../src/approval/repository";
 import { makeApprovalPort } from "../src/approval/port";
 import { makeRunDoResolutionNotifier } from "../src/approval/notifier";
 import type { Env } from "../src/index";
@@ -89,6 +94,9 @@ beforeEach(() => {
 afterEach(() => {
   resetRunPorts();
   resetApprovalApiPorts();
+  // One case stubs `fetch` to watch the withdrawn card rewrite its nudge DM.
+  // Left installed it would follow every later case into the shared runtime.
+  vi.unstubAllGlobals();
 });
 
 /** The header value IS the identity — same fake `approval-api.test.ts` uses. */
@@ -111,6 +119,10 @@ function patchApproval(id: string, body: unknown): Promise<Response> {
 }
 
 /* ------------------------------------------------------------- programs -- */
+
+/** The engineer DM a nudge already landed in, for the withdraw case below. */
+const NUDGE_CHANNEL = "D0WITHDRAWN";
+const NUDGE_TS = "1723640000.000700";
 
 const DRAFT = "we can have that fixed by Friday";
 const WHY = "it commits us to a date";
@@ -348,6 +360,48 @@ describe("withdraw", () => {
       decision: "pending",
     });
     expect((await h.stub.state())?.status).toBe("awaiting_approval");
+  });
+
+  /**
+   * THE WITHDRAWN CARD REWRITES ITS OWN NUDGE DM (Phase 13 Task 6).
+   *
+   * `updateNudge` is unit-tested in `notify-nudge.test.ts`; what this proves is
+   * the WIRING, through the production path and nothing else: the model's
+   * program, the capability, the real port built by `agent/loop.ts` from the
+   * Durable Object's own env, and the recorded `nudge_channel_id`/`nudge_ts`.
+   * Drop the `env` from that construction, or the `updateNudge` call from
+   * `approval/port.ts`, and this case fails while every other one in the file
+   * still passes.
+   *
+   * The nudge itself is not sent here — `nudgeless` keeps the projector off
+   * Slack — so the recorded message id is written directly. What is under test
+   * is what happens to a DM that HAS gone out, not how it got there.
+   */
+  it("rewrites the engineer's nudge DM, which now points at a card nobody can act on", async () => {
+    const { h, approvalId } = await parkedRun({
+      wokenSteps: [toolStep({ toolCallId: "call_withdraw", code: withdrawCode })],
+    });
+    await recordNudgeMessage(env.DB, approvalId, NUDGE_CHANNEL, NUDGE_TS);
+
+    // Same isolate as the object under test, so this reaches the port's call.
+    // Every Slack request in this generation is recorded; the assertions below
+    // name `chat.update` rather than assuming it is the only one.
+    const slackCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      slackCalls.push({ url: String(url), body: JSON.parse(String(init.body)) as Record<string, unknown> });
+      return new Response(JSON.stringify({ ok: true, ts: NUDGE_TS }), { status: 200 });
+    });
+
+    await h.stub.appendTurn(customerTurn("t2", "we rolled back, forget the date"));
+    await h.alarm();
+
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({ decision: "withdrawn" });
+
+    const updates = slackCalls.filter((call) => call.url === "https://slack.com/api/chat.update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.body.channel).toBe(NUDGE_CHANNEL);
+    expect(updates[0]!.body.ts).toBe(NUDGE_TS);
+    expect(JSON.stringify(updates[0]!.body.blocks)).toContain("Withdrawn");
   });
 });
 
@@ -587,6 +641,7 @@ describe("a withdraw whose D1 CAS was in flight when the resolution landed", () 
       const port = makeApprovalPort({
         storage,
         db: racingDb,
+        env: nudgeless(env as unknown as Env),
         runId: h.runId,
         generationId: "gen:interleaved",
         slackThread: { channelId: h.descriptor.channelId!, threadTs: h.descriptor.threadTs! },

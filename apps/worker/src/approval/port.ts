@@ -51,15 +51,17 @@ export type ApprovalPortInput = {
   slackThread: { channelId: string; threadTs: string } | null;
   now: () => number;
   /**
-   * Only for the withdrawal's nudge edit (`updateNudge`), which needs the bot
-   * token and the nudge configuration. Optional because it is the one input
-   * that buys no state-machine behaviour: the tests that exercise this port's
-   * local-vs-D1 ordering construct it without one, and a port without an `env`
-   * withdraws exactly as it always did, leaving the engineer's DM untouched.
-   * Production has exactly one construction site (`agent/loop.ts`) and it
-   * always passes it.
+   * For the withdrawal's nudge edit (`updateNudge`), which needs the bot token
+   * and the nudge configuration.
+   *
+   * REQUIRED, deliberately, even though nothing in `open` or `openApprovalId`
+   * reads it. Optional, a construction site that forgot it would compile, and
+   * the only symptom would be a withdrawn card whose engineer DM still shows a
+   * live "Review" button — indistinguishable from the world before this
+   * existed, in production and in CI alike. A missing input that silently
+   * disables a feature has to be a type error or it is nothing.
    */
-  env?: Env;
+  env: Env;
 };
 
 export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
@@ -161,22 +163,22 @@ export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
         // decision in its transcript, rather than a run nobody can restart.
         return { withdrawn: false, decision: result.row.decision };
       }
+      // EVERY REMAINING RESULT IS A COMPLETED WITHDRAWAL, and they share one
+      // answer. `not_found` lands here correctly: the card had not been
+      // projected yet, so the withdrawal is complete the moment the local row
+      // is resolved and the projector drops the job. So does a row already
+      // `withdrawn` — a redelivery of this very call.
+      //
       // THE ENGINEER'S NUDGE, IF ONE WENT OUT, NOW POINTS AT A CARD NOBODY CAN
       // ACT ON. Rewriting it is best-effort in the strong sense — `updateNudge`
       // never throws and makes no Slack call when no nudge message was recorded
       // — so a Slack outage cannot turn a completed withdrawal into a failed
       // capability call. The row is re-read because `withdrawApproval` reports
       // only that it moved: this read is what supplies the recorded
-      // channel/`ts`, and it happens only on the path that actually withdrew.
-      if (input.env !== undefined) {
-        const withdrawn = await getApproval(db, open.approvalId);
-        if (withdrawn !== null) await updateNudge(input.env, withdrawn);
-      }
+      // channel/`ts`, and it happens only on this path, the one that withdrew.
+      const withdrawn = await getApproval(db, open.approvalId);
+      if (withdrawn !== null) await updateNudge(input.env, withdrawn);
 
-      // `not_found` lands here too, and correctly: the card had not been
-      // projected yet, so the withdrawal is complete the moment the local row
-      // is resolved and the projector drops the job. So does a row already
-      // `withdrawn` — a redelivery of this very call.
       return { withdrawn: true };
     },
   };

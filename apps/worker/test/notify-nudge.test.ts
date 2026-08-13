@@ -61,6 +61,20 @@ function stubSlack(
   });
 }
 
+/**
+ * Stub `fetch` with an arbitrary transport — a throw, a non-JSON body — for the
+ * cases `stubSlack`'s reply shape cannot express.
+ *
+ * It clears `sent` for the same reason `stubSlack` does: that array is
+ * module-level, so a case that installs its own `fetch` without resetting it
+ * inherits the previous case's requests and any `expect(sent)` it later grows
+ * would be reading another test's data.
+ */
+function stubTransport(impl: () => Promise<Response>): void {
+  sent = [];
+  vi.stubGlobal("fetch", impl);
+}
+
 const happySlack = (method: string): unknown =>
   method === "conversations.open"
     ? { ok: true, channel: { id: DM_CHANNEL } }
@@ -234,7 +248,7 @@ describe("sendNudge", () => {
   it("unclaims the row when the request throws", async () => {
     const row = await seedApproval();
     await connectOnDuty();
-    vi.stubGlobal("fetch", async () => {
+    stubTransport(async () => {
       throw new Error("network down");
     });
 
@@ -363,7 +377,7 @@ describe("updateNudge", () => {
 
   it("swallows a thrown request", async () => {
     const row = await decidedWithNudge();
-    vi.stubGlobal("fetch", async () => {
+    stubTransport(async () => {
       throw new Error("network down");
     });
 
@@ -372,7 +386,7 @@ describe("updateNudge", () => {
 
   it("swallows a non-JSON response", async () => {
     const row = await decidedWithNudge();
-    vi.stubGlobal("fetch", async () => new Response("<html>gateway timeout</html>", { status: 504 }));
+    stubTransport(async () => new Response("<html>gateway timeout</html>", { status: 504 }));
 
     await expect(updateNudge(testEnv(), row)).resolves.toBeUndefined();
   });

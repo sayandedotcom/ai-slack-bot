@@ -623,6 +623,7 @@ describe("the approval_card projection", () => {
       const port = makeApprovalPort({
         storage: s,
         db: env.DB,
+        env: nudgeless(env as unknown as Env),
         runId: h.runId,
         generationId: "gen:card",
         slackThread: { channelId: h.descriptor.channelId!, threadTs: THREAD },
@@ -655,6 +656,7 @@ describe("the approval_card projection", () => {
       const port = makeApprovalPort({
         storage: s,
         db: env.DB,
+        env: nudgeless(env as unknown as Env),
         runId: h.runId,
         generationId: "gen:dup",
         slackThread: { channelId: h.descriptor.channelId!, threadTs: THREAD },
@@ -687,6 +689,7 @@ describe("the approval_card projection", () => {
       makeApprovalPort({
         storage: s,
         db: env.DB,
+        env: nudgeless(env as unknown as Env),
         runId: h.runId,
         generationId,
         slackThread: { channelId: h.descriptor.channelId!, threadTs: THREAD },
@@ -727,6 +730,7 @@ describe("the approval_card projection", () => {
       const port = makeApprovalPort({
         storage: s,
         db: broken,
+        env: nudgeless(env as unknown as Env),
         runId: h.runId,
         generationId: "gen:down",
         slackThread: { channelId: h.descriptor.channelId!, threadTs: THREAD },
@@ -750,6 +754,7 @@ describe("the approval_card projection", () => {
       const port = makeApprovalPort({
         storage: s,
         db: env.DB,
+        env: nudgeless(env as unknown as Env),
         runId: h.runId,
         generationId: "gen:gone",
         slackThread: { channelId: h.descriptor.channelId!, threadTs: THREAD },

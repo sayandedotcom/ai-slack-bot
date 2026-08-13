@@ -15,6 +15,7 @@ import {
   decideApproval,
   insertApproval,
   listUndeliveredResolutions,
+  recordNudgeMessage,
   setDelivery,
 } from "../src/approval/repository";
 import {
@@ -54,6 +55,9 @@ const EDITED = "We expect the migration to finish early next week.";
 const WHY = "it commits us to a date in front of the customer";
 const FIREFIGHTER = "ronit@zellify.app";
 const CHANNEL = "C11RESOLUTION";
+/** The engineer DM a nudge already landed in, for the nudge-rewrite case. */
+const NUDGE_CHANNEL = "D0RESOLVED";
+const NUDGE_TS = "1723640000.000800";
 
 /* ---------------------------------------------------------------- fakes -- */
 
@@ -408,6 +412,64 @@ describe("an approved reply resolves through the one inbox", () => {
     });
 
     expect(sender.calls[0]).toMatchObject({ runId: h.runId, channelId, threadTs });
+  });
+
+  /**
+   * THE SETTLED CARD REWRITES ITS OWN NUDGE DM (Phase 13 Task 6).
+   *
+   * `updateNudge` is unit-tested in `notify-nudge.test.ts`; this proves the
+   * WIRING — that `RunDO.resolveApproval` actually calls it, with the row that
+   * carries the decision and the decider. Every other case in this file
+   * resolves a card with no recorded nudge message, where `updateNudge`
+   * returns before it does anything, so without this one the call could be
+   * deleted and the file would stay green.
+   *
+   * The nudge is not sent here (no projector runs); the recorded message id is
+   * written directly, because what is under test is what happens to a DM that
+   * HAS gone out.
+   */
+  it("rewrites the engineer's nudge DM, whose Review button is now dead", async () => {
+    const { h, approvalId } = await parkedApproval({ sender: recordingSender() });
+    await recordNudgeMessage(env.DB, approvalId, NUDGE_CHANNEL, NUDGE_TS);
+
+    // Same isolate as the Durable Object, so this reaches the call the
+    // resolution makes. The customer send does not come through here — it goes
+    // through the injected sender above — so every request recorded is the
+    // nudge edit.
+    const slackCalls: Array<{ url: string; body: Record<string, unknown>; authorization: string | null }> = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      slackCalls.push({
+        url: String(url),
+        body: JSON.parse(String(init.body)) as Record<string, unknown>,
+        authorization: new Headers(init.headers).get("authorization"),
+      });
+      return new Response(JSON.stringify({ ok: true, ts: NUDGE_TS }), { status: 200 });
+    });
+
+    try {
+      expect(
+        await h.stub.resolveApproval({
+          approvalId,
+          decision: "approved",
+          outboundText: DRAFT,
+          rejectReason: null,
+          decidedBy: FIREFIGHTER,
+        }),
+      ).toEqual({ applied: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const updates = slackCalls.filter((call) => call.url === "https://slack.com/api/chat.update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.body.channel).toBe(NUDGE_CHANNEL);
+    expect(updates[0]!.body.ts).toBe(NUDGE_TS);
+    // The decision and the decider, in the message that replaces the card.
+    expect(JSON.stringify(updates[0]!.body.blocks)).toContain(`Approved by ${FIREFIGHTER}`);
+    // The bot's own message, edited with the bot's own token. The customer
+    // send above used the engineer's user token, and these two credentials
+    // must never be confused for one another.
+    expect(updates[0]!.authorization).toBe(`Bearer ${env.SLACK_BOT_TOKEN}`);
   });
 
   it("keeps decidedBy out of the model's context entirely", async () => {
