@@ -460,11 +460,11 @@ the single wave-D wiring step, NOT here. Everything else in this task
 (authz, CAS-through-HTTP, 409/422/404, sweeper re-delivery via the fake) is
 provable without Task 5 existing.
 
-- [ ] **Step 1: Write failing tests.** Through `SELF.fetch` with an injected fake verifier (compose via the same key-scoped test-port pattern the run layer uses): list/card require any team email — a valid JWT for a viewer works, a valid JWT for an outsider email → 403, no/garbage JWT → 401; PATCH as a **viewer** → `403 not_a_firefighter`, row untouched; PATCH approve as a fire-fighter → 200, response carries decision+delivery, and the DO received exactly one `resolveApproval`; concurrent PATCH approve vs reject → one 200, one `409 already_decided` carrying the winner; edit without text / reject without reason → 422; unknown id → 404; **DO notify failure after D1 commit** (inject a failing stub) → PATCH still returns 200 with `resolutionDelivered:false`, the row is decided, and the extended sweeper (invoke `scheduled()` directly in-test) re-delivers via `listUndeliveredResolutions`; reads hit D1 only (assert zero DO invocations for GET).
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.** Routes in Hono beside `src/api/runs.ts` conventions. The sweeper extension queries `listUndeliveredResolutions(db, 10)` each minute and re-invokes the owning DO's `resolveApproval`.
-- [ ] **Step 4: Run tests + typecheck.**
-- [ ] **Step 5: Commit:** `feat(api): decide approvals from the dashboard alone`
+- [x] **Step 1: Write failing tests.** Through `SELF.fetch` with an injected fake verifier (compose via the same key-scoped test-port pattern the run layer uses): list/card require any team email — a valid JWT for a viewer works, a valid JWT for an outsider email → 403, no/garbage JWT → 401; PATCH as a **viewer** → `403 not_a_firefighter`, row untouched; PATCH approve as a fire-fighter → 200, response carries decision+delivery, and the DO received exactly one `resolveApproval`; concurrent PATCH approve vs reject → one 200, one `409 already_decided` carrying the winner; edit without text / reject without reason → 422; unknown id → 404; **DO notify failure after D1 commit** (inject a failing stub) → PATCH still returns 200 with `resolutionDelivered:false`, the row is decided, and the extended sweeper (invoke `scheduled()` directly in-test) re-delivers via `listUndeliveredResolutions`; reads hit D1 only (assert zero DO invocations for GET).
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement.** Routes in Hono beside `src/api/runs.ts` conventions. The sweeper extension queries `listUndeliveredResolutions(db, 10)` each minute and re-invokes the owning DO's `resolveApproval`.
+- [x] **Step 4: Run tests + typecheck.**
+- [x] **Step 5: Commit:** `feat(api): decide approvals from the dashboard alone`
 
 ### Task 7 — Interruption and withdraw
 

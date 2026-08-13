@@ -184,3 +184,92 @@ wave, so a policy sentence still claiming they don't exist would directly
 contradict the rewritten `escalation_judgment` section and the tool's own
 declaration doc comments. `STABLE_POLICY_SECTIONS` now has nine sections
 (was ten); `test/agent-prompt.test.ts` updated to match.
+
+---
+
+## Task 6 — The HTTP API, and the JWKS key-miss amplification finding
+
+**Port pattern reused, not invented.** `src/api/approvals.ts` mirrors
+`src/agent/driver.ts`'s `RunPorts` shape (`installRunPorts` / `resolveRunPorts`
+/ module-scope registry) for its own `ApprovalApiPorts` (`verifier`,
+`notifier`): a plain object a test overrides before `SELF.fetch`, and
+production fills the `verifier` gap lazily on first request (mirroring
+`ensureRunPortsInstalled`'s "install once, only if nothing is there yet"
+shape from `src/agent/ports.ts`). No per-key scoping — an approval route has
+no run-key equivalent to scope by, and every test in this file resets the
+registry itself, same as the unkeyed half of `installRunPorts`. `notifier` is
+deliberately left unfilled by production composition: wiring `notify` to the
+RunDO's real `resolveApproval` is wave D's single composition line, not this
+task's, per the brief's explicit "decoupling" instruction. Until that lands,
+a decided approval always reports `resolutionDelivered:false` and relies on
+the sweeper to keep retrying — which is the same behavior the row would show
+if the real DO happened to be unreachable, so nothing here is a special case.
+
+**Finding: are the routes reachable without upstream Access enforcement?**
+Yes, in the sense that matters for this task, and the evidence is in this
+same checkout:
+
+- `README.md`'s "Access and the temporary override" describes the *intended*
+  edge gate — one Access application matching the whole
+  `firefighter.sayandeten.workers.dev` host, covering `/api/*` (and
+  therefore `/api/approvals/*`) with only `/slack/*` and `/oauth/*` carved out
+  as explicit bypasses. If that application exists and is configured
+  correctly, `/api/approvals` is gated exactly like `/api/runs` already is.
+- But Task 0's own baseline (this file, "Access configuration") recorded
+  `ACCESS_APP_AUD` as **still an unconfirmed placeholder**
+  (`UNSET_SEE_PHASE_11_NOTES`) as of this session, and release gate G1 says
+  the real AUD has not yet been read from the live Access application. That
+  is a fact about configuration, not code, but it means this checkout cannot
+  assert the Access application is actually standing guard today — only that
+  the Worker's *own* code enforces nothing on its own. `src/access/jwt.ts`'s
+  own header comment says it plainly: "a header being PRESENT is not the
+  same as it being VALID". Nothing server-side refuses a request that never
+  passed through Access; that refusal is Access's job alone, at the edge.
+- So: whether `/api/approvals` is reachable unauthenticated on the live
+  deployment right now is an operational fact this task cannot observe (no
+  network access, no Cloudflare credentials in this environment) — but the
+  honest worst-case assumption, given G1's open status, is "yes, possibly."
+  Task 10's live-proof step re-runs the `curl` check from README.md's
+  "Verifying the gate still lets ingest through" section against
+  `/api/approvals` specifically before relying on Access for this route.
+
+**Decision: mitigate at this layer, cheaply.** Task 2's review accepted, as a
+deferred Minor, that `AccessVerifier`'s JWKS cache
+(`src/access/jwt.ts`'s `resolveKey`) refetches on every key-miss rather than
+respecting the 1-hour floor — bounded per `verify()` call, not globally. That
+was theoretical while nothing called the verifier; this task is what makes it
+reachable, and `resolveKey` runs the JWKS lookup *before* the signature is
+even checked, so a syntactically-valid three-segment token with a fresh
+random `kid` on every request is enough to force one real JWKS fetch per
+request, with no valid signature required. If Cloudflare's JWKS endpoint
+throttles under that load, authentication breaks for every real user, not
+just the attacker.
+
+This is **not** a redesign of Task 2's cache — that stays exactly as shipped,
+per the dispatch's explicit instruction — and a redesign would be the wrong
+place to spend this task's budget regardless: the real fix (a cache that
+remembers "this `kid` doesn't exist" for some bounded time, independent of
+the overall freshness floor) belongs in `src/access/jwt.ts` where the cache
+already lives, not bolted onto one caller of it.
+
+What *is* implemented, in `src/api/approvals.ts` (`requireIdentity`, the
+"verify circuit breaker" section): a per-isolate cap of 30 failed
+verifications per rolling 60-second window. Once tripped, further requests
+in that window get `401 access_jwt_invalid` without the fake/real verifier's
+`verify()` ever being called — so the worst case for this route is bounded to
+30 JWKS-endpoint round trips per isolate per minute, regardless of how many
+distinct `kid`s an attacker cycles through, rather than one round trip per
+request unboundedly. A legitimate caller with an occasionally-stale token
+sees no behavior change (they were already getting `401` on the one bad
+attempt), the breaker self-clears every minute so a real Access key rotation
+is never permanently locked out, and it costs nothing beyond one counter
+check on the request path. Covered by
+`test/approval-api.test.ts` > "the failed-verify circuit breaker (JWKS
+amplification mitigation)", which drives 40 distinct failing "tokens" through
+a counting fake verifier and asserts the fake was called fewer than 40 times.
+
+This is a mitigation, not a fix: it bounds the blast radius at this one route
+rather than closing the underlying gap, which is why `src/access/jwt.ts`
+itself is untouched and the Minor from Task 2's review is still open at the
+source. Recorded here per the dispatch's instruction that silence on this
+question is not an acceptable answer.
