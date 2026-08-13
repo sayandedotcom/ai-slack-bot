@@ -734,4 +734,94 @@ describe("approval outcomes reach memory through the existing outbox", () => {
     expect(episode.asked).toContain("We are actively working on a fix, no ETA yet");
     expect(episode.asked).toContain("We'll ship the fix by end of day");
   });
+
+  /**
+   * THE BOUNDARY CASE `EPISODE_LIMITS.asked` (1,000 chars) actually exercises.
+   * Both cases above use short fixed strings well under the cap, so neither
+   * touches `boundedEpisodeText`'s truncation at all — this one deliberately
+   * does, with realistic-length inputs.
+   *
+   * The edited branch's field order is `[opening, text, superseded draft,
+   * deliveryLine]` — deliveryLine LAST, deliberately, mirroring the rejected
+   * branch's reasoning (`src/approval/contracts.ts`): `readAsked()` truncates
+   * this episode's `asked` from the TAIL (`boundedEpisodeText` keeps
+   * `slice(0, max-1)`), so whichever field sits last is what a long turn
+   * sacrifices. The delivery line ("it will not be sent automatically…") is
+   * the least valuable thing for a FUTURE memory recall to keep — a later
+   * recall wants to know what was edited and how, not that one particular
+   * message once needed a human to send it by hand — so it is placed where
+   * truncation eats it first, and the edited text and the superseded draft
+   * are placed where truncation protects them.
+   *
+   * This is NOT true of the model's own LIVE transcript: `toInputModelMessage`
+   * (`src/agent/prompt/evidence.ts`) carries `turn.content` whole, with no
+   * length cap, so the model itself always sees the full delivery instruction
+   * regardless of length. The cap below is a property of the MEMORY episode
+   * only.
+   */
+  it("protects the edited text and the superseded draft from the episode cap, at the delivery line's expense", async () => {
+    const longText =
+      "We are actively working on the migration fix and expect it to be fully rolled out within the next " +
+      "two business days, pending final validation from the infra team, and we will follow up the moment " +
+      "the rollout completes so you have a confirmed date to share with your own stakeholders internally.";
+    const longDraft =
+      "We can have the migration completely finished and verified in production by end of day tomorrow, " +
+      "no further validation steps required on our side, and the customer-facing dashboards will already " +
+      "reflect the new numbers by then without any additional confirmation needed from anyone else.";
+
+    const harness = await freshLoopRun({
+      origin: "slack",
+      model: mockModel([
+        textStep({ chunks: [longDraft] }),
+        textStep({ chunks: ["Noted — sending the reviewed wording instead."] }),
+      ]),
+    });
+
+    await harness.stub.appendTurn(customerTurn("t1", "when will the migration be done?"));
+    await harness.alarm();
+
+    const editTurn: RunTurnInput = {
+      id: "t2",
+      role: "user",
+      source: "approval",
+      content: resolutionTurnContent({
+        decision: "edited",
+        text: longText,
+        reason: null,
+        draft: longDraft,
+        delivery: "blocked",
+        deliveryError: "identity_unavailable",
+      }),
+    };
+    // Confirm the fixture actually crosses the cap before trusting anything
+    // the episode does with it — a boundary test that never reaches the
+    // boundary proves nothing.
+    expect(editTurn.content.replace(/\s+/g, " ").trim().length).toBeGreaterThan(1000);
+
+    await harness.stub.appendTurn(editTurn);
+    await harness.alarm();
+
+    const generationIds = await harness.storage((storage) =>
+      storage.sql
+        .exec<{ id: string }>("SELECT id FROM agent_generations ORDER BY created_at ASC")
+        .toArray()
+        .map((row) => row.id),
+    );
+    expect(generationIds).toHaveLength(2);
+
+    const secondMemory = await harness.storage((storage) =>
+      readGenerationMemory(storage, generationIds[1]),
+    );
+    const episode = JSON.parse(secondMemory?.episodeJson ?? "{}") as { asked: string };
+
+    expect(episode.asked.length).toBeLessThanOrEqual(1000);
+    // WHAT SURVIVES: the edited text and the superseded draft, whole.
+    expect(episode.asked).toContain(longText);
+    expect(episode.asked).toContain(longDraft);
+    // WHAT DOES NOT: the delivery line's own closing instruction, cut off
+    // mid-sentence — proof the LAST field is what a long turn sacrifices,
+    // not the two the plan actually needs memory to keep.
+    expect(episode.asked).not.toContain("do not try to send it another way");
+    expect(episode.asked.endsWith("…")).toBe(true);
+  });
 });

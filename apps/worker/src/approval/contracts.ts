@@ -119,10 +119,17 @@ export function resolutionTurnContent(input: {
       "A human REJECTED the reply you asked to send, and it was not sent.",
       `Their reason: ${input.reason ?? "(none given)"}`,
       "Do not send that draft. Treat the reason as a correction: it is what this team will not say to this customer.",
-      // LAST ON PURPOSE. `readAsked()` caps a generation's `asked` at 1,000
-      // characters, so whichever half is truncated on a long draft, it must
-      // not be the reason — the reason is what makes the rejection useful to
-      // memory even if the draft itself gets cut off.
+      // LAST ON PURPOSE. The MEMORY episode's `asked` field (`readAsked()` in
+      // `src/run/session.ts`, capped at `EPISODE_LIMITS.asked` = 1,000 chars
+      // by `boundedEpisodeText`, which keeps the HEAD and drops the tail) is
+      // built from this same turn content — so whichever field is truncated
+      // on a long draft, it must not be the reason. The reason is what makes
+      // the rejection useful to a FUTURE memory recall even if the draft
+      // itself gets cut off. This cap is a property of the memory episode
+      // ONLY: the model's own live transcript reads `turn.content` whole,
+      // with no length cap at all (`toInputModelMessage`,
+      // `src/agent/prompt/evidence.ts`), so the model always sees the full
+      // draft regardless of ordering.
       `The draft that was rejected: ${input.draft}`,
     ].join("\n\n");
   }
@@ -136,6 +143,14 @@ export function resolutionTurnContent(input: {
   if (input.decision === "edited") {
     parts.push(`Your original draft, now superseded: ${input.draft}`);
   }
+  // deliveryLine goes LAST for the same reason the rejected branch orders
+  // itself the way it does, above: it is what a long turn's memory episode
+  // sacrifices first. Deliberately so — a future recall wants to know WHAT
+  // was edited and WHY, not that this one particular message once needed a
+  // human to send it by hand. `input.text` and the superseded draft sit
+  // ahead of it so they survive the cap; only the memory episode is capped
+  // at all, so the model's own live view of this delivery instruction is
+  // never shortened regardless of this ordering.
   parts.push(deliveryLine(input.delivery, input.deliveryError));
   return parts.join("\n\n");
 }
