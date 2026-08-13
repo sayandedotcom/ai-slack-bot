@@ -294,12 +294,20 @@ describe("d1 projection", () => {
 });
 
 describe("0006 migration properties", () => {
-  it("has no migration number collision and does not reach into phase 11", () => {
+  it("has no migration number collision, and 0006 is still the agent-loop one", () => {
     const numbers = env.TEST_MIGRATIONS.map((migration) => migration.name.slice(0, 4));
     expect(new Set(numbers).size).toBe(numbers.length);
     expect(numbers).toContain("0006");
-    // Phase 11's approvals migration is 0007 and is not this task's to write.
-    expect(numbers).not.toContain("0007");
+    expect(env.TEST_MIGRATIONS.find((migration) => migration.name.startsWith("0006"))?.name).toContain(
+      "agent_loop",
+    );
+    // This assertion used to read `expect(numbers).not.toContain("0007")`,
+    // pinning that Phase 10 had not reached into Phase 11's migration number.
+    // Phase 11 Task 1 then wrote `0007_approvals.sql`, so the guard had done
+    // its job and outlived it. What is worth keeping is the uniqueness of the
+    // prefixes above and the fact that NOBODY renumbered 0006 out from under
+    // the applied remote database — an applied migration's number is frozen.
+    expect(numbers).toContain("0007");
   });
 
   it("enforces model-step uniqueness in d1, not only locally", async () => {

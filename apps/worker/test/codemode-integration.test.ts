@@ -12,9 +12,11 @@ import {
   fakeAuditSink,
   fakeDeps,
   slackScope,
+  testExecution,
   TEST_LIMITS,
   type FakeFixtures,
 } from "./helpers/codemode";
+import { buildRegistry } from "../src/codemode/registry";
 
 // The AI SDK types execute() as PromiseLike<OUT> | AsyncIterable<OUT>, since a
 // tool may stream. Ours never does, so narrow once here rather than at every
@@ -139,6 +141,36 @@ describe("the tool surface Phase 10 receives", () => {
   // is the SDK's own annotation name, which the registry deliberately never
   // attaches (see `registry.ts`'s note on `needsApproval`).
   it("never implies an AI SDK approval gate on the outer tool", () => {
+    // THE DESCRIPTOR'S SHAPE, not only its prose. A description sweep is the
+    // weaker half of this claim by a long way: the SDK reads an ANNOTATION, so
+    // a real second approval gate would be a `needsApproval` PROPERTY on the
+    // tool object (or on any capability descriptor inside the registry) and
+    // would say nothing at all in the description text. Asserted both ways
+    // round, and over every namespace's every method, because invariant 1
+    // forbids a second gate anywhere — not just on the outer tool.
+    const descriptor = tool() as unknown as Record<string, unknown>;
+    expect(Object.keys(descriptor)).not.toContain("needsApproval");
+    expect(descriptor.needsApproval).toBeUndefined();
+
+    const registry = buildRegistry(
+      slackScope,
+      fakeDeps(),
+      TEST_LIMITS,
+      testExecution({ audit: fakeAuditSink() }),
+    );
+    const methods = registry.flatMap((namespace) =>
+      Object.entries(namespace.tools).map(([method, spec]) => ({
+        name: `${namespace.name}.${method}`,
+        keys: Object.keys(spec as unknown as Record<string, unknown>),
+      })),
+    );
+    expect(methods.length).toBeGreaterThan(0);
+    for (const method of methods) {
+      expect(method.keys, `${method.name} carries an approval annotation`).not.toContain(
+        "needsApproval",
+      );
+    }
+
     const description = tool().description ?? "";
     expect(description).not.toMatch(/needsApproval/i);
   });

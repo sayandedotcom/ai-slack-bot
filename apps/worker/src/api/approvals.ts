@@ -324,6 +324,16 @@ approvalsApi.patch("/approvals/:id", async (c) => {
   }
   if (delivered) {
     await markResolutionDelivered(c.env.DB, row.id, Date.now());
+  } else {
+    // Swallowed, never silent. The decision stands either way (invariant 9),
+    // but a decision that did not reach its run is the one thing an operator
+    // needs to know is now riding on the sweeper — and until this line existed,
+    // the only trace of it was a `resolutionDelivered:false` in a response
+    // nobody keeps. Ids only: no draft, no edited text, no decider.
+    console.warn("approval notify did not apply; the sweeper will re-drive it", {
+      approvalId: row.id,
+      runId: row.runId,
+    });
   }
 
   return c.json({ approval: publicApprovalCard(row), resolutionDelivered: delivered });

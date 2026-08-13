@@ -569,7 +569,16 @@ describe("crash window 3 — the provider asked for a tool that never started", 
     const clock = new FakeClock();
     const parked = latch();
     const release = latch();
+    // The successor is HELD inside its own tool call, not merely observed to
+    // have started. `onCall` opened a latch when attempt 2's stream began and
+    // the test then read the driver row — but nothing kept attempt 2 in flight,
+    // so on a loaded box (a full-suite run, never in isolation) the successor
+    // could reach its own finalize first, and the read would land on a settled
+    // driver with `attempt` already cleared. Same in-flight moment, made
+    // deterministic: attempt 2 parks in its tool-input stream and stays there
+    // until the read has happened.
     const reclaimed = latch();
+    const releaseReclaimed = latch();
     let filed = 0;
 
     const model = mockModel(
@@ -581,13 +590,16 @@ describe("crash window 3 — the provider asked for a tool that never started", 
         textStep({ chunks: ["filed FF-1 for the stuck deploy."] }),
       ],
       {
-        onCall: (call) => {
-          if (call === 2) reclaimed.open();
-        },
         holdAfterToolInput: async (call) => {
-          if (call !== 1) return;
-          parked.open();
-          await release.wait();
+          if (call === 1) {
+            parked.open();
+            await release.wait();
+            return;
+          }
+          if (call === 2) {
+            reclaimed.open();
+            await releaseReclaimed.wait();
+          }
         },
       },
     );
@@ -627,12 +639,15 @@ describe("crash window 3 — the provider asked for a tool that never started", 
     await reclaimed.wait();
 
     // The successor is attempt 2 of the SAME generation — a reclaim continues
-    // the work rather than forking a second conversation. Read while it is in
-    // flight, because the driver clears `attempt` once the run settles.
+    // the work rather than forking a second conversation. The driver clears
+    // `attempt` once the run settles, so the read has to land while attempt 2
+    // is still in flight: `reclaimed` opens from INSIDE attempt 2's held tool
+    // call, and `releaseReclaimed` below is what lets it move on afterwards.
     expect(await harness.storage((storage) => readDriver(storage))).toMatchObject({
       phase: "running",
       attempt: 2,
     });
+    releaseReclaimed.open();
 
     // Only now is the lost attempt allowed to finish its stream.
     release.open();

@@ -412,6 +412,27 @@ describe("setDelivery", () => {
       false,
     );
   });
+
+  it("treats an empty `from` set as a refused no-op", async () => {
+    // WHAT THIS DOES AND DOES NOT PROVE, because the difference was measured
+    // rather than assumed: deleting `setDelivery`'s `if (from.length === 0)`
+    // guard leaves this case GREEN. SQLite (through D1) accepts `delivery IN
+    // ()` and matches nothing, so the guard is a fast path, not the thing that
+    // makes the call safe — an honest reading of it is "one statement saved",
+    // not "a syntax error prevented".
+    //
+    // The case is still worth its four lines: it pins the CONTRACT that an
+    // empty `from` is a refused no-op with the row untouched, which is what
+    // every caller's branch on the boolean depends on, and which would stop
+    // being true if the guard were ever changed to `return true` or if a future
+    // engine rejected the empty list instead of matching nothing.
+    const runId = await seedRun();
+    const c = card(runId);
+    await insertApproval(env.DB, c);
+
+    expect(await setDelivery(env.DB, c.id, [], "sent", null, 100)).toBe(false);
+    expect(await getApproval(env.DB, c.id)).toMatchObject({ delivery: "none", updatedAt: c.now });
+  });
 });
 
 describe("listOpen", () => {

@@ -199,13 +199,33 @@ export function makeAccessVerifier(
       const keys = new Map<string, CryptoKey>();
       for (const jwk of body.keys ?? []) {
         if (!jwk.kid) continue;
-        const key = await crypto.subtle.importKey(
-          "jwk",
-          jwk,
-          { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-          false,
-          ["verify"],
-        );
+        // ONE UNIMPORTABLE KEY MUST NOT TAKE THE DOCUMENT DOWN WITH IT.
+        //
+        // `importKey` rejects with a raw `DOMException`/`TypeError` for a JWK
+        // that is malformed, or simply of an algorithm this verifier does not
+        // do (Access has served EC keys alongside RSA ones before now). Left
+        // unwrapped, that escaped `verify` as a non-`AccessJwtError` and broke
+        // the closed error contract every caller branches on — the route in
+        // `api/approvals.ts` maps an `AccessJwtError` to `401` by CODE, and
+        // anything else becomes a 500. Skipping the key instead keeps the
+        // GOOD keys in the document usable, and a token that actually needs
+        // the skipped one still fails closed: its `kid` is simply absent, so
+        // `resolveKey` refetches once and then throws `bad_signature`.
+        let key: CryptoKey;
+        try {
+          key = await crypto.subtle.importKey(
+            "jwk",
+            jwk,
+            { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+            false,
+            ["verify"],
+          );
+        } catch {
+          // No key material, no `kid`, no exception text in the log line: a
+          // JWKS document is public, but this module's rule is that nothing
+          // about it reaches a log or an error (invariant 12).
+          continue;
+        }
         keys.set(jwk.kid, key);
       }
       const next: JwksCache = { keys, fetchedAt: now() };

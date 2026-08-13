@@ -3546,6 +3546,26 @@ export function finalizeAnswer(
       const verdict = evaluateTransition(current.status, settledStatus);
       if (verdict.ok && verdict.changed) {
         events.push(writeStatusEvent(storage, current.status, settledStatus, now));
+      } else {
+        // REFUSED, AND SAID SO.
+        //
+        // The outer `if` already established `from !== to`, and
+        // `evaluateTransition` returns `changed: false` only for `from === to`,
+        // so this branch is reached for exactly one reason: the pair is illegal
+        // under `TRANSITIONS`. `idle -> awaiting_approval` and
+        // `done|failed -> anything but live` are the pairs that qualify, and no
+        // path reaches them today — a generation only settles here from `live`.
+        //
+        // If one ever did, the pause would already be DURABLE
+        // (`paused_approval_id` is written above) while the dashboard kept
+        // showing the old status: a run parked with nothing saying so, which is
+        // the exact divergence this transaction exists to prevent. Silence
+        // there would leave nothing to find it by. Statuses only in the line —
+        // no content, no draft, no identity.
+        console.warn("finalizeAnswer: a settled status transition was refused", {
+          from: current.status,
+          to: settledStatus,
+        });
       }
     }
 

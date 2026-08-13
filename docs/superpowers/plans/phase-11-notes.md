@@ -354,3 +354,127 @@ attempted), and the branch is unreachable while the `approvals` row exists —
 approval rows. The structurally honest fix is for `#settleDelivery` to return
 `null` and the caller to abandon the resolution, which changes crash semantics
 and is not a one-liner. Recorded rather than done.
+
+---
+
+## Task 9 — the gate: mutation review, triage, and the full-suite run
+
+### The full gate, command by command
+
+Run at commit `8d0ddf5` + this task's diff, on `main`.
+
+| Command | Result | vs. Task 0 baseline |
+| --- | --- | --- |
+| `pnpm --filter @workspace/worker test` | **78 files, 1494 passed, 2 skipped, 0 failed** (123.2s) | baseline 69 files / 1329 passed / 2 skipped / **1 failed**. +9 files, +165 tests, and the baseline's one failure is gone |
+| `pnpm --filter @workspace/worker codemode:dts:check` | `capability declarations are up to date`; `check-text-files: no control bytes` | unchanged |
+| `pnpm exec tsc --noEmit -p tsconfig.json` | exit 0, no output | unchanged (clean at baseline) |
+| `pnpm lint` | 2 tasks (`@workspace/ui`, `web`), both pass — the worker package declares no `lint` script | unchanged |
+| `pnpm build` | 1 task (`web`), compiled + 4 static pages | unchanged |
+| `wrangler deploy --dry-run` | 3086.85 KiB / gzip 475.04 KiB, all bindings resolved | `ACCESS_APP_AUD` is still `UNSET_SEE_PHASE_11_NOTES` — release gate G1, Task 10's to set |
+
+The +9 files are Phase 11's own: `access-jwt`, `approval-api`,
+`approval-contracts`, `approval-interrupt`, `approval-repository`,
+`approval-resolution`, `agent-pause`, `codemode-approval`, and this task's
+`approval-e2e`.
+
+**Two red tests existed on `main` before this task and are fixed here.**
+
+1. `test/agent-cost.test.ts` > "0006 migration properties" asserted
+   `numbers).not.toContain("0007")` — a Phase 10 guard that Task 1 retired by
+   writing `migrations/0007_approvals.sql`. Red since `00eafc5`; nothing in the
+   per-task process could have caught it, because no task's exact-path suite
+   included that file. Now asserts what is actually worth pinning: prefixes are
+   unique, `0006` is still the agent-loop migration (nobody renumbered an
+   already-applied migration), and `0007` exists.
+2. `test/agent-failure-matrix.test.ts:632`, the recorded flake. Closed by
+   holding the successor attempt open inside its own tool call
+   (`holdAfterToolInput(2)` + a second latch) instead of merely observing that
+   attempt 2's stream had started, so the in-flight read cannot lose a race with
+   the successor's own finalize. The assertion is unchanged — the property (a
+   reclaim continues generation attempt 2 rather than forking) is still checked.
+
+### Mutation review — three mutated, three reviewed by reading
+
+Each mutation was applied to the real source, run against its exact-path
+suites, and reverted. **Mutated (evidence, not reasoning):**
+
+| # | Mutation | Result | Caught by |
+| --- | --- | --- | --- |
+| 1 | `migrations/0007_approvals.sql`: `CREATE UNIQUE INDEX idx_approvals_one_open` → `CREATE INDEX` | **5 failures** | `approval-repository` ("refuses a second insert while the first is pending", "still refuses … once decided but undelivered"), `agent-pause` ("treats duplicate_open as success", "retries rather than retiring a job whose collision is a DIFFERENT approval"), `approval-e2e` ("the card appears exactly once" — with the index gone the collision becomes a PRIMARY KEY violation whose message text is correctly NOT mapped to `duplicate_open`, so the job retries forever) |
+| 2 | `src/api/approvals.ts` `requireIdentity`: `if (c.req.method === "PATCH") return { email: jwt }` — i.e. PATCH skips verification entirely | **3 failures** | `approval-api` ("401s with no token, row untouched"), `approval-e2e` ("gets no token material back in the real verifier's 401") and — the one worth noting — `approval-e2e`'s canary sweep, because an unverified token becomes `decided_by` and the raw bearer credential lands in the D1 `approvals` row |
+| 3 | `src/run/session.ts` `finalizeGeneration`: `latchApprovalPause(...)` moved above the `isCurrentClaim` fence, so a superseded claimant latches the pause | **1 failure** | `agent-pause` > "refuses a paused finalize from a superseded claimant" (`pausedApprovalId` must stay null). Honest limit: this mutation only reaches the generation row's `paused_approval_id`; the same test also asserts the run status, but the mutation's early return never gets as far as writing one, so that half of the assertion was not exercised by this experiment. |
+
+**Reviewed by reading only — NOT mutation-tested** (the plan's timebox is three):
+
+- **Viewer PATCH.** `approvalsApi.patch` calls `isFirefighter(identity.email)`
+  before parsing the body or touching D1, so a viewer's 403 provably precedes
+  any write. Covered by `approval-api` > "403s a viewer, and the row stays
+  untouched" and by `approval-e2e` > "reads nothing and decides nothing", which
+  additionally asserts the whole row is byte-identical afterwards.
+- **Decision rollback on delivery failure.** No code path writes `decision`
+  outside `decideApproval`/`withdrawApproval`, and `setDelivery` touches only
+  `delivery`/`delivery_error`/`updated_at`. Invariant 5 holds by the shape of
+  the two statements rather than by a guard, so a mutation would have to be an
+  invented rollback rather than a deletion.
+- **Model-supplied channel.** `ApprovalPort.open` takes `slackThread` from
+  `run_state` and the sender's destination is re-derived at delivery time in
+  `#deliverApproval`; the capability declares no destination argument
+  (`codemode-approval` > "takes no destination argument", `approval-resolution`
+  > "takes the destination from run state, never from the card's snapshot").
+
+### Deferred-Minor triage — every one, with its decision
+
+**Fixed in this commit:**
+
+| From | Minor | What was done |
+| --- | --- | --- |
+| Task 2 | `crypto.subtle.importKey` unwrapped in the JWKS import loop, so a malformed JWK escapes as a raw `DOMException`/`TypeError` and breaks the closed `AccessJwtError` contract | Wrapped; an unimportable key is skipped so the document's GOOD keys still work, and a token needing the skipped key fails closed as `bad_signature`. New case in `access-jwt.test.ts`; verified red without the fix. It matters because `api/approvals.ts` maps `AccessJwtError` to 401 **by code** and anything else becomes a 500 on the decision path |
+| Task 3 | `codemode-integration` checked the tool DESCRIPTION for `needsApproval` rather than the descriptor's shape, so it could not detect a real AI SDK approval gate (invariant 1) | Now asserts the descriptor's own keys, and sweeps every method of every namespace in a real `buildRegistry` for a `needsApproval` property. The description check stays as the weaker second half |
+| Task 4 | A refused public-status transition dropped silently in `finalizeAnswer` | `console.warn` on the refused branch (statuses only, no content). Confirmed unreachable-in-practice rather than merely unlikely: the outer `if` guarantees `from !== to`, and `evaluateTransition` returns `changed:false` only for `from === to`, so the new branch fires solely on an illegal transition |
+| Task 4 ⚠️ | **No test pinned a shadow-run escalation card** (invariant 14's card half) | `approval-e2e` > "projects an honestly-labelled card for a SHADOW run": a real `escalate` on a real shadow run, the real projector, `shadow: true` on the card, then a real PATCH whose delivery is `suppressed` with the sender never called |
+| Task 6 | The PATCH notify failure was swallowed with no log | `console.warn("approval notify did not apply; the sweeper will re-drive it", {approvalId, runId})`. Ids only. The decision still stands (invariant 9); what changes is that an operator can see a click now riding on the sweeper |
+| Task 6 | `approval-api`'s zero-DO comment overstated its mechanism | Comment rewritten to claim only what `state() === null` proves (nothing was WRITTEN), with the stronger invariant-7 claim attributed to its actual evidence: the route file never references `env.RUNS` |
+| Task 8 | The byte-identical prompt test covered `STABLE_POLICY_SECTIONS` but not `VOICE_EXAMPLES`/`renderVoiceExamples()` | Both added to the two-module-builds comparison; they are the second half of the same cached stable prefix |
+| Task 1 | `setDelivery`'s `from.length === 0` guard untested | A case was added — and it is recorded here as **weaker than it looks**: removing the guard leaves it GREEN, because SQLite/D1 accepts `delivery IN ()` and matches nothing. The guard is a saved statement, not a syntax-error shield. The case is kept for the CONTRACT (empty `from` = refused no-op, row untouched) and says so in its own comment |
+
+**Recorded, not fixed:**
+
+| From | Minor | Why not |
+| --- | --- | --- |
+| Task 1 | `ONE_OPEN_INDEX_ERROR` assumes `run_id` stays the only unique column on `approvals` | Correct today and now backed by evidence rather than by the comment: mutation 1 dropped the unique index, the collision became a PRIMARY KEY violation, and the different message text was correctly NOT mapped to `duplicate_open`. A future unique column would need this constant revisited; the assumption is documented at the constant |
+| Task 4 | `src/approval/projection.ts` reads local state outside its `try`, so a throw escapes `run()` | **The premise does not hold.** `src/run/do.ts`'s projection dispatcher already wraps `runner.run(job)` in try/catch and converts a throw into `{outcome:"retry"}` with `safeErrorText`, which is the same bounded retry the inner `catch` produces. Moving the reads inside would change nothing observable |
+| Task 5 | An `in_doubt` delivery leaves the row permanently unsettled under `idx_approvals_one_open` | Already recorded above as a Phase 13 hazard; unreachable in Phase 11 (the production sender refuses first). Not this gate's to change — it is the plan's own schema |
+| Task 5 | `#settleDelivery` returns `{delivery: to}` when the re-read finds no row | Already recorded above; the honest alternative (`null` + abandon the resolution) changes crash semantics and is not a gate-sized edit |
+| Task 8 | A substring assertion ends mid-sentence on a dangling "so" | Cosmetic; the assertion is correct and changing prose in a passing assertion buys nothing at the gate |
+
+### What the full suite revealed that per-task review could not
+
+Only one thing, and it is the reason the two-run budget was worth spending
+here: the `0007` assertion in `test/agent-cost.test.ts`. It was red on `main`
+for eight commits. Every task ran its own exact-path suites and every one of
+them was green, because the broken assertion lived in a file no Phase 11 task
+touched. Nothing else surfaced: with the flake closed, the 78-file run was
+green first time and no cross-file ordering problem appeared.
+
+### Tests this task judged weaker than they look
+
+Stated because an honestly-reported gap is worth more than a green suite.
+
+1. **`setDelivery`'s empty-`from` case** — measured, not suspected; see above.
+2. **`approval-e2e` > "gets no token material back in the real verifier's
+   401"** proves the ROUTE does not echo the header or the JWKS document, and
+   that the error body has exactly two keys. It cannot catch a future
+   `AccessJwtError` that put token material in its own `message`, because
+   `fail()` only forwards `err.code` — the property is guaranteed by
+   `jwt.ts`'s construction, and this test guards the shaping around it.
+3. **The WS forgery case's first two assertions** (`unknown_type`,
+   `server_owned_field`) would both still pass if the injection were possible
+   by another route, so the case carries a third assertion that survives
+   deleting both guards: an ACCEPTED frame is committed with the source the
+   server assigns (`human_steer`), never `approval`. That is the one that means
+   the browser cannot forge a decision.
+4. **The canary sweep's boundary** is the same one `agent-canaries.test.ts`
+   documents: vendor gateways are faked at the `dependencies` seam, so a real
+   adapter echoing its own credential is not caught here. What this file adds is
+   the approval path specifically — the D1 row, the events, the resolution turn,
+   every local table, the woken generation's transcript, and the logs.

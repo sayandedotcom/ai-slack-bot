@@ -443,6 +443,11 @@ describe("stable policy content", () => {
     expect(JSON.stringify(second.STABLE_POLICY_SECTIONS)).toBe(
       JSON.stringify(first.STABLE_POLICY_SECTIONS),
     );
+    // The voice examples are the SECOND half of the same cached stable prefix
+    // (`prompt/index.ts` renders them as `instructions[1]`), so a `Date.now()`
+    // or an iteration order baked in there breaks the cache exactly as badly.
+    expect(second.renderVoiceExamples()).toBe(first.renderVoiceExamples());
+    expect(JSON.stringify(second.VOICE_EXAMPLES)).toBe(JSON.stringify(first.VOICE_EXAMPLES));
   });
 
   /**

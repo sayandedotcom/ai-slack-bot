@@ -136,6 +136,35 @@ describe("makeAccessVerifier", () => {
     expect((err as AccessJwtError).code).toBe("bad_signature");
   });
 
+  it("skips an unimportable JWK without breaking the error contract", async () => {
+    // A JWKS document with one key this verifier cannot import — a malformed
+    // RSA key, or (as Access has served in the past) a key of a different
+    // algorithm entirely — beside one good key.
+    //
+    // Two properties, and the second is the one that makes this worth a case:
+    // the GOOD key still works, and a token that needs the BAD one fails as an
+    // `AccessJwtError`, not as the raw `DOMException`/`TypeError` `importKey`
+    // rejects with. `api/approvals.ts` maps `AccessJwtError` to 401 by code and
+    // everything else to a 500, so an unwrapped throw here would turn a bad
+    // token into a server error on the route that carries a human's decision.
+    const good = await generateKeyPair("kid-good");
+    const bad = { kty: "RSA", kid: "kid-bad", alg: "RS256", use: "sig", n: "!!!not-base64url!!!", e: "AQAB" };
+    const { fetcher } = fakeJwksFetcher(good.publicJwk, bad as JsonWebKey);
+    const verifier = makeAccessVerifier({ teamDomain: TEAM_DOMAIN, aud: AUD }, fetcher);
+
+    await expect(verifier.verify(await sign(good.privateKey, good.kid, validClaims()))).resolves.toEqual({
+      email: "ronit@zellify.app",
+    });
+
+    const err = await verifier
+      .verify(await sign(good.privateKey, "kid-bad", validClaims()))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AccessJwtError);
+    expect((err as AccessJwtError).code).toBe("bad_signature");
+    // And nothing about the JWKS document rode out on the message.
+    expect((err as AccessJwtError).message).not.toContain("AQAB");
+  });
+
   it("fetches the JWKS once and reuses it across two verifications", async () => {
     const key = await generateKeyPair("kid-1");
     const { fetcher, calls } = fakeJwksFetcher(key.publicJwk);

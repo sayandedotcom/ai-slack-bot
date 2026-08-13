@@ -161,12 +161,17 @@ describe("GET /api/approvals", () => {
     expect(body.approvals).toHaveLength(1);
     expect(body.approvals[0]).toMatchObject({ id, runId, draft: "We can refund the last invoice." });
 
-    // Zero DO invocations, proven the same way `run-api.test.ts`'s "0006
-    // repairs..." case proves it: a Durable Object that has never been woken
-    // has no storage at all, so `state()` — itself the one call this
-    // assertion makes, AFTER the route already responded — reports `null`.
-    // If the list route had reached into `RUNS` for this run, its object
-    // would have storage and this would fail.
+    // No DO STATE WAS WRITTEN, which is what `state()` can actually prove and
+    // is therefore all this claims. A Durable Object that nothing has
+    // initialized has no `run_state` row, so `null` here says the route did not
+    // reach `initialize` — it does NOT say the route never instantiated a stub
+    // or called a read-only method, because neither leaves a trace.
+    //
+    // The stronger claim (invariant 7: reads never wake a DO AT ALL) rests on
+    // the route file itself, which never references `env.RUNS` — greppable, and
+    // the only form of proof available from outside. Stated as two separate
+    // things on purpose: an assertion described as more than it is, is how a
+    // green suite ends up standing for a property nobody checks.
     const stub = runStubForKey(env.RUNS, runKey);
     expect(await stub.state()).toBeNull();
   });
