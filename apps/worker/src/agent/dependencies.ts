@@ -63,7 +63,11 @@ import {
  * | turnId                 | persisted `agent_turn_id` | caller must supply     |
  * | shadow                 | D1 `runs` row             | REFUSE (fail closed)   |
  * | customerSlug           | D1 channel policy         | null (no customer)     |
- * | actor                  | the rotation + identities | null (nobody to speak) |
+ * | actor                  | rotation + identities¹    | null (nobody to speak) |
+ *
+ * ¹ and only for a run that could speak: a Slack run with a pinned thread that
+ *   is not shadowed. Every other run resolves `actor: null` without reading the
+ *   identity table at all. See the comment at the resolution itself.
  *
  * Two properties are worth stating separately, because both have already been
  * gotten wrong somewhere in this codebase's history:
@@ -98,6 +102,16 @@ export async function resolveCodeModeScope(
    * gateway's own default takes.
    */
   identity?: UserTokenSource,
+  /**
+   * The run's clock, not the wall clock.
+   *
+   * It decides WHOSE identity is used: the rotation is a pure function of an
+   * instant, so a caller that already knows the instant it is acting at must
+   * not get a different engineer from a clock read microseconds later. That
+   * coupling is exactly what `UserTokenSource`'s `nowMs` parameter exists to
+   * prevent, and reading `Date.now()` here would have reintroduced it.
+   */
+  now: () => number = () => Date.now(),
 ): Promise<CodeModeScope> {
   const run = await getRunById(db, state.runId);
   if (run === null) {
@@ -113,15 +127,33 @@ export async function resolveCodeModeScope(
   const policy: ChannelPolicy | null =
     state.channelId === null ? null : await getChannelPolicy(db, state.channelId);
 
-  // ONE identity question, asked through the same port the send path uses, so
-  // that a non-null `actor` means "there is a credential we can actually speak
-  // with" rather than "a row exists somewhere". The token itself is discarded
-  // here — the scope carries FACTS about the human, never the credential, and
-  // is re-resolved at the last trusted moment inside the gateway.
+  const slackThread =
+    state.origin === "slack" && state.channelId !== null && state.threadTs !== null
+      ? { channelId: state.channelId, threadTs: state.threadTs }
+      : null;
+
+  // WHO THIS RUN MAY SPEAK AS — asked ONLY of runs that could actually speak.
   //
-  // A `SealError` from corrupt ciphertext or a mis-rotated key propagates: a
-  // tampered database must not look like an engineer who has not connected.
-  const onDutyToken = identity === undefined ? null : await identity.onDutyToken(Date.now());
+  // The question itself is one identity read plus one decryption, asked through
+  // the same port the send path uses, so that a non-null `actor` means "there
+  // is a credential we can actually speak with" rather than "a row exists
+  // somewhere". The token is discarded here: the scope carries FACTS about the
+  // human, never the credential, which is re-resolved at the last trusted
+  // moment inside the gateway.
+  //
+  // It is asked of a Slack run with a pinned thread that is not shadowed, and
+  // of nothing else. That narrowing is a BLAST-RADIUS decision, not an
+  // optimisation. A `SealError` — a tampered ciphertext or a mis-rotated
+  // `IDENTITY_KEY` — deliberately propagates rather than reading as "not
+  // connected", which means it aborts the turn before the prompt is built; so
+  // does an `externalId` that `validateScope` will not accept. Asking on every
+  // turn would let one corrupt row for the on-duty engineer take out Chat runs,
+  // shadow runs and read-only investigations that were never going to reply.
+  // Narrowed, the loud failure lands exactly on the runs whose purpose includes
+  // replying, and degrades nothing else.
+  const mayReply = slackThread !== null && !run.shadow;
+  const onDutyToken =
+    identity === undefined || !mayReply ? null : await identity.onDutyToken(now());
 
   // `validateScope` rather than an object literal: it is strict at every level,
   // so a field this function forgets, mistypes, or accidentally widens is a
@@ -132,10 +164,7 @@ export async function resolveCodeModeScope(
     origin: state.origin,
     shadow: run.shadow,
     customerSlug: policy?.customer_slug ?? null,
-    slackThread:
-      state.origin === "slack" && state.channelId !== null && state.threadTs !== null
-        ? { channelId: state.channelId, threadTs: state.threadTs }
-        : null,
+    slackThread,
     actor:
       onDutyToken === null
         ? null
@@ -330,6 +359,7 @@ export async function makeRunCodeToolForRun(
     input.state,
     input.turnId,
     makeUserTokenSource(input.env),
+    clock,
   );
 
   return makeRunCodeTool({

@@ -1,9 +1,11 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveCodeModeScope } from "../src/agent/dependencies";
 import { buildRegistry } from "../src/codemode/registry";
 import { CapabilityError } from "../src/codemode/errors";
 import type { CodeModeScope } from "../src/codemode/contracts";
 import type { UserTokenSource } from "../src/identity/user-token";
+import type { RunState } from "../src/run/session";
 import { makeSlackGateway } from "../src/slack/gateway";
 import {
   fakeAuditSink,
@@ -50,6 +52,25 @@ const unconnected: UserTokenSource = {
     return null;
   },
 };
+
+/**
+ * A source that records every instant it was asked about.
+ *
+ * `asked` is the assertion that matters for the runs that cannot speak: "the
+ * identity table was never read" is a strictly stronger claim than "the actor
+ * came out null", and only the first one says a corrupt row for the on-duty
+ * engineer cannot take out a Chat run.
+ */
+function counting(inner: UserTokenSource): UserTokenSource & { asked: number[] } {
+  const asked: number[] = [];
+  return {
+    asked,
+    async onDutyToken(nowMs: number) {
+      asked.push(nowMs);
+      return inner.onDutyToken(nowMs);
+    },
+  };
+}
 
 type Captured = { url: string; authorization: string | null; body: unknown };
 
@@ -115,6 +136,144 @@ function effectsFor(scope: CodeModeScope): Promise<EffectRow[]> {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+/* ----------------------------------------------- the actor, in production -- */
+
+const uid = () => crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase();
+
+async function seedScopeRun(input: {
+  origin: "slack" | "chat";
+  shadow?: boolean;
+}): Promise<RunState> {
+  const runId = `run_${crypto.randomUUID()}`;
+  const channelId = input.origin === "slack" ? `C${uid()}` : null;
+  const threadTs = input.origin === "slack" ? "1712345678.000100" : null;
+  const key =
+    input.origin === "slack" ? `slack:${channelId}:${threadTs}` : `chat:${crypto.randomUUID()}`;
+
+  if (channelId !== null) {
+    await env.DB.prepare(
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'acme', 'live')",
+    )
+      .bind(channelId, `chan-${channelId}`)
+      .run();
+  }
+  await env.DB.prepare(
+    `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'live', ?, 0, 0)`,
+  )
+    .bind(runId, key, input.origin, channelId, threadTs, input.shadow === true ? 1 : 0)
+    .run();
+
+  return {
+    runId,
+    key,
+    origin: input.origin,
+    channelId,
+    threadTs,
+    status: "live",
+    summary: null,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+}
+
+/**
+ * WHERE THE ON-DUTY ENGINEER ENTERS THE SCOPE.
+ *
+ * `bindings/slack.ts` refuses a reply whose scope carries no actor, so this
+ * resolution is the half of the credential path that makes production work at
+ * all — and it is asked ONLY of runs that could speak, because the question can
+ * fail loudly (a `SealError`, or an `externalId` `validateScope` rejects) and
+ * that failure must not reach a Chat run that was never going to reply.
+ */
+describe("resolveCodeModeScope resolves the on-duty engineer", () => {
+  it("names the connected engineer, and carries no credential", async () => {
+    const state = await seedScopeRun({ origin: "slack" });
+
+    const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:1", connected());
+
+    expect(scope.actor).toEqual({
+      engineerEmail: ON_DUTY,
+      slackUserId: "U0NDUTY01",
+    });
+    expect(JSON.stringify(scope)).not.toContain(USER_TOKEN);
+  });
+
+  it("resolves no actor when nobody on duty has connected Slack", async () => {
+    const state = await seedScopeRun({ origin: "slack" });
+    const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:2", unconnected);
+    expect(scope.actor).toBeNull();
+  });
+
+  // The default the four two-argument call sites depend on. Absent source means
+  // nobody, and nobody means every customer-facing write refuses.
+  it("resolves no actor when no source is supplied at all", async () => {
+    const state = await seedScopeRun({ origin: "slack" });
+    const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:3");
+    expect(scope.actor).toBeNull();
+  });
+
+  it("asks at the RUN'S instant, not the wall clock", async () => {
+    // The rotation is a pure function of an instant, so the clock is what
+    // decides WHOSE identity is used.
+    const state = await seedScopeRun({ origin: "slack" });
+    const source = counting(connected());
+    const runInstant = 1_760_000_000_000;
+
+    await resolveCodeModeScope(env.DB, state, "agent:gen:4", source, () => runInstant);
+
+    expect(source.asked).toEqual([runInstant]);
+  });
+
+  it("never reads an identity for a Chat run", async () => {
+    const state = await seedScopeRun({ origin: "chat" });
+    const source = counting(connected());
+
+    const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:5", source);
+
+    expect(scope.actor).toBeNull();
+    expect(source.asked).toEqual([]);
+  });
+
+  it("never reads an identity for a run with no pinned thread", async () => {
+    // A threadless Slack run is not representable — the `runs` CHECK forbids
+    // the row and `validateScope` refuses the scope — so the run that reaches
+    // the identity question with `slackThread: null` is a Chat one, and it is
+    // refused an identity read for that reason rather than for its origin.
+    const seeded = await seedScopeRun({ origin: "slack" });
+    const source = counting(connected());
+
+    await expect(
+      resolveCodeModeScope(env.DB, { ...seeded, threadTs: null }, "agent:gen:6", source),
+    ).rejects.toThrow(/invalid_context/);
+    expect(source.asked).toEqual([]);
+  });
+
+  it("never reads an identity for a shadow run", async () => {
+    const state = await seedScopeRun({ origin: "slack", shadow: true });
+    const source = counting(connected());
+
+    const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:7", source);
+
+    // Shadow comes from the D1 row, and a shadow run cannot write at all.
+    expect(scope.shadow).toBe(true);
+    expect(scope.actor).toBeNull();
+    expect(source.asked).toEqual([]);
+  });
+
+  it("lets a tampered identity fail loudly rather than look unconnected", async () => {
+    const state = await seedScopeRun({ origin: "slack" });
+    const sealed: UserTokenSource = {
+      async onDutyToken() {
+        throw new Error("SealError: ciphertext did not open");
+      },
+    };
+
+    await expect(resolveCodeModeScope(env.DB, state, "agent:gen:8", sealed))
+      .rejects.toThrow(/ciphertext did not open/);
+  });
 });
 
 /* ------------------------------------------------------------- the send -- */
