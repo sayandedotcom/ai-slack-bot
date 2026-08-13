@@ -61,10 +61,14 @@ type ApprovalRowDb = {
   delivery: ApprovalDelivery;
   created_at: number;
   updated_at: number;
+  nudged_at: number | null;
+  nudge_channel_id: string | null;
+  nudge_ts: string | null;
 };
 
 const COLUMNS = `id, run_id, generation_id, draft, why, channel_id, thread_ts, shadow,
-  decision, decided_by, decided_at, edited_text, reject_reason, delivery, created_at, updated_at`;
+  decision, decided_by, decided_at, edited_text, reject_reason, delivery, created_at, updated_at,
+  nudged_at, nudge_channel_id, nudge_ts`;
 
 function toRow(db: ApprovalRowDb): ApprovalRow {
   return {
@@ -84,6 +88,9 @@ function toRow(db: ApprovalRowDb): ApprovalRow {
     delivery: db.delivery,
     createdAt: db.created_at,
     updatedAt: db.updated_at,
+    nudgedAt: db.nudged_at,
+    nudgeChannelId: db.nudge_channel_id,
+    nudgeTs: db.nudge_ts,
   };
 }
 
@@ -283,6 +290,39 @@ export async function listOpen(db: D1Database, limit = 50): Promise<ApprovalRow[
     .bind(limit)
     .all<ApprovalRowDb>();
   return (results ?? []).map(toRow);
+}
+
+/**
+ * The once-only CAS for the Slack nudge DM (Phase 13): exactly one caller
+ * ever sees `true` for a given row, no matter how many concurrent or
+ * repeated sends race for it. One conditional UPDATE — `WHERE ... AND
+ * nudged_at IS NULL` — branching on `meta.changes` after the fact, same
+ * pattern as `decideApproval`'s CAS: there is no read-then-write window for
+ * a second caller to land in.
+ */
+export async function claimNudge(db: D1Database, id: string, now: number): Promise<boolean> {
+  const result = await db
+    .prepare(`UPDATE approvals SET nudged_at = ? WHERE id = ? AND nudged_at IS NULL`)
+    .bind(now, id)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * Records the channel/ts of the nudge DM that was actually sent, once
+ * `claimNudge` has already won the slot. Not itself a CAS — the claim above
+ * is what makes this call happen at most once per row.
+ */
+export async function recordNudgeMessage(
+  db: D1Database,
+  id: string,
+  channelId: string,
+  ts: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE approvals SET nudge_channel_id = ?, nudge_ts = ? WHERE id = ?`)
+    .bind(channelId, ts, id)
+    .run();
 }
 
 /**

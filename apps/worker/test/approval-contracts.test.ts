@@ -24,6 +24,9 @@ function row(overrides: Partial<ApprovalRow> = {}): ApprovalRow {
     delivery: "none",
     createdAt: 1,
     updatedAt: 1,
+    nudgedAt: null,
+    nudgeChannelId: null,
+    nudgeTs: null,
     ...overrides,
   };
 }

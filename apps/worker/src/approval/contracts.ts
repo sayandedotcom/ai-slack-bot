@@ -29,6 +29,9 @@ export type ApprovalRow = {
   delivery: ApprovalDelivery;
   createdAt: number;
   updatedAt: number;
+  nudgedAt: number | null;
+  nudgeChannelId: string | null;
+  nudgeTs: string | null;
 };
 
 export type DecisionInput =

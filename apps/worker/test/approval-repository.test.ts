@@ -2,12 +2,14 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { DecisionInputError, type ApprovalRow } from "../src/approval/contracts";
 import {
+  claimNudge,
   decideApproval,
   getApproval,
   insertApproval,
   listOpen,
   listUndeliveredResolutions,
   markResolutionDelivered,
+  recordNudgeMessage,
   setDelivery,
   withdrawApproval,
   type NewApprovalCard,
@@ -547,6 +549,74 @@ describe("row shape constraints fail closed", () => {
         .bind(`apr:${crypto.randomUUID()}`, `run_${crypto.randomUUID()}`)
         .run(),
     ).rejects.toThrow();
+  });
+});
+
+describe("claimNudge — exactly-once CAS", () => {
+  it("returns true once and false on every retry", async () => {
+    const runId = await seedRun();
+    const c = card(runId);
+    await insertApproval(env.DB, c);
+
+    expect(await claimNudge(env.DB, c.id, 100)).toBe(true);
+    expect(await claimNudge(env.DB, c.id, 200)).toBe(false);
+    expect(await claimNudge(env.DB, c.id, 300)).toBe(false);
+
+    const row = await getApproval(env.DB, c.id);
+    expect(row?.nudgedAt).toBe(100);
+  });
+
+  it("two concurrent claims on a fresh row yield exactly one true", async () => {
+    const runId = await seedRun();
+    const c = card(runId);
+    await insertApproval(env.DB, c);
+
+    const [a, b] = await Promise.all([
+      claimNudge(env.DB, c.id, 100),
+      claimNudge(env.DB, c.id, 101),
+    ]);
+
+    expect([a, b].filter(Boolean)).toHaveLength(1);
+  });
+
+  it("returns false for an unknown id", async () => {
+    expect(await claimNudge(env.DB, `apr:${crypto.randomUUID()}`, 100)).toBe(false);
+  });
+});
+
+describe("recordNudgeMessage", () => {
+  it("stores channel and ts, readable via getApproval", async () => {
+    const runId = await seedRun();
+    const c = card(runId);
+    await insertApproval(env.DB, c);
+    await claimNudge(env.DB, c.id, 100);
+
+    await recordNudgeMessage(env.DB, c.id, "C_ENG", "1720000000.000100");
+
+    const row = await getApproval(env.DB, c.id);
+    expect(row?.nudgeChannelId).toBe("C_ENG");
+    expect(row?.nudgeTs).toBe("1720000000.000100");
+  });
+});
+
+describe("the unnudged index feed", () => {
+  it("returns the other pending rows, oldest first, once one is claimed", async () => {
+    const runA = await seedRun();
+    const runB = await seedRun();
+    const runC = await seedRun();
+    const first = card(runA, { now: 100 });
+    const second = card(runB, { now: 200 });
+    const third = card(runC, { now: 300 });
+    await insertApproval(env.DB, first);
+    await insertApproval(env.DB, second);
+    await insertApproval(env.DB, third);
+
+    await claimNudge(env.DB, second.id, 400);
+
+    const { results } = await env.DB.prepare(
+      `SELECT id FROM approvals WHERE decision = 'pending' AND nudged_at IS NULL ORDER BY created_at ASC`,
+    ).all<{ id: string }>();
+    expect((results ?? []).map((r) => r.id)).toEqual([first.id, third.id]);
   });
 });
 
