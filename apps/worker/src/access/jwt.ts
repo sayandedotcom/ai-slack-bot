@@ -87,6 +87,38 @@ const JWKS_CACHE_FLOOR_MS = 60 * 60 * 1000;
  */
 const UNKNOWN_KID_NEGATIVE_TTL_MS = 60 * 1000;
 
+/**
+ * The hard ceiling on `unknownKids`'s size, in EVERY isolate, for the whole
+ * isolate's lifetime -- not just within one TTL window.
+ *
+ * The TTL alone does not bound memory: an entry is only ever removed when
+ * that SAME `kid` is looked up again after expiring (`resolveKey`'s
+ * TTL-elapsed branch), which never happens for the amplification attack
+ * shape this cache exists to throttle -- a caller cycling through DISTINCT,
+ * never-repeated `kid`s. Every such `kid` adds one permanent entry, so
+ * without a cap the map grows without limit for as long as the isolate
+ * lives. `MAX_UNKNOWN_KIDS` is the fix: `rememberUnknownKid` evicts the
+ * OLDEST entry (a `Map` preserves insertion order, so this is a plain FIFO,
+ * no LRU bookkeeping needed) before inserting past this size, so
+ * `unknownKids.size` never exceeds it. Worst case, this isolate's negative
+ * cache costs at most `MAX_UNKNOWN_KIDS` string keys plus a number each --
+ * a few tens of KB even at this size, not a resource-exhaustion vector.
+ *
+ * Evicting the oldest entry is safe for the property this cache protects: if
+ * an attacker is cycling through more than `MAX_UNKNOWN_KIDS` distinct `kid`s
+ * faster than they expire, the evicted `kid` was not going to be looked up
+ * again anyway (that IS the attack shape -- never-repeated `kid`s), so
+ * losing its entry early costs nothing. The only way eviction could reopen
+ * amplification is if the SAME `kid` were hammered repeatedly while more
+ * than `MAX_UNKNOWN_KIDS` OTHER distinct `kid`s were also in flight between
+ * two of its requests -- a scenario requiring the attacker to sustain a
+ * working set larger than this cap simultaneously, at which point the cap
+ * has already done its job of bounding memory, and the worst case reverts to
+ * (at most) one extra fetch for that one `kid`, not the original unbounded
+ * per-request amplification.
+ */
+const MAX_UNKNOWN_KIDS = 1000;
+
 function base64UrlToBytes(segment: string): Uint8Array {
   const padded = segment + "=".repeat((4 - (segment.length % 4)) % 4);
   const std = padded.replace(/-/g, "+").replace(/_/g, "/");
@@ -132,6 +164,19 @@ export function makeAccessVerifier(
    * the TTL is short.
    */
   const unknownKids = new Map<string, number>();
+
+  /**
+   * Inserts (or refreshes) `kid`'s negative entry, evicting the oldest entry
+   * first if the map is already at `MAX_UNKNOWN_KIDS` -- see that constant's
+   * doc comment for the full bound and why FIFO eviction is safe here.
+   */
+  function rememberUnknownKid(kid: string, nowMs: number): void {
+    if (unknownKids.size >= MAX_UNKNOWN_KIDS) {
+      const oldest = unknownKids.keys().next().value;
+      if (oldest !== undefined) unknownKids.delete(oldest);
+    }
+    unknownKids.set(kid, nowMs + UNKNOWN_KID_NEGATIVE_TTL_MS);
+  }
 
   async function loadJwks(): Promise<JwksCache> {
     if (inflight) return inflight;
@@ -218,7 +263,7 @@ export function makeAccessVerifier(
       key = keys.get(kid);
     }
     if (!key) {
-      unknownKids.set(kid, nowMs + UNKNOWN_KID_NEGATIVE_TTL_MS);
+      rememberUnknownKid(kid, nowMs);
       throw new AccessJwtError("bad_signature", "no JWKS key matches the token's kid");
     }
     return key;

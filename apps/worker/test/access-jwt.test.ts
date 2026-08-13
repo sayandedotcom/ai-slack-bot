@@ -262,6 +262,70 @@ describe("makeAccessVerifier", () => {
       await expect(verifier.verify(token)).resolves.toEqual({ email: "ronit@zellify.app" });
       expect(calls).toBe(3);
     });
+
+    /**
+     * The bound named explicitly in the second review round: the negative
+     * cache's TTL alone does not cap MEMORY, because an entry is only ever
+     * removed when that SAME `kid` is looked up again after expiring -- and
+     * the actual attack shape (a caller cycling through distinct,
+     * never-repeated `kid`s) never repeats a `kid`, so that cleanup branch
+     * never runs for it. Without a hard cap, `unknownKids` would grow by one
+     * entry per distinct unknown `kid` forever.
+     *
+     * This proves the cap holds by BEHAVIOR, not by reaching into the
+     * verifier's private `unknownKids` map (which is not exposed, and should
+     * not be): drive `MAX_UNKNOWN_KIDS + 5` distinct never-published `kid`s
+     * through the verifier, then re-query the OLDEST one. If the cache were
+     * unbounded, that `kid` would still be negatively cached and refused with
+     * no network call. Instead it must trigger a fresh fetch -- proof it was
+     * evicted, i.e. proof the map did not grow past its cap. A
+     * recently-inserted `kid`, by contrast, must still be served from cache
+     * with no extra call, proving eviction is FIFO (oldest-first) rather than
+     * indiscriminate.
+     *
+     * No real RSA signing here (`generateKeyPair`/`sign` are deliberately not
+     * used): `resolveKey` throws before the signature is ever checked, so a
+     * syntactically-valid header+payload with a throwaway signature segment
+     * is enough, and it keeps 1000+ iterations fast.
+     */
+    it("bounds the negative cache's size, evicting the oldest unknown kid first", async () => {
+      // Mirrors `MAX_UNKNOWN_KIDS` in `src/access/jwt.ts`. Not exported —
+      // deliberately: a test that imported the real constant could not tell
+      // "the cap moved" apart from "the cap doesn't exist," and a value
+      // hard-coded here that drifts from the real one still proves the
+      // property (eviction happens at SOME bound), just not the exact
+      // number. Kept in sync by convention: if this ever fails because the
+      // production constant changed, update this literal to match.
+      const MAX_UNKNOWN_KIDS = 1000;
+
+      const { fetcher, calls } = fakeJwksFetcher(); // an always-empty JWKS
+      const verifier = makeAccessVerifier({ teamDomain: TEAM_DOMAIN, aud: AUD }, fetcher);
+
+      function unsignedFakeToken(kid: string): string {
+        // Never reaches `crypto.subtle.verify` -- `resolveKey` throws on the
+        // unknown `kid` first -- so the signature segment can be throwaway.
+        const headerSeg = base64urlJson({ alg: "RS256", kid, typ: "JWT" });
+        const payloadSeg = base64urlJson({});
+        return `${headerSeg}.${payloadSeg}.c2ln`;
+      }
+
+      for (let i = 0; i < MAX_UNKNOWN_KIDS + 5; i++) {
+        const err = await verifier.verify(unsignedFakeToken(`kid-${i}`)).catch((e: unknown) => e);
+        expect((err as AccessJwtError).code).toBe("bad_signature");
+      }
+      const callsAfterFill = calls();
+
+      // The very first kid inserted must have been evicted by now (FIFO,
+      // five insertions past the cap): re-querying it costs a fresh fetch.
+      await verifier.verify(unsignedFakeToken("kid-0")).catch((e: unknown) => e);
+      expect(calls()).toBeGreaterThan(callsAfterFill);
+
+      // The most recently inserted kid, still comfortably within the cap,
+      // must remain negatively cached: no extra fetch.
+      const callsAfterEvictedRecheck = calls();
+      await verifier.verify(unsignedFakeToken(`kid-${MAX_UNKNOWN_KIDS + 4}`)).catch((e: unknown) => e);
+      expect(calls()).toBe(callsAfterEvictedRecheck);
+    });
   });
 });
 
