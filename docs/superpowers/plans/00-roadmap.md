@@ -184,7 +184,7 @@ wrong.
 | 13 | Slack nudge | [full](phase-13-slack-nudge-and-send.md) | 11, 12 | 4 |
 | 14 | Dashboard shell | [full](phase-14-dashboard-shell.md) | 05, 12 (soft) | 5 |
 | 15 | Run list + live run drawer | below | 10, 14 | 5 |
-| 16 | Approval card | below | 11, 14 | 5 |
+| 16 | Approval card | [full](phase-16-approval-card.md) | 11, 14 | 5 |
 | 17 | Chat page + citations | below | 10, 14 | 5 |
 | 18 | Sandbox Tier 2 | below | 00·T1, **monorepo** | 5 |
 | 19 | Ship loop + proof capture | below | 18 | 6 |
@@ -459,7 +459,7 @@ in flight, then swapped when 12 merges.
 
 **Goal:** One click, where the engineer already was.
 
-**Depends on:** Phases 11, 14 · **Day 5**
+**Depends on:** Phases 11, 14 · **Day 5** · Full plan: [phase-16-approval-card.md](phase-16-approval-card.md) (written 2026-08-13)
 
 **Files:** `apps/dashboard/src/approvals/*`
 
@@ -468,10 +468,10 @@ in flight, then swapped when 12 merges.
 2. **Approve / Edit / Reject.** Edit is inline, not a modal.
 3. **Reject requires a reason** — that reason is training data for Phase 21, not paperwork.
 4. **Optimistic update with rollback** on failure — keyed off Phase 11's `409 already_decided` contract, which returns the winning decision for the rollback render.
-5. **Live withdrawal handling.** A card can vanish under the cursor when the agent withdraws it (spec §5.3); it must disappear with an explanation, never silently. The signal already exists: the resolution turn is a run event on the existing WebSocket.
+5. **Live withdrawal handling.** A card can vanish under the cursor when the agent withdraws it (spec §5.3); it must disappear with an explanation, never silently. Detected by poll-reconcile (an id leaving the open list with no local decision gets one detail fetch), NOT the run WebSocket — the dashboard has no WS client until Phase 15, and the card must not wait for it. Phase 15/22 may upgrade the transport; the reconciliation survives that.
 6. **Empty state** that reads as reassurance rather than absence.
 
-**Exit criteria:** An escalation appears within a second of `escalate()`. Approve/edit/reject update through the Phase 11 fake-sender contract and rejection reaches memory. Real on-duty sending is the Phase 13 integration exit.
+**Exit criteria:** An escalation appears within one poll interval (≤3 s) of its card projecting. Approve/edit/reject update through the Phase 11 fake-sender contract and rejection reaches memory. Real on-duty sending is the Phase 13 integration exit.
 
 ---
 
