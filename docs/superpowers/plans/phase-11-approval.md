@@ -432,10 +432,10 @@ async resolveApproval(input: { approvalId: string; decision: "approved"|"edited"
 
 Resolution order inside the RPC (each step idempotent on `approvalId`): (1) shadow run ⇒ delivery `suppressed`, skip send; (2) else approved/edited ⇒ D1 `setDelivery none→sending` then `sender.send` then `sending→sent|blocked|in_doubt`; (3) `appendTurn({ id: "approval:"+approvalId, source: "approval", content: <structured resolution: decision, final text or reason, delivery outcome> })` — the existing input transaction wakes the driver; (4) local `approval_state → resolved`; (5) D1 `markResolutionDelivered`. A crash between (2) and (3) is repaired by the sweeper re-invoking the RPC — the turn id makes re-entry idempotent, and a `sending` row found on re-entry maps to `in_doubt` rather than a second send attempt.
 
-- [ ] **Step 1: Write failing tests.** With a fake sender and real DO: approve → delivery `blocked` (production sender) → resolution turn committed once with `source:"approval"` → run transitions `awaiting_approval → live` (driver wakes) and the next fake generation sees the resolution in its transcript as user-authority input; edit → `outboundText` uses the edited text; reject → no send attempted, reason lands in the turn; duplicate `resolveApproval` (sweeper replay) appends no second turn (idempotent id) and re-marks delivery consistently; shadow run → `suppressed`, no sender call; fake sender returning `in_doubt` → delivery `in_doubt`, resolution turn says so, run still resumes (the human decision is fact regardless of delivery).
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run `pnpm --filter @workspace/worker test -- approval-resolution run-do` + typecheck.**
+- [x] **Step 1: Write failing tests.** With a fake sender and real DO: approve → delivery `blocked` (production sender) → resolution turn committed once with `source:"approval"` → run transitions `awaiting_approval → live` (driver wakes) and the next fake generation sees the resolution in its transcript as user-authority input; edit → `outboundText` uses the edited text; reject → no send attempted, reason lands in the turn; duplicate `resolveApproval` (sweeper replay) appends no second turn (idempotent id) and re-marks delivery consistently; shadow run → `suppressed`, no sender call; fake sender returning `in_doubt` → delivery `in_doubt`, resolution turn says so, run still resumes (the human decision is fact regardless of delivery).
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run `pnpm --filter @workspace/worker test -- approval-resolution run-do` + typecheck.**
 - [ ] **Step 5: Commit:** `feat(approval): resolve a human decision through the one inbox`
 
 ### Task 6 — The HTTP API

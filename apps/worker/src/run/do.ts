@@ -10,7 +10,18 @@ import type {
 } from "./protocol";
 import { parseClientMessage } from "./protocol";
 import { broadcastEvent } from "./broadcast";
-import { projectRunIndex } from "./repository";
+import { getRunById, projectRunIndex } from "./repository";
+import {
+  outboundText,
+  resolutionTurnContent,
+  type ApprovalDelivery,
+  type ApprovalRow,
+} from "../approval/contracts";
+import {
+  getApproval,
+  markResolutionDelivered,
+  setDelivery,
+} from "../approval/repository";
 import {
   appendAssistantUpdate,
   appendToolCallUpdate,
@@ -32,6 +43,7 @@ import {
   nextProjectionDueAt,
   readDriver,
   readGeneration,
+  resolveApprovalState,
   readRunIndexRevision,
   countModelSteps,
   resumeAfterOperatorConfig,
@@ -115,6 +127,14 @@ function eventCreatedAt(event: RunEvent): number {
       return event.createdAt;
   }
 }
+
+/**
+ * The `delivery_error` written when a resolution is re-entered while a send is
+ * still in flight. Named rather than inline because it is the one delivery
+ * error a human reading the dashboard has to act on: it means somebody must
+ * open the thread and look before anything else is sent.
+ */
+const REENTERED_WHILE_SENDING = "the resolution was re-entered while a send was in flight";
 
 /** How many revisions one drain pass will carry before yielding. */
 const PROJECTION_DRAIN_MAX = 8;
@@ -516,6 +536,199 @@ export class RunDO extends DurableObject<Env> {
       abortForNewerInput(this.ctx.storage);
     }
     return committed;
+  }
+
+  /**
+   * ONE HUMAN DECISION, BACK INTO THE RUN IT CAME FROM.
+   *
+   * Called by the dashboard's `PATCH /api/approvals/:id` after its D1 CAS has
+   * committed, and by the one-minute sweeper for any decided row whose
+   * resolution never arrived (invariant 9). Five steps, each idempotent on
+   * `approvalId`, in this order:
+   *
+   *   1. shadow run  ⇒ delivery `suppressed`, and NO sender call at all;
+   *   2. else approved/edited ⇒ D1 `none -> sending`, send, `sending -> ...`;
+   *   3. `appendTurn({ id: "approval:"+approvalId, source: "approval" })`,
+   *      which is the ordinary input transaction and therefore the wake;
+   *   4. the local `approval_state` row ⇒ `resolved`, so the next finalize
+   *      cannot re-park the run on a decision that has already landed;
+   *   5. D1 `resolution_delivered_at`, which retires the sweeper's repair key.
+   *
+   * A crash anywhere in that sequence is repaired by the sweeper re-invoking
+   * this method: step 3's turn id makes re-entry append no second turn, and
+   * step 2's CAS makes it attempt no second send.
+   *
+   * THE RUN RESUMES WHATEVER DELIVERY DID — `blocked`, `in_doubt` or
+   * `suppressed` all unpark it. Under Phase 11's identity-refusing sender that
+   * means every approval resumes `blocked`, which reads as a bug until you
+   * price the alternative: the human's decision is a fact independently of
+   * whether the message went out, and parking until a delivery that cannot
+   * happen before Phase 13 would strand every real escalation for weeks. The
+   * resolution turn says so honestly instead (see `resolutionTurnContent`).
+   *
+   * `decidedBy` is accepted, recorded in D1 by the caller, and DELIBERATELY
+   * never passed to `appendTurn` (invariant 12). The model does not learn
+   * which engineer clicked.
+   */
+  async resolveApproval(input: {
+    approvalId: string;
+    decision: "approved" | "edited" | "rejected";
+    outboundText: string | null;
+    rejectReason: string | null;
+    decidedBy: string;
+  }): Promise<{ applied: boolean }> {
+    const state = readState(this.ctx.storage);
+    if (state === null) return { applied: false };
+
+    const card = await getApproval(this.env.DB, input.approvalId);
+    // Nothing to resolve, or this decision belongs to a different
+    // conversation. The second check is the one that matters: an approval
+    // resolved into the wrong object would put one customer's approved text
+    // into another customer's run. The notifier addresses this object by the
+    // run's own key, so it can only fail through a caller bug — which is
+    // exactly the kind this refuses cheaply.
+    if (card === null || card.runId !== state.runId) return { applied: false };
+
+    // THE D1 ROW DECIDES WHETHER THERE IS ANYTHING TO RESOLVE — invariant 6's
+    // "one writer surface", enforced here rather than assumed of the caller.
+    // Unparking a run on a decision the system of record does not carry would
+    // be a resolution nobody made; a mismatched one would answer with the
+    // wrong human's choice. Both are refused as undelivered, which leaves the
+    // repair key (`resolution_delivered_at`) set and the sweeper re-driving,
+    // rather than committing something unattributable.
+    //
+    // The TEXT still comes from `input`, not from the row: the caller derived
+    // it from this same row with `outboundText` a moment ago, and taking it
+    // here keeps the sweeper's replay byte-identical to the original notify.
+    if (card.decision !== input.decision) return { applied: false };
+
+    const finalText = input.outboundText ?? outboundText(card);
+    const delivery =
+      input.decision === "rejected"
+        // `rejected | withdrawn => delivery stays none`. There is nothing to
+        // send, so there is no delivery sub-machine to run at all.
+        ? { delivery: "none" as ApprovalDelivery, error: null }
+        : await this.#deliverApproval(card, finalText, state);
+
+    const result = await this.appendTurn({
+      id: `approval:${input.approvalId}`,
+      role: "user",
+      source: "approval",
+      content: resolutionTurnContent({
+        decision: input.decision,
+        text: input.decision === "rejected" ? null : finalText,
+        reason: input.rejectReason,
+        delivery: delivery.delivery,
+        deliveryError: delivery.error,
+      }),
+      // The approval id, so a reader can join this turn back to its card. No
+      // decided_by here either — metadata rides on the same turn.
+      metadata: { approvalId: input.approvalId, decision: input.decision, delivery: delivery.delivery },
+    });
+
+    // `resolveApprovalState` reports whether IT moved the row, not whether the
+    // row is in the asked-for state. A fresh turn beside a row that was
+    // already settled is the one combination worth a line in the log: it means
+    // something else (a withdrawal racing the decision) settled the approval
+    // locally while this resolution was in flight.
+    const moved = resolveApprovalState(this.ctx.storage, input.approvalId, "resolved", this.#now());
+    if (result.appended && !moved) {
+      console.warn("approval resolution: the local record was already settled", {
+        approvalId: input.approvalId,
+      });
+    }
+
+    await markResolutionDelivered(this.env.DB, input.approvalId, this.#now());
+    return { applied: true };
+  }
+
+  /**
+   * Step 1 and step 2: settle the delivery sub-machine, and return what it
+   * settled on so the resolution turn can tell the truth about it.
+   *
+   * Delivery NEVER writes back to the decision (invariant 5). Nothing in here
+   * can fail in a way that rolls a human's click back; the worst case is an
+   * `in_doubt` row and a sentence telling a person to go and look.
+   */
+  async #deliverApproval(
+    card: ApprovalRow,
+    text: string,
+    state: RunState,
+  ): Promise<{ delivery: ApprovalDelivery; error: string | null }> {
+    const db = this.env.DB;
+
+    // Shadow is read LIVE from the D1 `runs` row, not taken from the card's
+    // snapshot, and the two are OR-ed. A run's shadow flag only ever ratchets
+    // false -> true (`run/repository.ts`), so a card projected before the
+    // ratchet says `false` about a run that must never write to a customer —
+    // and if the live row cannot be read at all, the snapshot is what is left,
+    // which fails closed in the same direction.
+    const run = await getRunById(db, card.runId);
+    if (card.shadow || run?.shadow === true) {
+      return this.#settleDelivery(card.id, ["none", "sending"], "suppressed", null);
+    }
+
+    if (state.channelId === null || state.threadTs === null) {
+      // The destination comes from run state and nowhere else (invariant 10),
+      // so a run with no pinned thread has nowhere to send — `escalate` refuses
+      // to open an approval on such a run at all, which makes this unreachable
+      // rather than merely unlikely. Blocked, and never a guess at a channel.
+      return this.#settleDelivery(card.id, ["none", "sending"], "blocked", "no_pinned_thread");
+    }
+
+    // THE GUARD AGAINST A SECOND SEND, and it is this CAS rather than the read
+    // above: a read can be stale, a conditional UPDATE cannot. Exactly one
+    // caller moves `none -> sending`, and only that caller sends.
+    const started = await setDelivery(db, card.id, ["none"], "sending", null, this.#now());
+    if (!started) {
+      // Somebody already started it. A row still `sending` is a crash between
+      // the send and its outcome: an unknown outcome is a human's problem to
+      // reconcile, whereas a duplicate customer message is not recoverable at
+      // all — so this maps to `in_doubt` and NEVER to a second attempt. A row
+      // that has already settled (the ordinary sweeper replay) is untouched by
+      // that CAS and reported as it stands.
+      return this.#settleDelivery(card.id, ["sending"], "in_doubt", REENTERED_WHILE_SENDING);
+    }
+
+    const sender = this.#resolvePorts().approvalSender;
+    let outcome;
+    try {
+      outcome = await sender.send({
+        runId: state.runId,
+        channelId: state.channelId,
+        threadTs: state.threadTs,
+        text,
+      });
+    } catch (error) {
+      // A THROWN sender is an unknown outcome, not a failure to send: the
+      // request may well have reached Slack before the throw. Treating it as
+      // retryable is the one thing that could double-post to a customer.
+      outcome = { result: "in_doubt" as const, reason: safeErrorText(error, "the sender threw") };
+    }
+
+    return outcome.result === "sent"
+      ? this.#settleDelivery(card.id, ["sending"], "sent", null)
+      : this.#settleDelivery(card.id, ["sending"], outcome.result, outcome.reason);
+  }
+
+  /**
+   * One delivery transition, reporting what the row ACTUALLY holds afterwards.
+   *
+   * The re-read on a refused CAS is not ceremony: the resolution turn quotes
+   * this outcome to the model, and a turn that says "sent" about a row another
+   * caller has just marked `in_doubt` would be the run confidently telling a
+   * customer something nobody can confirm.
+   */
+  async #settleDelivery(
+    approvalId: string,
+    from: ApprovalDelivery[],
+    to: ApprovalDelivery,
+    error: string | null,
+  ): Promise<{ delivery: ApprovalDelivery; error: string | null }> {
+    const moved = await setDelivery(this.env.DB, approvalId, from, to, error, this.#now());
+    if (moved) return { delivery: to, error };
+    const current = await getApproval(this.env.DB, approvalId);
+    return current === null ? { delivery: to, error } : { delivery: current.delivery, error: null };
   }
 
   async appendToolCallUpdate(input: ToolCallUpdateInput): Promise<AppendResult> {

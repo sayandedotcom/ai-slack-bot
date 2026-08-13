@@ -11,6 +11,7 @@ import {
   markResolutionDelivered,
 } from "../approval/repository";
 import { DecisionInputError, outboundText, type ApprovalRow, type DecisionInput } from "../approval/contracts";
+import { makeRunDoResolutionNotifier } from "../approval/notifier";
 
 /**
  * One human decision on one proposed customer Slack reply, over HTTP. This is
@@ -26,10 +27,11 @@ import { DecisionInputError, outboundText, type ApprovalRow, type DecisionInput 
 
 /**
  * The seam Task 5's Durable Object RPC lands behind. Defined HERE, not in
- * `src/run/do.ts`, specifically so this task can ship against a fake while
- * Task 5 is still in flight — see the task brief's "decoupling" section. The
- * production line that makes `notify` actually call the RunDO stub's
- * `resolveApproval` is explicitly a LATER wave-D wiring step, not this file.
+ * `src/run/do.ts`, specifically so this task could ship against a fake while
+ * Task 5 was still in flight. Its production implementation —
+ * `makeRunDoResolutionNotifier`, which calls the owning RunDO stub's
+ * `resolveApproval` — lives in `src/approval/notifier.ts` and is composed in
+ * `resolvePorts` below, exactly like the verifier.
  */
 export interface ResolutionNotifier {
   notify(input: {
@@ -64,7 +66,7 @@ type ApprovalApiPorts = {
  */
 let GLOBAL_PORTS: Partial<ApprovalApiPorts> = {};
 
-/** Test seam. Also the only way `notifier` is ever populated before wave D. */
+/** Test seam: override either port before a request reaches `resolvePorts`. */
 export function installApprovalApiPorts(ports: Partial<ApprovalApiPorts>): void {
   GLOBAL_PORTS = { ...GLOBAL_PORTS, ...ports };
 }
@@ -75,11 +77,12 @@ export function resetApprovalApiPorts(): void {
 }
 
 /**
- * Fills in the production verifier IF NOTHING IS THERE YET, and returns
- * whatever the registry now holds. `notifier` is deliberately never filled in
- * here — its production wiring is wave D's job (see the interface doc comment
- * above) — so it stays `undefined` in this checkout, and every call site below
- * treats it as optional.
+ * Fills in the production ports IF NOTHING IS THERE YET, and returns whatever
+ * the registry now holds. Both are still typed optional at every call site
+ * below: a request that arrives before this ran would otherwise be a crash on
+ * the path that carries a human's decision, and `undefined` there means
+ * `resolutionDelivered: false` and a sweeper repair, which is precisely
+ * invariant 9's designed behaviour.
  *
  * This is the property invariant 11 needs stated as code rather than prose:
  * there is no flag, no env check, and no code path that can produce an
@@ -94,6 +97,9 @@ function resolvePorts(env: Env): Partial<ApprovalApiPorts> & { verifier: AccessV
       ...GLOBAL_PORTS,
       verifier: makeAccessVerifier({ teamDomain: env.ACCESS_TEAM_DOMAIN, aud: env.ACCESS_APP_AUD }),
     };
+  }
+  if (GLOBAL_PORTS.notifier === undefined) {
+    GLOBAL_PORTS = { ...GLOBAL_PORTS, notifier: makeRunDoResolutionNotifier(env) };
   }
   return GLOBAL_PORTS as Partial<ApprovalApiPorts> & { verifier: AccessVerifier };
 }
@@ -288,9 +294,9 @@ approvalsApi.patch("/approvals/:id", async (c) => {
   /**
    * INVARIANT 9, the subtlest rule in this task: the D1 decision above already
    * committed. Nothing from here on may roll it back. `notify` reaching a dead
-   * or not-yet-wired DO (the `notifier` port is `undefined` until wave D
-   * installs it — see `resolvePorts`'s doc comment) is caught exactly like an
-   * application-level `{applied:false}` refusal: either way this handler still
+   * or unreachable DO — or a `notifier` port that is somehow absent — is
+   * caught exactly like an application-level `{applied:false}` refusal from
+   * the DO itself: either way this handler still
    * returns 200 with the row's real decision and `resolutionDelivered:false`.
    *
    * This LOOKS like a bug to a reviewer who has not read invariant 9 — a

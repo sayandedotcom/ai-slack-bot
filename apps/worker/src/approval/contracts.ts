@@ -84,6 +84,78 @@ export function outboundText(row: ApprovalRow): string {
 }
 
 /**
+ * What the run is told about a human's decision — the whole content of the
+ * `appendTurn({source:"approval"})` that re-enters the run.
+ *
+ * THREE FACTS AND NOTHING ELSE: the decision, the final text (or the reject
+ * reason), and what happened to the delivery. In particular NOT `decidedBy`
+ * (invariant 12): D1 records which engineer clicked because the dashboard and
+ * later audits need it, and the model has no business knowing. A run's answer
+ * must not change depending on who was on duty.
+ *
+ * Prose rather than JSON because this lands in the model's transcript as
+ * user-authority input, and the delivery half of it is an INSTRUCTION — under
+ * Phase 11's identity-refusing sender the approved text has to be posted by a
+ * human, and a bare `"delivery":"blocked"` is not something a model can act on.
+ */
+export function resolutionTurnContent(input: {
+  decision: "approved" | "edited" | "rejected";
+  /** The text that was to be sent. Null only for a rejection. */
+  text: string | null;
+  /** The human's reason. Null unless rejected. */
+  reason: string | null;
+  delivery: ApprovalDelivery;
+  deliveryError: string | null;
+}): string {
+  if (input.decision === "rejected") {
+    return [
+      "A human REJECTED the reply you asked to send, and it was not sent.",
+      `Their reason: ${input.reason ?? "(none given)"}`,
+      "Do not send that draft. Treat the reason as a correction: it is what this team will not say to this customer.",
+    ].join("\n\n");
+  }
+
+  const opening =
+    input.decision === "edited"
+      ? "A human EDITED and approved the reply you asked to send. This is the final text, and the only version that may ever go out:"
+      : "A human APPROVED the reply you asked to send, unchanged:";
+
+  return [opening, input.text ?? "", deliveryLine(input.delivery, input.deliveryError)].join("\n\n");
+}
+
+function deliveryLine(delivery: ApprovalDelivery, error: string | null): string {
+  switch (delivery) {
+    case "sent":
+      return "It has been sent to the customer thread. Carry on from there.";
+    case "blocked":
+      // The honest version of Phase 11's terminal state. The run resumes on
+      // this, so the model has to be told what is still owed to the customer.
+      return (
+        `It was NOT sent (${error ?? "blocked"}), and it will not be sent automatically.`
+        + " Sending as the on-duty engineer is not available yet, so the approved text above has to be posted by a human."
+        + " Say so plainly in your answer, and do not try to send it another way."
+      );
+    case "suppressed":
+      return (
+        "This run is shadowing a conversation it must never write to, so nothing was sent"
+        + " and nothing will be. The approved text is on the record for review only."
+      );
+    case "in_doubt":
+      return (
+        `The send was attempted and its outcome is unknown (${error ?? "unknown"}).`
+        + " Do NOT send it again — a duplicate message to a customer cannot be taken back."
+        + " A human has to check the thread and reconcile."
+      );
+    case "none":
+    case "sending":
+      // Unreachable for an approved/edited resolution: the caller always
+      // settles delivery before building this. Stated rather than thrown,
+      // because a resolution turn that fails to build would park the run.
+      return "The delivery of this reply is still unresolved; a human has to check the thread.";
+  }
+}
+
+/**
  * What the `approval` capability namespace (Task 3) is allowed to touch.
  *
  * Deliberately the ONLY seam between model-facing code and approval state.

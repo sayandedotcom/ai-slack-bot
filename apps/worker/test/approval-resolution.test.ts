@@ -1,0 +1,534 @@
+import { SELF, env } from "cloudflare:test";
+import { beforeEach, describe, expect, it } from "vitest";
+import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
+import { installApprovalApiPorts, resetApprovalApiPorts } from "../src/api/approvals";
+import { installRunPorts } from "../src/agent/driver";
+import { makeIdentityRefusingSender, type ApprovalSender } from "../src/approval/sender";
+import type { DecisionInput } from "../src/approval/contracts";
+import { decideApproval, insertApproval, setDelivery } from "../src/approval/repository";
+import { putApprovalState, readApprovalState, readModelTranscript } from "../src/run/session";
+import { FakeContinuation, freshDriverRun, turn, type DriverHarness } from "./helpers/agent-driver";
+
+/**
+ * RESOLUTION: one human decision, back into the run it came from.
+ *
+ * Everything here runs against the real RunDO, the real session transactions,
+ * the real D1 `approvals` row and the real driver — the only fake is the
+ * `ApprovalSender`, and half the cases do not even fake that, because
+ * `makeIdentityRefusingSender` IS the Phase 11 production implementation and
+ * its refusal is the behaviour that has to be proved.
+ *
+ * The two properties worth naming, because both look like bugs from outside:
+ *
+ *  - a `blocked` delivery is TERMINAL and the run STILL RESUMES. There is no
+ *    engineer identity before Phase 12 and no bot-token fallback, ever, so
+ *    parking the run until the send succeeds would strand every escalation for
+ *    weeks. The decision is a fact; delivery is a separate state machine.
+ *  - a replayed `resolveApproval` — the sweeper repairing a crash — appends NO
+ *    second turn and attempts NO second send. The turn id is what makes the
+ *    first true and the delivery CAS is what makes the second true.
+ */
+
+const DRAFT = "We can have the migration finished by Friday.";
+const EDITED = "We expect the migration to finish early next week.";
+const WHY = "it commits us to a date in front of the customer";
+const FIREFIGHTER = "ronit@zellify.app";
+const CHANNEL = "C11RESOLUTION";
+
+/* ---------------------------------------------------------------- fakes -- */
+
+type SendInput = Parameters<ApprovalSender["send"]>[0];
+type SendResult = Awaited<ReturnType<ApprovalSender["send"]>>;
+
+/**
+ * Records every send it is asked for. `calls.length` is the assertion that
+ * matters most in this file: "the sender was NEVER called" is a strictly
+ * stronger claim than "delivery ended up suppressed", and only the first one
+ * says a shadow run cannot speak to a customer.
+ */
+function recordingSender(
+  result: SendResult = { result: "sent", ts: "1720000000.000100" },
+): ApprovalSender & { calls: SendInput[] } {
+  const calls: SendInput[] = [];
+  return {
+    calls,
+    async send(input) {
+      calls.push(input);
+      return result;
+    },
+  };
+}
+
+/** Same fake identity-as-token verifier as `approval-api.test.ts`. */
+function fakeVerifier(): AccessVerifier {
+  return {
+    async verify(jwt: string): Promise<AccessIdentity> {
+      if (!jwt) throw new AccessJwtError("missing", "no token was supplied");
+      if (!jwt.includes("@")) throw new AccessJwtError("malformed", "not an email-shaped fake token");
+      return { email: jwt };
+    },
+  };
+}
+
+/* ------------------------------------------------------------- fixtures -- */
+
+let threads = 0;
+
+/** A fresh, well-formed `seconds.microseconds` thread id per run. */
+function nextThreadTs(): string {
+  threads += 1;
+  return `${1_720_000_000 + Math.floor(Math.random() * 8_000_000)}.${String(threads).padStart(6, "0")}`;
+}
+
+type Parked = {
+  h: DriverHarness;
+  approvalId: string;
+  channelId: string;
+  threadTs: string;
+  continuation: FakeContinuation;
+};
+
+/**
+ * A run genuinely parked on a genuinely open approval: the local
+ * `approval_state` row a real `escalate` writes, the D1 card the projection
+ * would create, the real `paused` finalize, and (unless `decide: false`) the
+ * human decision already CASed into D1 — i.e. exactly the state the DO is in
+ * when the dashboard's PATCH notifies it.
+ */
+async function parkedApproval(
+  options: {
+    sender?: ApprovalSender;
+    /** Flip the D1 `runs` row, NOT the card, to shadow. */
+    shadowRun?: boolean;
+    /** The card's own snapshot of `shadow`. */
+    cardShadow?: boolean;
+    /** Where the CARD says the reply goes — deliberately settable apart from
+     *  the run's pinned thread, so invariant 10 can be tested. */
+    cardChannelId?: string;
+    cardThreadTs?: string;
+    decision?: DecisionInput;
+    decide?: boolean;
+  } = {},
+): Promise<Parked> {
+  const continuation = new FakeContinuation();
+  const channelId = CHANNEL;
+  const threadTs = nextThreadTs();
+  const h = await freshDriverRun({ continuation, slack: { channelId, threadTs } });
+  if (options.sender) {
+    installRunPorts({ approvalSender: options.sender }, { runKey: h.key });
+  }
+
+  const approvalId = `apr:${crypto.randomUUID()}`;
+  continuation
+    .onRun((claim, s) => {
+      putApprovalState(s, {
+        approvalId,
+        generationId: claim.generationId,
+        draft: DRAFT,
+        why: WHY,
+        now: h.clock.value,
+      });
+    })
+    .returns({ outcome: "paused", approvalId });
+
+  await h.stub.appendTurn(turn(`open:${approvalId}`));
+  await h.alarm();
+  expect((await h.stub.state())?.status).toBe("awaiting_approval");
+
+  if (options.shadowRun === true) {
+    await env.DB.prepare(`UPDATE runs SET shadow = 1 WHERE id = ?`).bind(h.runId).run();
+  }
+
+  expect(
+    await insertApproval(env.DB, {
+      id: approvalId,
+      runId: h.runId,
+      generationId: continuation.claims[0].generationId,
+      draft: DRAFT,
+      why: WHY,
+      channelId: options.cardChannelId ?? channelId,
+      threadTs: options.cardThreadTs ?? threadTs,
+      shadow: options.cardShadow ?? false,
+      now: h.clock.value,
+    }),
+  ).toBe("created");
+
+  if (options.decide !== false) {
+    const decided = await decideApproval(
+      env.DB,
+      approvalId,
+      options.decision ?? { action: "approve" },
+      FIREFIGHTER,
+      h.clock.value,
+    );
+    expect(decided.result).toBe("decided");
+  }
+
+  // The escalation is over. The next generation is an ordinary one, so it
+  // consumes the resolution turn instead of opening a second approval.
+  continuation.onRun(async () => {}).returns({ outcome: "completed" });
+
+  return { h, approvalId, channelId, threadTs, continuation };
+}
+
+type DeliveryRow = {
+  delivery: string;
+  delivery_error: string | null;
+  resolution_delivered_at: number | null;
+};
+
+/** `delivery_error` and `resolution_delivered_at` are not on `ApprovalRow`. */
+function deliveryOf(id: string): Promise<DeliveryRow | null> {
+  return env.DB.prepare(
+    `SELECT delivery, delivery_error, resolution_delivered_at FROM approvals WHERE id = ?`,
+  )
+    .bind(id)
+    .first<DeliveryRow>();
+}
+
+/**
+ * Every resolution turn in the run, found by SOURCE rather than by the id
+ * under test. Filtering by `approval:{id}` would make "exactly one turn" true
+ * by construction — a second turn under a different id would simply not be
+ * counted, which is the one failure this file most needs to see.
+ */
+async function resolutionTurns(h: DriverHarness) {
+  const turns = await h.stub.turns();
+  return turns.filter((t) => t.source === "approval");
+}
+
+/* ------------------------------------------------------- approved/edited -- */
+
+describe("an approved reply resolves through the one inbox", () => {
+  it("blocks on identity, commits one resolution turn, and resumes the run anyway", async () => {
+    // NO sender installed: this is the real `makeIdentityRefusingSender`,
+    // reached through the same default every deployed RunDO gets.
+    const { h, approvalId } = await parkedApproval();
+
+    expect(
+      await h.stub.resolveApproval({
+        approvalId,
+        decision: "approved",
+        outboundText: DRAFT,
+        rejectReason: null,
+        decidedBy: FIREFIGHTER,
+      }),
+    ).toEqual({ applied: true });
+
+    // Delivery is terminal and honest about why.
+    expect(await deliveryOf(approvalId)).toMatchObject({
+      delivery: "blocked",
+      delivery_error: "identity_unavailable",
+    });
+    expect((await deliveryOf(approvalId))?.resolution_delivered_at).not.toBeNull();
+
+    // Exactly one resolution turn, from the approval source.
+    const resolution = await resolutionTurns(h);
+    expect(resolution).toHaveLength(1);
+    expect(resolution[0].id).toBe(`approval:${approvalId}`);
+    expect(resolution[0].source).toBe("approval");
+    expect(resolution[0].role).toBe("user");
+    expect(resolution[0].content).toContain(DRAFT);
+    expect(resolution[0].content).toContain("NOT sent");
+
+    // The run unparked, and the local record is settled so the next finalize
+    // cannot re-park it.
+    expect((await h.stub.state())?.status).toBe("live");
+    expect((await h.storage((s) => readApprovalState(s, approvalId)))?.state).toBe("resolved");
+
+    // And the next generation genuinely SEES it, as user-authority input.
+    await h.alarm();
+    const transcript = await h.storage((s) => readModelTranscript(s));
+    const inputs = transcript.filter((entry) => entry.kind === "input");
+    expect(JSON.stringify(inputs.at(-1))).toContain(DRAFT);
+  });
+
+  it("sends the EDITED text, and only the edited text", async () => {
+    const sender = recordingSender();
+    const { h, approvalId } = await parkedApproval({
+      sender,
+      decision: { action: "edit", text: EDITED },
+    });
+
+    await h.stub.resolveApproval({
+      approvalId,
+      decision: "edited",
+      outboundText: EDITED,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    });
+
+    expect(sender.calls).toHaveLength(1);
+    expect(sender.calls[0].text).toBe(EDITED);
+    expect((await deliveryOf(approvalId))?.delivery).toBe("sent");
+
+    const resolution = await resolutionTurns(h);
+    expect(resolution[0].content).toContain(EDITED);
+    expect(resolution[0].content).not.toContain(DRAFT);
+  });
+
+  it("takes the destination from run state, never from the card's snapshot", async () => {
+    // The card claims a different channel and thread. It is a DISPLAY
+    // snapshot; the sender re-derives the destination from `run_state` at
+    // delivery time (invariant 10), so the card's values must not appear.
+    const sender = recordingSender();
+    const { h, approvalId, channelId, threadTs } = await parkedApproval({
+      sender,
+      cardChannelId: "CWRONGPLACE",
+      cardThreadTs: "1699999999.999999",
+    });
+
+    await h.stub.resolveApproval({
+      approvalId,
+      decision: "approved",
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    });
+
+    expect(sender.calls[0]).toMatchObject({ runId: h.runId, channelId, threadTs });
+  });
+
+  it("keeps decidedBy out of the model's context entirely", async () => {
+    const { h, approvalId } = await parkedApproval();
+    await h.stub.resolveApproval({
+      approvalId,
+      decision: "approved",
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    });
+
+    // Invariant 12: D1 records who decided; the model has no business knowing.
+    // Content AND metadata, because metadata rides along on the same turn.
+    const resolution = await resolutionTurns(h);
+    expect(JSON.stringify(resolution[0])).not.toContain(FIREFIGHTER);
+
+    await h.alarm();
+    const transcript = await h.storage((s) => readModelTranscript(s));
+    expect(JSON.stringify(transcript)).not.toContain(FIREFIGHTER);
+  });
+});
+
+/* ------------------------------------------------------------- rejected -- */
+
+describe("a rejected reply", () => {
+  it("attempts no send, leaves delivery none, and carries the reason into the run", async () => {
+    const sender = recordingSender();
+    const { h, approvalId } = await parkedApproval({
+      sender,
+      decision: { action: "reject", reason: "we have not agreed that date internally" },
+    });
+
+    await h.stub.resolveApproval({
+      approvalId,
+      decision: "rejected",
+      outboundText: null,
+      rejectReason: "we have not agreed that date internally",
+      decidedBy: FIREFIGHTER,
+    });
+
+    expect(sender.calls).toHaveLength(0);
+    expect((await deliveryOf(approvalId))?.delivery).toBe("none");
+
+    const resolution = await resolutionTurns(h);
+    expect(resolution).toHaveLength(1);
+    expect(resolution[0].content).toContain("we have not agreed that date internally");
+    expect((await h.stub.state())?.status).toBe("live");
+  });
+});
+
+/* --------------------------------------------------------------- shadow -- */
+
+describe("a shadow run", () => {
+  it("suppresses delivery and NEVER calls the sender", async () => {
+    // The card says `shadow: false` — it was projected before the run was
+    // ratcheted — and the D1 `runs` row says true. The live row wins.
+    const sender = recordingSender();
+    const { h, approvalId } = await parkedApproval({ sender, shadowRun: true, cardShadow: false });
+
+    await h.stub.resolveApproval({
+      approvalId,
+      decision: "approved",
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    });
+
+    expect(sender.calls).toEqual([]);
+    expect((await deliveryOf(approvalId))?.delivery).toBe("suppressed");
+
+    const resolution = await resolutionTurns(h);
+    expect(resolution).toHaveLength(1);
+    expect(resolution[0].content).toContain("nothing was sent");
+    // The human's decision is still a fact, so the run still resumes.
+    expect((await h.stub.state())?.status).toBe("live");
+  });
+});
+
+/* ------------------------------------------------------------- in doubt -- */
+
+describe("an unknown send outcome", () => {
+  it("records in_doubt, says so in the turn, and still resumes the run", async () => {
+    const sender = recordingSender({ result: "in_doubt", reason: "the gateway timed out" });
+    const { h, approvalId } = await parkedApproval({ sender });
+
+    await h.stub.resolveApproval({
+      approvalId,
+      decision: "approved",
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    });
+
+    expect(await deliveryOf(approvalId)).toMatchObject({
+      delivery: "in_doubt",
+      delivery_error: "the gateway timed out",
+    });
+    const resolution = await resolutionTurns(h);
+    expect(resolution[0].content).toContain("unknown");
+    expect((await h.stub.state())?.status).toBe("live");
+  });
+
+  it("maps a `sending` row found on re-entry to in_doubt without a second send", async () => {
+    // The crash window the sweeper repairs: step (2) moved the row to
+    // `sending` and the isolate died before the sender returned. Nobody knows
+    // whether the customer saw it, and a duplicate customer message is not
+    // recoverable — so this is a human's problem, not a retry.
+    const sender = recordingSender();
+    const { h, approvalId } = await parkedApproval({ sender });
+    expect(await setDelivery(env.DB, approvalId, ["none"], "sending", null, h.clock.value)).toBe(true);
+
+    await h.stub.resolveApproval({
+      approvalId,
+      decision: "approved",
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    });
+
+    expect(sender.calls).toEqual([]);
+    expect((await deliveryOf(approvalId))?.delivery).toBe("in_doubt");
+    expect(await resolutionTurns(h)).toHaveLength(1);
+    expect((await h.stub.state())?.status).toBe("live");
+  });
+});
+
+/* ------------------------------------------------ the one writer surface -- */
+
+describe("a resolution D1 does not carry", () => {
+  it("is refused: no send, no turn, and the run stays parked", async () => {
+    // The approval is still `pending` in D1 — nobody decided it. A caller that
+    // announced a decision anyway would be a second writer surface
+    // (invariant 6), and unparking on it would answer a customer with a
+    // decision no human ever made.
+    const sender = recordingSender();
+    const { h, approvalId } = await parkedApproval({ sender, decide: false });
+
+    expect(
+      await h.stub.resolveApproval({
+        approvalId,
+        decision: "approved",
+        outboundText: DRAFT,
+        rejectReason: null,
+        decidedBy: FIREFIGHTER,
+      }),
+    ).toEqual({ applied: false });
+
+    expect(sender.calls).toEqual([]);
+    expect(await resolutionTurns(h)).toHaveLength(0);
+    expect((await deliveryOf(approvalId))?.delivery).toBe("none");
+    expect((await h.stub.state())?.status).toBe("awaiting_approval");
+  });
+});
+
+/* ----------------------------------------------------------- idempotency -- */
+
+describe("a replayed resolution (the sweeper repairing a crash)", () => {
+  it("appends no second turn and attempts no second send", async () => {
+    const sender = recordingSender();
+    const { h, approvalId } = await parkedApproval({ sender });
+    const input = {
+      approvalId,
+      decision: "approved" as const,
+      outboundText: DRAFT,
+      rejectReason: null,
+      decidedBy: FIREFIGHTER,
+    };
+
+    expect(await h.stub.resolveApproval(input)).toEqual({ applied: true });
+    const afterFirst = await h.stub.turns();
+    const deliveredAt = (await deliveryOf(approvalId))?.resolution_delivered_at;
+
+    // The sweeper's re-drive: the same call, twice more.
+    expect(await h.stub.resolveApproval(input)).toEqual({ applied: true });
+    expect(await h.stub.resolveApproval(input)).toEqual({ applied: true });
+
+    // ONE turn, and not one more turn of any kind: a second resolution turn
+    // would be a second wake and a second answer to the same decision.
+    expect(await resolutionTurns(h)).toHaveLength(1);
+    expect(await h.stub.turns()).toEqual(afterFirst);
+
+    // ONE send. The delivery CAS, not the turn id, is what makes this true.
+    expect(sender.calls).toHaveLength(1);
+    expect((await deliveryOf(approvalId))?.delivery).toBe("sent");
+    expect(deliveredAt).not.toBeNull();
+    expect((await deliveryOf(approvalId))?.resolution_delivered_at).not.toBeNull();
+    expect((await h.storage((s) => readApprovalState(s, approvalId)))?.state).toBe("resolved");
+  });
+});
+
+/* --------------------------------------------------- the production wiring */
+
+describe("the production ResolutionNotifier", () => {
+  beforeEach(() => {
+    resetApprovalApiPorts();
+  });
+
+  it("carries a real PATCH into the owning RunDO", async () => {
+    // The verifier is faked because signing a real Access JWT is
+    // `access-jwt.test.ts`'s subject. The NOTIFIER deliberately is not: this
+    // case fails if the wave-D wiring is missing, because an unwired notifier
+    // and a dead DO are indistinguishable from the response alone — hence the
+    // assertions on the DO's own state below.
+    installApprovalApiPorts({ verifier: fakeVerifier() });
+    const { h, approvalId } = await parkedApproval({ decide: false });
+
+    const res = await SELF.fetch(`https://firefighter.test/api/approvals/${approvalId}`, {
+      method: "PATCH",
+      headers: {
+        "Cf-Access-Jwt-Assertion": FIREFIGHTER,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ action: "approve" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json<{ approval: { decision: string }; resolutionDelivered: boolean }>();
+    expect(body.approval.decision).toBe("approved");
+    expect(body.resolutionDelivered).toBe(true);
+
+    // The object itself, not just the response: the turn landed and the run
+    // came back out of `awaiting_approval`.
+    expect(await resolutionTurns(h)).toHaveLength(1);
+    expect((await h.stub.state())?.status).toBe("live");
+    expect((await deliveryOf(approvalId))?.delivery).toBe("blocked");
+    expect((await deliveryOf(approvalId))?.resolution_delivered_at).not.toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------ the sender -- */
+
+describe("makeIdentityRefusingSender", () => {
+  it("refuses every send with identity_unavailable, whatever it is handed", async () => {
+    const sender = makeIdentityRefusingSender();
+    expect(
+      await sender.send({
+        runId: "run_1",
+        channelId: CHANNEL,
+        threadTs: "1720000000.000001",
+        text: DRAFT,
+      }),
+    ).toEqual({ result: "blocked", reason: "identity_unavailable" });
+  });
+});

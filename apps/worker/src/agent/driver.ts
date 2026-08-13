@@ -8,6 +8,7 @@ import type {
   ResumePolicy,
 } from "./contracts";
 import { CLAIM_LEASE_MS, CONTINUATION_TOTAL_MS, DRIVER_MAX_ATTEMPTS } from "./limits";
+import { makeIdentityRefusingSender, type ApprovalSender } from "../approval/sender";
 
 /**
  * The driver's ports and its scheduling arithmetic.
@@ -187,6 +188,20 @@ export type RunPorts = {
    * reschedule work that immediately fails again for free.
    */
   modelConfigured: boolean;
+  /**
+   * How an approved reply reaches the customer — the port `resolveApproval`
+   * hands the approved text to.
+   *
+   * It rides on the ports rather than being built inside the RunDO for the
+   * usual reason (a test must be able to drive `sent` and `in_doubt` outcomes
+   * that no code in this checkout can produce), and it DEFAULTS to the
+   * production implementation rather than to `null` for a less usual one:
+   * `makeIdentityRefusingSender` is what Phase 11 ships, so the safe direction
+   * for a forgotten wiring is "refuses and says why", not "no sender
+   * installed" — which would be one more code path that has to decide what an
+   * absent sender means, on the path that speaks to customers.
+   */
+  approvalSender: ApprovalSender;
 };
 
 export function defaultRunPorts(): RunPorts {
@@ -196,6 +211,7 @@ export function defaultRunPorts(): RunPorts {
     limits: DEFAULT_DRIVER_LIMITS,
     now: () => Date.now(),
     modelConfigured: false,
+    approvalSender: makeIdentityRefusingSender(),
   };
 }
 
