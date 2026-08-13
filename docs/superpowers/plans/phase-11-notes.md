@@ -1018,25 +1018,142 @@ is an escalation by construction (`src/db/counters.ts` counts rows, and
 `escalate` is the only thing that mints one), so 3 rows means 3 asks. The
 counter is behaving exactly as its doc comment says.
 
+### The EDIT decision — the third and last decision type, proven live
+
+Decided on operator authorization (the row was deliberately left pending at
+the previous report because approving customer-facing text is a
+fire-fighter's call). Confirmed still `pending` with `decided_by=NULL`
+immediately before the `PATCH`.
+
+`PATCH apr:0ab09578-4d9d-4555-b061-7f708d52d75a` with
+`{"action":"edit","text":"Thanks for flagging this. I can't commit to waiving
+the charges outright, but I've asked billing to review the invoice and we'll
+come back to you within one business day with what we can do."}` at
+2026-08-13T21:02:19Z → **HTTP 200**:
+
+```
+decision=edited  decidedBy=sayandeten@gmail.com  editedText=<the human's text>
+rejectReason=null  delivery="blocked"  resolutionDelivered=true
+```
+
+D1 after: `decision=edited`, `decided_by=sayandeten@gmail.com`,
+`edited_text` stored verbatim, **`delivery=blocked`,
+`delivery_error=identity_unavailable`**, decided 21:02:20, resolution
+delivered 21:02:23.
+
+**The sender was handed the HUMAN's text, not the model's draft.** This is
+the only decision type where the two differ, so it is worth being explicit
+about the evidence:
+
+- `outboundText()` (`src/approval/contracts.ts:79`) returns `row.editedText`
+  when `decision === "edited" && editedText !== null`, and `row.draft`
+  otherwise. `src/api/approvals.ts` passes `outboundText(row)` on the
+  non-rejected branch.
+- `delivery_error=identity_unavailable` proves the sender was **actually
+  called** and refused — not skipped, which would have left `delivery` at
+  `none` as the rejection did.
+- The resolution turn names the edited text as *"the final text, and the
+  only version that may ever go out"*, and the resumed model quoted **only**
+  that version.
+
+**Important 1's edited half — measured.** The resolution turn (id
+`approval:apr:0ab09578-…`, metadata `{approvalId, decision:"edited",
+delivery:"blocked"}`, no `decidedBy`) orders its parts:
+
+| Part | Character offset |
+| --- | --- |
+| the human's final (edited) text | **125** |
+| `Your original draft, now superseded:` + the model's draft | **354** |
+| the delivery line (`It was NOT sent (identity_unavailable)…`) | **754** |
+
+which is exactly what the fix specifies for this branch — the superseded
+draft sits *between* the final text and the delivery line.
+
+**Exactly one resolution turn per approval.** Run `f723b51f…` now carries two,
+correctly keyed and distinct: `approval:apr:16bb9cc7-…` and
+`approval:apr:0ab09578-…`. Turn sources across the run: `agent:3,
+approval:2, triage:1`.
+
+**The run resumed honestly and did NOT re-escalate.** Transitions across the
+whole run: `idle → live → awaiting_approval → live → awaiting_approval →
+live → idle`. It ends **`idle`**, and the approvals table stays at 3 rows —
+so an approved edit was correctly treated as approval-with-changes, not as a
+rejection and not as grounds for another click. Final narration:
+
+> The edited reply is approved but did not go out — `slack.reply` is
+> unavailable this run (identity_unavailable), so someone has to paste it
+> into the thread by hand. This is the only version cleared to send: […the
+> human's text…] … it supersedes both earlier drafts — nothing else from this
+> run should reach the customer. The customer has received nothing so far.
+
+**Canary sweep over all 51 events:** `sayandeten`, `decidedBy`,
+`decided_by`, `eyJ`, `cf-access`, `CF_Authorization` — all **absent**.
+
+**The open queue is now empty:** `GET /api/approvals?state=open` →
+`{"approvals":[]}`. `escalated` stays **3** — an edit decides an existing
+escalation, it does not mint a new one.
+
+### The episode truncation gap — CLOSED, by accident, on this decision
+
+At the previous report the truncation half of Important 1 was recorded as
+unproven, because the rejection's episode was 749 of 1,000 characters and
+nothing was cut. **The edit's episode is exactly 1,000 characters and IS
+truncated** (`gen:56fb0fa5-9314-4505-aeda-a6766f565a83`, `state='projected'`,
+Zep uuid `7df015e9-b76b-4aa6-b0ba-9a16e9f1fe72`, projected 21:02:38).
+
+What survived, and what did not:
+
+| Content | Fate |
+| --- | --- |
+| the human's final edited text (index 124) | **survived** |
+| the superseded model draft (index 352) | **survived** |
+| the trailing delivery instruction | **truncated mid-word** (`…do not try to send it another w…`) |
+| the decider's email | absent, as always |
+
+So the ordering choice is now validated under real truncation pressure and
+not merely asserted: the two pieces of durable content both survived, and
+what `EPISODE_LIMITS.asked` cut was the tail of the Phase-11 delivery
+boilerplate — the least valuable part, and a fact that also rides on the
+turn's `metadata.delivery` for machine readers. This is the behaviour the fix
+was written to produce.
+
 ### Still NOT RUN
 
-- **An `edit` decision** (`{"action":"edit","text":"…"}`) was never exercised
-  live, so "an edit stores the human's text" is proven in test only
-  (`test/approval-api.test.ts`, `test/approval-e2e.test.ts`). Approve and
-  reject both are proven live.
-- **A live `memory.recall` surfacing the rejection lesson** — pending
-  extraction, see above.
-- **Truncation of an over-length resolution episode** — the ordering is
-  proven live, the truncation is not (the episode fit in 749 of 1,000 chars).
-- The test-matrix rows listed under "Honest status" below that no live
-  scenario reached: CAS loser, immutable decision under delivery failure,
-  viewer/outsider 403, invalid-JWT 401 (unreachable from outside),
+- **A live `memory.recall` surfacing the rejection or edit lesson** — both
+  episodes are projected with Zep uuids, but no later run has yet recalled
+  either. **Pending extraction**, with the episode contents above as what is
+  actually verified. Zep extraction itself IS proven live (see the leak
+  check).
+- The test-matrix rows no live scenario reached: CAS loser, immutable
+  decision under delivery failure, viewer-`PATCH` 403, outsider 403,
+  invalid-JWT 401 (unreachable from outside — see the negative proof above),
   interruption/withdraw races, shadow suppression.
 
-**Left open deliberately:** approval `apr:0ab09578-…` on run `f723b51f…` is
-`pending` and sitting in the open queue. Deciding it means approving a
-customer-facing reply, which is a fire-fighter's judgment call and not the
-deploying session's to make. It is a real queue item, not debris.
+### Closing summary — the whole live proof at a glance
+
+For Phases 12 and 13, so none of this has to be reconstructed from three
+separate entries. All on deployed version
+`2201184a-0c68-47db-b971-2abfe68edcdf`, 2026-08-13, decided by
+`sayandeten@gmail.com` (the `G2-TEMP-OVERRIDE` fire-fighter).
+
+| Decision | Approval | Run | Delivery | Resolution turn carries | Episode |
+| --- | --- | --- | --- | --- | --- |
+| **approved** | `apr:b64f4a23-6c48-4d0d-a19d-aaf42c2dd477` | `bca4b327-b142-45f2-a253-2313bafd75da` | `blocked` / `identity_unavailable` | the approved draft | `7148191d-…` projected |
+| **rejected** | `apr:16bb9cc7-874f-485c-bdb3-d15d7cd2d3a1` | `f723b51f-41ba-4e09-86f7-710a815952e6` | **`none`** — no send attempted | reason (82) then rejected draft (568) | `aa4e4595-…` projected, 749 chars, untruncated |
+| **edited** | `apr:0ab09578-4d9d-4555-b061-7f708d52d75a` | `f723b51f-41ba-4e09-86f7-710a815952e6` | `blocked` / `identity_unavailable` | edited text (125), superseded draft (354), delivery (754) | `7df015e9-…` projected, 1,000 chars, **truncated — both texts survived** |
+
+Facts that hold across all three: the `PATCH` response reports the
+**post-notify** delivery (final review's Important 2); `resolutionDelivered`
+was `true` every time, so the sweeper never had to repair a click; exactly
+one approval-keyed resolution turn per approval; `decided_by` appears in D1
+and in **no** model-visible surface (three canary sweeps, 42 + 42 + 51
+events); and every run resumed and narrated honestly that a human must send
+the text by hand.
+
+Two live findings worth inheriting: a **rejected** row frees the one-open
+slot for its own run (rows 2 → 3 share a `run_id`), and Zep's fact extraction
+**anonymises the decider** ("A human can refund…"), so invariant 12 survives
+into extracted facts.
 
 ### Honest status of the test matrix
 
@@ -1051,8 +1168,11 @@ draft included.
 Still **live-unverified** and proven in test only: the CAS's concurrent
 loser, immutable decision under delivery failure, viewer-`PATCH` 403,
 outsider 403, invalid-JWT 401 (unreachable from outside — see the negative
-proof above), interruption/withdraw races, shadow suppression, an `edit`
-decision, and truncation of an over-length resolution episode.
+proof above), interruption/withdraw races, and shadow suppression.
+
+All three decision types (**approve, edit, reject**) are now proven live, as
+is episode truncation preserving the ordering. See the closing summary at the
+end of the Task 10 section.
 
 ---
 
