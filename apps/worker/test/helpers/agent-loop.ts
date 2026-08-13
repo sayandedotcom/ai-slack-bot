@@ -363,8 +363,9 @@ function wrapModel(
   model: LanguageModel,
   ctx: DurableObjectState,
   midStream: ((storage: DurableObjectStorage) => void) | undefined,
+  onModelCall: ((callOptions: unknown) => void) | undefined,
 ): LanguageModel {
-  if (!midStream) return model;
+  if (!midStream && !onModelCall) return model;
 
   const inner = model as unknown as MockLanguageModelV4;
   let fired = false;
@@ -373,12 +374,14 @@ function wrapModel(
     provider: "mock",
     modelId: FABLE_5_MODEL_ID,
     doStream: async (callOptions) => {
+      onModelCall?.(callOptions);
       const result = await inner.doStream(callOptions);
+      if (!midStream) return result;
       const tap = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
         transform(part, controller) {
           if (!fired && part.type === "text-delta") {
             fired = true;
-            midStream(ctx.storage);
+            midStream!(ctx.storage);
           }
           controller.enqueue(part);
         },
@@ -490,6 +493,21 @@ export type LoopOptions = {
     base: CapabilityDependencies,
     scope: CodeModeScope,
   ) => CapabilityDependencies;
+  /**
+   * Fields merged over the Durable Object's OWN env before the continuation is
+   * composed — this test's env, never the pool's.
+   *
+   * For the canary sweep, which has to put a recognizable fake value in every
+   * host-adapter credential field and then prove none of them reaches a prompt,
+   * an event, a D1 row, an episode or a log. The pool's own
+   * `AI_GATEWAY_ANTHROPIC_URL: ""` / `AI_GATEWAY_TOKEN: ""` bindings are
+   * untouched by this and stay the guarantee that no suite can compose a real
+   * provider; the harness injects its `modelFactory` directly, so the production
+   * composer is never entered here at all.
+   */
+  env?: Record<string, string>;
+  /** Observe the options every provider invocation was actually built with. */
+  onModelCall?: (callOptions: unknown) => void;
 };
 
 export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
@@ -531,8 +549,11 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
        */
       continuation: (ctx, workerEnv) => {
         claimedStorage = ctx.storage;
-        return makeAgentContinuation(ctx, workerEnv, {
-          modelFactory: () => handleFor(wrapModel(options.model, ctx, options.midStream)),
+        const composedEnv =
+          options.env === undefined ? workerEnv : { ...workerEnv, ...options.env };
+        return makeAgentContinuation(ctx, composedEnv, {
+          modelFactory: () =>
+            handleFor(wrapModel(options.model, ctx, options.midStream, options.onModelCall)),
           // The ADDITIONAL guard only. The durable freshness guard is composed
           // by `makeAgentContinuation` itself and cannot be switched off here,
           // which is exactly the property invariant 15 needs.
