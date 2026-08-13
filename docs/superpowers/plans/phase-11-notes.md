@@ -77,14 +77,34 @@ before treating it as a regression. Task 9 owns
 | --- | --- | --- |
 | Zero Trust team domain | `zellify-firefighter.cloudflareaccess.com` | `README.md:22`, corroborated by `phase-08-notes.md:427` (`/api/health` → 302 to that host) |
 | `ACCESS_TEAM_DOMAIN` var | `zellify-firefighter.cloudflareaccess.com` | Task 2 sets it |
-| `ACCESS_APP_AUD` var | **UNSET** — placeholder pending | see release gate G1 |
+| `ACCESS_APP_AUD` var | `1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238` | **Set by Task 10** (`4e069de`); G1 CLOSED |
 
-The Access application AUD could not be read from this checkout, and the
-application itself may not be stood up yet (the manager's brief asks for Access
-to be *put* in front of the dashboard, restricted to `@zellify.app`, with the
-developer's personal email as a temporary policy override). Tasks 1–9 are
-unaffected: every test injects a fake verifier, and production composition
-reads the var.
+Through Task 9 the AUD could not be read from this checkout, so it stayed the
+placeholder `UNSET_SEE_PHASE_11_NOTES`. Tasks 1–9 were unaffected: every test
+injects a fake verifier, and only production composition reads the var.
+
+**Task 10 set it, and corroborated it twice against the live edge rather than
+pasting it on trust** (both checks are reproducible without credentials):
+
+1. An unauthenticated `GET https://firefighter.sayandeten.workers.dev/api/approvals?state=open`
+   returns `302` to the Access login with
+   `?kid=1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238`, and
+   the `meta` JWT in that same URL decodes to
+   `{"aud":"1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238",
+   "hostname":"firefighter.sayandeten.workers.dev","auth_status":"NONE",
+   "service_token_status":false, ...}`. So the AUD is the one the edge itself
+   associates with this host.
+2. `cloudflared access token --app=https://firefighter.sayandeten.workers.dev`
+   resolves the application to the token path
+   `~/.cloudflared/firefighter.sayandeten.workers.dev-1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238-token`
+   — the same AUD, derived independently by Cloudflare's own client.
+
+This is the `firefighter - Dashboard` self-hosted application (bare host,
+policy "Zellify staff + temporary personal override", 24-hour session). The
+two sibling applications matching `/oauth` and `/slack` have
+bypass-for-everyone policies and neither is an approval route; pinning either
+of their AUDs would have the verifier accept a token minted by an application
+that authenticates nobody.
 
 ## Roster — confirmed 2026-08-13
 
@@ -110,7 +130,7 @@ tag in `src/access/roster.ts` and is listed as release gate G2.
 
 | # | Gate | Blocks |
 | --- | --- | --- |
-| G1 | Read the real Access application AUD (Access → Applications → firefighter → Overview) and replace the `ACCESS_APP_AUD` placeholder. Until then a deployed Worker rejects every JWT — it fails **closed**, which is the safe direction. | Task 10 |
+| G1 | ~~Read the real Access application AUD and replace the `ACCESS_APP_AUD` placeholder.~~ **CLOSED 2026-08-13 by Task 10**, commit `4e069de`, deployed in version `2201184a-0c68-47db-b971-2abfe68edcdf`. Value and its two independent corroborations are in "Access configuration" above. | — |
 | G2 | Remove `sayandeten@gmail.com` from `src/access/roster.ts` **and** from the Cloudflare Access policy once the developer has a `@zellify.app` address or the engagement ends. Noted in `README.md` per the manager's instruction. | post-Phase-11 |
 
 ---
@@ -509,6 +529,207 @@ Both were unmet plan requirements, not polish.
 
 Full detail, tests, and commands are in
 `.superpowers/sdd/phase-11-approval/final-fix-report.md`.
+
+---
+
+## Task 10 — deploy, and the live proof that is NOT yet done
+
+Run 2026-08-13 (UTC) from `main` at `a64ddb1`, plus this task's own
+`4e069de`. **Read the status line first: the deploy happened; the live proof
+did not.** Steps 2–4 of the task are blocked on two things this session
+cannot produce, both detailed under "What is blocked" below.
+
+| Task 10 step | Status |
+| --- | --- |
+| Step 1 — migrate, set vars, deploy | **DONE, verified** |
+| Step 2 — escalation parks the run | **NOT RUN** — needs a human `#test-firedrill` message |
+| Step 3 — authenticated PATCH approves | **NOT RUN** — needs a `cloudflared` browser handshake |
+| Step 4 — rejection reaches memory; counter moves | **NOT RUN** — depends on Steps 2–3 |
+| Step 5 — record evidence | this section |
+
+### The pre-deploy gate (the phase's second and last full-suite run)
+
+The phase budgeted exactly two full-suite runs; Task 9 spent the first, this
+is the second. Run as a genuine gate *before* production was touched.
+
+| Command | Result | vs. Task 9's gate |
+| --- | --- | --- |
+| `pnpm --filter @workspace/worker test` | **78 files, 1495 passed, 2 skipped, 0 failed** (143.70s) | 78 / 1494 / 2 / 0 — **+1 test**, no new files |
+| `pnpm exec tsc --noEmit -p tsconfig.json` | exit 0, no output | unchanged |
+| `pnpm --filter @workspace/worker codemode:dts:check` | `check-text-files: no control bytes in tracked source.` / `capability declarations are up to date` | unchanged |
+| `pnpm lint` | 2 tasks (`@workspace/ui`, `web`), both pass | unchanged |
+| `pnpm build` | 1 task (`web`), routes `/` and `/_not-found` | unchanged |
+| `wrangler deploy --dry-run` | 3087.97 KiB / gzip 475.38 KiB, all bindings resolved, `ACCESS_APP_AUD` now the real value | Task 9's dry-run still had the placeholder |
+
+The +1 test (1494 → 1495) is accounted for by the three commits that landed
+after Task 9's gate (`ed74872`, `56ae811`, `a64ddb1`). Nothing red; nothing
+skipped that was not already skipped.
+
+### Step 1a — the migration, applied BEFORE the deploy on purpose
+
+Ordering was load-bearing and the hazard was confirmed real, not assumed:
+`getCounters` (`src/db/counters.ts`) runs
+`SELECT COUNT(*) AS escalated FROM approvals WHERE created_at >= ?`, and a
+`SELECT COUNT(*)` against `sqlite_master` before the migration showed the
+remote database had **no `approvals` table at all** (only `d1_migrations`
+matched). Deploying first would therefore have broken `/api/counters`, a
+working Phase 10 endpoint.
+
+```
+wrangler d1 migrations list DB --remote        → pending: 0007_approvals.sql   (the only one)
+wrangler d1 migrations apply DB --remote       → ✘ ERROR ... [code: 7429]
+                                                  "D1 DB storage operation exceeded timeout
+                                                   which caused object to be reset."
+```
+
+**The apply reported an error but the migration had in fact fully
+committed.** This was not assumed from the ledger row — the live DDL was read
+back and compared against `migrations/0007_approvals.sql`:
+
+- `d1_migrations` gained `id=7, name=0007_approvals.sql, applied_at=2026-08-13 20:20:18`.
+- `sqlite_master` carries the `approvals` table plus all three indexes —
+  `idx_approvals_one_open`, `idx_approvals_open`, `idx_approvals_undelivered`
+  (and `sqlite_autoindex_approvals_1` for the TEXT primary key).
+- The stored `sql` for the table and for all three partial indexes is
+  **byte-identical to the migration file** once SQL comments are stripped —
+  including the two clauses most worth checking, `idx_approvals_one_open`'s
+  `WHERE decision = 'pending' OR (decision IN ('approved','edited') AND
+  delivery NOT IN ('sent','blocked','suppressed'))` and the `delivery` CHECK
+  listing all six states.
+- `wrangler d1 migrations list DB --remote` then reported
+  `✅ No migrations to apply!`.
+
+So the 7429 was a late-response artifact, not partial application. **No drift
+and no unexpected pending migration was found at any point** — `0007` was the
+only thing outstanding, exactly as the task expected. Recorded in full
+because a future reader seeing `7429` in the logs should not conclude the
+migration needs re-running.
+
+### Step 1b — the deploy
+
+```
+wrangler deploy
+  Worker Startup Time: 81 ms
+  Uploaded firefighter (18.91 sec)
+  Deployed firefighter triggers (15.94 sec)
+  https://firefighter.sayandeten.workers.dev
+  schedule: * * * * *
+  Current Version ID: 2201184a-0c68-47db-b971-2abfe68edcdf
+```
+
+All bindings resolved, `env.ACCESS_APP_AUD` showing the real AUD.
+
+**Post-deploy health, from evidence:**
+
+- `wrangler tail` shows the live version serving as
+  `2201184a-0c68-47db-b971-2abfe68edcdf` with `"outcome":"ok"` and
+  `"exceptions":[]`.
+- A cron invocation at `scheduledTime 1786652674000`
+  (**2026-08-13T20:24:34Z**, i.e. after the deploy) ran `"cron":"* * * * *"`
+  with `"outcome":"ok"` and `"exceptions":[]`. This matters more than a plain
+  request: `scheduled()` now runs the approval sweeper, whose
+  `listUndeliveredResolutions` query hits the newly-created `approvals`
+  table. A missing or malformed table would surface here as an exception, and
+  none appeared.
+- Workers Observability over the deploy window shows crons firing every
+  minute continuously across the deploy (20:15 → 20:21 and onward) with no
+  interruption.
+- `SELECT COUNT(*) FROM approvals` → **0**. The table is live and empty, so
+  the `escalated` counter's baseline for Step 4 is **0**.
+
+### The negative proof: an unauthenticated request IS refused — by Access, not by us
+
+The task asked for this to be recorded as observed rather than assumed, and
+what was observed is **not** our `401 access_jwt_invalid`.
+
+| Request | Observed |
+| --- | --- |
+| `GET /api/approvals?state=open`, no credentials | **302** to `https://zellify-firefighter.cloudflareaccess.com/cdn-cgi/access/login/...` |
+| `GET /api/approvals?state=open` with `Cookie: CF_Authorization=not.a.jwt` | **302** |
+| `GET /api/approvals?state=open` with `Cf-Access-Jwt-Assertion: not.a.jwt` (a forged assertion header) | **302** |
+| `PATCH /api/approvals/does-not-exist`, no credentials | **302** |
+| `GET /api/counters`, no credentials | **302** |
+| `GET /slack/events`, no credentials (control) | **404** — reaches the Worker |
+
+The `/slack/events` control is what makes the rest meaningful: it proves the
+302s are Cloudflare Access refusing specific routes, not a blanket edge block
+or a dead Worker.
+
+**The decisive evidence is negative and comes from the tail.** During a
+`wrangler tail` window in which all three of `/slack/events`, `/api/counters`
+and `/api/approvals` were requested, the only URL the Worker ever saw was
+`/slack/events`. The two `/api/*` requests **do not appear in the tail at
+all** — the Worker never executed for them.
+
+Conclusions, stated at the strength the evidence supports:
+
+- `/api/approvals` (and `/api/counters`) **are** gated. Task 6's honest
+  worst-case note — "whether `/api/approvals` is reachable unauthenticated on
+  the live deployment right now is an operational fact this task cannot
+  observe … the honest worst-case assumption is 'yes, possibly'" — is now
+  **resolved to NO**, on the deployed Worker, by direct observation.
+- Our own `401 access_jwt_invalid` is **not reachable from an external
+  unauthenticated caller** on this host, because Access refuses before the
+  Worker runs and does not forward an attacker-supplied
+  `Cf-Access-Jwt-Assertion`. The 401 remains the correct in-Worker behaviour
+  and is covered by `test/approval-api.test.ts` and
+  `test/approval-e2e.test.ts`; it is simply defence in depth behind the edge,
+  not the rejection a logged-out user meets. **The test-matrix "invalid JWT
+  401" row is therefore proven in test, not live, and cannot be proven live
+  from outside** — recorded rather than glossed.
+
+### What is blocked, and what it needs
+
+Neither can be produced from this session; both were checked before asking.
+
+**B1 — no Access token for the authenticated `PATCH` (blocks Steps 3–4).**
+`cloudflared` was **not installed** at all. It has now been installed to
+`~/.local/bin/cloudflared` (version `2026.8.1`, official
+`cloudflared-linux-amd64`), so the only remaining part is the part that
+genuinely requires a human: a **browser handshake**.
+
+```
+cloudflared access login https://firefighter.sayandeten.workers.dev
+cloudflared access token --app=https://firefighter.sayandeten.workers.dev
+```
+
+`access token` was run first and returned
+`Unable to find token for provided application. Please run login command to
+generate token.` — so no token was already cached and the operator genuinely
+has to authenticate once.
+
+A Cloudflare **service token is not a substitute**: it authenticates a machine
+(`common_name`, no `email` claim) and `isFirefighter()` would 403 it. That is
+the fail-closed identity constraint working as designed, not a gap to route
+around. The live 302's `meta` JWT independently shows
+`"service_token_status":false` for this application.
+
+**B2 — no `#test-firedrill` message (blocks Steps 2–4).** There is no Slack
+write path in this environment. The message must be posted by a human, and
+its *shape* decides whether the phase is exercised at all: it has to be
+**committal** — something whose correct answer is a customer-facing promise
+the model should not make unilaterally (the brief's example: asking the
+fire-fighter to confirm a refund policy, e.g. *"Customer is asking whether we
+can refund their annual plan 40 days in — can we tell them yes?"*). A
+question the model can resolve by asking a clarifying question back will
+correctly produce **no approval row at all**, because the phase deliberately
+teaches that clarifying sends are not escalations (exit criterion 4). A
+clarifying-shaped message therefore does not fail the phase — it fails to
+*test* it.
+
+### Honest status of the test matrix and exit criteria
+
+Everything in the "Test matrix" table is proven by the automated suite (Task
+9's gate, re-run green here). **None of it is yet proven live.** The rows that
+Steps 2–4 exist to confirm end-to-end in production — `blocked` delivery,
+resolution, pause latch, memory, and the fire-fighter-200 half of `authz` —
+remain **live-unverified**, and are marked NOT RUN above rather than being
+inferred from the green suite.
+
+For the avoidance of the exact ambiguity the phase-10 notes warned about:
+**nothing in this section should be read as claiming a run has ever parked
+`awaiting_approval` in production.** No approval row has ever existed in the
+production database (`COUNT(*) = 0` after deploy).
 
 ---
 
