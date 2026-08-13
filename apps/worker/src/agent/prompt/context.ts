@@ -274,6 +274,16 @@ export function renderTrustedContext(context: TrustedContext): string {
       "`approval.withdraw()`. If a human has already decided, you get their",
       "decision back instead of a withdrawal. Do NOT escalate a second reply",
       "while this one is open, and do not send the draft yourself.",
+      // The one sentence that closes the window the settled-record fix opened:
+      // a `withdrawn:false` answer frees the host-side check, but the decided
+      // card still holds this run's one open slot until its delivery settles,
+      // so a second escalate would be projected as `duplicate_open` and retried
+      // against a job budget while the run sits parked on a card nobody can
+      // see. Guidance, not a guarantee — recorded as a known window in
+      // `phase-11-notes.md`.
+      "If `withdraw()` answers with a decision instead of a withdrawal, that",
+      "decision is final and its reply is still being delivered: do not escalate",
+      "again — say what happened and wait for the outcome to reach you.",
     );
   }
 

@@ -641,6 +641,16 @@ export class RunDO extends DurableObject<Env> {
     // end state anyway — the human's decision has landed, and the turn that
     // carries it is committed microseconds later by this same method or by the
     // sweeper.
+    //
+    // THIS ORDER IS MIRRORED BY A TEST THAT CANNOT SEE IT. `test/approval-
+    // interrupt.test.ts` > "a withdraw whose D1 CAS was in flight when the
+    // resolution landed" replays these three steps — decide in D1, settle the
+    // local record, commit the turn — from inside a wrapped `D1Database`,
+    // because a re-entrant RPC into the object under test is not possible. It
+    // is how `ApprovalPort.withdraw` is proved not to re-park a run whose
+    // decision has already arrived. Reorder the three statements below and that
+    // test keeps passing while no longer standing for anything: change it in
+    // the same commit.
     const moved = resolveApprovalState(this.ctx.storage, input.approvalId, "resolved", this.#now());
 
     const result = await this.appendTurn({

@@ -41,11 +41,26 @@ import { freshDriverRun, waitFor } from "./helpers/agent-driver";
  *     below rewrites the local record to a sentinel that appears NOWHERE in the
  *     conversation and requires the prompt to carry the sentinel.
  *
- *  2. `withdraw` and a human's `PATCH` race, and exactly one wins. Both halves
- *     are held behind a barrier and released deliberately, so the race is
- *     genuinely raced rather than sequenced and asserted: the withdraw is
- *     stopped INSIDE the Durable Object, mid-`run_code`, immediately before the
- *     port runs, while the PATCH request is in flight from the test.
+ *  2. `withdraw` and a human's `PATCH` race, and exactly one wins. Every case
+ *     holds the withdraw at a barrier INSIDE the Durable Object, mid-`run_code`,
+ *     immediately before the port runs — but they are not all races, and the
+ *     difference is deliberate:
+ *
+ *       - "hands the model the human's decision" and "409s a late human
+ *         decision" SEQUENCE the two halves on purpose. Ordering them is what
+ *         makes the exact return shapes assertable, and it is why they, not the
+ *         race, are what catch a missing CAS every time rather than in whichever
+ *         interleaving the runtime happened to pick;
+ *       - "lets exactly one side win" is the actual race: both halves in
+ *         flight, neither awaited before the other starts, invariant-only
+ *         assertions;
+ *       - "leaves the local record settled" constructs one specific
+ *         interleaving that no timing can reach reliably, by wrapping the
+ *         port's own `D1Database`.
+ *
+ *     Collapsing the sequenced cases into the race would lose the assertions;
+ *     collapsing the race into them would lose the proof that the CASes, and
+ *     not the test's ordering, are what decide the winner.
  *
  * Everything here runs against the real loop (`makeAgentContinuation`), the
  * real approval port over the object's real storage, the real Code Mode
@@ -465,7 +480,6 @@ describe("withdraw racing a human decision", () => {
     // CAS first and the slow one lands the human's — so the rounds below cover
     // both winners, with the same assertions either way and no round expecting
     // a particular one.
-    const winners: string[] = [];
     const rounds = [
       { pollMs: 0, release: "request-first" },
       { pollMs: 0, release: "release-first" },
@@ -487,11 +501,9 @@ describe("withdraw racing a human decision", () => {
 
       const row = await getApproval(env.DB, approvalId);
       if (res.status === 200) {
-        winners.push(`${release}/${pollMs}ms: human`);
         expect(spy.results).toEqual([{ withdrawn: false, decision: "approved" }]);
         expect(row).toMatchObject({ decision: "approved" });
       } else {
-        winners.push(`${release}/${pollMs}ms: withdraw`);
         expect(res.status).toBe(409);
         expect(await res.json()).toMatchObject({ code: "already_decided", decision: "withdrawn" });
         expect(spy.results).toEqual([{ withdrawn: true }]);
@@ -499,9 +511,6 @@ describe("withdraw racing a human decision", () => {
       }
       await h.alarm();
     }
-    // Reported so the evidence in the task report says which orderings the run
-    // actually exercised.
-    console.log("race winners:", winners.join(", "));
   });
 });
 
@@ -521,9 +530,17 @@ describe("a withdraw whose D1 CAS was in flight when the resolution landed", () 
    * retired and the turn id is taken.
    *
    * The window is inside one `db.batch()`, so it is reached by wrapping the
-   * handle the port was built with rather than by timing. What the hook does is
-   * exactly what `RunDO.resolveApproval` does, in its order: decide in D1,
-   * settle the local record, commit the resolution turn.
+   * handle the port was built with rather than by timing. `port.open()` touches
+   * no D1 and `withdrawApproval` is the only `batch()` in this path, so the hook
+   * provably fires where the comment says it does.
+   *
+   * What the hook does is exactly what `RunDO.resolveApproval` does, in its
+   * order: decide in D1, settle the local record, commit the resolution turn.
+   * It REPLAYS that method rather than calling it, because a re-entrant RPC into
+   * the object under test does not resolve — which means this test mirrors
+   * production by agreement, not by construction. `resolveApproval` carries a
+   * comment naming this case for that reason: if its order changes and this hook
+   * does not, the case still passes while standing for nothing.
    */
   it("leaves the local record settled instead of re-parking the run", async () => {
     const h = await freshDriverRun({
