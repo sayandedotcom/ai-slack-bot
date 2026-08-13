@@ -115,6 +115,28 @@ app.route("/api", githubOAuth);
 // catch-all, and still behind the same Access application as the dashboard.
 app.route("/ws", runsWs);
 
+/**
+ * An unmatched API or WebSocket path is a 404, and it stops HERE — it must
+ * never reach the asset bundle.
+ *
+ * This line exists because of Phase 14's `not_found_handling:
+ * "single-page-application"` (wrangler.jsonc). That setting is what makes a
+ * hard refresh on a client-side route work: the asset worker answers ANY
+ * unmatched path with `index.html` and a 200. Without this guard that
+ * generosity extends to `/api/anything-misspelled`, which then returns an HTML
+ * document with a success status — an API caller sees 200 and gets markup,
+ * and the dashboard's `getJson` maps the parse failure to "backend
+ * unreachable" rather than the plain 404 it is. `test/api-artifacts.test.ts`
+ * caught it: a traversal key normalizes the URL to `/api/`, which matches no
+ * route, and the route's one-404-for-everything discipline silently became a
+ * 200.
+ *
+ * Placed below every `/api` and `/ws` mount and above the catch-all, so it
+ * only ever sees paths nothing else claimed.
+ */
+app.all("/api/*", (c) => c.json({ code: "not_found", message: "no such route" }, 404));
+app.all("/ws/*", (c) => c.json({ code: "not_found", message: "no such route" }, 404));
+
 // The Worker runs first on every request; anything unmatched falls through to
 // the static asset bundle. Explicit, rather than relying on route-ordering
 // config that later phases would have to keep correct.
