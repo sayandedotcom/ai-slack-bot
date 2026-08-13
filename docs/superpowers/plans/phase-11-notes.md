@@ -535,16 +535,17 @@ Full detail, tests, and commands are in
 ## Task 10 — deploy, and the live proof that is NOT yet done
 
 Run 2026-08-13 (UTC) from `main` at `a64ddb1`, plus this task's own
-`4e069de`. **Read the status line first: the deploy happened; the live proof
-did not.** Steps 2–4 of the task are blocked on two things this session
-cannot produce, both detailed under "What is blocked" below.
+`4e069de`. The deploy and the approve half of the live proof are **done and
+verified against production**. The reject half is **NOT RUN** — it needs a
+second committal `#test-firedrill` message, which no path here can post.
 
 | Task 10 step | Status |
 | --- | --- |
 | Step 1 — migrate, set vars, deploy | **DONE, verified** |
-| Step 2 — escalation parks the run | **NOT RUN** — needs a human `#test-firedrill` message |
-| Step 3 — authenticated PATCH approves | **NOT RUN** — needs a `cloudflared` browser handshake |
-| Step 4 — rejection reaches memory; counter moves | **NOT RUN** — depends on Steps 2–3 |
+| Step 2 — escalation parks the run | **DONE, verified live** — run `bca4b327…`, approval `apr:b64f4a23…` |
+| Step 3 — authenticated PATCH approves → `blocked` → honest resumption | **DONE, verified live** |
+| Step 4a — the `escalated` counter moved | **DONE, verified live** — 0 → 1 |
+| Step 4b — a REJECTION's reason + rejected draft reach memory | **NOT RUN** — needs a second committal message |
 | Step 5 — record evidence | this section |
 
 ### The pre-deploy gate (the phase's second and last full-suite run)
@@ -678,58 +679,219 @@ Conclusions, stated at the strength the evidence supports:
   401" row is therefore proven in test, not live, and cannot be proven live
   from outside** — recorded rather than glossed.
 
-### What is blocked, and what it needs
+### The Access token — verified before it was used
 
-Neither can be produced from this session; both were checked before asking.
+`cloudflared` was not installed on this machine at all; it was installed here
+(official `cloudflared-linux-amd64`, version `2026.8.1`, at
+`~/.local/bin/cloudflared`) and the operator then ran `cloudflared access
+login`. The resulting token was **decoded and checked before being trusted**,
+because a login can succeed against the wrong sibling application:
 
-**B1 — no Access token for the authenticated `PATCH` (blocks Steps 3–4).**
-`cloudflared` was **not installed** at all. It has now been installed to
-`~/.local/bin/cloudflared` (version `2026.8.1`, official
-`cloudflared-linux-amd64`), so the only remaining part is the part that
-genuinely requires a human: a **browser handshake**.
+| Claim | Value | Verdict |
+| --- | --- | --- |
+| `aud` | `["1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238"]` | matches the dashboard app. Note it is an **array**, the shape `src/access/jwt.ts` was written to accept |
+| `iss` | `https://zellify-firefighter.cloudflareaccess.com` | correct team domain, no trailing slash |
+| `email` | `sayandeten@gmail.com` | in `FIREFIGHTERS` (`src/access/roster.ts:35`) — the documented `G2-TEMP-OVERRIDE` |
+| `type` | `app` | an app token, **not** a service token; no `common_name` claim |
+| `iat` / `exp` | 2026-08-13T13:11:07Z / 2026-08-14T13:11:07Z | the app's 24-hour session |
+| header `kid` | `482f151d1077188e58747ed89c7f36542dc470a82a6c92f946f2608465ac328a` | same `kid` that signed the `meta` JWT in the earlier login redirect |
+
+Transport: the token was sent as the **`cf-access-token` request header**
+(not a copied `CF_Authorization` cookie). Recorded because the task asked
+which of the two was used.
+
+### Steps 2–3 — the live proof, end to end
+
+The operator posted this in `#test-firedrill` (`C0BPGUXG5RS`,
+ts `1786653268.729669`, received 2026-08-13 20:34:29):
+
+> Customer is asking whether we can refund their annual plan 40 days in — can
+> we tell them yes?
+
+**It was not assumed to have escalated — the run was read first.** It did,
+and correctly: a refund commitment is exactly the committal shape the phase
+exists for.
+
+| Identifier | Value |
+| --- | --- |
+| Run id | `bca4b327-b142-45f2-a253-2313bafd75da` |
+| Run key | `slack:C0BPGUXG5RS:1786653268.729669` |
+| Approval id | `apr:b64f4a23-6c48-4d0d-a19d-aaf42c2dd477` |
+| Escalating generation | `gen:f771e77e-9717-4d54-ba8e-50b8e42cb34b` |
+| Resumed generation | `gen:389f352d-0917-4698-babf-21674cd82357` |
+| Memory graph | `customer:firedrill` |
+
+**Escalate returns immediately and does not block (invariant 2).** The run's
+own event stream shows `run_code` calling `approval.escalate` as capability
+call `cap:toolu_01FaSZFFvCfrbXiwCysyRizP:1`, completing with
+`durationMs: 0` and result
+`{"approvalId":"apr:b64f4a23-6c48-4d0d-a19d-aaf42c2dd477","state":"pending"}`.
+
+**The run parked, and the narration names the escalation.** Status
+transitions recorded on the run, in order:
 
 ```
-cloudflared access login https://firefighter.sayandeten.workers.dev
-cloudflared access token --app=https://firefighter.sayandeten.workers.dev
+idle -> live -> awaiting_approval -> live -> idle
 ```
 
-`access token` was run first and returned
-`Unable to find token for provided application. Please run login command to
-generate token.` — so no token was already cached and the operator genuinely
-has to authenticate once.
+The pre-decision narration opened *"Held the refund answer for approval
+(apr:b64f4a23) — approving a refund is a commitment, and I couldn't find any
+refund policy to anchor it…"* and, unprompted, warned that `slack.reply` was
+returning `identity_unavailable` so the text could not be sent directly even
+if approved.
 
-A Cloudflare **service token is not a substitute**: it authenticates a machine
-(`common_name`, no `email` claim) and `isFirefighter()` would 403 it. That is
-the fail-closed identity constraint working as designed, not a gap to route
-around. The live 302's `meta` JWT independently shows
-`"service_token_status":false` for this application.
+**The D1 card at park (`decision`/`decided_by` both unset):**
 
-**B2 — no `#test-firedrill` message (blocks Steps 2–4).** There is no Slack
-write path in this environment. The message must be posted by a human, and
-its *shape* decides whether the phase is exercised at all: it has to be
-**committal** — something whose correct answer is a customer-facing promise
-the model should not make unilaterally (the brief's example: asking the
-fire-fighter to confirm a refund policy, e.g. *"Customer is asking whether we
-can refund their annual plan 40 days in — can we tell them yes?"*). A
-question the model can resolve by asking a clarifying question back will
-correctly produce **no approval row at all**, because the phase deliberately
-teaches that clarifying sends are not escalations (exit criterion 4). A
-clarifying-shaped message therefore does not fail the phase — it fails to
-*test* it.
+```
+id=apr:b64f4a23-6c48-4d0d-a19d-aaf42c2dd477  run_id=bca4b327-…  kind=slack_reply
+decision=pending  delivery=none  shadow=0  decided_by=NULL  decided_at=NULL
+resolution_delivered_at=NULL  created=2026-08-13 20:35:31
+```
 
-### Honest status of the test matrix and exit criteria
+**Step 2 — the card reads over HTTP.** `GET /api/approvals?state=open` with
+the token → **200**, returning exactly the one card with its `draft`, `why`,
+`channelId`, `threadTs`, `createdAt`. The response carries **no `decidedBy`
+and no token material**. The read wakes no Durable Object: `src/api/approvals.ts`
+contains no reference to `env.RUNS` or any run stub (grepped), so the route
+is structurally incapable of it — matching invariant 7.
 
-Everything in the "Test matrix" table is proven by the automated suite (Task
-9's gate, re-run green here). **None of it is yet proven live.** The rows that
-Steps 2–4 exist to confirm end-to-end in production — `blocked` delivery,
-resolution, pause latch, memory, and the fire-fighter-200 half of `authz` —
-remain **live-unverified**, and are marked NOT RUN above rather than being
-inferred from the green suite.
+**Step 3 — the authenticated PATCH.** `PATCH /api/approvals/apr:b64f4a23-…`
+with `{"action":"approve"}` at 2026-08-13T20:37:39Z → **HTTP 200**:
 
-For the avoidance of the exact ambiguity the phase-10 notes warned about:
-**nothing in this section should be read as claiming a run has ever parked
-`awaiting_approval` in production.** No approval row has ever existed in the
-production database (`COUNT(*) = 0` after deploy).
+```json
+{"approval":{"id":"apr:b64f4a23-6c48-4d0d-a19d-aaf42c2dd477",
+  "runId":"bca4b327-b142-45f2-a253-2313bafd75da",
+  "decision":"approved","decidedBy":"sayandeten@gmail.com",
+  "decidedAt":1786653460159,"editedText":null,"rejectReason":null,
+  "delivery":"blocked"},
+ "resolutionDelivered":true}
+```
+
+Two things in that body are themselves proofs:
+
+- **`delivery":"blocked"` in the RESPONSE is the live proof of the final
+  whole-branch review's Important 2.** Before that fix the handler rendered
+  the row as it stood *before* `notify` ran, which would have reported
+  `"none"` here. It reports the delivery the human's own click caused.
+- **`resolutionDelivered:true`** means wave-D's lazily-composed
+  `ResolutionNotifier` reached the owning RunDO synchronously. The
+  one-minute sweeper was not needed and did not have to repair anything.
+
+**The D1 row after the decision:**
+
+```
+decision=approved  decided_by=sayandeten@gmail.com
+delivery=blocked   delivery_error=identity_unavailable
+decided_at=2026-08-13 20:37:40   resolution_delivered_at=2026-08-13 20:37:41
+```
+
+`identity_unavailable` is `makeIdentityRefusingSender` refusing, exactly as
+Phase 11 intends — there is no engineer Slack identity until Phase 12 and
+deliberately no bot-token fallback. **`blocked` here is the phase working,
+not a failure.**
+
+**The resolution turn — exactly one, and it names no human.** Committed as
+turn id `approval:apr:b64f4a23-6c48-4d0d-a19d-aaf42c2dd477` (keyed by the
+approval id, which is what makes a sweeper replay idempotent). Counting turn
+sources across the whole run: `agent: 2, triage: 1, approval: 1`. Its
+metadata is `{approvalId, decision:"approved", delivery:"blocked"}` — and
+carries **no `decidedBy`** (invariant 12). Content:
+
+> A human APPROVED the reply you asked to send, unchanged: … It was NOT sent
+> (identity_unavailable), and it will not be sent automatically. Sending as
+> the on-duty engineer is not available yet, so the approved text above has
+> to be posted by a human. Say so plainly in your answer, and do not try to
+> send it another way.
+
+**The run resumed and narrated honestly.** Final status `idle`,
+`driver.state=idle`, `driver.error=null`, 5 steps. The final narration:
+
+> Approved, unchanged — but it never reached the customer. `slack.reply` is
+> unavailable on this run (`identity_unavailable`), and nothing sends the
+> approved text automatically, so someone needs to paste it into the thread
+> by hand:
+> [the draft, quoted in full for the human to copy]
+
+That is the honest "approved; needs manual send" outcome the phase requires,
+and the model volunteered the draft in pasteable form rather than implying it
+had been sent.
+
+**Security canary, swept over the entire 42-event run snapshot** (the
+model-visible surface): `sayandeten` **absent**, `decidedBy` **absent**,
+`decided_by` **absent**, JWT material (`eyJ`) **absent**, `cf-access` /
+`CF_Authorization` **absent**. Invariant 12 holds live, not just in test.
+
+**The one-open slot freed itself.** The live row is `decision=approved,
+delivery=blocked`; `idx_approvals_one_open`'s predicate (read back from the
+live database, above) is `decision='pending' OR (decision IN
+('approved','edited') AND delivery NOT IN ('sent','blocked','suppressed'))`.
+`blocked` IS in that exclusion list, so the row falls outside the partial
+unique index and the run can escalate again. `GET /api/approvals?state=open`
+now returns `{"approvals":[]}`.
+
+**Memory reached the graph — for the APPROVED path.** Both generations
+produced `agent_memory_outbox` rows on graph `customer:firedrill`, and both
+reached terminal `state='projected'` with a Zep `episode_uuid` and
+`last_error=NULL`:
+
+| Generation | State | episode_uuid | Projected |
+| --- | --- | --- | --- |
+| `gen:f771e77e…` (escalating) | `projected` | `3ff366ba-8a9c-4a9b-be44-032493291b3a` | 20:35:48 |
+| `gen:389f352d…` (resumed) | `projected` | `7148191d-c497-40c1-97bf-31533fa42769` | 20:37:58 |
+
+The resumed generation's episode `asked` field carries the resolution turn
+**verbatim, including the draft text**, and does **not** contain the decider's
+email. So invariant 13's claim — that an approval-sourced turn reaches org
+memory through the existing outbox with no new pipeline — is now proven
+**live**, where Task 8 could only prove it in test. Projection lag was ~6
+seconds, not the longer Zep extraction lag that applies to *recall*.
+
+**Step 4a — the `escalated` counter moved.** `GET /api/counters` →
+`{"counters":{"heard":3,"ingested":3,"triaged":2,"escalated":1}}`. The
+baseline immediately after deploy was `SELECT COUNT(*) FROM approvals` = **0**,
+so this is a real 0 → 1 movement. This call is also the live proof that the
+**deploy ordering was correct**: `/api/counters` returns 200 rather than
+erroring on a missing `approvals` table.
+
+### What is still NOT RUN
+
+**Step 4b — a rejection's reason and rejected draft reaching memory.** There
+is no Slack write path here, and a second escalation needs a second
+customer message: the approve/reject decision on `apr:b64f4a23…` is
+immutable, so the same card cannot also be rejected.
+
+This specifically leaves the final whole-branch review's **Important 1**
+(`resolutionTurnContent` appending `The draft that was rejected: …` after the
+reason, so the truncation-first ordering preserves the reason) **proven in
+test only** — `test/memory-outbox.test.ts` covers it, and the mechanism it
+rides on is now proven live by the approved episode above, but the rejected
+branch's own text has not been observed in production.
+
+Deliberately **not** worked around: no approval row was hand-inserted into
+production D1 and no Slack event was forged to manufacture a second
+escalation. Either would fabricate evidence for the exact claim this record
+exists to substantiate.
+
+**What it needs:** one more committal `#test-firedrill` message — a *new*
+question, not a reply in the existing thread, since that thread's run has
+already answered. Same shape as the one that worked (a customer-facing
+commitment the model should not make alone). Then `PATCH` with
+`{"action":"reject","reason":"…"}`, and check the resumed generation's
+`agent_memory_outbox` episode for both the reason and the rejected draft.
+
+### Honest status of the test matrix
+
+Every row is proven by the automated suite. These rows are **additionally
+proven live** by the run above: `blocked` delivery, resolution
+(exactly-once, correctly keyed), pause latch, one-open (freeing after
+terminal delivery), the fire-fighter-200 half of `authz`, `security` (the
+canary sweep), and `memory` for the approved path.
+
+Still **live-unverified** and proven in test only: the CAS's concurrent
+loser, immutable decision under delivery failure, viewer-`PATCH` 403,
+outsider 403, invalid-JWT 401 (unreachable from outside — see the negative
+proof above), interruption/withdraw races, shadow suppression, and the
+rejection half of `memory`.
 
 ---
 

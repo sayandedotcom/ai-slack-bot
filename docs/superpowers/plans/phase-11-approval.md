@@ -498,12 +498,12 @@ provable without Task 5 existing.
 
 ### Task 10 — Deploy and live proof
 
-> **Status 2026-08-13:** Step 1 is done and verified (migration `0007` applied to remote D1, `ACCESS_APP_AUD` set — release gate G1 closed — and version `2201184a-0c68-47db-b971-2abfe68edcdf` deployed). Steps 2–4 are **NOT RUN**: they need a human-posted committal `#test-firedrill` message and a `cloudflared access login` browser handshake, neither of which the deploying session could produce. Full evidence, including the unauthenticated-request refusal, is in `phase-11-notes.md` → "Task 10".
+> **Status 2026-08-13:** Steps 1–3 are done and verified live (deployed version `2201184a-0c68-47db-b971-2abfe68edcdf`; run `bca4b327-b142-45f2-a253-2313bafd75da` parked on `apr:b64f4a23-6c48-4d0d-a19d-aaf42c2dd477`, approved by authenticated `PATCH` → `200` with `delivery: "blocked"` / `identity_unavailable`, resumed with an honest needs-manual-send narration). Release gate G1 is closed. **Step 4 is half done:** the `escalated` counter moved 0 → 1, but the *rejection* half is **NOT RUN** — it needs a second committal `#test-firedrill` message, which no path in the executing session could post. Full evidence in `phase-11-notes.md` → "Task 10".
 
 - [x] **Step 1:** Apply `0007` to remote D1 (`d1 migrations list` first). Set `ACCESS_TEAM_DOMAIN`/`ACCESS_APP_AUD` vars via `wrangler.jsonc` and deploy.
-- [ ] **Step 2:** Post a committal-shaped message in `#test-firedrill` (e.g. a request to confirm a refund policy). Verify: run parks `awaiting_approval`; `GET /api/approvals?state=open` (browser, Access session) shows the card; the model's narration names the escalation.
-- [ ] **Step 3:** Approve via authenticated `PATCH` (browser devtools fetch or `curl` with a copied `CF_Authorization` cookie → document which in notes). Verify: 200, delivery `blocked`, resolution turn visible in the run snapshot, run resumed `live→idle` with an honest "approved; needs manual send" narration.
-- [ ] **Step 4:** Reject a second escalation with a reason; after Zep extraction lag, `memory.recall` from a Chat run surfaces the lesson. Verify the `escalated` counter moved.
+- [x] **Step 2:** Post a committal-shaped message in `#test-firedrill` (e.g. a request to confirm a refund policy). Verify: run parks `awaiting_approval`; `GET /api/approvals?state=open` (browser, Access session) shows the card; the model's narration names the escalation.
+- [x] **Step 3:** Approve via authenticated `PATCH` (browser devtools fetch or `curl` with a copied `CF_Authorization` cookie → document which in notes). Verify: 200, delivery `blocked`, resolution turn visible in the run snapshot, run resumed `live→idle` with an honest "approved; needs manual send" narration. — token sent as the `cf-access-token` header; transitions observed were `awaiting_approval→live→idle`.
+- [ ] **Step 4:** Reject a second escalation with a reason; after Zep extraction lag, `memory.recall` from a Chat run surfaces the lesson. Verify the `escalated` counter moved. — **counter verified (0 → 1); the rejection is NOT RUN.**
 - [ ] **Step 5:** Record all evidence (run ids, timestamps, D1 rows, JWT rejection of a logged-out request) in `phase-11-notes.md`. Commit: `docs(approval): record phase 11 live verification`
 
 ## Test matrix (the phase is not done without each row)
@@ -524,11 +524,11 @@ provable without Task 5 existing.
 
 ## Exit criteria
 
-- [ ] A `#test-firedrill` escalation parks the run and the driver stops before another model step.
-- [ ] The dashboard API approves, edits, and rejects with validated identity; an edit stores the human's text; a rejection's reason reaches memory.
-- [ ] Delivery in Phase 11 terminates `blocked` with no bot-token fallback and the run resumes honestly.
+- [x] A `#test-firedrill` escalation parks the run and the driver stops before another model step. — verified live: run `bca4b327…` went `live → awaiting_approval`, and the next event on the run was the resolution turn, with no model step in between.
+- [ ] The dashboard API approves, edits, and rejects with validated identity; an edit stores the human's text; a rejection's reason reaches memory. — **approve** verified live with validated identity (`decidedBy: sayandeten@gmail.com`); **edit** and **reject** are NOT RUN live (proven in test only). Stays unticked.
+- [x] Delivery in Phase 11 terminates `blocked` with no bot-token fallback and the run resumes honestly. — verified live: `delivery=blocked`, `delivery_error=identity_unavailable`, run resumed to `idle` narrating that the draft must be pasted by a human.
 - [x] A multi-turn scoping conversation costs at most one click — clarifying sends never create approval rows (prompt-taught, test-snapshotted). — met on this criterion's own stated basis: the policy text is in `src/agent/prompt/policy.ts` and pinned by two green cases in `test/agent-prompt.test.ts`. Not live-observed.
-- [ ] Full local gate green; live proof recorded in `phase-11-notes.md`. — **half met.** The gate is green (78 files, 1495 passed, 2 skipped, 0 failed) and is recorded; the live proof is NOT RUN. Stays unticked until Steps 2–4 run.
+- [ ] Full local gate green; live proof recorded in `phase-11-notes.md`. — gate green (78 files, 1495 passed, 2 skipped, 0 failed) and recorded; the live proof is recorded and substantially complete (escalate → park → authenticated approve → `blocked` → honest resumption → memory → counter). Stays unticked only because its rejection half is marked NOT RUN, per criterion 2.
 
 ## Downstream handoff
 
