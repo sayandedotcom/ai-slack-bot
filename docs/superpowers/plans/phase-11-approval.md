@@ -436,7 +436,7 @@ Resolution order inside the RPC (each step idempotent on `approvalId`): (1) shad
 - [x] **Step 2: Run, verify FAIL.**
 - [x] **Step 3: Implement.**
 - [x] **Step 4: Run `pnpm --filter @workspace/worker test -- approval-resolution run-do` + typecheck.**
-- [ ] **Step 5: Commit:** `feat(approval): resolve a human decision through the one inbox`
+- [x] **Step 5: Commit:** `feat(approval): resolve a human decision through the one inbox`
 
 ### Task 6 — The HTTP API
 
