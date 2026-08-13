@@ -22,6 +22,13 @@
  *
  * Node script, not a vitest test, because the worker test pool runs in
  * workerd and has no filesystem.
+ *
+ * WHERE IT RUNS. `pnpm test` and `pnpm codemode:dts:check`, both in this
+ * package. It was only in the second one, which nothing runs automatically —
+ * this repository has no CI and no turbo task reaches it — so a guard against a
+ * mistake that recurred four times depended on somebody remembering the one
+ * command that invoked it. It takes ~50 ms over the whole tracked tree, so
+ * putting it in front of the suite costs nothing measurable.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -38,9 +45,22 @@ const CHECKED_EXTENSIONS = new Set([
  * C0 control bytes that never legitimately appear in source. Tab (0x09),
  * newline (0x0a) and carriage return (0x0d) are excluded; so is 0x7f, which is
  * not a C0 code and shows up harmlessly inside some encoded fixtures.
+ *
+ * Written as an explicit exclusion set rather than as range arithmetic because
+ * the range version said `byte < 0x09 || (byte > 0x0d && byte < 0x20)`, which
+ * quietly PERMITTED vertical tab (0x0b) and form feed (0x0c) — the two C0 bytes
+ * that sit inside the 0x09-0x0d span but are not in the sentence above it. The
+ * guard exists precisely because a comment was trusted four times in this
+ * phase, so its own comment and its own code must agree by construction.
+ *
+ * Neither byte triggers git's binary detection (that keys on NUL), so this was
+ * not a hole in the review-hiding failure mode this script was written for. It
+ * was a hole in what the script CLAIMS to check.
  */
+const ALLOWED_CONTROL_BYTES = new Set([0x09, 0x0a, 0x0d]);
+
 function isForbiddenByte(byte) {
-  return byte < 0x09 || (byte > 0x0d && byte < 0x20);
+  return byte < 0x20 && !ALLOWED_CONTROL_BYTES.has(byte);
 }
 
 function trackedFiles() {
