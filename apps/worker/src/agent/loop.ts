@@ -1009,8 +1009,17 @@ async function consumeStream(
  * the submitted program — `codemode/tool.ts:4-16` already rejected a validator
  * for echoing submitted values, and this field is persisted, replayed to the
  * provider and read by an operator.
+ *
+ * It does not state the length cap, because it cannot reach one: this is a
+ * module constant with no `limits` in scope, and a hardcoded number here would
+ * be a second copy of the limit free to drift from the schema. The number the
+ * model needs lives once, rendered from `limits.maxCodeChars`, in `run_code`'s
+ * own description (`codemode/tool.ts`'s RULES) — which is in the context of the
+ * very call being repaired.
+ *
+ * Exported so a test can assert it is frozen.
  */
-const SCHEMA_REFUSAL: CodeModeOutput = {
+export const SCHEMA_REFUSAL: CodeModeOutput = {
   result: null,
   logs: [],
   error:
@@ -1021,6 +1030,20 @@ const SCHEMA_REFUSAL: CodeModeOutput = {
   truncation: { result: false, logs: false },
   metrics: { durationMs: 0, capabilityCalls: 0 },
 };
+
+// ONE instance is referenced by every refused tool result in memory and
+// re-serialized on every replay (`agent/transcript.ts`'s normalizeToolOutput
+// hands `value` on without cloning). Nothing mutates it today; freezing makes
+// that structural instead of a convention.
+//
+// Every level, not just the top one. A shallow freeze would leave `logs`,
+// `truncation` and `metrics` writable — and `logs.push(...)` on the shared
+// array is exactly the mutation that would appear in every historical refusal
+// at once.
+Object.freeze(SCHEMA_REFUSAL);
+Object.freeze(SCHEMA_REFUSAL.logs);
+Object.freeze(SCHEMA_REFUSAL.truncation);
+Object.freeze(SCHEMA_REFUSAL.metrics);
 
 /**
  * Swap the SDK's synthetic validation-error result for the host-authored one,

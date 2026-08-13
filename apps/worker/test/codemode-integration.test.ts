@@ -2,7 +2,12 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { makeRunCodeTool, type CodeModeOutput } from "../src/codemode/tool";
 import { makeSupabaseReader } from "../src/supabase/reader";
-import { alwaysFresh, type CodeModeScope } from "../src/codemode/contracts";
+import {
+  alwaysFresh,
+  PRODUCTION_LIMITS,
+  type CodeModeLimits,
+  type CodeModeScope,
+} from "../src/codemode/contracts";
 import {
   fakeAuditSink,
   fakeDeps,
@@ -32,11 +37,12 @@ const tool = (
   fixtures: FakeFixtures = {},
   audit = fakeAuditSink(),
   scope: CodeModeScope = slackScope,
+  limits: CodeModeLimits = TEST_LIMITS,
 ) =>
   makeRunCodeTool({
     scope,
     deps: { ...fakeDeps(fixtures), db: env.DB },
-    limits: TEST_LIMITS,
+    limits,
     auditForExecution: () => audit,
     guard: alwaysFresh(),
     loader: env.LOADER,
@@ -79,6 +85,42 @@ describe("the tool surface Phase 10 receives", () => {
     expect(description).toContain("declare const slack: {");
     expect(description).toContain("declare const files: {");
     expect(description).not.toContain("{{types}}");   // placeholder was replaced
+  });
+
+  // The model is told to shorten an over-long program (agent/loop.ts's
+  // SCHEMA_REFUSAL) and the SDK message that carried the number is suppressed
+  // before it gets there, so the number has to be here — RENDERED, not typed.
+  // A hardcoded "24000" in the prose is the defect, not the fix, which is why
+  // this asserts the rendered text FOLLOWS the configured limit rather than
+  // matching a literal.
+  it("states the code cap, derived from the configured limit", () => {
+    const other: CodeModeLimits = { ...TEST_LIMITS, maxCodeChars: 4_321 };
+    expect(TEST_LIMITS.maxCodeChars).not.toBe(other.maxCodeChars);
+
+    const asConfigured = tool().description ?? "";
+    const asOverridden = tool(undefined, undefined, undefined, other).description ?? "";
+
+    expect(asConfigured).toContain(`at most ${TEST_LIMITS.maxCodeChars} characters`);
+    expect(asOverridden).toContain(`at most ${other.maxCodeChars} characters`);
+    // The old number is gone, so the sentence cannot be a hardcoded constant
+    // that happens to agree with one of the two configurations.
+    expect(asOverridden).not.toContain(String(TEST_LIMITS.maxCodeChars));
+    expect(asConfigured).not.toContain("{{maxCodeChars}}");   // placeholder was replaced
+  });
+
+  // Production ships the same rendering, so the number the model reads is the
+  // number `z.string().max()` enforces.
+  it("states the production cap when given production limits", () => {
+    const production = makeRunCodeTool({
+      scope: slackScope,
+      deps: { ...fakeDeps(), db: env.DB },
+      limits: PRODUCTION_LIMITS,
+      auditForExecution: () => fakeAuditSink(),
+      guard: alwaysFresh(),
+      loader: env.LOADER,
+    });
+    const description = typeof production.description === "string" ? production.description : "";
+    expect(description).toContain(`at most ${PRODUCTION_LIMITS.maxCodeChars} characters`);
   });
 
   it("tells the model it is writing JavaScript and has no network", () => {

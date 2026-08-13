@@ -85,6 +85,8 @@ export type CodeModeOutput = {
 const RULES = `You have one tool. Write JavaScript that calls the capabilities below.
 
 - Write ONE async arrow function. It is the whole program.
+- The program must be at most {{maxCodeChars}} characters. A longer one is
+  refused before anything runs.
 - The declarations are TypeScript, but you are writing JAVASCRIPT. No type
   annotations, no interfaces, no imports.
 - Return the final, compact result. Filter and join in code rather than
@@ -152,10 +154,19 @@ export function makeRunCodeTool(
     }),
   );
 
+  // The cap is RENDERED from the same `limits.maxCodeChars` the input schema
+  // below is built from, never typed into the prose. A hand-written number
+  // drifts the moment the limit changes, and the model would then be shortening
+  // to a target the schema no longer enforces — the specific failure this
+  // sentence exists to prevent, since the SDK's own message carrying the number
+  // is suppressed before the model sees it (`agent/loop.ts`'s SCHEMA_REFUSAL).
+  //
+  // Substituted BEFORE `{{types}}`, so nothing in the generated declarations
+  // can be read as a placeholder.
   const description = RULES.replace(
-    "{{types}}",
-    renderCapabilityDeclarations(declarationOnlyRegistry),
-  );
+    "{{maxCodeChars}}",
+    String(input.limits.maxCodeChars),
+  ).replace("{{types}}", renderCapabilityDeclarations(declarationOnlyRegistry));
 
   const loader = guardLoader(input.loader, input.limits);
 

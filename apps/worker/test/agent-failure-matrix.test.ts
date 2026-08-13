@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelMessage } from "ai";
 import { resetRunPorts } from "../src/agent/driver";
+import { SCHEMA_REFUSAL } from "../src/agent/loop";
 import { PRODUCTION_LIMITS } from "../src/codemode/contracts";
 import {
   listEvents,
@@ -405,6 +406,40 @@ describe("tool arguments the SDK refuses against the schema", () => {
     expect(billed).toHaveLength(3);
     const turns = await harness.storage((storage) => listTurns(storage));
     expect(turns.filter((turn) => turn.source === "agent")).toHaveLength(0);
+  });
+
+  /**
+   * ONE object, shared by reference.
+   *
+   * `agent/transcript.ts`'s `normalizeToolOutput` hands an `error-json` `value`
+   * on without cloning, so every refused tool result in memory points at this
+   * exact instance and re-serializes it on every replay. A single mutation
+   * would therefore rewrite history that has already been read.
+   *
+   * Deep, not shallow: `logs`, `truncation` and `metrics` are separate objects,
+   * and `SCHEMA_REFUSAL.logs.push(...)` on a shallow-frozen constant would
+   * still succeed.
+   */
+  it("hands out a refusal nothing can mutate", () => {
+    expect(Object.isFrozen(SCHEMA_REFUSAL)).toBe(true);
+    expect(Object.isFrozen(SCHEMA_REFUSAL.logs)).toBe(true);
+    expect(Object.isFrozen(SCHEMA_REFUSAL.truncation)).toBe(true);
+    expect(Object.isFrozen(SCHEMA_REFUSAL.metrics)).toBe(true);
+
+    // Modules are strict mode, so a write throws rather than failing silently.
+    const mutable = SCHEMA_REFUSAL as unknown as {
+      error: string;
+      logs: string[];
+      truncation: { result: boolean };
+      metrics: { durationMs: number };
+    };
+    expect(() => { mutable.error = "rewritten"; }).toThrow(TypeError);
+    expect(() => mutable.logs.push("leaked")).toThrow(TypeError);
+    expect(() => { mutable.truncation.result = true; }).toThrow(TypeError);
+    expect(() => { mutable.metrics.durationMs = 99; }).toThrow(TypeError);
+
+    expect(SCHEMA_REFUSAL.error).toMatch(/^invalid_input: /);
+    expect(SCHEMA_REFUSAL.logs).toEqual([]);
   });
 });
 
