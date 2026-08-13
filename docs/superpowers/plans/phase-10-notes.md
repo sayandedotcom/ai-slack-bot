@@ -1289,13 +1289,16 @@ harness.
    `{ type: "error-text", value: <raw thrown message> }` tool result, the loop
    ignored `tool-error` entirely, `normalizeResponseMessages` stored the
    synthetic result, and the model answered on top of it and reached
-   `completed`. `agent/loop.ts`'s `onStepEnd` now refuses any step carrying a
-   `tool-error`, AFTER the response allowlist so an unregistered tool name keeps
-   its precise `malformed_response:unsupported_tool` diagnosis and its
-   `requires_input` settlement. Both halves are pinned:
+   `completed`. `agent/loop.ts`'s `onStepEnd` now refuses a step whose
+   `tool-error` came from a THROW, AFTER the response allowlist so an
+   unregistered tool name keeps its precise `malformed_response:unsupported_tool`
+   diagnosis and its `requires_input` settlement. Both halves are pinned:
    `agent-failure-matrix.test.ts` > "fails the step rather than fabricating a
    result for an unknown tool" and > "retries the generation rather than letting
    the model answer over the failure".
+
+   The refusal was first written to catch ANY `tool-error`, which was too broad
+   — see gap 7.
 
    What remains open, and it is smaller: `withOuterToolEvents` writes the outer
    `run_code` `started` event but has no `catch`, so a thrown `execute` leaves
@@ -1303,3 +1306,35 @@ harness.
    correctly and the retry writes its own lifecycle, but a dashboard replaying
    the failed attempt's events sees a call that never ends. Not fixed here
    because the fix belongs with the outer-event mapper rather than the loop.
+7. **The over-long-program check exists twice, and only the outer one runs.**
+   `codemode/tool.ts:168` caps `code` at `input.limits.maxCodeChars` in the zod
+   input schema; `codemode/executor.ts:200-205` caps it again against the same
+   `limits.maxCodeChars` and returns a `CapabilityError("invalid_input", …)` as
+   a VALUE. The schema fires first, at the AI SDK layer, so the executor's branch
+   is unreachable through the outer tool and its intended error-as-value never
+   runs.
+
+   The two are now BEHAVIOURALLY consistent even though the code is still
+   duplicated. `agent/loop.ts`'s `onStepEnd` recognises the SDK's
+   `InvalidToolInputError` / `NoSuchToolError` on the `invalid: true` `tool-call`
+   part and replaces the SDK's synthetic result with a host-authored
+   `CodeModeOutput` — `result: null`, `error` in the tool's documented
+   `code: message` wire format, carried as `error-json` so Anthropic receives it
+   with `is_error: true` — so the model reads a schema refusal exactly the way it
+   reads a capability error and corrects its own call. Pinned by
+   `agent-failure-matrix.test.ts` > "lets the model correct its own call instead
+   of retrying the generation".
+
+   The duplication is left in place deliberately: the executor cap is the
+   defence for any future caller that does not go through the outer tool's
+   schema, and deleting it would remove a bound rather than a copy. What is NOT
+   consistent is the wording — the executor's message quotes the actual lengths,
+   the loop's does not, because the loop is not the owner of `maxCodeChars` and
+   importing `PRODUCTION_LIMITS` there would be a second source of truth for a
+   number that is injectable.
+
+   One thing this case genuinely does not produce: an outer `tool_call` event.
+   The SDK never calls `execute` for a call it refused, so `withOuterToolEvents`
+   never runs and no lifecycle is written. That is honest — no tool ran — but it
+   means the failure matrix row's "failed tool event" half is satisfied by the
+   transcript rather than by the event stream.

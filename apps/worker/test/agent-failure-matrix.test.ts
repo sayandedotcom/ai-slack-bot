@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelMessage } from "ai";
 import { resetRunPorts } from "../src/agent/driver";
+import { PRODUCTION_LIMITS } from "../src/codemode/contracts";
 import {
   listEvents,
   listTurns,
@@ -280,6 +281,130 @@ describe("tool infrastructure that throws instead of returning a failure", () =>
     const billed = await harness.storage((storage) => listPendingUsageProjections(storage, 50));
     expect(billed).toHaveLength(1);
     expect(billed[0]!.globalStep).toBe(0);
+  });
+});
+
+/* ------------------------------ tool arguments the SDK refuses (row 4) -- */
+
+describe("tool arguments the SDK refuses against the schema", () => {
+  /**
+   * The THIRD producer of `tool-error`, and the one that is not a failure of
+   * ours at all.
+   *
+   * `run_code`'s input schema caps `code` at `PRODUCTION_LIMITS.maxCodeChars`
+   * (`codemode/tool.ts:168`). A longer program is rejected by the SDK's own
+   * validation BEFORE `execute` is called: nothing threw, no host call was
+   * made, the isolate was never loaded. `ai@7.0.59` marks the call
+   * `invalid: true` with an `InvalidToolInputError` on the `tool-call` part and
+   * synthesizes a `tool-error` beside it.
+   *
+   * That is a model-authored malformation, and the failure matrix's row for it
+   * is "failed tool event, model may continue" — the error-as-value contract,
+   * not the thrown-infrastructure row above. The loop therefore hands the model
+   * a HOST-AUTHORED refusal in `run_code`'s own `CodeModeOutput` shape and lets
+   * it fix its own call. `codemode/executor.ts:200-205` says the same thing one
+   * layer down for the same condition; the two are now consistent.
+   *
+   * Classifying this `infrastructure_retry` instead — measured — settles
+   * `{ path: "infrastructure_retry", errorCode: "tool_execution_failed" }` with
+   * `retryCount: 1`, and the retry re-runs the IDENTICAL history, so the model
+   * re-emits the same over-long program until all three paid driver attempts
+   * are gone.
+   */
+  const OVERLONG = `async () => { /* ${"x".repeat(PRODUCTION_LIMITS.maxCodeChars)} */ }`;
+
+  it("lets the model correct its own call instead of retrying the generation", async () => {
+    const model = mockModel([
+      toolStep({ toolCallId: "call_long", code: OVERLONG }),
+      // The corrected call. It really runs: `TRIVIAL` goes through the same
+      // production composer and the same isolate every other tool step here
+      // uses, so this asserts recovery, not merely "the loop kept going".
+      toolStep({ toolCallId: "call_short", code: TRIVIAL }),
+      textStep({ chunks: ["the export worker is fine."] }),
+    ]);
+    const harness = await freshLoopRun({ model });
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.alarm();
+
+    // Self-correction, in one extra step. No retry, no attempt spent.
+    expect(harness.results).toHaveLength(1);
+    expect(harness.results[0]).toMatchObject({ path: "completed", errorCode: null });
+    const driver = await harness.storage((storage) => readDriver(storage));
+    expect(driver.phase).toBe("idle");
+    expect(driver.retryCount).toBe(0);
+
+    const turns = await harness.storage((storage) => listTurns(storage));
+    expect(turns.filter((turn) => turn.source === "agent")).toHaveLength(1);
+
+    // The refused call IS paired in durable history — an assistant tool-call
+    // with a tool result — because the next request would be malformed without
+    // it. What that result carries is the whole point.
+    const transcript = await harness.storage((storage) => readModelTranscript(storage));
+    const refused = transcript
+      .flatMap((row) => {
+        const message = row.message as ModelMessage;
+        return message.role === "tool" && Array.isArray(message.content) ? message.content : [];
+      })
+      .filter((part) => part.type === "tool-result" && part.toolCallId === "call_long");
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({
+      type: "tool-result",
+      toolName: "run_code",
+      output: {
+        // `error-json`, so `@ai-sdk/anthropic` sends it with `is_error: true`
+        // and nothing can read it as a successful run.
+        type: "error-json",
+        value: {
+          result: null,
+          logs: [],
+          error: expect.stringMatching(/^invalid_input: /) as unknown as string,
+          metrics: { durationMs: 0, capabilityCalls: 0 },
+        },
+      },
+    });
+
+    // HOST-AUTHORED, and nothing else. The SDK's synthetic result for this case
+    // is `"AI_InvalidToolInputError: Invalid input for tool run_code:
+    // AI_TypeValidationError: Type validation failed: Value: <the entire
+    // submitted program>. Error message: <zod issues>"`. None of it — not the
+    // class name, not the zod issue codes, not the second copy of the program —
+    // may reach a durable row.
+    const serialized = JSON.stringify(transcript);
+    expect(serialized).not.toContain("InvalidToolInputError");
+    expect(serialized).not.toContain("TypeValidationError");
+    expect(serialized).not.toContain("too_big");
+    expect(serialized.split(OVERLONG.slice(0, 200)).length - 1).toBe(1);
+
+    // The corrected call reached the real tool and produced a real result.
+    const events = await harness.storage((storage) => listEvents(storage, 0, 500));
+    const outer = events.flatMap((event) =>
+      event.type === "tool_call" && event.update.name === "run_code" ? [event.update] : [],
+    );
+    expect(outer.map((update) => update.callId)).toEqual(["call_short", "call_short"]);
+    expect(outer.at(-1)).toMatchObject({ state: "completed" });
+
+    // Three steps, three billed provider calls, one per logical step. The
+    // refused step is still a step and is still charged for.
+    const billed = await harness.storage((storage) => listPendingUsageProjections(storage, 50));
+    expect(billed.map((row) => row.globalStep)).toEqual([0, 1, 2]);
+  });
+
+  it("is still bounded: a model that never corrects itself hits the step ceiling", async () => {
+    // The bound on self-correction is the one that bounds every other tool
+    // loop, and it is not new: `stopWhen: stepCountIs(remainingSteps)` plus
+    // `loop.ts`'s `remainingSteps` preflight, and the pre-step spend guard
+    // beneath it. A model that re-emits the rejected program forever settles a
+    // visible `step_limit`, it does not spin.
+    const model = mockModel([toolStep({ toolCallId: "call_long", code: OVERLONG })]);
+    const harness = await freshLoopRun({ model, limits: { maxStepsPerGeneration: 3 } });
+    await harness.stub.appendTurn(customerTurn("t1"));
+    await harness.alarm();
+
+    expect(harness.results[0]).toMatchObject({ path: "step_limit", errorCode: "step_limit" });
+    const billed = await harness.storage((storage) => listPendingUsageProjections(storage, 50));
+    expect(billed).toHaveLength(3);
+    const turns = await harness.storage((storage) => listTurns(storage));
+    expect(turns.filter((turn) => turn.source === "agent")).toHaveLength(0);
   });
 });
 

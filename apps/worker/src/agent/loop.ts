@@ -1,4 +1,6 @@
 import {
+  InvalidToolInputError,
+  NoSuchToolError,
   streamText,
   type ModelMessage,
   type TextStreamPart,
@@ -65,6 +67,7 @@ import {
   normalizeResponseMessages,
   selectModelHistory,
   OUTER_TOOL_NAME,
+  type ResponseMessage,
   type TranscriptMessage,
 } from "./transcript";
 import { AssistantStream, systemClock, type StreamClock } from "./stream";
@@ -643,10 +646,66 @@ export async function runContinuation(
           });
         }
 
+        // Tool calls the SDK REFUSED BEFORE running them, because the MODEL's
+        // own arguments were wrong.
+        //
+        // `ai@7.0.59` marks such a call `invalid: true` and hangs the deciding
+        // error object off the `tool-call` part itself: `InvalidToolInputError`
+        // when the arguments fail `run_code`'s strict schema (an over-long
+        // program, a missing or extra property, a wrong type), `NoSuchToolError`
+        // when the name is not registered. The paired `tool-error` part carries
+        // only `String(error)`, which is why the discrimination reads the
+        // `tool-call` part — the class is the precise signal, the stringified
+        // message is not.
+        //
+        // This is NOT infrastructure. Nothing threw, no host call failed, the
+        // tool never started. It is a model-authored malformation, and the
+        // failure matrix's own row for a program the tool refuses is "failed
+        // tool event, model may continue" — the error-as-value contract. So the
+        // model is allowed to read the refusal and fix its own call, exactly as
+        // it reads a `CodeModeOutput.error`, rather than the whole generation
+        // being re-run on the identical history that produced the bad call.
+        const refusedByValidation = new Set<string>();
+        for (const part of step.content) {
+          if (part.type !== "tool-call" || part.invalid !== true) continue;
+          if (
+            InvalidToolInputError.isInstance(part.error)
+            || NoSuchToolError.isInstance(part.error)
+          ) {
+            refusedByValidation.add(part.toolCallId);
+          }
+        }
+
+        // What the model reads back is HOST-AUTHORED, never the SDK's message.
+        //
+        // The SDK's own synthetic result is
+        // `{ type: "error-text", value: "AI_InvalidToolInputError: … Type
+        // validation failed: Value: <the entire submitted program> … <zod
+        // issues>" }`. Storing that reopens the disclosure half of the defect
+        // this guard was added for — the same reason `codemode/tool.ts:4-16`
+        // refuses `@cloudflare/codemode/ai`'s validator, whose issue text echoes
+        // submitted values back — and it doubles the transcript with a copy of
+        // the program that is already in the assistant message beside it.
+        //
+        // The replacement is `error-json`, so `@ai-sdk/anthropic` sends it with
+        // `is_error: true`, and its value is a `CodeModeOutput` whose `result`
+        // is null and whose `error` is in the tool's documented `code: message`
+        // wire format. Nothing about it can be mistaken for a successful run.
+        const responseMessages =
+          refusedByValidation.size === 0
+            ? step.response.messages
+            : replaceRefusedToolOutputs(step.response.messages, refusedByValidation);
+
         // Strict allowlist. Readable reasoning, a provider-executed call, an
         // unknown tool name or an unstorable output all fail the step SAFELY
         // rather than being written into durable history (invariants 16-18).
-        const normalized = normalizeResponseMessages(step.response.messages);
+        //
+        // Still ahead of everything below, and that is what keeps the unknown
+        // tool NAME settling `malformed_response:unsupported_tool` even though
+        // the block above also recognises it: replacing that call's output does
+        // not make `escalate` a tool this build offers, and the allowlist
+        // rejects on the name before any of it is checkpointed.
+        const normalized = normalizeResponseMessages(responseMessages);
         if (normalized.outcome === "rejected") {
           halt({
             path: "malformed_history",
@@ -688,7 +747,19 @@ export async function runContinuation(
         // `malformed_response:unsupported_tool`, and it settles `requires_input`
         // rather than spending two more provider calls on a history that will
         // produce the same bad call again. Ordering is what keeps both true.
-        if (step.content.some((part) => part.type === "tool-error")) {
+        //
+        // And NARROWED to the throw. `refusedByValidation` is excluded because
+        // its call was refused by the schema, not by a host failure: retrying
+        // the generation there re-runs the IDENTICAL history, the model
+        // re-emits the same rejected arguments, all three paid driver attempts
+        // burn and it ends in `driver_attempts_exhausted` needing a human — for
+        // a program a hundred characters too long that the model fixes by
+        // itself in one more step. Measured, both halves.
+        if (
+          step.content.some(
+            (part) => part.type === "tool-error" && !refusedByValidation.has(part.toolCallId),
+          )
+        ) {
           halt({
             path: "infrastructure_retry",
             errorCode: "tool_execution_failed",
@@ -919,6 +990,67 @@ async function consumeStream(
       }
     }
   }
+}
+
+/**
+ * The ONE thing the model is told when the SDK refused its tool arguments.
+ *
+ * Host-authored, fixed, and deliberately shaped as a `CodeModeOutput` — the
+ * same value `run_code` returns for every failure it can express, so the model
+ * reads a schema refusal exactly the way it reads a capability error, in the
+ * documented `code: message` wire format (`codemode/tool.ts`'s RULES: "Errors
+ * come back as 'code: message'. The code is stable; read it and adapt.").
+ *
+ * `result: null` and a populated `error` are what make it unmistakable for a
+ * successful run; carried as `error-json`, it also reaches Anthropic with
+ * `is_error: true`.
+ *
+ * It quotes NOTHING back. Not the SDK's message, not the zod issue list, not
+ * the submitted program — `codemode/tool.ts:4-16` already rejected a validator
+ * for echoing submitted values, and this field is persisted, replayed to the
+ * provider and read by an operator.
+ */
+const SCHEMA_REFUSAL: CodeModeOutput = {
+  result: null,
+  logs: [],
+  error:
+    "invalid_input: the arguments did not satisfy this tool's input schema, so nothing ran. "
+    + "It takes exactly one property, `code`, holding the whole program as a single non-empty "
+    + "string within the declared length limit, and no other property. "
+    + "Repair the arguments — shortening the program if it is long — and call the tool again.",
+  truncation: { result: false, logs: false },
+  metrics: { durationMs: 0, capabilityCalls: 0 },
+};
+
+/**
+ * Swap the SDK's synthetic validation-error result for the host-authored one,
+ * for exactly the calls the SDK refused against the schema.
+ *
+ * Structural on purpose: it rebuilds the parts it keeps rather than spreading
+ * the provider's objects, so no field nobody enumerated rides along into the
+ * value `normalizeResponseMessages` is about to store. Everything it does not
+ * recognize is passed through untouched — this function decides ONE thing, and
+ * the allowlist immediately after it still decides what may be stored at all.
+ */
+function replaceRefusedToolOutputs(
+  messages: readonly ResponseMessage[],
+  refused: ReadonlySet<string>,
+): ResponseMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "tool" || !Array.isArray(message.content)) return message;
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (part.type !== "tool-result" || !refused.has(part.toolCallId)) return part;
+        return {
+          type: "tool-result" as const,
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          output: { type: "error-json" as const, value: SCHEMA_REFUSAL },
+        };
+      }),
+    };
+  });
 }
 
 /**
