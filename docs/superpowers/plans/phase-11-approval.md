@@ -66,11 +66,11 @@ Checked while writing this plan (2026-08-13): the shipped `write-guard.ts` (`con
 
 ### Repeat at the start of implementation
 
-- [ ] `pnpm --filter @workspace/worker test && pnpm --filter @workspace/worker typecheck` — record the baseline (last known: 69 files / 1329 passed + the 2 new fix suites).
-- [ ] Re-read `src/agent/driver.ts` `applyOutcome`/`ContinuationOutcome` and `src/run/do.ts` finalize path — Task 4 patches both and they may have drifted.
-- [ ] Read the Access application AUD from the dashboard (Access → Applications → firefighter → Overview) and record it in `phase-11-notes.md`; it becomes the `ACCESS_APP_AUD` var. Confirm the team domain is `zellify-firefighter.cloudflareaccess.com`.
-- [ ] Confirm the four fire-fighter emails with Ronit's answer to the day-0 Slack batch (`ronit@ / luka@ / mikheil@ / zurab@zellify.app` assumed below). Do not merge guessed emails; the roster module isolates them.
-- [ ] Create `docs/superpowers/plans/phase-11-notes.md` with commit, versions, and an invented-API table.
+- [x] `pnpm --filter @workspace/worker test && pnpm --filter @workspace/worker typecheck` — record the baseline (last known: 69 files / 1329 passed + the 2 new fix suites).
+- [x] Re-read `src/agent/driver.ts` `applyOutcome`/`ContinuationOutcome` and `src/run/do.ts` finalize path — Task 4 patches both and they may have drifted.
+- [x] Read the Access application AUD from the dashboard (Access → Applications → firefighter → Overview) and record it in `phase-11-notes.md`; it becomes the `ACCESS_APP_AUD` var. Confirm the team domain is `zellify-firefighter.cloudflareaccess.com`.
+- [x] Confirm the four fire-fighter emails with Ronit's answer to the day-0 Slack batch (`ronit@ / luka@ / mikheil@ / zurab@zellify.app` assumed below). Do not merge guessed emails; the roster module isolates them.
+- [x] Create `docs/superpowers/plans/phase-11-notes.md` with commit, versions, and an invented-API table.
 
 ## Non-negotiable invariants
 
@@ -275,9 +275,9 @@ Risk-first: contracts and CAS before capabilities, pause before API, everything 
 
 ### Task 0 — Baseline and gates
 
-- [ ] **Step 1:** Run the baseline commands from "Repeat at the start of implementation"; record counts in `phase-11-notes.md`.
-- [ ] **Step 2:** Record the Access AUD, team domain, and confirmed roster emails in the notes. If the roster answer from Ronit has not arrived, proceed with the assumed emails but tag the roster module `// UNCONFIRMED` and add a release gate line in notes.
-- [ ] **Step 3:** Commit: `docs(approval): record phase 11 verification baseline`
+- [x] **Step 1:** Run the baseline commands from "Repeat at the start of implementation"; record counts in `phase-11-notes.md`.
+- [x] **Step 2:** Record the Access AUD, team domain, and confirmed roster emails in the notes. If the roster answer from Ronit has not arrived, proceed with the assumed emails but tag the roster module `// UNCONFIRMED` and add a release gate line in notes.
+- [x] **Step 3:** Commit: `docs(approval): record phase 11 verification baseline`
 
 ### Task 1 — Approval contracts and D1 repository
 
