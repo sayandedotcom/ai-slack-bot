@@ -145,7 +145,8 @@ the time of writing, and a test pins it.
 | `latestApprovalState(storage)` added to `src/run/session.ts` | New read, needed by `withdraw`'s "nothing open" branch: between the capability's `openApprovalId()` pre-check and the port's own read, a human's decision can settle the record, and the port has to name THAT approval to answer honestly. `openApproval` deliberately cannot see a settled row, so it could not be reused. | `test/approval-interrupt.test.ts` ("hands the model the human's decision when the human won") |
 | Task 4's `withdraw` loser branch NO LONGER re-opens the local record (`resolved -> resolving`) | Behaviour change to shipped code, found by Task 7's race. `resolveApproval` settles the local record and THEN commits the resolution turn (Task 5's reversed order); a `withdraw` whose D1 CAS was in flight across that whole sequence loses the CAS and is the LAST writer of the local row. Re-opening it there re-parks a run whose decision has already been delivered — with the repair key retired and the turn id taken, nothing can ever unpark it. Leaving the row settled is safe in the other direction because delivery of the decision never depended on it (the PATCH notifies, the sweeper re-drives, both keyed on D1); the worst case is a generation settling `completed` a moment before the resolution turn wakes a new one. | `test/approval-interrupt.test.ts` ("a withdraw whose D1 CAS was in flight when the resolution landed" — wraps the port's own `D1Database` to run the whole resolution inside the CAS's `batch()`) |
 | `withdraw` with nothing open now answers from the D1 row instead of always `{withdrawn:true}` | Same branch, the other half. Reaching the port with no open record means the row moved after the capability's pre-check — i.e. a human's decision landed while the model's program was awaiting something. Reporting a withdrawal there is a lie about a message that may already have been approved. A `withdrawn`, missing, or still-`pending` row all keep the old answer. | `test/approval-interrupt.test.ts` ("hands the model the human's decision when the human won") |
-| KNOWN WINDOW: a `withdrawn:false` answer frees the host-side escalate check before the decided card frees the D1 slot | Consequence of the loser-branch fix above, accepted rather than reverted (review of Task 7). Leaving the local record settled means `openApprovalId()` returns null, so the capability layer would permit a second `escalate` — while the human's decided card is still UNSETTLED under `idx_approvals_one_open` (approved/edited with delivery not yet `sent`/`blocked`). The projector would answer `duplicate_open` and retry against a bounded job budget while the run sits parked on a card the dashboard cannot see. The old reopen blocked this only by accident, at the cost of stranding runs, which is strictly worse. Closed with GUIDANCE, not a guarantee: the pending-approval context block tells the model that a decision returned by `withdraw()` is final and must not be re-escalated. A structural fix (the capability re-reading the D1 card's delivery state before permitting an escalate) is deferred — it would put a D1 read on the escalate path, which invariant 2 keeps synchronous and local. | `test/approval-interrupt.test.ts` ("hands the model the human's decision when the human won" pins the state the window starts from; the guidance itself is prompt text and is pinned only as rendered copy) |
+| KNOWN WINDOW: a `withdrawn:false` answer frees the host-side escalate check before the decided card frees the D1 slot | Consequence of the loser-branch fix above, accepted rather than reverted (review of Task 7). Leaving the local record settled means `openApprovalId()` returns null, so the capability layer would permit a second `escalate` — while the human's decided card is still UNSETTLED under `idx_approvals_one_open` (approved/edited with delivery not yet `sent`/`blocked`). The projector would answer `duplicate_open` and retry against a bounded job budget while the run sits parked on a card the dashboard cannot see. The old reopen blocked this only by accident, at the cost of stranding runs, which is strictly worse. Closed with GUIDANCE, not a guarantee: the pending-approval context block tells the model that a decision returned by `withdraw()` is final and must not be re-escalated. **CORRECTED 2026-08-14 (final whole-branch review):** the reason originally given here for deferring a structural fix — "it would put a D1 read on the escalate path, which invariant 2 keeps synchronous and local" — is a misreading of invariant 2 and should not be inherited by Phase 13. Invariant 2 says `escalate` must never **block waiting for a human decision**; it says nothing against a D1 read in general, and `ApprovalPort.open()` is already `async` and already performs a D1 write (the projection enqueue) on the escalate path today. The synchronicity requirement belongs to `openApprovalId()` (the finalize latch's own synchronous local read) and the finalize latch itself — neither of which a re-read inside `open()`/the capability layer would touch. So a structural fix (re-reading the D1 card's delivery state before permitting a second escalate) is not ruled out by invariant 2; it remains deferred as a scope decision for a later phase, not because the invariants forbid it. | `test/approval-interrupt.test.ts` ("hands the model the human's decision when the human won" pins the state the window starts from; the guidance itself is prompt text and is pinned only as rendered copy) |
+| KNOWN WINDOW (scope correction): the prompt guidance above protects only the generation that called `withdraw()`, not every generation that could re-escalate | The window's closing guidance (`src/agent/prompt/context.ts:269`, inside `if (context.pendingApproval !== null)`) was described above as closing the gap for the run in general. It is narrower: once `withdraw()` loses to a human decision, the local record is settled, so `openApproval(storage)` returns `null` for it and the whole `### One reply is waiting on a human` block — the guidance included — is **not rendered at all** for any later generation. Only the SAME generation that called `withdraw()` and is still mid-turn sees the guidance in its own transcript history. A later generation woken by, e.g., a new customer message arriving before the resolution turn lands sees no block and no guidance, and is free to call `escalate` again with nothing telling it not to. Still recoverable in practice — the next wake after the resolution turn commits renders the new pending-approval block as normal — so this stays a known window rather than a defect, but Phase 13 should treat the guidance as covering one generation, not the run. | `test/approval-interrupt.test.ts` (same case as above; no test currently pins the narrower scope directly) |
 | Test harness: `freshLoopRun({ realApproval: true })` forwards the REAL port | `freshLoopRun` fakes every vendor port including `approval`. The interruption suite needs the real one (local record, D1 CAS, projection) while still wrapping it for the race barrier, so the harness now forwards `dependencies`' fourth argument when asked. Opt-in: the real port refuses to open an approval on a run with no pinned Slack thread, which every chat-origin suite would hit. | `test/approval-interrupt.test.ts` (the only caller) |
 
 ---
@@ -478,3 +479,71 @@ Stated because an honestly-reported gap is worth more than a green suite.
    adapter echoing its own credential is not caught here. What this file adds is
    the approval path specifically — the D1 row, the events, the resolution turn,
    every local table, the woken generation's transcript, and the logs.
+
+---
+
+## Final whole-branch review — two Important fixes
+
+Applied 2026-08-14, after Task 9's gate, as the last code change before deploy.
+Both were unmet plan requirements, not polish.
+
+1. **The rejected/edited draft never reached org memory.**
+   `resolutionTurnContent` (`src/approval/contracts.ts`) now takes a required
+   `draft` input. The rejected branch appends `The draft that was rejected: …`
+   **last**, after the reason — `readAsked()`'s 1,000-char `EPISODE_LIMITS.asked`
+   cap means trailing placement is what gets truncated first, and the reason is
+   the more valuable half if only one survives. The edited branch appends
+   `Your original draft, now superseded: …` between the final text and the
+   delivery line. `src/run/do.ts`'s call site now passes `card.draft`. The
+   covering tests in `test/memory-outbox.test.ts` were changed to build their
+   turns with the real `resolutionTurnContent` instead of a hand-written
+   literal — the literal had drifted from what Task 5 actually built and the
+   test kept passing anyway, which is what let this slip through the gate.
+2. **The PATCH response reported delivery from before `notify` ran.**
+   `src/api/approvals.ts`'s handler now re-reads the row with `getApproval`
+   after the notify branch (falling back to the pre-notify `row` if the
+   re-read finds nothing) and renders that. The notify-failure path
+   (invariant 9: 200, `resolutionDelivered:false`, decision stands) is
+   untouched — the re-read runs after that branch either way, and on failure
+   nothing changed the row for it to newly reveal.
+
+Full detail, tests, and commands are in
+`.superpowers/sdd/phase-11-approval/final-fix-report.md`.
+
+---
+
+## Phase 13 entry criteria
+
+Decisions this phase is handing forward, so Phase 13 inherits them as stated
+constraints rather than rediscovering them.
+
+- **`in_doubt` permanently holds the one-open slot.** `idx_approvals_one_open`
+  treats a decided approved/edited row as unsettled unless its delivery is
+  `sent`, `blocked` or `suppressed` — `in_doubt` is none of those, so a run
+  whose delivery lands there can never escalate again, with no operator exit
+  but hand-editing D1. Unreachable in Phase 11 (the identity-refusing sender
+  never reaches `in_doubt`). Phase 13 must decide: a reconciliation action
+  that moves `in_doubt` to a terminal delivery, or an explicit, documented
+  dead end.
+- **The approval sweeper has no per-row backoff.**
+  `listUndeliveredResolutions` pages `APPROVAL_SWEEP_PAGE_SIZE` (10) rows
+  `ORDER BY decided_at ASC` with no attempt counter, so a permanently-failing
+  row would sit at the head of the page every minute and head-of-line block
+  every later decision's repair. Theoretical today (nothing in Phase 11 fails
+  permanently); real the moment a delivery path can.
+- **`src/access/jwt.ts` cannot distinguish a JWKS outage from a forged
+  token.** Both map to `bad_signature` → 401. Fails closed, which is the
+  right direction, but the code is wrong about why it failed, and an outage
+  is then indistinguishable from an attack in the logs. Adding an
+  `unavailable` member to `AccessJwtErrorCode` is a deliberate contract
+  change, deferred to Phase 12's rework of `src/access/`.
+
+## Release gate G2 — grep-able marker
+
+G2 (remove the temporary personal-email override, see "Release gates" above)
+is tagged in three places: `src/access/roster.ts`, `README.md`, and this
+file. As of this review those three tags used different wording, so finding
+all of them meant remembering three separate places rather than running one
+search. All three now carry the literal marker string `G2-TEMP-OVERRIDE`
+verbatim, so removal is `grep -rn G2-TEMP-OVERRIDE` across the repo, once,
+rather than three memories.

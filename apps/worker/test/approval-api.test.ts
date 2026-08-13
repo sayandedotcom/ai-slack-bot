@@ -7,7 +7,7 @@ import {
   resetApprovalApiPorts,
   type ResolutionNotifier,
 } from "../src/api/approvals";
-import { insertApproval, type NewApprovalCard } from "../src/approval/repository";
+import { insertApproval, setDelivery, type NewApprovalCard } from "../src/approval/repository";
 import { runStubForKey } from "../src/run/keys";
 
 /**
@@ -52,6 +52,29 @@ function recordingNotifier(): ResolutionNotifier & { calls: NotifyCall[] } {
     calls,
     async notify(input) {
       calls.push(input);
+      return { applied: true };
+    },
+  };
+}
+
+/**
+ * Records every call, reports success, and — as its side effect — moves
+ * `delivery` in D1 exactly like the real DO does inside `resolveApproval` ->
+ * `#deliverApproval` before `notify` returns. No real DO exists in this
+ * file's fixtures, so a fake that never touches `delivery` would make the
+ * PATCH handler's pre-notify and post-notify reads indistinguishable — which
+ * is exactly the bug this fixture exists to make visible.
+ */
+function notifierThatDelivers(
+  to: "blocked" | "sent" | "in_doubt" = "blocked",
+  error: string | null = "identity_unavailable",
+): ResolutionNotifier & { calls: NotifyCall[] } {
+  const calls: NotifyCall[] = [];
+  return {
+    calls,
+    async notify(input) {
+      calls.push(input);
+      await setDelivery(env.DB, input.approvalId, ["none"], to, error, Date.now());
       return { applied: true };
     },
   };
@@ -250,7 +273,13 @@ describe("PATCH /api/approvals/:id — authorization", () => {
 
 describe("PATCH /api/approvals/:id — deciding", () => {
   it("approves as a fire-fighter: 200, decision+delivery in the body, notifier called once", async () => {
-    const notifier = recordingNotifier();
+    // `notifierThatDelivers`, not `recordingNotifier`: it moves `delivery` in
+    // D1 as its side effect, the way the real DO does before `notify`
+    // returns. That is what makes the assertion below meaningful — with a
+    // notifier that never touches `delivery`, the pre-notify and post-notify
+    // reads are byte-identical and the assertion would pass whether or not
+    // the handler re-reads at all.
+    const notifier = notifierThatDelivers();
     installApprovalApiPorts({ verifier: fakeVerifier(), notifier });
     const { runId, id } = await seedApproval();
 
@@ -264,6 +293,11 @@ describe("PATCH /api/approvals/:id — deciding", () => {
     const body = await res.json<{ approval: { decision: string; delivery: string }; resolutionDelivered: boolean }>();
     expect(body.approval.decision).toBe("approved");
     expect(body.resolutionDelivered).toBe(true);
+    // THE PROPERTY THIS ASSERTS: the body reports the delivery state the
+    // notify call CAUSED, not the `none` snapshot `decideApproval`'s own CAS
+    // read before notify ever ran. Rendering that stale snapshot is exactly
+    // the defect being fixed.
+    expect(body.approval.delivery).toBe("blocked");
 
     expect(notifier.calls).toHaveLength(1);
     expect(notifier.calls[0]).toMatchObject({

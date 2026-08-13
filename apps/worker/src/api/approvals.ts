@@ -336,7 +336,21 @@ approvalsApi.patch("/approvals/:id", async (c) => {
     });
   }
 
-  return c.json({ approval: publicApprovalCard(row), resolutionDelivered: delivered });
+  // `row` is the SELECT from `decideApproval`'s own batch — taken BEFORE
+  // `notify` ran. By the time a successful notify returns, the owning DO has
+  // already moved `delivery` past `none` (`blocked` under Phase 11's
+  // identity-refusing sender), and a response built from `row` would report a
+  // state the DO no longer holds. Re-reading after notify settles is what
+  // makes the body match what actually happened; it must stay AFTER the
+  // notify branch above, never before, or it would just re-read the same
+  // pre-delivery snapshot. Falls back to `row` — not a 404 — if the re-read
+  // somehow returns nothing: the decision already committed (invariant 9),
+  // and a human's click is not withheld because a follow-up read raced
+  // something. This does not touch the notify-failure path above: a dead or
+  // unreachable DO still returns 200 with `resolutionDelivered:false` and the
+  // decided row exactly as `decideApproval` left it, delivery included.
+  const fresh = await getApproval(c.env.DB, row.id);
+  return c.json({ approval: publicApprovalCard(fresh ?? row), resolutionDelivered: delivered });
 });
 
 /* ------------------------------------------------------------- sweeper --- */

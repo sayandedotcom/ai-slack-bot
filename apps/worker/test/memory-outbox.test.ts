@@ -15,6 +15,7 @@ import { cite } from "../src/memory/cite";
 import { createOrGetRun } from "../src/run/repository";
 import { chatRunKey } from "../src/run/keys";
 import { readGenerationMemory } from "../src/run/session";
+import { resolutionTurnContent } from "../src/approval/contracts";
 import type { AddEpisodeInput, MemoryStore } from "../src/memory/store";
 import type { AgentEpisode, EpisodeSourceDescriptor } from "../src/memory/episode";
 import type { MemoryJob } from "../src/memory/consumer";
@@ -624,12 +625,14 @@ describe("the cron sweeper", () => {
  * downstream (`buildAgentEpisode`, the outbox, the Zep projector) needs to
  * know approvals exist at all.
  *
- * This test cannot exercise the `paused` continuation outcome or a real
- * dashboard PATCH resolution turn — the driver's reserved `paused` member
- * (Task 4) and the PATCH handler that builds the resolution turn's content
- * (Task 5) do not exist yet. What it proves instead is the mechanism they
- * will both rely on: an `approval`-sourced turn's content is ordinary input,
- * and ordinary input already flows into the next episode with no extra code.
+ * This test still does not drive a real dashboard PATCH or the driver's
+ * `paused` continuation outcome end to end — that is `test/approval-e2e.test.ts`
+ * and `test/approval-resolution.test.ts`'s job. What it proves here is that an
+ * `approval`-sourced turn's content is ordinary input: it uses the real
+ * `resolutionTurnContent` (`src/approval/contracts.ts`) to build the turn, so
+ * the exact prose a resolution actually carries — including the rejected
+ * draft and the edited-away original — is what gets asserted into the next
+ * generation's episode, not a hand-shaped stand-in for it.
  */
 describe("approval outcomes reach memory through the existing outbox", () => {
   it("carries a rejection reason and the original draft into the FOLLOWING generation's episode", async () => {
@@ -644,17 +647,23 @@ describe("approval outcomes reach memory through the existing outbox", () => {
     await harness.stub.appendTurn(customerTurn("t1", "can I get a refund for this month?"));
     await harness.alarm();
 
-    // Shaped the way a rejection resolution turn plausibly will be (Task 5's
-    // job to actually construct) — but the shape doesn't matter here. The
-    // property under test is that whatever content lands in an
-    // `approval`-sourced turn reaches the next episode, unconditionally.
+    // Built with the REAL `resolutionTurnContent` — Task 5's actual construction
+    // of an `approval`-sourced turn's content, not a stand-in for its shape.
+    // A hand-written literal here would stop testing the requirement the
+    // moment `resolutionTurnContent` changed underneath it; using the real
+    // function is what keeps this test honest about what it proves.
     const rejectionTurn: RunTurnInput = {
       id: "t2",
       role: "user",
       source: "approval",
-      content:
-        'Approval rejected. Reason: needs manager sign-off before any refund promise. ' +
-        'Original draft: "Refund approved, will process by Friday."',
+      content: resolutionTurnContent({
+        decision: "rejected",
+        text: null,
+        reason: "needs manager sign-off before any refund promise",
+        draft: "Refund approved, will process by Friday.",
+        delivery: "none",
+        deliveryError: null,
+      }),
     };
     await harness.stub.appendTurn(rejectionTurn);
     await harness.alarm();
@@ -672,7 +681,7 @@ describe("approval outcomes reach memory through the existing outbox", () => {
     );
     expect(secondMemory).not.toBeNull();
     const episode = JSON.parse(secondMemory?.episodeJson ?? "{}") as { asked: string };
-    expect(episode.asked).toContain("Approval rejected");
+    expect(episode.asked).toContain("A human REJECTED");
     expect(episode.asked).toContain("needs manager sign-off");
     expect(episode.asked).toContain("Refund approved, will process by Friday");
   });
@@ -689,13 +698,21 @@ describe("approval outcomes reach memory through the existing outbox", () => {
     await harness.stub.appendTurn(customerTurn("t1", "when will this be fixed?"));
     await harness.alarm();
 
+    // Built with the REAL `resolutionTurnContent`, same reasoning as the
+    // rejection case above: this is what Task 5 actually constructs, not a
+    // hand-written stand-in for its shape.
     const editTurn: RunTurnInput = {
       id: "t2",
       role: "user",
       source: "approval",
-      content:
-        'Approval edited. Human text: "We are actively working on a fix, no ETA yet." ' +
-        'Model draft was: "We\'ll ship the fix by end of day."',
+      content: resolutionTurnContent({
+        decision: "edited",
+        text: "We are actively working on a fix, no ETA yet.",
+        reason: null,
+        draft: "We'll ship the fix by end of day.",
+        delivery: "blocked",
+        deliveryError: "identity_unavailable",
+      }),
     };
     await harness.stub.appendTurn(editTurn);
     await harness.alarm();

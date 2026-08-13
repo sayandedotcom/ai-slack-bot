@@ -41,6 +41,9 @@ The same override also lives one layer down, in the Worker's own approval roster
 because the trial's live proof requires it to `PATCH` an approval. Pull it from **both**
 places — the Access policy above and that file — together.
 
+<!-- G2-TEMP-OVERRIDE -- grep this exact string (also in roster.ts and phase-11-notes.md)
+     to find every tag of release gate G2 in one search. -->
+
 ### Why the two bypasses are not security holes
 
 Slack cannot authenticate to Access, so a gated `/slack/events` would silently drop every

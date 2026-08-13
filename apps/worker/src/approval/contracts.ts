@@ -104,6 +104,13 @@ export function resolutionTurnContent(input: {
   text: string | null;
   /** The human's reason. Null unless rejected. */
   reason: string | null;
+  /**
+   * The model's own draft — the text `approval.escalate` was called with.
+   * Required for every decision, not just rejection: memory needs it to
+   * learn what this team won't send, and an edited resolution needs it to
+   * show the model what its superseded version was.
+   */
+  draft: string;
   delivery: ApprovalDelivery;
   deliveryError: string | null;
 }): string {
@@ -112,6 +119,11 @@ export function resolutionTurnContent(input: {
       "A human REJECTED the reply you asked to send, and it was not sent.",
       `Their reason: ${input.reason ?? "(none given)"}`,
       "Do not send that draft. Treat the reason as a correction: it is what this team will not say to this customer.",
+      // LAST ON PURPOSE. `readAsked()` caps a generation's `asked` at 1,000
+      // characters, so whichever half is truncated on a long draft, it must
+      // not be the reason — the reason is what makes the rejection useful to
+      // memory even if the draft itself gets cut off.
+      `The draft that was rejected: ${input.draft}`,
     ].join("\n\n");
   }
 
@@ -120,7 +132,12 @@ export function resolutionTurnContent(input: {
       ? "A human EDITED and approved the reply you asked to send. This is the final text, and the only version that may ever go out:"
       : "A human APPROVED the reply you asked to send, unchanged:";
 
-  return [opening, input.text ?? "", deliveryLine(input.delivery, input.deliveryError)].join("\n\n");
+  const parts = [opening, input.text ?? ""];
+  if (input.decision === "edited") {
+    parts.push(`Your original draft, now superseded: ${input.draft}`);
+  }
+  parts.push(deliveryLine(input.delivery, input.deliveryError));
+  return parts.join("\n\n");
 }
 
 function deliveryLine(delivery: ApprovalDelivery, error: string | null): string {

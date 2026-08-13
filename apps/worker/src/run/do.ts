@@ -661,6 +661,7 @@ export class RunDO extends DurableObject<Env> {
         decision: input.decision,
         text: input.decision === "rejected" ? null : finalText,
         reason: input.rejectReason,
+        draft: card.draft,
         delivery: delivery.delivery,
         deliveryError: delivery.error,
       }),

@@ -269,12 +269,18 @@ describe("an approved reply resolves through the one inbox", () => {
     });
 
     expect(sender.calls).toHaveLength(1);
+    // THE SEND carries only the edited text — `.toBe`, not `.toContain`, so a
+    // draft that leaked in as a prefix or suffix would fail this too.
     expect(sender.calls[0].text).toBe(EDITED);
     expect((await deliveryOf(approvalId))?.delivery).toBe("sent");
 
+    // THE RESOLUTION TURN is not the send: it also carries the model's own
+    // superseded draft, deliberately (per `resolutionTurnContent`) — the
+    // model needs to see what it originally proposed beside what actually
+    // went out. Only the wire text sent to the customer is draft-free.
     const resolution = await resolutionTurns(h);
     expect(resolution[0].content).toContain(EDITED);
-    expect(resolution[0].content).not.toContain(DRAFT);
+    expect(resolution[0].content).toContain(DRAFT);
   });
 
   it("takes the destination from run state, never from the card's snapshot", async () => {

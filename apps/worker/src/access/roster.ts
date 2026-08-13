@@ -31,6 +31,7 @@ export const FIREFIGHTERS: readonly string[] = [
   // application's policy -- once the developer has a @zellify.app address or
   // the engagement ends. Tracked as release gate G2 in
   // docs/superpowers/plans/phase-11-notes.md and in README.md.
+  // G2-TEMP-OVERRIDE -- grep this exact string to find every tag of this gate.
   "sayandeten@gmail.com",
 ];
 
