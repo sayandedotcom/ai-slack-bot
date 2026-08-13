@@ -127,6 +127,66 @@ export function isAbsentConfigurationCode(code: string | null): boolean {
 }
 
 /**
+ * THE CLOSED SET OF TERMINAL FAILURES A STRANDED INPUT MAY WAKE BY ITSELF.
+ *
+ * The hole this exists for. A trusted turn that commits WHILE a generation is
+ * answering does not allocate anything — `scheduleInput` sees `running` and
+ * joins the live generation, which will absorb it at its next `prepareStep`. If
+ * that generation then dies terminally instead of taking another step, the input
+ * is durable, above `settled_through_seq`, and owned by nobody: the driver reads
+ * `failed`, and `nextAlarmAt` only ever schedules model work for `scheduled` or
+ * `running`. The same message sent one millisecond LATER allocates a new
+ * generation through `scheduleInput` and is answered normally. Plan line 470
+ * ("generation has settled" -> "create a new generation/turn ID") describes the
+ * later message; this list is what makes the earlier one behave identically.
+ *
+ * Why a closed list rather than "any `requires_input` failure". Waking resets
+ * `attempt` and `retry_count` to zero, so a failure that the pending input
+ * ITSELF causes would be re-entered with a full budget, forever. Two guards stop
+ * that, and both are required:
+ *
+ *  - the code must be here, meaning the failure is provably not a verdict on the
+ *    pending input — the generation never saw it;
+ *  - `pending_through_seq` must exceed the dead generation's
+ *    `included_through_seq`, meaning there is genuinely input it never read.
+ *    A successor takes that input at its first `prepareStep`, which lifts its
+ *    included cursor to the pending cursor, so a second identical failure has
+ *    nothing left to wake on. The chain length is bounded by arriving input, not
+ *    by a counter.
+ *
+ * Deliberately ABSENT, each for a reason that would otherwise be a spin:
+ *
+ *  - every `malformed_history` code (`context_limit:*`, `empty_history`,
+ *    `readable_reasoning`, `malformed_response:*`). These are the input-caused
+ *    ones: an unusable turn or an oversized history is still unusable and still
+ *    oversized on the next generation, and the failure can be reached from
+ *    inside `prepareStep` BEFORE the included cursor moves, so the second guard
+ *    would not catch it either.
+ *  - `driver_attempts_exhausted`. Its whole meaning is "the crash budget is
+ *    gone"; handing it a fresh one on the strength of a message that arrived
+ *    during the crashing is how a transient outage becomes an unbounded spend.
+ *  - anything settling `requires_operator_config` or `requires_reconciliation`.
+ *    Those never reach here — the policy check is the outer gate — and they are
+ *    the two the plan reserves for an explicit human action (plan line 655).
+ */
+export const UNSEEN_INPUT_WAKE_CODES = [
+  // A refusal is a verdict on the context the generation SENT, and the pending
+  // input was not in it. A steer is the documented remedy (`REFUSAL_RESUME_POLICY`).
+  "provider_refusal",
+  "provider_refusal_mid_stream",
+  // The step ceiling is per generation. A successor gets a fresh budget and the
+  // evidence the customer just added, which is the only thing that helps.
+  "step_limit",
+  // An abort that found nothing pending at the moment it was read. If input has
+  // landed since, it is owed an answer exactly as a post-cancel message would be.
+  "run_cancelled",
+] as const;
+
+export function wakesOnUnseenInput(code: string | null): boolean {
+  return code !== null && (UNSEEN_INPUT_WAKE_CODES as readonly string[]).includes(code);
+}
+
+/**
  * Turn provenance that may wake the loop. This is about who the turn came from,
  * never about what it says — there is no topic test anywhere in Phase 10.
  * `agent` and `system` are absent on purpose: the loop's own output must not
@@ -392,8 +452,15 @@ export type FinalizeOutcome =
       outcome: "settled";
       generationId: string;
       generationState: GenerationState;
-      driverPhase: "idle" | "failed";
+      /**
+       * `scheduled` means this generation settled TERMINALLY and a successor was
+       * allocated for input it never saw (`UNSEEN_INPUT_WAKE_CODES`). The public
+       * status must follow the driver, not the generation: the run is working.
+       */
+      driverPhase: "idle" | "failed" | "scheduled";
       settledThroughSeq: number;
+      /** Present only with `driverPhase: "scheduled"`. */
+      successorGenerationId?: string;
     }
   | {
       outcome: "continued";

@@ -804,6 +804,111 @@ describe("rows 6 and 7 — the settle/new-input race has exactly two outcomes", 
     expect(finals.map((turn) => turn.id)).toContain(firstGeneration);
     await assertNothingLost(harness, [opening.event.seq, steer.event.seq]);
   });
+
+  /**
+   * THE THIRD RESOLUTION OF THE SAME RACE: the generation neither settled nor
+   * continued — it DIED, with the steer already durable and unread.
+   *
+   * Row 7 says a settled generation plus new input creates a new generation. A
+   * terminal `requires_input` failure is settled, and the plan's resume table
+   * (line 655) says ordinary trusted input is exactly what wakes that policy. So
+   * a steer that lands one millisecond after the refusal is answered — while,
+   * before this, the same steer landing one millisecond BEFORE it waited for an
+   * unrelated later message, because `nextAlarmAt` schedules model work only for
+   * `scheduled` and `running`. Same input, same run, opposite outcome, decided
+   * by a race the customer cannot see.
+   *
+   * Both cases below drive the REAL continuation to a real refusal.
+   */
+  it("failure wins: a steer the refused generation never read still gets answered", async () => {
+    const model = mockModel([
+      // HTTP 200 with a content-filter finish: terminal, `requires_input`.
+      textStep({ chunks: ["I cannot"], unified: "content-filter", raw: "refusal" }),
+      textStep({ chunks: ["the answer to the steer"] }),
+    ]);
+    let steerSeq = 0;
+    const harness = await freshLoopRun({
+      model,
+      midStream: (storage) => {
+        steerSeq = appendTurn(storage, steerTurn("s1", "one more thing")).event.seq;
+      },
+    });
+    const opening = await harness.stub.appendTurn(customerTurn("t1"));
+
+    const refusal = await harness.alarm();
+    expect(harness.results[0].path).toBe("provider_refusal");
+    // The successor is committed in the SAME transaction as the failure, so the
+    // re-arm at the end of this very delivery already sees work to do. A pending
+    // cursor with no alarm is a customer whose message nothing will ever read.
+    expect(refusal.nextAlarmAt).not.toBeNull();
+    expect((await harness.storage((storage) => readDriver(storage))).phase).toBe("scheduled");
+
+    await harness.alarm();
+    const finals = await agentTurns(harness);
+    expect(finals).toHaveLength(1);
+    expect(finals[0].content).toBe("the answer to the steer");
+
+    // The refused generation stays terminal and keeps naming what happened; the
+    // answer belongs to a NEW turn id (invariant 8).
+    const generations = await harness.storage((storage) =>
+      storage.sql
+        .exec<{ id: string; state: string }>("SELECT id, state FROM agent_generations")
+        .toArray(),
+    );
+    expect(generations).toHaveLength(2);
+    expect(generations.filter((row) => row.state === "refused")).toHaveLength(1);
+    expect(finals[0].id).not.toBe(`agent:${generations[0].id}:final`);
+
+    await assertNothingLost(harness, [opening.event.seq, steerSeq]);
+  });
+
+  it("wakes at most ONE successor per unread input, however often it refuses", async () => {
+    // The counter-argument the wake has to survive: allocating resets `attempt`
+    // and `retry_count` to zero, so a wake that fired whenever a failed run had
+    // a pending cursor would refuse, wake, refuse, wake — forever, and bill for
+    // every lap. Six refusals are scripted and the drain is allowed twenty
+    // deliveries; if the guard is wrong this burns them all.
+    const model = mockModel(
+      Array.from({ length: 6 }, () =>
+        textStep({ chunks: ["I cannot"], unified: "content-filter", raw: "refusal" }),
+      ),
+    );
+    let providerCalls = 0;
+    const harness = await freshLoopRun({
+      model,
+      onModelCall: () => {
+        providerCalls += 1;
+      },
+      midStream: (storage) => {
+        // ONE steer, on the first attempt only. Nothing new arrives after it.
+        if (providerCalls === 1) appendTurn(storage, steerTurn("s1", "one more thing"));
+      },
+    });
+    await harness.stub.appendTurn(customerTurn("t1"));
+
+    let outcome = await harness.alarm();
+    for (let delivery = 0; delivery < 20 && outcome.nextAlarmAt !== null; delivery += 1) {
+      outcome = await harness.alarm();
+    }
+
+    // Exactly two: the original and the one the unread steer woke. The second
+    // generation READ the steer at its first `prepareStep`, which lifts its
+    // included cursor to the pending cursor — so its own refusal has nothing
+    // left unread to wake a third. The bound is structural, not a counter.
+    expect(providerCalls).toBe(2);
+    expect(
+      await harness.storage((storage) =>
+        storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM agent_generations").one().n,
+      ),
+    ).toBe(2);
+
+    const driver = await harness.storage((storage) => readDriver(storage));
+    expect(driver.phase).toBe("failed");
+    expect(driver.resumePolicy).toBe("requires_input");
+    // At rest with no alarm armed. From here only a genuinely new trusted turn
+    // resumes the run, through `scheduleInput` — which is the plan's rule.
+    expect(await harness.storage((storage) => storage.getAlarm())).toBeNull();
+  });
 });
 
 /* ---------------------------------------------- step 8: the coalescing -- */

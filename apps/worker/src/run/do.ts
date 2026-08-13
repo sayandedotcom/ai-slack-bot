@@ -139,6 +139,20 @@ const PUBLIC_DRIVER_PHASE: Record<DriverPhase, PublicDriverPhase> = {
   failed: "failed",
 };
 
+/**
+ * The public status a finalized `settled` outcome implies, keyed by the driver
+ * phase it left behind.
+ *
+ * A table rather than a ternary because the third entry is the one that is easy
+ * to get wrong: a terminal failure that woke a successor for stranded input is
+ * `scheduled`, and it is `live`, not `failed`.
+ */
+const FINALIZED_STATUS: Record<"idle" | "failed" | "scheduled", RunStatus> = {
+  idle: "idle",
+  failed: "failed",
+  scheduled: "live",
+};
+
 export type PublicDriverState = {
   state: PublicDriverPhase;
   attempt: number;
@@ -872,7 +886,14 @@ export class RunDO extends DurableObject<Env> {
   async #applyFinalizeStatus(finalize: FinalizeOutcome): Promise<void> {
     switch (finalize.outcome) {
       case "settled":
-        await this.#applyPublicStatus(finalize.driverPhase === "idle" ? "idle" : "failed");
+        // Three phases, not two. A terminal failure that stranded input the dead
+        // generation never read allocates a successor in the same transaction
+        // (`UNSEEN_INPUT_WAKE_CODES`), and the public status follows the DRIVER,
+        // not the generation: the run has work scheduled, so it is `live`.
+        // Reporting `failed` here would flash a failure the customer's own
+        // message has already resumed, and the re-arm below would then contradict
+        // it by firing anyway.
+        await this.#applyPublicStatus(FINALIZED_STATUS[finalize.driverPhase]);
         return;
       case "continued":
       case "rescheduled":

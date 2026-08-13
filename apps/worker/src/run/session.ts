@@ -39,6 +39,7 @@ import {
   isWakeSource,
   newGenerationId,
   usageRowIdFor,
+  wakesOnUnseenInput,
   WAKE_TURN_SOURCES,
   type AssistantUpdateOutcome,
   type ClaimFence,
@@ -1000,6 +1001,36 @@ function scheduleInput(
   // generation and its agent turn id NOW, before any asynchronous call, so
   // every retry and continuation of this work reuses the same effect scope
   // (invariant 7).
+  const { generationId, agentTurnId } = allocateScheduledGeneration(storage, {
+    firstInputSeq: seq,
+    // What is already in the transcript. Anything above it is pending input.
+    includedThroughSeq: driver.settledThroughSeq,
+    now,
+  });
+
+  return {
+    scheduling: { outcome: "allocated", generationId, agentTurnId, eventSeq: seq },
+    statusEvent: goLive(storage, now),
+  };
+}
+
+/**
+ * Point the driver at a brand-new `scheduled` generation, in the caller's
+ * transaction.
+ *
+ * ONE body for the three places a generation is born — ordinary input on an idle
+ * or resumable run, the operator's configuration reset, and a terminal failure
+ * that stranded input it never read. They differ only in where the new
+ * generation starts reading; everything else has to be identical, because the
+ * fields reset here are what a fresh attempt means: no lease, no heartbeat, no
+ * backoff, no inherited error and — deliberately — `attempt`/`retry_count` at
+ * zero. Three copies of that list is three chances for one of them to keep a
+ * stale lease and have the next claim refuse itself.
+ */
+function allocateScheduledGeneration(
+  storage: DurableObjectStorage,
+  input: { firstInputSeq: number; includedThroughSeq: number; now: number },
+): { generationId: string; agentTurnId: string } {
   const generationId = newGenerationId();
   const agentTurnId = agentTurnIdFor(generationId);
 
@@ -1009,11 +1040,10 @@ function scheduleInput(
      VALUES (?, ?, 'scheduled', ?, ?, ?, ?)`,
     generationId,
     agentTurnId,
-    seq,
-    // What is already in the transcript. Anything above it is pending input.
-    driver.settledThroughSeq,
-    now,
-    now,
+    input.firstInputSeq,
+    input.includedThroughSeq,
+    input.now,
+    input.now,
   );
   storage.sql.exec(
     `UPDATE agent_driver SET
@@ -1032,13 +1062,10 @@ function scheduleInput(
      WHERE singleton = 1`,
     generationId,
     agentTurnId,
-    now,
+    input.now,
   );
 
-  return {
-    scheduling: { outcome: "allocated", generationId, agentTurnId, eventSeq: seq },
-    statusEvent: goLive(storage, now),
-  };
+  return { generationId, agentTurnId };
 }
 
 export type OperatorConfigResume =
@@ -1116,41 +1143,13 @@ export function resumeAfterOperatorConfig(
 
     const failedGenerationId = driver.generationId;
     const failed = readGeneration(storage, failedGenerationId);
-    const generationId = newGenerationId();
-    const agentTurnId = agentTurnIdFor(generationId);
-
-    storage.sql.exec(
-      `INSERT INTO agent_generations
-         (id, agent_turn_id, state, first_input_seq, included_through_seq, created_at, updated_at)
-       VALUES (?, ?, 'scheduled', ?, ?, ?, ?)`,
-      generationId,
-      agentTurnId,
+    const { generationId, agentTurnId } = allocateScheduledGeneration(storage, {
       // The same first input the dead generation was allocated for, when it can
       // still be read. Nothing new arrived to move it.
-      failed?.firstInputSeq ?? driver.settledThroughSeq + 1,
-      driver.settledThroughSeq,
+      firstInputSeq: failed?.firstInputSeq ?? driver.settledThroughSeq + 1,
+      includedThroughSeq: driver.settledThroughSeq,
       now,
-      now,
-    );
-    storage.sql.exec(
-      `UPDATE agent_driver SET
-         phase = 'scheduled',
-         current_generation_id = ?,
-         current_agent_turn_id = ?,
-         attempt = 0,
-         retry_count = 0,
-         lease_expires_at = NULL,
-         last_heartbeat_at = NULL,
-         next_attempt_at = 0,
-         resume_policy = NULL,
-         last_error_code = NULL,
-         last_error_message = NULL,
-         updated_at = ?
-       WHERE singleton = 1`,
-      generationId,
-      agentTurnId,
-      now,
-    );
+    });
 
     return {
       outcome: "rescheduled",
@@ -2851,12 +2850,48 @@ export function finalizeGeneration(
         );
       }
 
+      // THE STRANDED-INPUT WAKE, and it must be in THIS transaction.
+      //
+      // A trusted turn that committed while this generation was answering never
+      // allocated anything — `scheduleInput` saw `running` and joined. The
+      // generation was meant to absorb it at its next `prepareStep`; it died
+      // instead. Nothing else will come: the driver now reads `failed`, and
+      // `nextAlarmAt` schedules model work only for `scheduled` or `running`, so
+      // the input sits above the settled watermark until an unrelated later
+      // message happens to arrive. The one-millisecond-later version of the same
+      // message allocates a generation and is answered (plan line 470).
+      //
+      // Both guards are load-bearing and `UNSEEN_INPUT_WAKE_CODES` explains why:
+      // the code must be one the pending input provably did not cause, and there
+      // must be input this generation never READ — not merely never settled.
+      // A successor's first `prepareStep` lifts its included cursor to the
+      // pending cursor, so the same failure cannot wake a third generation
+      // without a genuinely new message. Doing it here rather than in a
+      // follow-up call keeps the failure and its successor in one commit; a
+      // crash between them is exactly the stranding this fixes.
+      const successor =
+        isInputResumablePolicy(request.resumePolicy)
+        && wakesOnUnseenInput(request.errorCode)
+        && driver.pendingThroughSeq > generation.includedThroughSeq
+          ? allocateScheduledGeneration(storage, {
+              firstInputSeq: generation.includedThroughSeq + 1,
+              // Where `scheduleInput` starts a resumed generation: everything
+              // above the settled watermark is still owed. Re-reading an input
+              // the dead generation already transcribed is free — the
+              // `model_messages` insert is `ON CONFLICT DO NOTHING` on the
+              // source event seq, so history is not duplicated.
+              includedThroughSeq: driver.settledThroughSeq,
+              now,
+            })
+          : null;
+
       return {
         outcome: "settled",
         generationId: generation.id,
         generationState: request.state,
-        driverPhase: "failed",
+        driverPhase: successor === null ? "failed" : "scheduled",
         settledThroughSeq: driver.settledThroughSeq,
+        ...(successor === null ? {} : { successorGenerationId: successor.generationId }),
       };
     }
 

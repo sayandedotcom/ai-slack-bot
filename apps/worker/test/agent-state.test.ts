@@ -970,6 +970,153 @@ describe("settlement", () => {
     expect(result.generation?.state).toBe("refused");
   });
 
+  /**
+   * THE STRANDED-INPUT WAKE, at the transaction that decides it.
+   *
+   * A turn that commits while a generation is RUNNING allocates nothing — it
+   * joins. If that generation then dies terminally, the driver reads `failed`
+   * and `nextAlarmAt` schedules model work only for `scheduled`/`running`, so
+   * without this the turn waits for an unrelated later message. Sent one
+   * millisecond after the failure instead, the very same turn allocates a
+   * generation and is answered, which is what plan line 470 promises.
+   *
+   * Every case below strands input the SAME way and varies only the terminal
+   * error code, because that is the only thing allowed to discriminate.
+   */
+  async function strandInputThenFail(request: {
+    state: "failed" | "refused";
+    resumePolicy: "requires_input" | "requires_operator_config";
+    errorCode: string;
+  }) {
+    const { stub, fence } = await claimedRun();
+    return inRun(stub, (s) => {
+      // The generation reads its input: `included_through_seq` now covers seq 1.
+      includePendingInput(s, fence);
+      // ... and only THEN does the steer land, so the generation never sees it.
+      const joined = appendTurn(
+        s,
+        turn("steer:r-1", { source: "human_steer", content: "actually check staging" }),
+        4_000,
+      );
+      const outcome = finalizeGeneration(s, fence, { kind: "failed", ...request }, 5_000);
+      return {
+        joined,
+        outcome,
+        driver: readDriver(s),
+        dead: readGeneration(s, fence.generationId),
+        generations: s.sql
+          .exec<{ n: number }>("SELECT COUNT(*) AS n FROM agent_generations")
+          .one().n,
+      };
+    });
+  }
+
+  it("wakes a successor for input a terminally refused generation never read", async () => {
+    const result = await strandInputThenFail({
+      state: "refused",
+      resumePolicy: "requires_input",
+      errorCode: "provider_refusal",
+    });
+
+    // The steer really did join rather than allocate — this is the window.
+    expect(result.joined.scheduling.outcome).toBe("joined");
+
+    // The refusal stays terminal and keeps naming what happened. Nothing here
+    // rewrites history; a successor is allocated beside it.
+    expect(result.dead?.state).toBe("refused");
+    expect(result.dead?.resumePolicy).toBe("requires_input");
+    expect(result.generations).toBe(2);
+
+    // The driver is claimable again, so the alarm arithmetic has something to
+    // schedule. `failed` here is the bug: nothing would ever claim.
+    expect(result.outcome).toMatchObject({ outcome: "settled", driverPhase: "scheduled" });
+    expect(result.driver.phase).toBe("scheduled");
+    expect(result.driver.generationId).not.toBe(null);
+    expect(result.driver.resumePolicy).toBeNull();
+    // The successor starts from the settled watermark, so it owes BOTH the
+    // original message and the steer.
+    expect(result.driver.pendingThroughSeq).toBeGreaterThan(result.driver.settledThroughSeq);
+  });
+
+  it.each([
+    // Input-caused: an unusable turn is still unusable next time, and this can
+    // fail from inside `prepareStep` before the included cursor ever moves.
+    { errorCode: "context_limit:oversized_input", why: "malformed history" },
+    { errorCode: "empty_history", why: "malformed history" },
+    // Waking resets `attempt`/`retry_count` to zero, so a crash loop would be
+    // handed a fresh budget every time a message arrived during the crashing.
+    { errorCode: "driver_attempts_exhausted", why: "the crash budget is gone" },
+  ])("refuses to wake a successor for $errorCode ($why)", async ({ errorCode }) => {
+    const result = await strandInputThenFail({
+      state: "failed",
+      resumePolicy: "requires_input",
+      errorCode,
+    });
+
+    expect(result.outcome).toMatchObject({ outcome: "settled", driverPhase: "failed" });
+    expect(result.driver.phase).toBe("failed");
+    expect(result.generations).toBe(1);
+    // NOT data loss, and this is the honest half: the input is still above the
+    // settled watermark, so the next ordinary message resumes it through
+    // `scheduleInput` exactly as it always did.
+    expect(result.driver.pendingThroughSeq).toBeGreaterThan(result.driver.settledThroughSeq);
+  });
+
+  it("refuses to wake a successor an operator-config failure would have to pay for", async () => {
+    // The policy gate is the OUTER one: even a code that is otherwise wakeable
+    // cannot resume a run whose failure the plan reserves for an operator
+    // (plan line 655). Nothing here can restart spending that a cap stopped.
+    const result = await strandInputThenFail({
+      state: "failed",
+      resumePolicy: "requires_operator_config",
+      errorCode: "provider_refusal",
+    });
+
+    expect(result.outcome).toMatchObject({ outcome: "settled", driverPhase: "failed" });
+    expect(result.generations).toBe(1);
+  });
+
+  it("refuses to wake a successor when the failed generation read everything", async () => {
+    // No stranding: the generation took the steer at its last `prepareStep` and
+    // refused it anyway. This is the guard that stops the wake spinning — a
+    // successor that also refuses lands here, with nothing left unread.
+    const { stub, fence } = await claimedRun();
+    const result = await inRun(stub, (s) => {
+      const steer = appendTurn(
+        s,
+        turn("steer:r-1", { source: "human_steer", content: "actually check staging" }),
+        4_000,
+      );
+      includePendingInput(s, fence);
+      appendInputMessages(s, fence, {
+        globalStep: 0,
+        messages: [{ sourceEventSeq: steer.event.seq, message: { role: "user", content: "x" } }],
+        now: 4_500,
+      });
+      const outcome = finalizeGeneration(
+        s,
+        fence,
+        {
+          kind: "failed",
+          state: "refused",
+          resumePolicy: "requires_input",
+          errorCode: "provider_refusal",
+        },
+        5_000,
+      );
+      return {
+        outcome,
+        driver: readDriver(s),
+        generations: s.sql
+          .exec<{ n: number }>("SELECT COUNT(*) AS n FROM agent_generations")
+          .one().n,
+      };
+    });
+
+    expect(result.outcome).toMatchObject({ outcome: "settled", driverPhase: "failed" });
+    expect(result.generations).toBe(1);
+  });
+
   it("reschedules a retry as the same generation and a later attempt", async () => {
     const { stub, fence } = await claimedRun();
     const result = await inRun(stub, (s) => {
