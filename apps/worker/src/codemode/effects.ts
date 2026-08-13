@@ -40,10 +40,23 @@ const PROVEN_PRE_UPSTREAM: ReadonlySet<CapabilityErrorCode> = new Set([
   "linear_team_denied",
   "customer_scope_required",
   "read_only_violation",
-  // The guard runs immediately BEFORE the capability body, so a stale refusal
-  // proves nothing was sent. It belongs in this set for the same reason
-  // `capability_unavailable` does — and leaving it out would turn every
-  // superseded write into a permanent `in_doubt` a human has to clear.
+  // A SEAM, not a live path — and kept deliberately.
+  //
+  // Structurally unreachable from `performClaimed` today: the freshness guard
+  // is checked in `withCapabilityAudit` (`bindings/shared.ts:337`) BEFORE the
+  // capability body runs, and `runEffect` is called from inside that body, so a
+  // superseded execution never gets as far as `options.execute` and this code
+  // is never the thing that classifies it. `staleGeneration()` has exactly two
+  // throw sites — that guard and the outer tool's own pre-check — and neither
+  // is downstream of here.
+  //
+  // Phase 10 Task 1 entered it expecting Task 8 to make the guard a per-call
+  // check inside the effect. Task 8 made it structural instead, which is
+  // stronger. The entry stays because the CLASSIFICATION is correct and would
+  // be needed the moment any future capability re-checks freshness inside its
+  // own `execute` — and because getting it wrong in the other direction is the
+  // expensive mistake: without it, a superseded write becomes a permanent
+  // `in_doubt` for a human to clear by hand.
   "stale_generation",
 ]);
 
