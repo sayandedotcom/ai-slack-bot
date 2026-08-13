@@ -6,6 +6,9 @@ import { backfillApi } from "./api/backfill";
 import { runsApi, runsWs } from "./api/runs";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
+import { identityApi } from "./api/identity";
+import { slackOAuth } from "./oauth/slack";
+import { githubOAuth } from "./oauth/github";
 import { routeSlackMessageToOwnedRun, wakeSlackRun } from "./run/coordinator";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
@@ -58,6 +61,16 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   AI_GATEWAY_ANTHROPIC_URL?: string;
   AI_GATEWAY_TOKEN?: string;
   AGENT_MODEL_DISABLED?: string;
+  // Phase 12's five, all SECRETS — same justification as the AI Gateway pair
+  // above: they are not in wrangler.jsonc, so `wrangler types` cannot know
+  // them. Optional in the type, and that optionality is safe only because
+  // every route that needs one refuses with a 503 naming the missing variable
+  // (never its value) rather than proceeding without it.
+  IDENTITY_KEY?: string;
+  SLACK_CLIENT_ID?: string;
+  SLACK_CLIENT_SECRET?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -89,9 +102,40 @@ app.route("/api", approvalsApi);
 // application as the dashboard — a published artifact is exactly as private as
 // the run that produced it.
 app.route("/api", artifactsApi);
+// Phase 12. `identityApi` is what the dashboard asks first on every load — who
+// am I, and who is on duty — and the two OAuth routers are how a fire-fighter
+// connects their own Slack and GitHub accounts. All three under the same /api
+// mount, so the start routes inherit the same Access application as everything
+// else: the browser already carries the cookie, which is the whole reason the
+// connect buttons can be plain links with no JavaScript behind them.
+app.route("/api", identityApi);
+app.route("/api", slackOAuth);
+app.route("/api", githubOAuth);
 // Not JSON, so it is mounted outside /api — but still above the asset
 // catch-all, and still behind the same Access application as the dashboard.
 app.route("/ws", runsWs);
+
+/**
+ * An unmatched API or WebSocket path is a 404, and it stops HERE — it must
+ * never reach the asset bundle.
+ *
+ * This line exists because of Phase 14's `not_found_handling:
+ * "single-page-application"` (wrangler.jsonc). That setting is what makes a
+ * hard refresh on a client-side route work: the asset worker answers ANY
+ * unmatched path with `index.html` and a 200. Without this guard that
+ * generosity extends to `/api/anything-misspelled`, which then returns an HTML
+ * document with a success status — an API caller sees 200 and gets markup,
+ * and the dashboard's `getJson` maps the parse failure to "backend
+ * unreachable" rather than the plain 404 it is. `test/api-artifacts.test.ts`
+ * caught it: a traversal key normalizes the URL to `/api/`, which matches no
+ * route, and the route's one-404-for-everything discipline silently became a
+ * 200.
+ *
+ * Placed below every `/api` and `/ws` mount and above the catch-all, so it
+ * only ever sees paths nothing else claimed.
+ */
+app.all("/api/*", (c) => c.json({ code: "not_found", message: "no such route" }, 404));
+app.all("/ws/*", (c) => c.json({ code: "not_found", message: "no such route" }, 404));
 
 // The Worker runs first on every request; anything unmatched falls through to
 // the static asset bundle. Explicit, rather than relying on route-ordering

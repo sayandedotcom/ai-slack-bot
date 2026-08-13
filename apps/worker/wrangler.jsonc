@@ -79,12 +79,22 @@
     "ACCESS_APP_AUD": "1adc17dda313762e35bb55101cd87594cbc6f300d676f668fc6994f5caba8238"
   },
   "assets": {
-    "directory": "./public",
+    // The dashboard's Vite build output (Phase 14). It replaced ./public, which
+    // held one placeholder index.html. `dist` is gitignored, so a fresh
+    // checkout must build it before `wrangler dev`, `wrangler deploy` or the
+    // test pool will find it -- which is why @workspace/dashboard is a
+    // devDependency of this package (turbo's `build` dependsOn `^build`) and
+    // why the deploy script builds it explicitly.
+    "directory": "../dashboard/dist",
     "binding": "ASSETS",
     // Without this the asset worker runs first and the Worker only sees requests
     // that miss an asset. src/index.ts owns the routing instead: it answers /api/*
     // and explicitly falls through to ASSETS for everything else.
-    "run_worker_first": true
+    "run_worker_first": true,
+    // The SPA has client-side paths that no file matches. Without this, a hard
+    // refresh on one of them 404s from the asset worker instead of returning
+    // index.html and letting the router take it.
+    "not_found_handling": "single-page-application"
   },
   // Artifact storage for files.publish (Phase 09 Task 12). PRIVATE: the bucket
   // has no public origin, and objects are served only through the Worker's own

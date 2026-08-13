@@ -142,4 +142,43 @@ LANGSMITH_API_KEY=
 # full SQL where the plan wants a bounded, allowlisted read surface.
 SUPABASE_KEY=
 
-# Later phases add more (GitHub). Add each here as its phase introduces it.
+# --------------------------------------------------------------- Phase 12
+#
+# The five identity/OAuth secrets. All optional on `Env` (see src/index.ts) --
+# every route that needs one 503s naming the VARIABLE rather than proceeding
+# without it, so a checkout missing all five still boots and still serves the
+# rest of the API.
+
+# The one key that seals every stored user token at rest (AES-GCM-256) AND
+# signs the OAuth `state` parameter (HMAC-SHA256). One secret, two uses --
+# WebCrypto keeps them apart: src/identity/crypto.ts imports it with usages
+# encrypt/decrypt, src/oauth/state.ts with sign/verify, both non-extractable,
+# so neither key can do the other's job.
+#
+# Generate with:  openssl rand -base64 32
+#
+# It MUST decode to exactly 32 bytes; importIdentityKey rejects anything else
+# with SealError("bad_key"). Rotating it makes every existing row in
+# `identities` un-openable -- getDecryptedToken throws SealError rather than
+# reporting "not connected" -- so a rotation means every fire-fighter
+# re-connects both accounts. That is deliberate: silently treating a
+# mis-rotated key as "nobody is connected" would hide the mistake.
+IDENTITY_KEY=
+
+# Slack OAuth v2 app credentials. Slack API -> your app -> Basic Information.
+# The flow requests the USER scope `chat:write` (authed_user), not a bot
+# scope: the point is posting AS the fire-fighter. The callback URL
+# https://<origin>/api/oauth/slack/callback must be registered in the app's
+# OAuth & Permissions -> Redirect URLs; the origin is derived from the
+# request, so localhost and production need separate entries.
+SLACK_CLIENT_ID=
+SLACK_CLIENT_SECRET=
+
+# GitHub OAuth app (a plain OAuth app, not a GitHub App -- see the phase 12
+# plan's "What this phase deliberately does not do"). GitHub -> Settings ->
+# Developer settings -> OAuth Apps. Scope requested: `repo`. Authorization
+# callback URL: https://<origin>/api/oauth/github/callback.
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+
+# Later phases add more. Add each here as its phase introduces it.
