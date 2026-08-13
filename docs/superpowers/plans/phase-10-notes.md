@@ -1091,7 +1091,13 @@ operator did the thing the error code asked for.
   snapshot carry `model.status` and `model.missingConfiguration` — setting
   NAMES only (invariant 39).
 
-### The test pool cannot spend money, and the reason is not `AGENT_MODEL_DISABLED`
+### The test pool cannot spend money ON THE MODEL, and the reason is not `AGENT_MODEL_DISABLED`
+
+> **Scope, added by the final-review fixes.** This section is about the MODEL
+> path and nothing else. When it was written, the non-model vendors — Linear,
+> Supabase, LangSmith, Better Stack — were isolated from this pool only by
+> convention. They are configuration now; see "The non-model vendors are
+> configuration too" below.
 
 `AGENT_MODEL_DISABLED: "true"` in `vitest.config.ts` only stops ports composed
 from the POOL env from installing a continuation. Any test may install the
@@ -1791,3 +1797,186 @@ not touch `apps/worker/src`. It ran no probe. Nothing from Phase 11 is present.
 Every claim above is either a test that was opened and read, a declaration
 resolved in an installed package, or an explicit statement that something was
 not run.
+
+---
+
+## Final review fixes — closing the whole-branch review
+
+Same operator constraint as every task in this phase: **local + automated
+only.** No deploy, no migration, no provider call, no Gateway call, no Zep, no
+Slack, no Cloudflare account state read or changed, no spend. Nothing from
+Phase 11.
+
+The final broad review returned **approved / ready with follow-ups**: zero
+Critical, two Important, four Minor. Five of those six are closed here; the
+sixth (`projectPendingUsage`) was deferred deliberately by the review itself and
+is untouched.
+
+### I1 — a terminal input-resumable failure with unanswered input had no wake source
+
+**Fixed, not recorded.** The gap was real, and it was observed before it was
+argued about.
+
+**The observation.** A scripted `MockLanguageModelV4` returning one
+`content-filter` step, with a `human_steer` turn committed from inside the
+object's own execution context during that step's first `text-delta` — the
+window after the last `prepareStep` and before finalization. Then the alarm was
+dispatched repeatedly until `nextAlarmAt` returned null, so the projection jobs
+that briefly keep an alarm armed could not be mistaken for a model wake. At
+rest:
+
+```text
+path: 'provider_refusal'   phase: 'failed'   resumePolicy: 'requires_input'
+pendingThroughSeq: 4       settledThroughSeq: 0        alarm: null
+```
+
+Turn 4 was durable, visible, above the settled watermark, and owned by nobody.
+The same steer sent one millisecond LATER took the `scheduleInput` path,
+allocated a generation and was answered — verified in the same probe. Same
+input, same run, opposite outcome, decided by a race no customer can see.
+
+**Why it contradicted the plan rather than merely underdelivering.** Plan line
+470 says a settled generation plus new input creates a new generation/turn, and
+the resume table at line 655 says `requires_input` is woken by "a new trusted
+human/customer turn". Both were true of this turn. What denied it was purely
+positional: `scheduleInput` saw `running` and joined instead of allocating, and
+`nextAlarmAt` (`agent/driver.ts`) pushes a model candidate only for `scheduled`
+or `running`.
+
+**The fix**, in the failure branch of `finalizeGeneration` (`run/session.ts`),
+inside the SAME transaction that commits the failure: allocate a successor
+generation when all three of these hold.
+
+1. the resume policy is input-resumable — so `requires_operator_config` (a
+   spend cap, a missing secret) and `requires_reconciliation` are untouched and
+   still need their explicit human action;
+2. the error code is in `UNSEEN_INPUT_WAKE_CODES` (`agent/contracts.ts`), a
+   closed list: `provider_refusal`, `provider_refusal_mid_stream`, `step_limit`,
+   `run_cancelled`;
+3. `pending_through_seq > generation.included_through_seq` — there is input the
+   dead generation never READ, not merely never settled.
+
+**The spin argument, answered.** Waking resets `attempt`/`retry_count` to zero
+(`session.ts`), so an unconditional wake on a pending cursor would refuse, wake,
+refuse, wake, and bill every lap. Guard 3 is what bounds it, and the bound is
+structural rather than a counter: a successor takes the unread input at its
+first `prepareStep`, which lifts its included cursor to the pending cursor, so
+its own identical failure has nothing left unread to wake a third generation.
+Guard 2 covers the failures that can occur BEFORE the included cursor moves at
+all — every `malformed_history` code is excluded for exactly that reason, and
+because an unusable turn is still unusable next time. `driver_attempts_exhausted`
+is excluded because handing a fresh crash budget to a run that just exhausted
+one is how a transient outage becomes unbounded spend.
+
+Measured, not asserted: with six refusals scripted and twenty alarm deliveries
+allowed, the run makes exactly **two** provider calls and comes to rest at
+`failed` / `requires_input` with no alarm armed.
+
+The public status follows the DRIVER, not the generation (`run/do.ts`,
+`FINALIZED_STATUS`): a settle that left `scheduled` is `live`, because the run
+has work to do.
+
+Three copies of the "allocate a scheduled generation" body — ordinary input, the
+operator-config reset, and now this — were collapsed into one
+`allocateScheduledGeneration` helper, because the fields it resets (no lease, no
+heartbeat, no backoff, no inherited error) are what a fresh attempt MEANS, and
+three copies is three chances for one to keep a stale lease.
+
+**Tests.** `agent-steering.test.ts` > "failure wins: a steer the refused
+generation never read still gets answered" and > "wakes at most ONE successor
+per unread input, however often it refuses" (both through the real continuation
+and the real isolate); `agent-state.test.ts` > "wakes a successor for input a
+terminally refused generation never read", plus four discrimination cases.
+Verified to discriminate in BOTH directions: with `wakesOnUnseenInput` forced to
+`false`, three fail; forced to `true` for every code, five fail — including two
+pre-existing tests, which is the spin the allow-list exists to prevent.
+
+**What is still open.** `hasPendingInput` (`session.ts`) still has no production
+consumer; it is used by `steering.ts` and by tests. It is not the mechanism of
+this fix and was left alone.
+
+### The non-model vendors are configuration too (I2)
+
+`vitest.config.ts` neutralised the Gateway pair, `ZEP_API_KEY` and the Slack
+pair, and nothing else. `LINEAR_API_KEY`, `SUPABASE_KEY`, `LANGSMITH_API_KEY`,
+`BETTERSTACK_SQL_USERNAME`, `BETTERSTACK_SQL_PASSWORD` and
+`BETTERSTACK_UPTIME_TOKEN` are all read straight off `env` by
+`agent/dependencies.ts`, and `agent-composer.test.ts` builds the REAL adapters
+from the POOL env twice — so on a developer machine those closures held live
+credentials from `.dev.vars`. Nothing invoked them, so nothing leaked. But there
+is no `fetchMock` and no miniflare `outboundService` in this pool, so outbound
+network is not sealed at pool level, and the only thing between a future test
+and the live Linear workspace (`.dev.vars.example` documents that key as
+personal, with access to all five teams including live Development) was the
+write-guard policy matrix — an AUTHORIZATION check, which cannot help a READ.
+
+All six are now bound to obviously-synthetic fixtures sharing one `not-a-real-`
+prefix, in the same miniflare block. A seventh was added beyond the review's
+list: **`ANTHROPIC_API_KEY`**. With `AI_GATEWAY_ANTHROPIC_URL` bound empty,
+`makeTriageRunner` (`triage/run.ts`) composes `createAnthropic` and falls
+STRAIGHT to `api.anthropic.com`; no test composes it today — every triage suite
+injects its own runner — but "no test does" is precisely the convention being
+replaced, and it is also what makes the credential-walk pin below
+machine-independent. The agent path is unchanged either way: it refuses at
+`missing_gateway_url` before a provider exists.
+
+Pinned by `agent-composer.test.ts` > "binds every vendor credential the composer
+reads to a synthetic fixture", asserting EQUALITY with each value the way the
+Gateway pair is asserted — `toBeTruthy()` would pass on a real key, and a
+falsiness check would pass on a binding that had vanished.
+
+No test needed a real-looking value; nothing broke.
+
+### The credential walk had no non-vacuity pin (M2)
+
+`agent-composer.test.ts` > "reaches no credential by walking the whole
+dependency object graph" builds its search list from pool env values and filters
+to non-empty — correctly, since `value.includes("")` matches everything. But an
+empty list also finds no credential, perfectly, forever, and six of the eight
+came only from `.dev.vars`. On a fresh clone the walk searched for two and
+reported success. `expect(secrets).toHaveLength(8)` now pins it, and with the
+I2 bindings in place all eight are present on every machine.
+
+### The control-byte guard permitted two control bytes (M1)
+
+`scripts/check-text-files.mjs` read
+`byte < 0x09 || (byte > 0x0d && byte < 0x20)`, which permits vertical tab (0x0b)
+and form feed (0x0c), while its own docblock said only tab, LF and CR were
+excluded. **The code was changed to match the comment**, as an explicit
+`ALLOWED_CONTROL_BYTES` set rather than range arithmetic, because this is the
+guard that exists BECAUSE a comment was trusted four times.
+
+Verified by construction, in a throwaway git repository outside this worktree:
+files containing a raw 0x0b and a raw 0x0c pass the old predicate (exit 0) and
+fail the new one (exit 1, both named). Neither byte triggers git's binary
+detection — that keys on NUL — so this was never a hole in the review-hiding
+failure mode; it was a hole in what the script CLAIMED to check. The tracked
+tree contains neither byte.
+
+It was also manual-only, reachable from `codemode:dts:check` alone, from no
+turbo task and no CI (this repository has no `.github` directory). It now runs
+in front of the worker suite as well — `"test": "node
+scripts/check-text-files.mjs && vitest run"` — which costs ~50 ms over the whole
+tracked tree. No CI was added; none exists to add to.
+
+### `stale_generation` in `PROVEN_PRE_UPSTREAM` is a seam, not a live path (M3)
+
+`codemode/effects.ts` justified the entry with "the guard runs immediately
+BEFORE the capability body", which is true and is exactly why `runEffect`'s own
+check can never observe it: `assertFresh` is called in `withCapabilityAudit`
+(`bindings/shared.ts`) before the capability body, and `runEffect` is called
+from INSIDE that body. `staleGeneration()` has two throw sites — that guard and
+the outer tool's pre-check — and neither is downstream of `performClaimed`.
+Task 1 deferred this expecting Task 8 to make the guard live per call; Task 8
+made it structural instead, which is stronger.
+
+The comment is retitled as a seam. **The set member is kept**: the
+classification is correct, it becomes load-bearing the moment any capability
+re-checks freshness inside its own `execute`, and the opposite mistake is the
+expensive one — without it a superseded write becomes a permanent `in_doubt`
+for a human to clear by hand.
+
+### Not fixed, by the review's own instruction
+
+`projectPendingUsage` (`agent/usage.ts`) remains a second implementation with
+one wired owner. `usage.ts` documents it honestly. Untouched.
