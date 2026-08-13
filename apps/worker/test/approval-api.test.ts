@@ -492,31 +492,62 @@ describe("the extended scheduled() sweeper", () => {
     // Two attempts total: the PATCH's own, plus the sweep's.
     expect(dead.calls).toHaveLength(2);
   });
-});
 
-/* ------------------------------------------------- verify circuit breaker */
-
-describe("the failed-verify circuit breaker (JWKS amplification mitigation)", () => {
-  it("stops calling the verifier after enough failures in the window", async () => {
-    let attempts = 0;
-    const countingVerifier: AccessVerifier = {
-      async verify(jwt: string): Promise<AccessIdentity> {
-        attempts += 1;
-        throw new AccessJwtError("bad_signature", `attempt ${jwt}`);
+  /**
+   * A `D1Database` whose `prepare()` throws for the exact query
+   * `listDueOutboxRows` (`src/memory/outbox.ts`) issues, and passes every
+   * other query straight through to the real pool. This is the cheapest way
+   * to make `sweepMemoryOutbox` genuinely throw without touching a file this
+   * task does not own: `sweepMemoryOutbox` itself never throws under normal
+   * operation (every per-row failure is caught internally), so the only
+   * realistic way to observe it fail is a broken query underneath it.
+   */
+  function dbThatBreaksTheMemorySweep(real: D1Database): D1Database {
+    return new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string): D1PreparedStatement => {
+            if (sql.includes("agent_memory_outbox")) {
+              throw new Error("simulated memory sweep failure");
+            }
+            return target.prepare(sql);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
       },
-    };
-    installApprovalApiPorts({ verifier: countingVerifier });
+    });
+  }
 
-    // Drive well past the cap with distinct "tokens" (distinct kids, in the
-    // real attack shape), each one a genuine call into the verifier.
-    for (let i = 0; i < 40; i++) {
-      const res = await req("/api/approvals", { token: `attacker-${i}` });
-      expect(res.status).toBe(401);
-    }
+  it("still runs the approval sweep when the memory sweep throws, and the cron invocation still fails honestly", async () => {
+    const dead = deadNotifier();
+    installApprovalApiPorts({ verifier: fakeVerifier(), notifier: dead });
+    const { id } = await seedApproval();
 
-    // The breaker must have started refusing before all 40 reached the
-    // verifier — that is the whole point of the mitigation.
-    expect(attempts).toBeLessThan(40);
-    expect(attempts).toBeGreaterThan(0);
+    await req(`/api/approvals/${id}`, {
+      method: "PATCH",
+      token: FIREFIGHTER,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "approve" }),
+    });
+
+    const recovered = recordingNotifier();
+    installApprovalApiPorts({ notifier: recovered });
+
+    const brokenEnv = { ...env, DB: dbThatBreaksTheMemorySweep(env.DB) };
+    await expect(worker.scheduled(createScheduledController(), brokenEnv)).rejects.toThrow();
+
+    // The memory sweep threw first (it runs via the same `Promise.allSettled`
+    // entry, and its query is the one rigged to fail) — but the approval
+    // sweep, run independently, still reached the notifier and repaired the
+    // row invariant 9 promises will be repaired. If the two sweeps were still
+    // sequential, this notifier would never have been called at all.
+    expect(recovered.calls).toHaveLength(1);
+    expect(recovered.calls[0]).toMatchObject({ approvalId: id });
+
+    const row = await env.DB.prepare("SELECT resolution_delivered_at FROM approvals WHERE id = ?")
+      .bind(id)
+      .first<{ resolution_delivered_at: number | null }>();
+    expect(row?.resolution_delivered_at).not.toBeNull();
   });
 });
+

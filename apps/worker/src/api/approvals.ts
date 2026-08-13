@@ -69,11 +69,9 @@ export function installApprovalApiPorts(ports: Partial<ApprovalApiPorts>): void 
   GLOBAL_PORTS = { ...GLOBAL_PORTS, ...ports };
 }
 
-/** Test seam: forget everything installed, including the failed-verify breaker below. */
+/** Test seam: forget everything installed. */
 export function resetApprovalApiPorts(): void {
   GLOBAL_PORTS = {};
-  failedVerifyWindowStart = 0;
-  failedVerifyCount = 0;
 }
 
 /**
@@ -100,54 +98,6 @@ function resolvePorts(env: Env): Partial<ApprovalApiPorts> & { verifier: AccessV
   return GLOBAL_PORTS as Partial<ApprovalApiPorts> & { verifier: AccessVerifier };
 }
 
-/* --------------------------------------------------- verify circuit breaker */
-
-/**
- * A known, accepted weakness from Task 2's review, made REACHABLE by this
- * task: `AccessVerifier`'s JWKS cache is bounded per `verify()` call, not
- * globally (see `src/access/jwt.ts`'s `resolveKey`). A key-miss always bypasses
- * the 1-hour freshness floor, so a caller sending a fresh, syntactically-valid,
- * unsigned-or-forged JWT with a NEW random `kid` on every request forces one
- * real JWKS fetch per request — before the signature is even checked, because
- * `resolveKey` runs ahead of `crypto.subtle.verify`. If the origin is reachable
- * without Cloudflare Access sitting in front of it (a real possibility here:
- * see `phase-11-notes.md`'s "JWKS key-miss amplification" note — the Access
- * application's AUD was still an unconfirmed placeholder as of this task), an
- * unauthenticated caller can use this route to hammer Cloudflare's JWKS
- * endpoint, and a throttled JWKS endpoint breaks authentication for everyone,
- * not just the attacker.
- *
- * This is NOT a redesign of Task 2's cache — that stays exactly as shipped.
- * It is a cap at THIS layer on how many failed verifications this isolate will
- * even attempt in a rolling minute, so the worst case is bounded to
- * `FAILED_VERIFY_MAX` JWKS-endpoint round trips per isolate per minute,
- * regardless of how many distinct `kid`s an attacker cycles through. A
- * tripped breaker fails the same way an invalid JWT already does — `401
- * access_jwt_invalid` — so it changes nothing observable for a legitimate
- * caller with an occasionally-stale token, and it self-clears every minute so
- * a real key rotation is never permanently locked out.
- */
-const FAILED_VERIFY_WINDOW_MS = 60_000;
-const FAILED_VERIFY_MAX = 30;
-
-let failedVerifyWindowStart = 0;
-let failedVerifyCount = 0;
-
-function verifyCircuitOpen(now: number): boolean {
-  if (now - failedVerifyWindowStart > FAILED_VERIFY_WINDOW_MS) {
-    return false;
-  }
-  return failedVerifyCount >= FAILED_VERIFY_MAX;
-}
-
-function recordVerifyFailure(now: number): void {
-  if (now - failedVerifyWindowStart > FAILED_VERIFY_WINDOW_MS) {
-    failedVerifyWindowStart = now;
-    failedVerifyCount = 0;
-  }
-  failedVerifyCount += 1;
-}
-
 /* ------------------------------------------------------------ authz ---- */
 
 function fail(code: string, message: string) {
@@ -160,19 +110,27 @@ function fail(code: string, message: string) {
  * Validates the Access JWT and returns the identity it proves, or the
  * `Response` to send back verbatim. Every route below starts here — there is
  * no route in this file that reads `c.req.header` for identity itself.
+ *
+ * This file does NOT rate-limit or circuit-break failed verifications. An
+ * earlier revision added an unkeyed, pre-identity attempt cap here and a
+ * review caught it doing the opposite of its intent: free-to-produce failures
+ * (`AccessJwtError("missing"...)` for a header-less request costs zero JWKS
+ * calls — see `src/access/jwt.ts`) would trip it long before any real
+ * amplification occurred, and once tripped it denied EVERY caller, including
+ * a fire-fighter with a genuinely valid token, because the check ran before
+ * `isFirefighter`/`isTeamMember` and was not scoped by identity, IP, or
+ * `kid`. The actual JWKS key-miss amplification this was meant to guard
+ * against is bounded at its real source instead: `resolveKey`'s short-TTL
+ * negative cache in `src/access/jwt.ts`, which throttles the expensive
+ * operation (the JWKS fetch) directly rather than refusing traffic on this
+ * route as a proxy for it.
  */
 async function requireIdentity(c: Context<{ Bindings: Env }>): Promise<AccessIdentity | Response> {
-  const now = Date.now();
-  if (verifyCircuitOpen(now)) {
-    return c.json(fail("access_jwt_invalid", "too many invalid tokens recently; try again shortly"), 401);
-  }
-
   const { verifier } = resolvePorts(c.env);
   const jwt = c.req.header("Cf-Access-Jwt-Assertion") ?? "";
   try {
     return await verifier.verify(jwt);
   } catch (err) {
-    recordVerifyFailure(now);
     const reason = err instanceof AccessJwtError ? err.code : "invalid";
     return c.json(fail("access_jwt_invalid", `token failed verification: ${reason}`), 401);
   }

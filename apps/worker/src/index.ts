@@ -141,10 +141,27 @@ export default {
    * `waitUntil` is deliberately NOT used: the sweep is the whole point of this
    * invocation, so it is awaited, and a failure should surface as a failed cron
    * run rather than as silence.
+   *
+   * The two sweeps run through `Promise.allSettled`, not sequential `await`s,
+   * and deliberately so: a sequential `await sweepMemoryOutbox(env)` ahead of
+   * `sweepUndeliveredApprovals(env)` would mean a persistently throwing memory
+   * sweep silently disables the approval sweep every single minute, since
+   * Cloudflare does not retry a `scheduled()` invocation on its own — and the
+   * approval sweep is the ONLY repair path behind the PATCH route's
+   * `200`-with-`resolutionDelivered:false` promise (invariant 9). Both sweeps
+   * are always attempted; if either (or both) rejected, this still throws
+   * afterward so the cron invocation is honestly reported as failed, rather
+   * than swallowing the error and looking healthy.
    */
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    await sweepMemoryOutbox(env);
-    await sweepUndeliveredApprovals(env);
+    const results = await Promise.allSettled([sweepMemoryOutbox(env), sweepUndeliveredApprovals(env)]);
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((f) => f.reason),
+        "one or more scheduled sweeps failed",
+      );
+    }
   },
   // The second type parameter is the queue message body. Without it,
   // ExportedHandler defaults to `unknown` and the queue handler will not typecheck.

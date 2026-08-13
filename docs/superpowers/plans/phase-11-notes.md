@@ -239,43 +239,74 @@ same checkout:
   "Verifying the gate still lets ingest through" section against
   `/api/approvals` specifically before relying on Access for this route.
 
-**Decision: mitigate at this layer, cheaply.** Task 2's review accepted, as a
-deferred Minor, that `AccessVerifier`'s JWKS cache
-(`src/access/jwt.ts`'s `resolveKey`) refetches on every key-miss rather than
-respecting the 1-hour floor — bounded per `verify()` call, not globally. That
-was theoretical while nothing called the verifier; this task is what makes it
-reachable, and `resolveKey` runs the JWKS lookup *before* the signature is
-even checked, so a syntactically-valid three-segment token with a fresh
-random `kid` on every request is enough to force one real JWKS fetch per
-request, with no valid signature required. If Cloudflare's JWKS endpoint
-throttles under that load, authentication breaks for every real user, not
-just the attacker.
+**Decision (revised after review): mitigate at the source, not at this
+route.** Task 2's review accepted, as a deferred Minor, that `AccessVerifier`'s
+JWKS cache (`src/access/jwt.ts`'s `resolveKey`) refetches on every key-miss
+rather than respecting the 1-hour floor — bounded per `verify()` call, not
+globally. That was theoretical while nothing called the verifier; this task
+is what makes it reachable, and `resolveKey` runs the JWKS lookup *before*
+the signature is even checked, so a syntactically-valid three-segment token
+with a fresh random `kid` on every request is enough to force one real JWKS
+fetch per request, with no valid signature required. If Cloudflare's JWKS
+endpoint throttles under that load, authentication breaks for every real
+user, not just the attacker.
 
-This is **not** a redesign of Task 2's cache — that stays exactly as shipped,
-per the dispatch's explicit instruction — and a redesign would be the wrong
-place to spend this task's budget regardless: the real fix (a cache that
-remembers "this `kid` doesn't exist" for some bounded time, independent of
-the overall freshness floor) belongs in `src/access/jwt.ts` where the cache
-already lives, not bolted onto one caller of it.
+**First attempt, rejected on review.** The first cut of this fix added an
+unkeyed, per-isolate "circuit breaker" in `src/api/approvals.ts`'s
+`requireIdentity`: after 30 failed verifications in a rolling 60-second
+window, refuse further requests with no call into the verifier at all. Review
+caught two real problems with it, not just a tuning nit:
 
-What *is* implemented, in `src/api/approvals.ts` (`requireIdentity`, the
-"verify circuit breaker" section): a per-isolate cap of 30 failed
-verifications per rolling 60-second window. Once tripped, further requests
-in that window get `401 access_jwt_invalid` without the fake/real verifier's
-`verify()` ever being called — so the worst case for this route is bounded to
-30 JWKS-endpoint round trips per isolate per minute, regardless of how many
-distinct `kid`s an attacker cycles through, rather than one round trip per
-request unboundedly. A legitimate caller with an occasionally-stale token
-sees no behavior change (they were already getting `401` on the one bad
-attempt), the breaker self-clears every minute so a real Access key rotation
-is never permanently locked out, and it costs nothing beyond one counter
-check on the request path. Covered by
-`test/approval-api.test.ts` > "the failed-verify circuit breaker (JWKS
-amplification mitigation)", which drives 40 distinct failing "tokens" through
-a counting fake verifier and asserts the fake was called fewer than 40 times.
+- It ran *before* the identity/role check and was not scoped by identity, IP,
+  or `kid`. Once tripped, it denied every caller for the rest of the window —
+  **including a fire-fighter presenting a perfectly valid JWT to
+  `PATCH /api/approvals/:id`.** Under its own threat model that is a strictly
+  bad trade: "attacker adds load to Cloudflare's JWKS endpoint" becomes
+  "attacker prevents fire-fighters from approving anything," on the one
+  surface this entire phase exists to provide.
+- The failures that tripped it were free to produce: `verify("")` throws
+  `missing`, and a header that isn't a three-segment JWT with a `kid` throws
+  `malformed` — both **before** `resolveKey` runs, so before any JWKS fetch
+  at all (`src/access/jwt.ts`'s `verify`, header/format checks ahead of
+  `resolveKey`). Thirty header-less `GET`s cost an attacker nothing and
+  produce zero amplification, yet still denied the approval surface for the
+  rest of the minute. The counter was not measuring the resource it was
+  meant to protect.
 
-This is a mitigation, not a fix: it bounds the blast radius at this one route
-rather than closing the underlying gap, which is why `src/access/jwt.ts`
-itself is untouched and the Minor from Task 2's review is still open at the
-source. Recorded here per the dispatch's instruction that silence on this
-question is not an acceptable answer.
+That breaker (and its test) were removed entirely — see
+`src/api/approvals.ts`'s `requireIdentity` doc comment, which now explains
+why no rate-limiting lives at this layer.
+
+**What shipped instead: a short-TTL negative cache inside `resolveKey`
+itself**, `src/access/jwt.ts`. Once a `kid` survives a full refetch and is
+still missing, it is remembered as unknown for `UNKNOWN_KID_NEGATIVE_TTL_MS`
+(60 seconds); any further `resolveKey(kid)` call for that same `kid` fails
+immediately with **no network call**, until the entry's TTL elapses. This
+throttles the actual expensive operation (the JWKS fetch) directly, scoped
+per-`kid` rather than as a blunt cap on the whole route, and it never refuses
+a request that carries a token whose `kid` it hasn't already tried and
+failed — so a legitimate caller is never collaterally denied by someone
+else's garbage traffic, unlike the removed breaker.
+
+**The rotation trap, handled explicitly.** A negative cache with no expiry
+would turn a real Access key rotation into a self-inflicted outage: every
+valid token signed with a newly-published key would be rejected for as long
+as the negative entry lived. `UNKNOWN_KID_NEGATIVE_TTL_MS` is deliberately
+short (60s, matching the order of magnitude the review asked for) so
+rotation's blind spot is small and self-heals automatically — proven by
+`test/access-jwt.test.ts` > "re-checks a kid after its negative entry's TTL
+elapses, so rotation self-heals," which advances an injected clock (a new
+optional `now` parameter on `makeAccessVerifier`, defaulting to the real
+clock in production) past the TTL and asserts a `kid` that became real in the
+interim verifies successfully afterward. The companion test, "stops
+refetching for a repeated unknown kid within the TTL," proves the throttling
+half: ten repeated attempts for the same never-published `kid` inside the
+TTL cost zero additional fetches.
+
+This is a mitigation at the actual bottleneck, not a redesign of the
+freshness-floor cache around it — `JWKS_CACHE_FLOOR_MS` and the "refetch
+exactly once per miss, per call" behavior are untouched, and every
+pre-existing test in `test/access-jwt.test.ts` still passes unmodified.
+Recorded here per the dispatch's instruction that silence on this question is
+not an acceptable answer, and revised here per the review that correctly
+rejected the first attempt.

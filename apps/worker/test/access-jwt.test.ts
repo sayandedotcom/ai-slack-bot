@@ -178,6 +178,91 @@ describe("makeAccessVerifier", () => {
     expect((err as AccessJwtError).code).toBe("bad_signature");
     expect(calls).toBe(3);
   });
+
+  describe("unknown-kid negative cache (JWKS amplification mitigation)", () => {
+    /**
+     * The vulnerability this guards against: `resolveKey` runs BEFORE the
+     * signature is checked, so a caller does not even need a validly signed
+     * token -- only a well-formed one with a `kid` this isolate has never
+     * seen -- to force a JWKS fetch. Without the negative cache, a distinct
+     * `kid` on every request forces one fetch per request, forever. With it,
+     * a repeated unknown `kid` is refused with no network call until its
+     * negative entry's TTL elapses.
+     */
+    it("stops refetching for a repeated unknown kid within the TTL", async () => {
+      const key = await generateKeyPair("kid-known");
+      const { fetcher, calls } = fakeJwksFetcher(key.publicJwk);
+      let clock = 0;
+      const verifier = makeAccessVerifier({ teamDomain: TEAM_DOMAIN, aud: AUD }, fetcher, () => clock);
+
+      const unknownToken = await sign(key.privateKey, "kid-never-published", validClaims());
+
+      // First attempt: a genuine miss with a cold cache costs TWO fetches —
+      // the unconditional load a cold cache always takes, then the one more
+      // `resolveKey` always tries on any miss — exactly the existing
+      // "refetches exactly once [more]" behavior this file already pins
+      // elsewhere. The negative cache changes nothing about THIS call; it
+      // only prevents a SECOND miss on the same kid from repeating either.
+      const first = await verifier.verify(unknownToken).catch((e: unknown) => e);
+      expect((first as AccessJwtError).code).toBe("bad_signature");
+      expect(calls()).toBe(2);
+
+      // Ten more attempts for the SAME kid, well within the 60s TTL: none
+      // of them may touch the network again.
+      clock += 1_000;
+      for (let i = 0; i < 10; i++) {
+        const err = await verifier.verify(unknownToken).catch((e: unknown) => e);
+        expect((err as AccessJwtError).code).toBe("bad_signature");
+      }
+      expect(calls()).toBe(2);
+    });
+
+    /**
+     * The rotation trap named explicitly in review: a negative cache with no
+     * expiry would turn a real Access key rotation into an outage, rejecting
+     * every valid token signed with the newly-published key for as long as
+     * the negative entry lived. This proves the TTL actually elapses and a
+     * `kid` that becomes real afterward verifies successfully.
+     */
+    it("re-checks a kid after its negative entry's TTL elapses, so rotation self-heals", async () => {
+      const rotated = await generateKeyPair("kid-rotated-in");
+      let served: JsonWebKey[] = []; // not yet published, at first
+      let calls = 0;
+      const fetcher = (async () => {
+        calls++;
+        return new Response(JSON.stringify({ keys: served }), { status: 200 });
+      }) as unknown as typeof fetch;
+      let clock = 0;
+      const verifier = makeAccessVerifier({ teamDomain: TEAM_DOMAIN, aud: AUD }, fetcher, () => clock);
+
+      const token = await sign(rotated.privateKey, rotated.kid, validClaims());
+
+      // Miss: the key has not been published yet. A cold cache costs two
+      // fetches on a miss (same "refetches exactly once [more]" shape pinned
+      // above), and this kid is now negatively cached.
+      const miss = await verifier.verify(token).catch((e: unknown) => e);
+      expect((miss as AccessJwtError).code).toBe("bad_signature");
+      expect(calls).toBe(2);
+
+      // Still within the TTL: refused with no network call, even though the
+      // key IS published now server-side -- the negative cache has not
+      // expired yet, so this isolate has not looked again.
+      served = [rotated.publicJwk];
+      clock += 30_000;
+      const stillCached = await verifier.verify(token).catch((e: unknown) => e);
+      expect((stillCached as AccessJwtError).code).toBe("bad_signature");
+      expect(calls).toBe(2);
+
+      // Past the 60s TTL: the same kid gets a genuine fresh look. The
+      // one-hour freshness floor means the EXISTING (stale, still-empty)
+      // cache is used first and misses again, so this takes one more fetch
+      // to find the now-published key -- but it DOES find it: rotation has
+      // self-healed, which is the property this test exists to prove.
+      clock += 31_000;
+      await expect(verifier.verify(token)).resolves.toEqual({ email: "ronit@zellify.app" });
+      expect(calls).toBe(3);
+    });
+  });
 });
 
 describe("roster", () => {

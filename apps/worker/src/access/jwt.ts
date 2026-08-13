@@ -71,6 +71,22 @@ type JwksCache = {
 /** Cache floor. Below this age, a key-miss is the only thing that refetches. */
 const JWKS_CACHE_FLOOR_MS = 60 * 60 * 1000;
 
+/**
+ * How long a `kid` that survived a refetch and was still not found stays
+ * negatively cached before this verifier is willing to try the network for
+ * it again.
+ *
+ * Short and deliberately so: a real Access key rotation publishes a new
+ * `kid`, and if this verifier caches "unknown" for that `kid` for anywhere
+ * near as long as `JWKS_CACHE_FLOOR_MS`, every valid token signed with the
+ * newly-rotated key is rejected for that whole window -- a self-inflicted
+ * outage disguised as a security control. Sixty seconds bounds the
+ * amplification (see `resolveKey`'s doc comment) to one real JWKS fetch per
+ * unknown `kid` per minute, while keeping rotation's blind spot small enough
+ * that nobody would notice it operationally.
+ */
+const UNKNOWN_KID_NEGATIVE_TTL_MS = 60 * 1000;
+
 function base64UrlToBytes(segment: string): Uint8Array {
   const padded = segment + "=".repeat((4 - (segment.length % 4)) % 4);
   const std = padded.replace(/-/g, "+").replace(/_/g, "/");
@@ -90,10 +106,16 @@ function base64UrlToText(segment: string): string {
  * through the real network call -- there is no dev-bypass parameter, and no
  * env-conditional anywhere in this function that turns off a check. Tests
  * inject a fake fetcher; they never get a verifier that skips verification.
+ *
+ * `now` is a second, independent test seam -- it defaults to the real clock
+ * -- so a test can move time past `UNKNOWN_KID_NEGATIVE_TTL_MS` without a
+ * real 60-second sleep, to prove the negative cache actually expires and
+ * rotation self-heals. Production never passes it.
  */
 export function makeAccessVerifier(
   cfg: AccessVerifierConfig,
   fetchJwks: typeof fetch = fetch,
+  now: () => number = () => Date.now(),
 ): AccessVerifier {
   const jwksUrl = `https://${cfg.teamDomain}/cdn-cgi/access/certs`;
 
@@ -102,6 +124,14 @@ export function makeAccessVerifier(
   // floor, which governs how OLD a settled cache may be before it counts as
   // due for a routine refresh.
   let inflight: Promise<JwksCache> | null = null;
+
+  /**
+   * `kid` -> the timestamp its negative entry expires at. Populated only by
+   * `resolveKey` below, on a `kid` that survived a full refetch and was
+   * still missing. See `UNKNOWN_KID_NEGATIVE_TTL_MS`'s doc comment for why
+   * the TTL is short.
+   */
+  const unknownKids = new Map<string, number>();
 
   async function loadJwks(): Promise<JwksCache> {
     if (inflight) return inflight;
@@ -133,7 +163,7 @@ export function makeAccessVerifier(
         );
         keys.set(jwk.kid, key);
       }
-      const next: JwksCache = { keys, fetchedAt: Date.now() };
+      const next: JwksCache = { keys, fetchedAt: now() };
       cache = next;
       return next;
     })();
@@ -148,11 +178,39 @@ export function makeAccessVerifier(
    * Resolves the verification key for `kid`. A key-miss triggers exactly one
    * refetch -- Access rotates keys, so a `kid` this isolate has never seen is
    * expected, not an attack. A miss that survives the refetch is real: it
-   * does NOT retry again, so a request hammering an unknown `kid` cannot turn
-   * into an unbounded refetch loop against the JWKS endpoint.
+   * does NOT retry again FOR THIS CALL, so a single request hammering an
+   * unknown `kid` cannot turn into an unbounded refetch loop within itself.
+   *
+   * That guarantee was per-call, not global: a stream of DIFFERENT unknown
+   * `kid`s, one per request, each got its own full refetch, because nothing
+   * remembered a `kid` had already been tried and failed. A caller reaching
+   * this route without going through Cloudflare Access first (see
+   * `phase-11-notes.md`'s "Task 6" entry) could use that to force one real
+   * JWKS fetch per request, before the signature is even checked -- and a
+   * throttled JWKS endpoint breaks authentication for everyone, not just the
+   * attacker. `unknownKids` is the fix: once a `kid` has survived a full
+   * refetch and is still missing, it is remembered as unknown for
+   * `UNKNOWN_KID_NEGATIVE_TTL_MS`, and every further request for that same
+   * `kid` fails immediately with no network call, until the entry expires.
+   *
+   * The TTL is short -- see its own doc comment -- specifically so a `kid`
+   * that becomes real (Access rotates it in) is only ever blind for at most
+   * one TTL window, not held negative forever by a cache with no natural
+   * expiry.
    */
   async function resolveKey(kid: string): Promise<CryptoKey> {
-    const isFresh = cache !== null && Date.now() - cache.fetchedAt < JWKS_CACHE_FLOOR_MS;
+    const nowMs = now();
+    const negativeUntil = unknownKids.get(kid);
+    if (negativeUntil !== undefined) {
+      if (nowMs < negativeUntil) {
+        throw new AccessJwtError("bad_signature", "no JWKS key matches the token's kid");
+      }
+      // TTL elapsed -- give this kid a genuine fresh look, exactly like a
+      // `kid` this isolate has never seen before.
+      unknownKids.delete(kid);
+    }
+
+    const isFresh = cache !== null && nowMs - cache.fetchedAt < JWKS_CACHE_FLOOR_MS;
     let { keys } = isFresh ? cache! : await loadJwks();
     let key = keys.get(kid);
     if (!key) {
@@ -160,6 +218,7 @@ export function makeAccessVerifier(
       key = keys.get(kid);
     }
     if (!key) {
+      unknownKids.set(kid, nowMs + UNKNOWN_KID_NEGATIVE_TTL_MS);
       throw new AccessJwtError("bad_signature", "no JWKS key matches the token's kid");
     }
     return key;
