@@ -56,7 +56,7 @@ describe("one alarm slot, four kinds of work", () => {
     const at = nextAlarmAt({
       driver: driverAt({ phase: "running", leaseExpiresAt: NOW + 150_000 }),
       projectionDueAt: NOW + 15_000,
-      modelEnabled: true,
+      continuationInstalled: true,
       now: NOW,
     });
     // The projection is sooner, so it owns the slot. Priority between the two
@@ -69,7 +69,7 @@ describe("one alarm slot, four kinds of work", () => {
       driver: driverAt({ phase: "scheduled", nextAttemptAt: 0 }),
       // A vendor outage has walked this out to five minutes.
       projectionDueAt: NOW + 300_000,
-      modelEnabled: true,
+      continuationInstalled: true,
       now: NOW,
     });
     expect(at).toBe(NOW);
@@ -79,7 +79,7 @@ describe("one alarm slot, four kinds of work", () => {
     const at = nextAlarmAt({
       driver: driverAt({ phase: "scheduled", nextAttemptAt: NOW + 4_000 }),
       projectionDueAt: null,
-      modelEnabled: true,
+      continuationInstalled: true,
       now: NOW,
     });
     expect(at).toBe(NOW + 4_000);
@@ -89,7 +89,7 @@ describe("one alarm slot, four kinds of work", () => {
     const at = nextAlarmAt({
       driver: driverAt({ phase: "running", leaseExpiresAt: NOW + 150_000 }),
       projectionDueAt: null,
-      modelEnabled: true,
+      continuationInstalled: true,
       now: NOW,
     });
     expect(at).toBe(NOW + 150_000);
@@ -99,7 +99,7 @@ describe("one alarm slot, four kinds of work", () => {
     const at = nextAlarmAt({
       driver: driverAt({ phase: "scheduled" }),
       projectionDueAt: null,
-      modelEnabled: false,
+      continuationInstalled: false,
       now: NOW,
     });
     expect(at).toBeNull();
@@ -107,7 +107,12 @@ describe("one alarm slot, four kinds of work", () => {
 
   it("returns null when nothing is due, so an idle object can hibernate", () => {
     expect(
-      nextAlarmAt({ driver: driverAt(), projectionDueAt: null, modelEnabled: true, now: NOW }),
+      nextAlarmAt({
+        driver: driverAt(),
+        projectionDueAt: null,
+        continuationInstalled: true,
+        now: NOW,
+      }),
     ).toBeNull();
   });
 
@@ -116,7 +121,7 @@ describe("one alarm slot, four kinds of work", () => {
       nextAlarmAt({
         driver: driverAt(),
         projectionDueAt: NOW - 60_000,
-        modelEnabled: true,
+        continuationInstalled: true,
         now: NOW,
       }),
     ).toBe(NOW);

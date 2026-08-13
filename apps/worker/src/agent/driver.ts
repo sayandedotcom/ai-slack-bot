@@ -253,14 +253,21 @@ export function resolveRunPorts(runKey: string | null): RunPorts {
 export function nextAlarmAt(input: {
   driver: Pick<DriverState, "phase" | "leaseExpiresAt" | "nextAttemptAt">;
   projectionDueAt: number | null;
-  /** False while no continuation is wired: model work is parked, not scheduled. */
-  modelEnabled: boolean;
+  /**
+   * Whether a continuation is wired at all — the same predicate the operator
+   * report calls `continuationInstalled`, and deliberately NOT "the model can
+   * succeed". With no continuation there is nothing to dispatch to, so model
+   * work is parked rather than scheduled; with one installed the work is
+   * scheduled even on a deployment whose configuration is absent, because
+   * failing loudly at composition is the point (plan lines 965-966).
+   */
+  continuationInstalled: boolean;
   now: number;
 }): number | null {
   const { driver, now } = input;
   const candidates: number[] = [];
 
-  if (input.modelEnabled) {
+  if (input.continuationInstalled) {
     if (driver.phase === "scheduled") {
       // Fresh input carries `nextAttemptAt = 0`, so it is due immediately even
       // when the previous attempt had walked the backoff out to seconds. A

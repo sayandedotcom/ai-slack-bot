@@ -22,7 +22,9 @@ import { countModelSteps, readGenerationMemory, recordStepUsage } from "../src/r
 import type { MemoryJob } from "../src/memory/consumer";
 import type { Env } from "../src/index";
 import type { RunDO } from "../src/run/do";
+import type { RunServerMessage } from "../src/run/protocol";
 import { customerTurn, freshLoopRun, mockModel, textStep } from "./helpers/agent-loop";
+import { connect, syncedCursor, waitFor } from "./helpers/run-ws";
 
 /**
  * THE PHASE-WIDE GAP THIS TASK EXISTS TO CLOSE.
@@ -187,9 +189,9 @@ describe("the production ports", () => {
    * installing the production continuation. If somebody removes it from
    * vitest.config.ts, this fails.
    *
-   * It is not the whole story, and the case below is the rest of it: four sites
-   * in this repo install the production continuation from an env they built
-   * themselves, which bypasses this flag entirely.
+   * It is not the whole story, and the case below is the rest of it: any test
+   * that builds its own env object and installs the production continuation
+   * from it bypasses this flag entirely, and several in this repo do.
    */
   it("parks model work for the test pool's own env", () => {
     const { ports, report } = productionRunPorts(env as unknown as Env);
@@ -202,12 +204,13 @@ describe("the production ports", () => {
    * THE GUARD THAT ACTUALLY CANNOT BE BYPASSED.
    *
    * `AGENT_MODEL_DISABLED` only protects a composition that reads the POOL env.
-   * It protects nothing at all for the four call sites that build their own env
-   * and install the production continuation explicitly — the two below in this
-   * file and the two in `run-telemetry.test.ts`, which install GLOBALLY. Those
-   * continuations resolve their env at call time from the Durable Object
-   * (`do.ts`, `ports.continuation?.(this.ctx, this.env)`), so what they compose
-   * against is THIS pool env, opt-out or no opt-out.
+   * It protects nothing at all for a call site that builds its own env and
+   * installs the production continuation explicitly — key-scoped or GLOBAL, in
+   * this file or any other. No count is given, because the count is not the
+   * property: such a continuation resolves its env AT CALL TIME from the Durable
+   * Object (`do.ts`, `ports.continuation?.(this.ctx, this.env)`), so what it
+   * composes against is THIS pool env, opt-out or no opt-out, however many of
+   * them there happen to be today.
    *
    * So the line that cannot be defeated is the one below: with the two Gateway
    * settings bound EMPTY, `createProductionModelFactory` throws
@@ -250,6 +253,66 @@ describe("the production ports", () => {
           : `unexpected:${String(error)}`;
     }
     expect(ABSENT_MODEL_CONFIGURATION_CODES).toContain(thrownCode);
+  });
+
+  /**
+   * THE BIDIRECTIONAL PIN ON `ABSENT_MODEL_CONFIGURATION_CODES`.
+   *
+   * The case above is one-directional and single-sample: it observes ONE thrown
+   * code (whichever this machine's `.dev.vars` leaves absent first) and checks
+   * containment. Adding a fourth code to the list, or deleting one of the three,
+   * failed nothing — and that list is what decides whether a config-killed run
+   * can ever be revived, so a drifting entry is either a run that stays dead
+   * forever or a run revived onto a value that will fail again on every wake.
+   *
+   * This closes both directions against the REAL composer:
+   *
+   *  - FORWARD — blanking any required setting throws a code that is IN the
+   *    list, so a newly required setting cannot fail with a code the resume path
+   *    does not know about;
+   *  - REVERSE — the set of codes the composer actually produces this way EQUALS
+   *    the list, so an entry nobody can reach (a typo, a code that moved) fails
+   *    here instead of sitting in a resume allow-list forever.
+   *
+   * The required settings are taken from `modelDisposition`'s own report rather
+   * than retyped, so a fourth required setting joins this case automatically.
+   */
+  it("pins the absent-configuration codes, in both directions, against the real composer", () => {
+    // An empty env is missing everything, so the report names the whole required
+    // set. This is `ports.ts`'s list, read out rather than duplicated here.
+    const required = modelDisposition({} as unknown as Env).missingConfiguration;
+    expect(required).not.toHaveLength(0);
+
+    // CONTROL. With every setting present the composer returns a factory, so a
+    // throw below is caused by the ONE setting that case blanked and not by
+    // something ambient (an unpriced default model, a malformed fixture URL).
+    expect(() =>
+      createProductionModelFactory(configuredEnv() as unknown as ModelEnv),
+    ).not.toThrow();
+
+    const observed = required.map((name) => {
+      const env = { ...configuredEnv(), [name]: "" } as unknown as ModelEnv;
+      try {
+        createProductionModelFactory(env);
+        return { name, code: "did_not_throw" };
+      } catch (error) {
+        return {
+          name,
+          code:
+            error instanceof ModelCompositionError ? error.code : `unexpected:${String(error)}`,
+        };
+      }
+    });
+
+    // FORWARD. Named per setting, so a failure says WHICH one drifted.
+    for (const { name, code } of observed) {
+      expect(ABSENT_MODEL_CONFIGURATION_CODES, `absent ${name}`).toContain(code);
+    }
+
+    // REVERSE. Nothing may sit in the list that no absent setting produces.
+    expect([...new Set(observed.map((entry) => entry.code))].sort()).toEqual(
+      [...ABSENT_MODEL_CONFIGURATION_CODES].sort(),
+    );
   });
 
   it("installs globally, so a keyed test fake still wins for its own run", () => {
@@ -409,6 +472,49 @@ describe("absent configuration is terminal, but not irreversible", () => {
     const turns = await harness.stub.turns();
     const answer = turns.find((turn) => turn.role === "assistant");
     expect(answer?.content).toContain("04:12");
+  });
+
+  /**
+   * WHAT A CONNECTED DASHBOARD SEES WHEN THE RUN COMES BACK.
+   *
+   * The constructor's resume commits a `live` status event. Before this case
+   * existed that event was computed, committed and then DROPPED — the return
+   * value of `resumeAfterOperatorConfig` was discarded — on the justification
+   * that "a cold object has no sockets yet". That justification is false for
+   * this object: it hibernates its sockets (`ctx.acceptWebSocket`), so a tab
+   * that was open when the deployment rolled is still attached when the
+   * constructor runs and `ctx.getWebSockets()` hands it straight back there.
+   *
+   * The failure this pins was survivable, not silent-forever — the event is in
+   * the log and the next broadcast re-syncs the tab — but "the run you are
+   * watching says `failed` until something else happens" is not what the
+   * transition is for.
+   */
+  it("tells a socket that hibernated across the deploy that the run is live again", async () => {
+    const { harness } = await killedByAbsentGateway();
+    expect((await harness.stub.state())?.status).toBe("failed");
+
+    const socket = await connect(harness.stub);
+    const cursor = await syncedCursor(socket);
+
+    installRunPorts({ ...harness.ports, modelConfigured: true }, { runKey: harness.key });
+    // `webSockets: "hibernate"` and not a plain evict: this is the state a real
+    // open dashboard is in across a deployment, and it is the state in which the
+    // reconstructed object genuinely does have sockets attached.
+    await evictDurableObject(harness.stub, { webSockets: "hibernate" });
+
+    // Reconstructs the object; the constructor's resume runs inside this call.
+    expect((await harness.stub.driver()).phase).toBe("scheduled");
+
+    const frame = (await waitFor(
+      socket,
+      (m) => m.type === "event" && m.event.type === "status" && m.event.seq > cursor,
+    )) as Extract<RunServerMessage, { type: "event" }>;
+    expect(frame.event).toMatchObject({
+      type: "status",
+      previousStatus: "failed",
+      status: "live",
+    });
   });
 
   it("stays dead while the deployment is still unconfigured", async () => {

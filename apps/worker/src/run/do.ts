@@ -228,14 +228,37 @@ export class RunDO extends DurableObject<Env> {
    * Cheap and quiet in the ordinary case. `resumeAfterOperatorConfig` returns
    * immediately unless the deployment is configured AND this object's driver is
    * failed on an ABSENT-configuration code, so a healthy object pays one boolean
-   * and one local SELECT. Nothing is broadcast: a cold object has no sockets
-   * yet, and the `live` status event and its run-index revision are committed by
-   * the same transaction for the next reader and the next projection flush.
+   * and one local SELECT.
+   *
+   * The `live` transition IS delivered, because "a constructor runs on a cold
+   * object with nobody watching" is FALSE here. This object hibernates its
+   * sockets (`ctx.acceptWebSocket` in `fetch`), so a construction driven by a
+   * hibernated socket's own inbound frame — or by any request while such a
+   * socket is attached — finds those sockets already restored on `ctx`, and
+   * `ctx.getWebSockets()` returns them inside this very constructor. A dashboard
+   * that was open when the deployment rolled is exactly the reader most entitled
+   * to see the run come back.
+   *
+   * Safe to do from here on both counts the constructor cares about: `#broadcast`
+   * is synchronous and awaits nothing, so the rule at the top of the constructor
+   * holds; and it runs AFTER `resumeAfterOperatorConfig`'s `transactionSync` has
+   * committed, which is the same durable-then-broadcast order `#afterCommit`
+   * keeps. The per-socket cursor makes it a no-op for a socket that already has
+   * this seq, and with nobody attached it does nothing at all — the status event
+   * and its run-index revision are committed by the same transaction either way,
+   * for the next reader and the next projection flush.
    */
   #resumeAfterOperatorConfig(): void {
     const ports = this.#resolvePorts();
     if (!ports.modelConfigured) return;
-    resumeAfterOperatorConfig(this.ctx.storage, { configurationComplete: true }, this.#now());
+    const resumed = resumeAfterOperatorConfig(
+      this.ctx.storage,
+      { configurationComplete: true },
+      this.#now(),
+    );
+    if (resumed.outcome === "rescheduled" && resumed.statusEvent !== null) {
+      this.#broadcast(resumed.statusEvent);
+    }
   }
 
   /**
@@ -638,7 +661,7 @@ export class RunDO extends DurableObject<Env> {
     return nextAlarmAt({
       driver: readDriver(this.ctx.storage),
       projectionDueAt: nextProjectionDueAt(this.ctx.storage, this.#projectionKinds()),
-      modelEnabled: ports.continuation !== null,
+      continuationInstalled: ports.continuation !== null,
       now,
     });
   }

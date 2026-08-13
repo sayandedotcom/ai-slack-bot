@@ -1094,11 +1094,13 @@ operator did the thing the error code asked for.
 ### The test pool cannot spend money, and the reason is not `AGENT_MODEL_DISABLED`
 
 `AGENT_MODEL_DISABLED: "true"` in `vitest.config.ts` only stops ports composed
-from the POOL env from installing a continuation. Four sites install the
-production continuation from an env they built themselves (two in
-`agent-ports.test.ts`, two GLOBAL ones in `run-telemetry.test.ts`), and the
-continuation resolves its env at call time from the Durable Object — so the flag
-does nothing for them. The guarantee is instead
+from the POOL env from installing a continuation. Any test may install the
+production continuation from an env it built itself — key-scoped or GLOBAL — and
+several in `agent-ports.test.ts` and `run-telemetry.test.ts` do; the continuation
+still resolves its env at call time from the Durable Object, so the flag does
+nothing for them. Deliberately stated as a mechanism and not as a count of call
+sites: the count goes stale the next time somebody adds a case, and it has
+already done so once. The guarantee is instead
 `AI_GATEWAY_ANTHROPIC_URL: ""` and `AI_GATEWAY_TOKEN: ""`, bound in the same
 miniflare block: a binding overrides `.dev.vars`, so composition refuses before
 `createAnthropic` even when a developer machine later fills the Gateway settings

@@ -41,11 +41,14 @@ export default defineConfig({
           // to say, from THIS pool env, whatever env the port was composed from.
           //
           // That is why the opt-out below cannot carry the guarantee on its own.
-          // Four sites in this repo install the production continuation from an
-          // env they built themselves (`agent-ports.test.ts` twice, key-scoped;
-          // `run-telemetry.test.ts` twice, GLOBALLY), and one of them loops up
-          // to forty alarm dispatches waiting for a failure. None of them reads
-          // `AGENT_MODEL_DISABLED` at all.
+          // Any test may build its own env object and install the production
+          // continuation from it — key-scoped or GLOBAL — and several do, one of
+          // them looping up to forty alarm dispatches waiting for a failure.
+          // Such a test never reads `AGENT_MODEL_DISABLED` at all, and the
+          // continuation it installs still resolves ITS env at call time from
+          // the Durable Object, which is this pool env. Stated as a mechanism
+          // rather than as a count on purpose: the count changes every time
+          // somebody adds a case, the mechanism does not.
           //
           // It is not theoretical. The pool loads `.dev.vars`, which holds a
           // LIVE `ANTHROPIC_API_KEY`, and creating the private AI Gateway is a
@@ -66,8 +69,9 @@ export default defineConfig({
           // The SECOND guard, and a narrower one: it stops a RunDO whose ports
           // were composed from the POOL env from installing a continuation at
           // all, so model work parks instead of failing and every projection
-          // runner is still installed and still exercised. It does nothing for
-          // the four sites above, which is why it is not the money guarantee.
+          // runner is still installed and still exercised. It does nothing for a
+          // test that composes ports from an env of its own, which is why it is
+          // not the money guarantee.
           //
           // Read strictly (`1`/`true` only), so a typo fails loudly.
           //

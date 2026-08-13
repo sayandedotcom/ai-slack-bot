@@ -104,8 +104,17 @@ export function isInputResumablePolicy(policy: ResumePolicy | null): boolean {
  * Kept here rather than in `model.ts` on purpose: `session.ts` and `do.ts` need
  * this list, and importing `model.ts` from either would put `@ai-sdk/anthropic`
  * into a module graph that has no business evaluating it (see the note on
- * `productionContinuation` in `ports.ts`). `agent-ports.test.ts` pins the list
- * against what the real composer actually throws, so it cannot drift.
+ * `productionContinuation` in `ports.ts`).
+ *
+ * `agent-ports.test.ts` > "pins the absent-configuration codes, in both
+ * directions, against the real composer" is what keeps that separation honest.
+ * It blanks each required setting in turn, calls the REAL
+ * `createProductionModelFactory`, and asserts BOTH directions: every code it
+ * throws is in this list, and the set of codes it throws EQUALS this list. So
+ * adding an unreachable entry here fails, deleting a reachable one fails, and a
+ * newly required setting that fails with an unlisted code fails. It does not
+ * pin the PRESENT-BUT-WRONG codes below — those are excluded by construction,
+ * and the `it.each` exclusion cases cover their behaviour instead.
  */
 export const ABSENT_MODEL_CONFIGURATION_CODES = [
   "missing_anthropic_key",
