@@ -470,11 +470,11 @@ provable without Task 5 existing.
 
 **Files:** modify `src/agent/prompt/context.ts` (pending-approval trusted context), `src/run/do.ts`; extend `test/approval-interrupt.test.ts`.
 
-- [ ] **Step 1: Write failing tests.** Customer message on a parked run → run wakes (existing inbox), new generation's trusted context contains the pending approval (id + draft + why, from local `approval_state`, never from model-supplied data); model calls `withdraw` → D1 `pending→withdrawn` CAS, local `resolved`, escalate becomes possible again (partial index frees); withdraw racing a human decision — hold the PATCH CAS and the withdraw CAS behind a barrier → exactly one wins; when the human won, `withdraw` returns `{withdrawn:false, decision}` and the model's next step can react; when withdraw won, a late PATCH gets `409 already_decided` with `withdrawn`.
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.** Context builder reads `openApproval(storage)`; interruption requires no new wake machinery (the inbox already wakes on `customer`).
-- [ ] **Step 4: Run tests + typecheck.**
-- [ ] **Step 5: Commit:** `feat(approval): interrupt and withdraw without losing the human's click`
+- [x] **Step 1: Write failing tests.** Customer message on a parked run → run wakes (existing inbox), new generation's trusted context contains the pending approval (id + draft + why, from local `approval_state`, never from model-supplied data); model calls `withdraw` → D1 `pending→withdrawn` CAS, local `resolved`, escalate becomes possible again (partial index frees); withdraw racing a human decision — hold the PATCH CAS and the withdraw CAS behind a barrier → exactly one wins; when the human won, `withdraw` returns `{withdrawn:false, decision}` and the model's next step can react; when withdraw won, a late PATCH gets `409 already_decided` with `withdrawn`.
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement.** Context builder reads `openApproval(storage)`; interruption requires no new wake machinery (the inbox already wakes on `customer`).
+- [x] **Step 4: Run tests + typecheck.**
+- [x] **Step 5: Commit:** `feat(approval): interrupt and withdraw without losing the human's click`
 
 ### Task 8 — Prompt judgment, memory, counter
 

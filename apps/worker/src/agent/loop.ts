@@ -1402,6 +1402,12 @@ async function composeAndRun(
 ): Promise<ContinuationResult> {
   const resolved = await resolveTrustedContext(env.DB, {
     generationId: claim.generationId,
+    // THE PENDING APPROVAL'S ONLY SOURCE. A generation woken by a customer
+    // message while a decision is outstanding has to be told what is
+    // outstanding, and this handle is how the resolver reads it out of
+    // `approval_state` — never from the transcript, a turn's metadata or a
+    // tool result, all of which the conversation can reach.
+    storage: ctx.storage,
     run: {
       runId: state.runId,
       origin: state.origin,

@@ -2943,6 +2943,27 @@ export function openApproval(storage: DurableObjectStorage): ApprovalStateRecord
   return rows.length > 0 ? toApprovalState(rows[0]) : null;
 }
 
+/**
+ * The most recently opened approval on this run, SETTLED OR NOT.
+ *
+ * Deliberately not `openApproval`'s twin: it answers "which approval was this
+ * run last working on", which is the question `withdraw` has to ask when it
+ * finds nothing open. Between the capability layer's `openApprovalId()` check
+ * and the port's own read, a human's decision can have settled the row, and the
+ * model must be told about THAT approval rather than told it withdrew
+ * something. Ordered by `created_at` for the same reason `openApproval` is —
+ * ids are UUIDs and sort by nothing meaningful.
+ */
+export function latestApprovalState(storage: DurableObjectStorage): ApprovalStateRecord | null {
+  const rows = storage.sql
+    .exec<ApprovalStateRow>(
+      `SELECT ${APPROVAL_STATE_COLUMNS} FROM approval_state
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .toArray();
+  return rows.length > 0 ? toApprovalState(rows[0]) : null;
+}
+
 export function readApprovalState(
   storage: DurableObjectStorage,
   approvalId: string,

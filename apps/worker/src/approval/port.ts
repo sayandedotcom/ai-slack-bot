@@ -1,12 +1,13 @@
 import { CapabilityError } from "../codemode/errors";
 import {
   enqueueProjectionJob,
+  latestApprovalState,
   openApproval,
   putApprovalState,
   resolveApprovalState,
 } from "../run/session";
 import type { ApprovalPort } from "./contracts";
-import { withdrawApproval } from "./repository";
+import { getApproval, withdrawApproval } from "./repository";
 
 /**
  * THE REAL `ApprovalPort`: the RunDO's local approval record, plus the D1 card
@@ -93,11 +94,20 @@ export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
     async withdraw() {
       const open = openApproval(storage);
       if (open === null) {
-        // The capability layer refuses this before reaching the port, so this
-        // is the redelivery case: nothing open means nothing to retract, and
-        // reporting a withdrawal is the truthful answer for a caller whose
-        // first attempt already succeeded.
-        return { withdrawn: true };
+        // NOTHING OPEN — and there are two ways to get here, which the model
+        // must not be told the same thing about.
+        //
+        // The capability layer refuses a withdraw with no open approval before
+        // this port is ever called, so reaching this line means the row moved
+        // between that check and this call: the model's program awaited
+        // something, and a human's decision was carried in meanwhile. Reporting
+        // a withdrawal then would be a lie about a message that may already
+        // have gone to the customer.
+        //
+        // The other way is a genuine redelivery of a withdrawal that already
+        // succeeded, and `withdrawn: true` is the truthful answer for that one.
+        // The D1 row tells them apart.
+        return await settledDecision(db, latestApprovalState(storage)?.approvalId ?? null);
       }
 
       // LOCAL FIRST, D1 SECOND, and the order is load-bearing. The projector
@@ -114,14 +124,29 @@ export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
         && result.row.decision !== "pending"
         && result.row.decision !== "withdrawn"
       ) {
-        // A human got there first. The decision wins (invariant 5), so the
-        // local row goes back to unsettled: the run must stay parked until the
-        // resolution turn carries that decision in.
-        storage.sql.exec(
-          "UPDATE approval_state SET state = 'resolving', updated_at = ? WHERE approval_id = ?",
-          now,
-          open.approvalId,
-        );
+        // A HUMAN GOT THERE FIRST. The decision wins (invariant 5) and comes
+        // back to the model instead of a withdrawal.
+        //
+        // THE LOCAL ROW IS LEFT SETTLED — it must not be put back into the open
+        // set, and this is the subtlest decision in the file.
+        //
+        // The tempting move is to reopen it (`resolved -> resolving`) so the
+        // run stays parked until the resolution turn carries the decision in.
+        // That reopen can strand the run forever. `resolveApproval` settles the
+        // local row and THEN commits the turn; a withdraw racing it can land
+        // after that settle, and its reopen would then be the last write. The
+        // resolution has already retired its repair key
+        // (`resolution_delivered_at`) and its turn id is already present, so
+        // nothing re-settles the row — and the next finalize parks a run whose
+        // decision has already been delivered, with nothing left to unpark it.
+        //
+        // Leaving it settled is safe in the other direction, because the
+        // decision's delivery does not depend on this row at all: the PATCH
+        // notifies the DO, and the sweeper re-drives any notification that
+        // failed, both keyed on D1. The worst case is a generation that settles
+        // `completed` instead of `paused` a moment before the resolution turn
+        // arrives and wakes a new one — a run that resumes early WITH the
+        // decision in its transcript, rather than a run nobody can restart.
         return { withdrawn: false, decision: result.row.decision };
       }
       // `not_found` lands here too, and correctly: the card had not been
@@ -131,4 +156,29 @@ export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
       return { withdrawn: true };
     },
   };
+}
+
+/**
+ * What to tell a caller that found nothing open to withdraw: the human's
+ * decision if one landed, else a plain withdrawal.
+ *
+ * The D1 row is asked rather than the local record because the local record
+ * says only "settled", not "settled by whom". `withdrawn`, a missing row and a
+ * missing id all mean the same thing here — this run has no outstanding
+ * approval and nothing was sent — which is `withdrawn: true`, the same answer a
+ * redelivered withdrawal gets. So does a still-`pending` row: that is the
+ * documented hole where a D1 outage left the card behind after the local record
+ * was already settled, and the model has genuinely retracted as far as this run
+ * is concerned.
+ */
+async function settledDecision(
+  db: D1Database,
+  approvalId: string | null,
+): Promise<Awaited<ReturnType<ApprovalPort["withdraw"]>>> {
+  if (approvalId === null) return { withdrawn: true };
+  const row = await getApproval(db, approvalId);
+  if (row === null || row.decision === "pending" || row.decision === "withdrawn") {
+    return { withdrawn: true };
+  }
+  return { withdrawn: false, decision: row.decision };
 }

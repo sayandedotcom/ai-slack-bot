@@ -66,6 +66,7 @@ const context: TrustedContext = {
   shadow: false,
   customerSlug: "pulsefit",
   hasSlackTarget: true,
+  pendingApproval: null,
   actor: null,
 };
 
@@ -537,6 +538,8 @@ describe("trusted context", () => {
     const outcome = await resolveTrustedContext(env.DB, {
       generationId: "gen:1",
       run: slackRun,
+      // No Durable Object behind this case, so no pending approval can exist.
+      storage: null,
     });
     expect(outcome).toEqual({
       outcome: "resolved",
@@ -547,6 +550,7 @@ describe("trusted context", () => {
         shadow: true,
         customerSlug: "pulsefit",
         hasSlackTarget: true,
+        pendingApproval: null,
         actor: null,
       },
     });
@@ -555,14 +559,14 @@ describe("trusted context", () => {
   it("fails closed when the run row is missing", async () => {
     await seedChannel("pulsefit");
     expect(
-      await resolveTrustedContext(env.DB, { generationId: "gen:1", run: slackRun }),
+      await resolveTrustedContext(env.DB, { generationId: "gen:1", run: slackRun, storage: null }),
     ).toEqual({ outcome: "refused", reason: "run_not_found" });
   });
 
   it("fails closed when the channel policy row is missing", async () => {
     await seedRun();
     expect(
-      await resolveTrustedContext(env.DB, { generationId: "gen:1", run: slackRun }),
+      await resolveTrustedContext(env.DB, { generationId: "gen:1", run: slackRun, storage: null }),
     ).toEqual({ outcome: "refused", reason: "channel_unknown" });
   });
 
@@ -570,7 +574,7 @@ describe("trusted context", () => {
     await seedRun();
     await seedChannel(null);
     expect(
-      await resolveTrustedContext(env.DB, { generationId: "gen:1", run: slackRun }),
+      await resolveTrustedContext(env.DB, { generationId: "gen:1", run: slackRun, storage: null }),
     ).toEqual({ outcome: "refused", reason: "customer_unknown" });
   });
 
@@ -581,7 +585,7 @@ describe("trusted context", () => {
       { ...slackRun, channelId: null },
       { ...slackRun, threadTs: null },
     ]) {
-      expect(await resolveTrustedContext(env.DB, { generationId: "gen:1", run })).toEqual({
+      expect(await resolveTrustedContext(env.DB, { generationId: "gen:1", run, storage: null })).toEqual({
         outcome: "refused",
         reason: "slack_target_missing",
       });
@@ -592,7 +596,7 @@ describe("trusted context", () => {
     await seedRun({ origin: "chat" });
     await seedChannel("pulsefit");
     expect(
-      await resolveTrustedContext(env.DB, { generationId: "gen:1", run: slackRun }),
+      await resolveTrustedContext(env.DB, { generationId: "gen:1", run: slackRun, storage: null }),
     ).toEqual({ outcome: "refused", reason: "origin_mismatch" });
   });
 
@@ -603,6 +607,7 @@ describe("trusted context", () => {
     const outcome = await resolveTrustedContext(env.DB, {
       generationId: "gen:1",
       run: { runId, origin: "chat", channelId: null, threadTs: null },
+      storage: null,
     });
     expect(outcome).toMatchObject({
       outcome: "resolved",

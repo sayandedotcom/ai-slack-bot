@@ -20,6 +20,7 @@ export {
 export {
   renderTrustedContext,
   resolveTrustedContext,
+  type PendingApproval,
   type RunCoordinates,
   type TrustedContext,
   type TrustedContextOutcome,

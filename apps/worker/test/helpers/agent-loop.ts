@@ -469,6 +469,21 @@ export type LoopOptions = {
   flush?: { chars?: number; ms?: number };
   origin?: "chat" | "slack";
   shadow?: boolean;
+  /**
+   * Use the REAL `ApprovalPort` — the one `makeAgentContinuation` builds over
+   * this object's own storage — instead of `fakeApprovalPort()`.
+   *
+   * Opt-in rather than the default, because the real port refuses to open an
+   * approval on a run with no pinned Slack thread and writes durable
+   * `approval_state` rows that the finalize latch then acts on. Suites that
+   * only need `escalate` to return an id want neither.
+   *
+   * It arrives as the fourth argument of the `dependencies` factory, which is
+   * where `loop.ts` hands the port down; `wrapDeps` therefore sees the real one
+   * and can wrap it, which is how the interruption suite holds a withdraw at a
+   * barrier without replacing anything it is trying to test.
+   */
+  realApproval?: boolean;
   historyBounds?: { maxMessages: number; maxBytes: number };
   /**
    * Commit something to durable storage part-way through the FINAL provider
@@ -558,7 +573,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
           // by `makeAgentContinuation` itself and cannot be switched off here,
           // which is exactly the property invariant 15 needs.
           additionalGuard: options.additionalGuard ?? alwaysFresh(),
-          dependencies: (_env, scope, depsClock) => {
+          dependencies: (_env, scope, depsClock, approvalPort) => {
             const base: CapabilityDependencies = {
               ...fakeDeps(options.fixtures ?? {}),
               // The write guard re-reads the channel policy and the `runs` row
@@ -566,6 +581,8 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
               // real handle. Faking it would fake away the thing being protected.
               db: workerEnv.DB,
               clock: depsClock,
+              // Merged BEFORE `wrapDeps` runs, so a wrapper wraps the real port.
+              ...(options.realApproval === true ? { approval: approvalPort } : {}),
             };
             return options.wrapDeps ? options.wrapDeps(base, scope) : base;
           },
