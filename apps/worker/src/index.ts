@@ -6,6 +6,9 @@ import { backfillApi } from "./api/backfill";
 import { runsApi, runsWs } from "./api/runs";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
+import { identityApi } from "./api/identity";
+import { slackOAuth } from "./oauth/slack";
+import { githubOAuth } from "./oauth/github";
 import { routeSlackMessageToOwnedRun, wakeSlackRun } from "./run/coordinator";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
@@ -58,6 +61,16 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   AI_GATEWAY_ANTHROPIC_URL?: string;
   AI_GATEWAY_TOKEN?: string;
   AGENT_MODEL_DISABLED?: string;
+  // Phase 12's five, all SECRETS — same justification as the AI Gateway pair
+  // above: they are not in wrangler.jsonc, so `wrangler types` cannot know
+  // them. Optional in the type, and that optionality is safe only because
+  // every route that needs one refuses with a 503 naming the missing variable
+  // (never its value) rather than proceeding without it.
+  IDENTITY_KEY?: string;
+  SLACK_CLIENT_ID?: string;
+  SLACK_CLIENT_SECRET?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -89,6 +102,15 @@ app.route("/api", approvalsApi);
 // application as the dashboard — a published artifact is exactly as private as
 // the run that produced it.
 app.route("/api", artifactsApi);
+// Phase 12. `identityApi` is what the dashboard asks first on every load — who
+// am I, and who is on duty — and the two OAuth routers are how a fire-fighter
+// connects their own Slack and GitHub accounts. All three under the same /api
+// mount, so the start routes inherit the same Access application as everything
+// else: the browser already carries the cookie, which is the whole reason the
+// connect buttons can be plain links with no JavaScript behind them.
+app.route("/api", identityApi);
+app.route("/api", slackOAuth);
+app.route("/api", githubOAuth);
 // Not JSON, so it is mounted outside /api — but still above the asset
 // catch-all, and still behind the same Access application as the dashboard.
 app.route("/ws", runsWs);

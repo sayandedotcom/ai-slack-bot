@@ -1,8 +1,7 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { AccessJwtError, makeAccessVerifier, type AccessIdentity, type AccessVerifier } from "../access/jwt";
-import { isFirefighter } from "../access/roster";
+import { requireTeamMember } from "../api/identity";
 import { importIdentityKey, seal } from "../identity/crypto";
 import { upsertIdentity } from "../db/identities";
 import { importStateKey, mintState, verifyState } from "./state";
@@ -44,44 +43,6 @@ const USER_AGENT = "firefighter-worker";
 
 export const githubOAuth = new Hono<{ Bindings: Env }>();
 
-/* ------------------------------------------------------------- ports ---- */
-
-type GithubOAuthPorts = {
-  verifier: AccessVerifier;
-};
-
-/**
- * Module-scope port registry, the same shape and the same reasoning as
- * `./slack.ts`'s: a test overrides the verifier before the request, and
- * production fills the gap lazily on first use because only a REQUEST has
- * `env`.
- *
- * The property that matters is the same one too -- there is no flag, no env
- * check, and no code path here that can produce an `AccessVerifier` other than
- * `makeAccessVerifier`. A caller who wants a fake must install one.
- */
-let GLOBAL_PORTS: Partial<GithubOAuthPorts> = {};
-
-/** Test seam. */
-export function installGithubOAuthPorts(ports: Partial<GithubOAuthPorts>): void {
-  GLOBAL_PORTS = { ...GLOBAL_PORTS, ...ports };
-}
-
-/** Test seam: forget everything installed. */
-export function resetGithubOAuthPorts(): void {
-  GLOBAL_PORTS = {};
-}
-
-function resolvePorts(env: Env): { verifier: AccessVerifier } {
-  if (GLOBAL_PORTS.verifier === undefined) {
-    GLOBAL_PORTS = {
-      ...GLOBAL_PORTS,
-      verifier: makeAccessVerifier({ teamDomain: env.ACCESS_TEAM_DOMAIN, aud: env.ACCESS_APP_AUD }),
-    };
-  }
-  return GLOBAL_PORTS as { verifier: AccessVerifier };
-}
-
 /* ------------------------------------------------------------- authz ---- */
 
 function fail(code: string, message: string) {
@@ -89,26 +50,27 @@ function fail(code: string, message: string) {
 }
 
 /**
- * Verify the Access JWT, then check the roster.
+ * The roster half of the gate, on top of `requireTeamMember`'s JWT half.
  *
- * Inlined here on purpose and TEMPORARILY, mirroring `./slack.ts`: a parallel
- * task owns `src/api/identity.ts`'s shared `requireTeamMember`, and a later
- * wiring task folds both copies into it. Do not grow a third authorization
- * dialect in the meantime.
+ * Connecting an account is FIRE-FIGHTERS ONLY: a viewer has no rotation shift
+ * and nothing to post as, so a token stored for one would be a credential with
+ * no purpose and a blast radius anyway.
+ *
+ * The verification itself is deliberately not reimplemented here. It lives in
+ * `src/api/identity.ts` alongside the port registry that decides which
+ * `AccessVerifier` is in play, so this file has no second authorization
+ * dialect and no second way to install a fake -- a test that wants one calls
+ * `installIdentityApiPorts`, whatever route it is exercising.
  */
-async function requireFirefighter(c: Context<{ Bindings: Env }>): Promise<AccessIdentity | Response> {
-  const { verifier } = resolvePorts(c.env);
-  let identity: AccessIdentity;
-  try {
-    identity = await verifier.verify(c.req.header("Cf-Access-Jwt-Assertion") ?? "");
-  } catch (err) {
-    const reason = err instanceof AccessJwtError ? err.code : "invalid";
-    return c.json(fail("access_jwt_invalid", `token failed verification: ${reason}`), 401);
-  }
-  if (!isFirefighter(identity.email)) {
+async function requireFirefighter(
+  c: Context<{ Bindings: Env }>,
+): Promise<{ email: string } | Response> {
+  const member = await requireTeamMember(c);
+  if (member instanceof Response) return member;
+  if (member.role !== "firefighter") {
     return c.json(fail("not_a_firefighter", "connecting an account is fire-fighters only"), 403);
   }
-  return identity;
+  return { email: member.email };
 }
 
 /* ------------------------------------------------------------ config ---- */

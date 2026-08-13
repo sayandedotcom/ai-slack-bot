@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
-import { installSlackOAuthPorts, resetSlackOAuthPorts, slackOAuth } from "../src/oauth/slack";
+import { slackOAuth } from "../src/oauth/slack";
+import { installIdentityApiPorts, resetIdentityApiPorts } from "../src/api/identity";
 import { importStateKey, mintState, verifyState } from "../src/oauth/state";
 
 /**
@@ -63,8 +64,8 @@ function get(path: string, headers: Record<string, string> = {}, envOverrides = 
 
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM identities").run();
-  resetSlackOAuthPorts();
-  installSlackOAuthPorts({ verifier: fakeVerifier() });
+  resetIdentityApiPorts();
+  installIdentityApiPorts({ verifier: fakeVerifier() });
   calls = [];
 });
 
