@@ -36,6 +36,7 @@ import {
 } from "../src/run/session";
 import { chatRunKey } from "../src/run/keys";
 import { ZERO_USAGE } from "../src/agent/usage";
+import { UNSEEN_INPUT_WAKE_CODES } from "../src/agent/contracts";
 import type { ClaimFence, StepUsageInput } from "../src/agent/contracts";
 import type { RunTurnInput } from "../src/run/protocol";
 
@@ -1011,19 +1012,49 @@ describe("settlement", () => {
     });
   }
 
-  it("wakes a successor for input a terminally refused generation never read", async () => {
+  /**
+   * EVERY member of the wake list, spelled out rather than iterated.
+   *
+   * The table is deliberately a set of LITERALS, not
+   * `UNSEEN_INPUT_WAKE_CODES.map(...)`: a list driven by the constant would
+   * agree with a typo in the constant, which is the exact mistake this has to
+   * catch. `WAKE_CODES` below then asserts the two agree in both directions, so
+   * a member added without a case here fails too.
+   *
+   * `state` is what `toContinuationOutcome` really settles each path into
+   * (`loop.ts:217` for the refusals, `loop.ts:235` for the other two) — not a
+   * convenience, because `finalizeGeneration` reads it.
+   */
+  const WAKE_CASES = [
+    { errorCode: "provider_refusal", state: "refused" as const },
+    { errorCode: "provider_refusal_mid_stream", state: "refused" as const },
+    { errorCode: "step_limit", state: "failed" as const },
+    { errorCode: "run_cancelled", state: "failed" as const },
+  ];
+
+  it("covers the whole wake list and nothing that is not on it", () => {
+    // Both directions. A member renamed or mistyped in `contracts.ts` fails
+    // here AND loses its positive case below; a member ADDED without a case
+    // fails here alone, before it can ship untested.
+    expect(WAKE_CASES.map((entry) => entry.errorCode)).toEqual([...UNSEEN_INPUT_WAKE_CODES]);
+  });
+
+  it.each(WAKE_CASES)("wakes a successor for input a $errorCode generation never read", async ({
+    errorCode,
+    state,
+  }) => {
     const result = await strandInputThenFail({
-      state: "refused",
+      state,
       resumePolicy: "requires_input",
-      errorCode: "provider_refusal",
+      errorCode,
     });
 
     // The steer really did join rather than allocate — this is the window.
     expect(result.joined.scheduling.outcome).toBe("joined");
 
-    // The refusal stays terminal and keeps naming what happened. Nothing here
+    // The failure stays terminal and keeps naming what happened. Nothing here
     // rewrites history; a successor is allocated beside it.
-    expect(result.dead?.state).toBe("refused");
+    expect(result.dead?.state).toBe(state);
     expect(result.dead?.resumePolicy).toBe("requires_input");
     expect(result.generations).toBe(2);
 
@@ -1039,8 +1070,10 @@ describe("settlement", () => {
   });
 
   it.each([
-    // Input-caused: an unusable turn is still unusable next time, and this can
-    // fail from inside `prepareStep` before the included cursor ever moves.
+    // Input-caused: an unusable turn is still unusable and an oversized history
+    // is still oversized next time, so the successor reaches the identical halt
+    // with `attempt` and `retry_count` reset. (The cursor is NOT the reason —
+    // `appendInputMessages` lifts it at `loop.ts:474`, ahead of both halts.)
     { errorCode: "context_limit:oversized_input", why: "malformed history" },
     { errorCode: "empty_history", why: "malformed history" },
     // Waking resets `attempt`/`retry_count` to zero, so a crash loop would be

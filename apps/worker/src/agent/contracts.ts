@@ -150,18 +150,32 @@ export function isAbsentConfigurationCode(code: string | null): boolean {
  *  - `pending_through_seq` must exceed the dead generation's
  *    `included_through_seq`, meaning there is genuinely input it never read.
  *    A successor takes that input at its first `prepareStep`, which lifts its
- *    included cursor to the pending cursor, so a second identical failure has
- *    nothing left to wake on. The chain length is bounded by arriving input, not
- *    by a counter.
+ *    included cursor as far as ONE `listPendingInputTurns` page reaches — the
+ *    default is `EVENT_PAGE_DEFAULT`, 200 turns (`session.ts:1244`,
+ *    `session.ts:136`), and `prepareTurn` passes no override (`loop.ts:465`).
+ *    At or below 200 pending turns that lands exactly on the pending cursor and
+ *    a second identical failure has nothing left to wake on. Above it the cursor
+ *    lands on the 200th turn instead, the guard still sees `pending > included`,
+ *    and one more successor is allocated: the chain is ceil(N/200), not one. Not
+ *    a spin — each of those laps reads 200 turns no earlier generation ever saw
+ *    and makes a real provider call for them. Either way the length is bounded
+ *    by arriving input, not by a counter.
  *
  * Deliberately ABSENT, each for a reason that would otherwise be a spin:
  *
  *  - every `malformed_history` code (`context_limit:*`, `empty_history`,
- *    `readable_reasoning`, `malformed_response:*`). These are the input-caused
- *    ones: an unusable turn or an oversized history is still unusable and still
- *    oversized on the next generation, and the failure can be reached from
- *    inside `prepareStep` BEFORE the included cursor moves, so the second guard
- *    would not catch it either.
+ *    `readable_reasoning`, `malformed_response:*`). NOT because the cursor is
+ *    late: `appendInputMessages` lifts it at `loop.ts:474`, ahead of BOTH the
+ *    `context_limit` halt (`loop.ts:492`) and the `empty_history` halt
+ *    (`loop.ts:508`), and the other two are decided after the stream. The reason
+ *    is that the condition survives the wake. These are the input-caused ones —
+ *    an unusable turn is still unusable and an oversized history is still
+ *    oversized on the next generation, which reaches the identical halt — so the
+ *    lap buys nothing, where every code below buys a real provider call on
+ *    evidence nobody had yet. The second guard cannot be leaned on to end it
+ *    either, because the cursor lift is capped at one page (above): past 200
+ *    pending turns each lap re-enters a guaranteed failure with `attempt` and
+ *    `retry_count` reset to zero.
  *  - `driver_attempts_exhausted`. Its whole meaning is "the crash budget is
  *    gone"; handing it a fresh one on the strength of a message that arrived
  *    during the crashing is how a transient outage becomes an unbounded spend.

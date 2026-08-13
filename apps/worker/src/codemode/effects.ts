@@ -46,9 +46,11 @@ const PROVEN_PRE_UPSTREAM: ReadonlySet<CapabilityErrorCode> = new Set([
   // is checked in `withCapabilityAudit` (`bindings/shared.ts:337`) BEFORE the
   // capability body runs, and `runEffect` is called from inside that body, so a
   // superseded execution never gets as far as `options.execute` and this code
-  // is never the thing that classifies it. `staleGeneration()` has exactly two
-  // throw sites — that guard and the outer tool's own pre-check — and neither
-  // is downstream of here.
+  // is never the thing that classifies it. `generationFreshnessGuard` is the
+  // only thing in the worker that throws `staleGeneration()` at all (three
+  // statements, `steering.ts:68-71`, one per durable read), and it has exactly
+  // two invocation sites — that pre-body check and the outer tool's own
+  // pre-check (`codemode/tool.ts:204`). Neither is downstream of here.
   //
   // Phase 10 Task 1 entered it expecting Task 8 to make the guard a per-call
   // check inside the effect. Task 8 made it structural instead, which is

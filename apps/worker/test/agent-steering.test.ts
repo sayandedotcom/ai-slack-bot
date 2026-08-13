@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetRunPorts } from "../src/agent/driver";
+import type { AgentLimits } from "../src/agent/limits";
 import { abortForNewerInput } from "../src/agent/steering";
 import {
   appendTurn,
@@ -21,6 +22,7 @@ import {
   steerTurn,
   textStep,
   toolStep,
+  type LanguageModelV4StreamPart,
   type LoopHarness,
 } from "./helpers/agent-loop";
 
@@ -909,6 +911,111 @@ describe("rows 6 and 7 — the settle/new-input race has exactly two outcomes", 
     // resumes the run, through `scheduleInput` — which is the plan's rule.
     expect(await harness.storage((storage) => storage.getAlarm())).toBeNull();
   });
+
+  /**
+   * THE WHOLE WAKE LIST, driven end to end rather than asserted as a set.
+   *
+   * `UNSEEN_INPUT_WAKE_CODES` has four members and, before this, only one of
+   * them had ever woken anything through the real loop. A member mistyped in
+   * `contracts.ts` would have shipped silently: `wakesOnUnseenInput` would
+   * simply return false for the real code and the stranded turn would sit
+   * unanswered — the exact bug the list exists to prevent, restored by a typo.
+   *
+   * Each case scripts ONE provider step that dies terminally with a different
+   * code, and lands the steer from inside the object's own context between that
+   * generation's only `prepareStep` and its failure. The assertions are the ones
+   * that matter: a second generation exists, the driver is `scheduled` rather
+   * than `failed`, the steer is provably still unread when the failure commits,
+   * and the successor then reads it and answers it.
+   *
+   * `run_cancelled` is NOT here, and cannot be. Its own precondition is that the
+   * abort was classified with NOTHING pending (`loop.ts:428`) — a steer that has
+   * already landed makes the same abort a `continuation_requested` instead. It
+   * needs input to commit in the window between that classification and the
+   * finalize transaction, and this harness has no hook in that window. It is
+   * covered at the finalize transaction itself, in `agent-state.test.ts`, with a
+   * real joined steer. It is also defensive today: no external `abortSignal` is
+   * wired in production and there is no cancel endpoint.
+   */
+  const TERMINAL_SCRIPTS: {
+    errorCode: string;
+    limits: Partial<AgentLimits>;
+    step: () => LanguageModelV4StreamPart[];
+  }[] = [
+    {
+      // Content-filter with nothing on the wire: `classifyStepOutcome` reads
+      // pre-output and settles the plain code (`model.ts:319`).
+      errorCode: "provider_refusal",
+      limits: {},
+      step: () => textStep({ chunks: [], unified: "content-filter", raw: "refusal" }),
+    },
+    {
+      // The same finish AFTER visible text, which is a different code and a
+      // different billing decision (`model.ts:310`).
+      errorCode: "provider_refusal_mid_stream",
+      limits: {},
+      step: () => textStep({ chunks: ["I cannot"], unified: "content-filter", raw: "refusal" }),
+    },
+    {
+      // The ceiling reached while the model was still asking for tools, which
+      // is `step_limit` rather than an empty answer (`loop.ts:806`).
+      errorCode: "step_limit",
+      limits: { maxStepsPerGeneration: 1 },
+      step: () => toolStep({ toolCallId: "call_1", code: TRIVIAL }),
+    },
+  ];
+
+  it.each(TERMINAL_SCRIPTS)(
+    "wakes a successor end to end after $errorCode",
+    async ({ errorCode, limits, step }) => {
+      const model = mockModel([step(), textStep({ chunks: ["the answer to the steer"] })]);
+      let calls = 0;
+      let steerSeq = 0;
+      let harness: LoopHarness | null = null;
+      harness = await freshLoopRun({
+        model,
+        limits,
+        // The steer commits AFTER the dying generation's only `prepareStep` has
+        // run, so nothing transcribes it. It joins the live generation exactly
+        // as `RunDO.appendTurn` would — `scheduleInput` sees `running` — and
+        // there is no second step to absorb it. That is the stranding.
+        onModelCall: () => {
+          calls += 1;
+          if (calls !== 1) return;
+          steerSeq = appendTurn(harness!.claimed()!, steerTurn("s1", "one more thing")).event.seq;
+        },
+      });
+      const opening = await harness.stub.appendTurn(customerTurn("t1"));
+
+      const failure = await harness.alarm();
+      expect(harness.results[0].errorCode).toBe(errorCode);
+      // The steer really is UNREAD at the moment the failure settles: the only
+      // input in the transcript is the opening message.
+      expect((await inputRows(harness)).map((row) => row.sourceEventSeq)).toEqual([
+        opening.event.seq,
+      ]);
+
+      // The successor is committed in the SAME transaction as the failure, so
+      // the re-arm at the end of this very delivery already sees work to do.
+      expect(failure.nextAlarmAt).not.toBeNull();
+      const driver = await harness.storage((storage) => readDriver(storage));
+      expect(driver.phase).toBe("scheduled");
+      expect(driver.resumePolicy).toBeNull();
+      expect(
+        await harness.storage((storage) =>
+          storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM agent_generations").one().n,
+        ),
+      ).toBe(2);
+
+      // ...and the successor genuinely reads the steer and answers it. Without
+      // the wake this delivery does not happen at all.
+      await harness.alarm();
+      const finals = await agentTurns(harness);
+      expect(finals).toHaveLength(1);
+      expect(finals[0].content).toBe("the answer to the steer");
+      await assertNothingLost(harness, [opening.event.seq, steerSeq]);
+    },
+  );
 });
 
 /* ---------------------------------------------- step 8: the coalescing -- */

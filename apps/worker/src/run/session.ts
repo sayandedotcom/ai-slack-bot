@@ -2864,9 +2864,12 @@ export function finalizeGeneration(
       // Both guards are load-bearing and `UNSEEN_INPUT_WAKE_CODES` explains why:
       // the code must be one the pending input provably did not cause, and there
       // must be input this generation never READ — not merely never settled.
-      // A successor's first `prepareStep` lifts its included cursor to the
-      // pending cursor, so the same failure cannot wake a third generation
-      // without a genuinely new message. Doing it here rather than in a
+      // A successor's first `prepareStep` lifts its included cursor by at most
+      // ONE `listPendingInputTurns` page (`EVENT_PAGE_DEFAULT`, 200): at or
+      // below that the cursor reaches the pending cursor and the same failure
+      // cannot wake a third generation without a genuinely new message, and
+      // above it the chain runs ceil(N/200) laps, each reading 200 turns no
+      // earlier generation saw. Doing it here rather than in a
       // follow-up call keeps the failure and its successor in one commit; a
       // crash between them is exactly the stranding this fixes.
       const successor =
