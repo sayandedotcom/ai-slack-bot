@@ -189,7 +189,7 @@ wrong.
 | 18 | Sandbox Tier 2 | below | 00·T1, **monorepo** | 5 |
 | 19 | Ship loop + proof capture | below | 18 | 6 |
 | 20 | PR + ship-loop Linear updates → `web2app-rebuild` `staging` | below | 19 | 6 |
-| 21 | Voice, eval harness, shadow mode | below | 10, 07 | 6 |
+| 21 | Voice, eval harness, shadow mode | [full](phase-21-voice-eval-shadow.md) | 07, 10, 11, 12, 14 | 6 |
 | 22 | Handoff summary + states polish | below | 15, 16, 17 | 7 |
 | 23 | Drill dry-run, README, Loom | below | all | 7 |
 
@@ -557,9 +557,9 @@ in flight, then swapped when 12 merges.
 
 **Goal:** Replies indistinguishable from the on-duty engineer's own. This is where the drill catches prompt work that stopped at correctness.
 
-**Depends on:** Phases 10, 07 · **Day 6**
+**Depends on:** Phases 07, 10, **11** (`suppressed` corpus + escalate-in-shadow), **12** (`identities` for voice sampling, `onDuty` for the shift key), **14** (side-by-side panel) — the old "10, 07" undersold it · **Day 6** · Full plan: [phase-21-voice-eval-shadow.md](phase-21-voice-eval-shadow.md) (written 2026-08-14)
 
-**Files:** `src/agent/prompt/voice.ts` (modify), `src/eval/triage-eval.ts`, `src/eval/voice-samples.ts`, `src/run/shadow.ts`
+**Files:** `src/agent/prompt/voice.ts` (new), `src/eval/triage-eval.ts`, `src/eval/ai-tells.ts`, `src/api/eval.ts`, `apps/dashboard/src/shadow/*`. The old sketch's `src/run/shadow.ts` is not built — the write-guard and Phase 11's `suppressed` terminal already ARE shadow mode; this phase adds prompt posture and the eval surfaces only. Voice samples go in a new shift-frozen prompt block with its own cache mark (samples as of shift start, so the cache invalidates exactly once per rotation).
 
 **Tasks:**
 1. **Few-shot the voice with the engineer's own real messages.** D1 already holds every message they have sent in these channels; sample ~20 recent customer-channel replies into the prompt. "Reads as though they wrote it" stops being an instruction and becomes imitation of a specific person — and it re-tunes itself on rotation.
