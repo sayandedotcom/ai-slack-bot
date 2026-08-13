@@ -223,9 +223,11 @@ describe("slack.reply write policy", () => {
       .rejects.toThrow(/identity_unavailable/);
   });
 
-  // Phase 12 seam. Until an encrypted per-engineer token exists, a fully
-  // permitted reply still refuses — it must never fall back to the bot token.
-  it("still refuses on the happy path, because identity is Phase 12", async () => {
+  // The credential seam's DEFAULT. `slackTools` composes the gateway without a
+  // `UserTokenSource`, so a fully permitted reply still refuses — an unwired
+  // deployment must never fall back to the bot token. What a gateway with a
+  // source does is `slack-reply-identity.test.ts`.
+  it("still refuses on the happy path when no credential source is composed", async () => {
     await expect(attempt({ mode: "live", customerSlug: "acme" }))
       .rejects.toThrow(/identity_unavailable/);
   });

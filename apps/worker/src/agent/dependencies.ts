@@ -5,6 +5,7 @@ import { BETTERSTACK_UPTIME_ENDPOINT, makeBetterStackReader } from "../bettersta
 import { getChannelPolicy, type ChannelPolicy } from "../db/channels";
 import { makeArtifactPublisher } from "../files/r2";
 import { makeLangSmithReader } from "../langsmith/client";
+import { makeUserTokenSource, type UserTokenSource } from "../identity/user-token";
 import { makeLinearGateway } from "../linear/client";
 import type { MemoryStore } from "../memory/store";
 import type { ProvenanceSink } from "../memory/episode";
@@ -62,7 +63,7 @@ import {
  * | turnId                 | persisted `agent_turn_id` | caller must supply     |
  * | shadow                 | D1 `runs` row             | REFUSE (fail closed)   |
  * | customerSlug           | D1 channel policy         | null (no customer)     |
- * | actor                  | null in Phase 10          | n/a                    |
+ * | actor                  | the rotation + identities | null (nobody to speak) |
  *
  * Two properties are worth stating separately, because both have already been
  * gotten wrong somewhere in this codebase's history:
@@ -90,6 +91,13 @@ export async function resolveCodeModeScope(
   db: D1Database,
   state: RunState,
   turnId: string,
+  /**
+   * Who this run may speak as. Optional, and its ABSENCE means "nobody" — a
+   * caller that has no identity source resolves `actor: null` and every
+   * customer-facing write refuses, which is the same fail-closed direction the
+   * gateway's own default takes.
+   */
+  identity?: UserTokenSource,
 ): Promise<CodeModeScope> {
   const run = await getRunById(db, state.runId);
   if (run === null) {
@@ -105,6 +113,16 @@ export async function resolveCodeModeScope(
   const policy: ChannelPolicy | null =
     state.channelId === null ? null : await getChannelPolicy(db, state.channelId);
 
+  // ONE identity question, asked through the same port the send path uses, so
+  // that a non-null `actor` means "there is a credential we can actually speak
+  // with" rather than "a row exists somewhere". The token itself is discarded
+  // here — the scope carries FACTS about the human, never the credential, and
+  // is re-resolved at the last trusted moment inside the gateway.
+  //
+  // A `SealError` from corrupt ciphertext or a mis-rotated key propagates: a
+  // tampered database must not look like an engineer who has not connected.
+  const onDutyToken = identity === undefined ? null : await identity.onDutyToken(Date.now());
+
   // `validateScope` rather than an object literal: it is strict at every level,
   // so a field this function forgets, mistypes, or accidentally widens is a
   // thrown `invalid_context` here rather than a surprise three layers down.
@@ -118,10 +136,13 @@ export async function resolveCodeModeScope(
       state.origin === "slack" && state.channelId !== null && state.threadTs !== null
         ? { channelId: state.channelId, threadTs: state.threadTs }
         : null,
-    // Phase 12 resolves the on-duty engineer and their decrypted user token
-    // together. Until then there is no identity, and `slack.reply` refuses with
-    // `identity_unavailable` rather than speaking to a customer as a bot.
-    actor: null,
+    actor:
+      onDutyToken === null
+        ? null
+        : {
+            engineerEmail: onDutyToken.email,
+            slackUserId: onDutyToken.slackUserId,
+          },
   });
 }
 
@@ -177,7 +198,11 @@ export function makeCapabilityDependencies(
 ): CapabilityDependencies {
   return {
     db: env.DB,
-    slack: makeSlackGateway(env.DB, scope),
+    // THE CREDENTIAL SEAM for customer-facing speech. The gateway receives a
+    // port that can answer "whose token do I speak as right now", never `env`
+    // and never a token — and a deployment where nobody on duty has connected
+    // Slack gets a `reply` that refuses, not one that speaks as the app.
+    slack: makeSlackGateway(env.DB, scope, makeUserTokenSource(env)),
     memory: closeOver(new ZepMemory(env.ZEP_API_KEY)),
     linear: makeLinearGateway({
       apiKey: env.LINEAR_API_KEY,
@@ -300,7 +325,12 @@ export async function makeRunCodeToolForRun(
   input: RunCodeToolInput,
 ): Promise<Tool<{ code: string }, CodeModeOutput>> {
   const clock = input.clock ?? (() => Date.now());
-  const scope = await resolveCodeModeScope(input.env.DB, input.state, input.turnId);
+  const scope = await resolveCodeModeScope(
+    input.env.DB,
+    input.state,
+    input.turnId,
+    makeUserTokenSource(input.env),
+  );
 
   return makeRunCodeTool({
     scope,

@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
 import { installApprovalApiPorts, resetApprovalApiPorts } from "../src/api/approvals";
 import { installRunPorts } from "../src/agent/driver";
-import { makeIdentityRefusingSender, type ApprovalSender } from "../src/approval/sender";
+import {
+  makeIdentityRefusingSender,
+  makeUserTokenSender,
+  NOT_CONNECTED,
+  type ApprovalSender,
+} from "../src/approval/sender";
+import type { UserTokenSource } from "../src/identity/user-token";
 import type { DecisionInput } from "../src/approval/contracts";
 import {
   decideApproval,
@@ -23,17 +29,21 @@ import { FakeContinuation, freshDriverRun, turn, type DriverHarness } from "./he
  * RESOLUTION: one human decision, back into the run it came from.
  *
  * Everything here runs against the real RunDO, the real session transactions,
- * the real D1 `approvals` row and the real driver — the only fake is the
- * `ApprovalSender`, and half the cases do not even fake that, because
- * `makeIdentityRefusingSender` IS the Phase 11 production implementation and
- * its refusal is the behaviour that has to be proved.
+ * the real D1 `approvals` row and the real driver. The two cases that decide
+ * whether a customer hears anything use the REAL Phase 13 sender
+ * (`makeUserTokenSender`) over a stubbed transport — one with the on-duty
+ * engineer connected, one with nobody connected — because "delivery reached
+ * `sent`" and "delivery blocked honestly" are the behaviours that have to be
+ * proved, not mocked. The remaining cases fake the port, because what they are
+ * about is the state machine around the send rather than the send itself.
  *
  * The two properties worth naming, because both look like bugs from outside:
  *
- *  - a `blocked` delivery is TERMINAL and the run STILL RESUMES. There is no
- *    engineer identity before Phase 12 and no bot-token fallback, ever, so
- *    parking the run until the send succeeds would strand every escalation for
- *    weeks. The decision is a fact; delivery is a separate state machine.
+ *  - a `blocked` delivery is TERMINAL and the run STILL RESUMES. A deployment
+ *    where nobody on duty has connected Slack has nobody to speak as, and there
+ *    is no bot-token fallback, ever, so parking the run until the send succeeds
+ *    would strand every escalation. The decision is a fact; delivery is a
+ *    separate state machine.
  *  - a replayed `resolveApproval` — the sweeper repairing a crash — appends NO
  *    second turn and attempts NO second send. The turn id is what makes the
  *    first true and the delivery CAS is what makes the second true.
@@ -67,6 +77,51 @@ function recordingSender(
       return result;
     },
   };
+}
+
+/* ------------------------------------------------- the real Phase 13 sender -- */
+
+const USER_TOKEN = "xoxp-not-a-real-on-duty-token";
+
+/** The on-duty engineer, connected. */
+const connected: UserTokenSource = {
+  async onDutyToken() {
+    return { token: USER_TOKEN, slackUserId: "U0NDUTY01", email: "ronit@zellify.app" };
+  },
+};
+
+/** Nobody on duty has connected Slack. Configuration, not error. */
+const unconnected: UserTokenSource = {
+  async onDutyToken() {
+    return null;
+  },
+};
+
+type Posted = { url: string; authorization: string | null; body: unknown };
+
+/**
+ * A `fetch` for the real sender to post through, injected rather than stubbed
+ * globally: this file drives a real Durable Object over `SELF.fetch`, and a
+ * global stub would sit in the middle of that too.
+ */
+function slackFetch(answer: { ok: true; ts: string } | { ok: false; error: string }): {
+  calls: Posted[];
+  fetchImpl: typeof fetch;
+} {
+  const calls: Posted[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    calls.push({
+      url: String(input),
+      authorization: headers.get("authorization"),
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
+    });
+    return new Response(JSON.stringify(answer), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  return { calls, fetchImpl };
 }
 
 /** Same fake identity-as-token verifier as `approval-api.test.ts`. */
@@ -210,10 +265,13 @@ async function resolutionTurns(h: DriverHarness) {
 /* ------------------------------------------------------- approved/edited -- */
 
 describe("an approved reply resolves through the one inbox", () => {
-  it("blocks on identity, commits one resolution turn, and resumes the run anyway", async () => {
-    // NO sender installed: this is the real `makeIdentityRefusingSender`,
-    // reached through the same default every deployed RunDO gets.
-    const { h, approvalId } = await parkedApproval();
+  it("goes out under the ON-DUTY ENGINEER'S token and records delivery sent", async () => {
+    // THE PHASE 13 PATH, end to end: the real `makeUserTokenSender` over a
+    // stubbed transport, reached through the same port a deployed RunDO uses.
+    const slack = slackFetch({ ok: true, ts: "1720000000.000500" });
+    const { h, approvalId, channelId, threadTs } = await parkedApproval({
+      sender: makeUserTokenSender(connected, slack.fetchImpl),
+    });
 
     expect(
       await h.stub.resolveApproval({
@@ -225,10 +283,57 @@ describe("an approved reply resolves through the one inbox", () => {
       }),
     ).toEqual({ applied: true });
 
+    expect((await deliveryOf(approvalId))?.delivery).toBe("sent");
+    expect((await deliveryOf(approvalId))?.resolution_delivered_at).not.toBeNull();
+
+    // THE CREDENTIAL: the human's token, and provably not the bot's.
+    expect(slack.calls).toHaveLength(1);
+    expect(slack.calls[0].authorization).toBe(`Bearer ${USER_TOKEN}`);
+    expect(slack.calls[0].authorization).not.toContain(env.SLACK_BOT_TOKEN);
+    expect(slack.calls[0].url).toBe("https://slack.com/api/chat.postMessage");
+    // THE DESTINATION AND THE TEXT: the run's own pinned thread, and the
+    // approved characters byte-exact — no preamble, no signature.
+    expect(slack.calls[0].body).toEqual({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: DRAFT,
+    });
+
+    const resolution = await resolutionTurns(h);
+    expect(resolution).toHaveLength(1);
+    expect(resolution[0].content).toContain(DRAFT);
+    expect(resolution[0].content).not.toContain("NOT sent");
+    expect((await h.stub.state())?.status).toBe("live");
+    // The token never reaches the run's own record of what happened.
+    expect(JSON.stringify(resolution)).not.toContain(USER_TOKEN);
+  });
+
+  it("blocks when nobody on duty has connected Slack, and never uses the bot", async () => {
+    // THE HONEST FALLBACK, preserved rather than deleted. `SLACK_BOT_TOKEN` is
+    // present and usable in this environment, which is exactly why this
+    // matters: refusing has to be a decision, not a missing credential.
+    expect(env.SLACK_BOT_TOKEN).toBeTruthy();
+    const slack = slackFetch({ ok: true, ts: "1720000000.000501" });
+    const { h, approvalId } = await parkedApproval({
+      sender: makeUserTokenSender(unconnected, slack.fetchImpl),
+    });
+
+    expect(
+      await h.stub.resolveApproval({
+        approvalId,
+        decision: "approved",
+        outboundText: DRAFT,
+        rejectReason: null,
+        decidedBy: FIREFIGHTER,
+      }),
+    ).toEqual({ applied: true });
+
+    // Nothing was attempted at all, under any identity.
+    expect(slack.calls).toEqual([]);
     // Delivery is terminal and honest about why.
     expect(await deliveryOf(approvalId)).toMatchObject({
       delivery: "blocked",
-      delivery_error: "identity_unavailable",
+      delivery_error: NOT_CONNECTED,
     });
     expect((await deliveryOf(approvalId))?.resolution_delivered_at).not.toBeNull();
 
