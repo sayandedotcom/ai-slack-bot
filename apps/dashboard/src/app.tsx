@@ -13,6 +13,7 @@ import { RunDrawer } from "./runs/run-drawer";
 import { RunList } from "./runs/run-list";
 import { SessionView } from "./runs/session-view";
 import { useRunSession } from "./runs/use-run-session";
+import { ShadowPanel } from "./shadow/shadow-panel";
 
 /**
  * Which page is showing, and which run the dashboard drawer or the chat page
@@ -136,6 +137,12 @@ export function App() {
             <CountersPanel />
             <div data-slot="runs-panel" className="md:col-span-2">
               <RunList onSelect={selectRun} />
+            </div>
+            {/* Below the fold, deliberately: this is an eval corpus for
+                reviewing after the fact, not something waiting on a human
+                the way the approvals queue is. */}
+            <div data-slot="shadow-panel" className="md:col-span-2">
+              <ShadowPanel />
             </div>
           </main>
           {selectedRun === null ? null : (
