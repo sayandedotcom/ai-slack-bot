@@ -122,6 +122,44 @@ describe("detectAiTells", () => {
     });
   });
 
+  /**
+   * Policy ("Voice" > "Punctuation and rhythm"): "These rules are about prose,
+   * not code." This agent supports a codebase, so pasting a command or a query
+   * into a customer reply is the normal case. Scoring those as voice failures
+   * inflates the tell rate with drafts that are obeying the policy.
+   */
+  describe("code spans are exempt from the typography rules", () => {
+    it("does not flag a semicolon inside an inline code span", () => {
+      expect(detectAiTells("Run `git log --oneline; git status` and paste the output.")).not.toContain(
+        "semicolon",
+      );
+    });
+
+    it("does not flag an exclamation mark inside an inline code span", () => {
+      expect(detectAiTells("The guard is `a !== b`, so the branch never runs.")).not.toContain(
+        "exclamation",
+      );
+    });
+
+    it("does not flag an em dash or emoji inside a fenced block", () => {
+      const draft = "Here's the log line.\n\n```\n[warn] 04:12 ⚠ retry — giving up\n```\n\nThe retry never fired.";
+      const tells = detectAiTells(draft);
+      expect(tells).not.toContain("em_dash");
+      expect(tells).not.toContain("emoji");
+    });
+
+    it("still flags the same character in prose alongside a clean code span", () => {
+      expect(detectAiTells("Fixed now; run `SELECT 1; SELECT 2;` to confirm.")).toContain(
+        "semicolon",
+      );
+    });
+
+    it("keeps line structure so a fenced block cannot mask a bulleted recap", () => {
+      const draft = "To summarize:\n\n```\nnpm run build\n```\n\n- exports are fixed\n- imports are not";
+      expect(detectAiTells(draft)).toContain("bulleted_recap");
+    });
+  });
+
   it("reports multiple tells in one text", () => {
     const text = "Great question! Thanks for flagging! Let me know if you have any other questions.";
     const tells = detectAiTells(text);

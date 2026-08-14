@@ -157,6 +157,10 @@ export const STABLE_POLICY_SECTIONS: readonly PromptSection[] = [
       "  drafted. Slightly uneven is what a real message looks like.",
       "- No \"on our side\", \"at this time\", \"in order to\", \"reach out\". Say our, now,",
       "  to, ask.",
+      "",
+      "These rules are about prose, not code. Inside backticks or a fenced block,",
+      "write the code as it actually is. A semicolon in a SQL statement, or the \"!\"",
+      "in \"!==\", is the code, not your voice. The rules resume outside the ticks.",
     ].join("\n"),
   },
   {

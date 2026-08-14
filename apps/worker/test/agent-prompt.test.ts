@@ -473,6 +473,19 @@ describe("stable policy content", () => {
     }
   });
 
+  /**
+   * The punctuation rules read as absolutes ("Never use a semicolon"), which is
+   * wrong for an agent that supports a codebase: a reply routinely carries a
+   * shell one-liner or a query. The carve-out is stated in the policy rather
+   * than only implemented in the detector, so the model and the eval agree on
+   * what counts.
+   */
+  it("exempts code spans from the punctuation rules", () => {
+    const policy = flat(renderStablePolicy());
+    expect(policy).toContain("about prose, not code");
+    expect(policy).toContain("Inside backticks or a fenced block");
+  });
+
   it("holds a professional register: no emoji, no exclamation, no slang", () => {
     const policy = flat(renderStablePolicy());
     for (const rule of [

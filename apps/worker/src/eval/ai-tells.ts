@@ -146,10 +146,34 @@ const EMOJI_RE = /\p{Extended_Pictographic}/u;
 const EXCLAMATION_RE = /!/;
 
 /**
+ * Blanks out code spans before matching.
+ *
+ * Policy ("Voice" > "Punctuation and rhythm"): "These rules are about prose,
+ * not code. Inside backticks or a fenced block, write the code as it actually
+ * is." This agent supports a codebase, so a customer-facing reply routinely
+ * carries a shell one-liner or a SQL statement. Without this, `git log;
+ * git status` scores a `semicolon`, `a !== b` scores an `exclamation`, and a
+ * pasted log line carrying a warning glyph scores an `emoji` — inflating the
+ * tell rate with drafts that are obeying the policy, not breaking it.
+ *
+ * Code is replaced with spaces rather than removed, so offsets and — more to
+ * the point — LINE STRUCTURE survive. `hasBulletedRecap` reasons about which
+ * line a bullet is on, and deleting a fenced block outright would let an intro
+ * line collide with a bullet that was never adjacent to it.
+ */
+function stripCode(text: string): string {
+  const blank = (m: string): string => m.replace(/[^\n]/g, " ");
+  return text.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank);
+}
+
+/**
  * Detects which of the nine mechanical AI tells appear in `text`. Present or
  * absent only — no severity, no score. `[]` means the text is clean.
+ *
+ * Matching runs against the text with code spans blanked out; see `stripCode`.
  */
-export function detectAiTells(text: string): AiTell[] {
+export function detectAiTells(source: string): AiTell[] {
+  const text = stripCode(source);
   const tells: AiTell[] = [];
   const trimmed = text.replace(/^\s+/, "");
 
