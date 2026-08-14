@@ -113,6 +113,27 @@ const PROVISION_PROCESS_ID = "provision";
 /** Baked into the image at this path so a `git clean` can never delete it. */
 const PROVISION_SCRIPT = "/usr/local/bin/provision.sh";
 
+/**
+ * How long a live provision process may stay COMPLETELY silent before it is
+ * declared wedged. provision.sh prints its first STEP line within milliseconds
+ * of running and announces every step before starting minutes of work, so
+ * "alive with zero output" has no healthy reading at this age. Generous anyway:
+ * the false-positive cost is a spurious relaunch, the false-negative cost is a
+ * run polling politely until its step ceiling kills it.
+ */
+const WEDGED_AFTER_MS = 75_000;
+
+/** Sentinel note, compared by identity in bootOnce to trigger the one relaunch. */
+const WEDGED_NOTE =
+  "provisioning produced no output for over a minute and was declared wedged";
+
+/**
+ * Runs that already spent their one wedge-relaunch. Module scope for the same
+ * reason as `inflightBoots`: lifecycle objects are made per capability call,
+ * and this fact must outlive all of them.
+ */
+const relaunchedRuns = new Set<string>();
+
 const DEFAULT_REPO_PATH = "/workspace/web2app-rebuild";
 
 /** Product PRs target `staging`, so that is what the working tree tracks. */
@@ -285,6 +306,19 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
     const elapsedMs = Math.max(0, Date.now() - startedAtMs(process.startTime));
 
     if (process.status === "starting" || process.status === "running") {
+      // A live process that has said NOTHING for this long is not slow, it is
+      // wedged. provision.sh prints its first STEP line within milliseconds of
+      // actually running, and every later step announces itself before minutes
+      // of work — so "alive, zero output, over a minute" has no healthy
+      // reading. Observed live twice: a spawn against a nonexistent cwd left a
+      // record parked in "starting" forever, and a deploy mid-run preserved
+      // that corpse for the NEW code to poll faithfully (autoCleanup: false
+      // keeps records — including dead ones). Without this, boot reports
+      // "starting up" until the run dies at its step ceiling, which is the
+      // silent-failure shape everything in this phase exists to avoid.
+      if (progress.step === null && elapsedMs > WEDGED_AFTER_MS) {
+        return { state: "failed", commit: null, repoPath, elapsedMs, note: WEDGED_NOTE };
+      }
       return { state: "provisioning", commit: null, repoPath, elapsedMs, note: progress.note };
     }
     if (process.status === "completed" && (process.exitCode ?? 0) === 0) {
@@ -314,7 +348,22 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
     // is reported as failed on every later call and never relaunched: retrying
     // a `pnpm install` that failed on a lockfile conflict just burns the budget
     // and hides the reason.
-    if (existing) return report(sandbox, existing);
+    if (existing) {
+      const status = await report(sandbox, existing);
+      // One exception to "never relaunch", for exactly one failure mode: a
+      // WEDGED record — alive, silent past the deadline. That state has a known
+      // benign cause (a deploy mid-boot preserves the old code's spawn as a
+      // corpse the new code polls forever) which one clean relaunch heals. Once
+      // only, tracked per run: a second wedge means the cause is in the current
+      // code, and relaunching in a loop would re-create the exact
+      // poll-until-step-ceiling death this detection exists to prevent.
+      if (status.state === "failed" && status.note === WEDGED_NOTE && !relaunchedRuns.has(runId)) {
+        relaunchedRuns.add(runId);
+        await sandbox.killAllProcesses();
+        return startProvisioning(sandbox);
+      }
+      return status;
+    }
     return startProvisioning(sandbox);
   }
 

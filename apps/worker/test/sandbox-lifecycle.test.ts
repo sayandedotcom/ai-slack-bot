@@ -224,6 +224,49 @@ describe("boot", () => {
     expect(countOf(fake.calls, "killAllProcesses")).toBe(0);
   });
 
+  it("declares a silent live process wedged, relaunches once, then fails for good", async () => {
+    // Alive for two minutes with ZERO output. provision.sh prints its first
+    // STEP within milliseconds, so this state has no healthy reading — it is
+    // the deploy-corpse case found live on 2026-08-14: a spawn from the old
+    // code preserved by autoCleanup:false for the new code to poll forever.
+    const wedged = () =>
+      makeFakeSandbox({
+        process: { id: "provision", status: "running", startTime: new Date(Date.now() - 120_000) },
+        stdout: "",
+      });
+
+    // Each test uses its own run id: the one-relaunch bookkeeping is module
+    // scoped on purpose (lifecycle objects are per capability call), so state
+    // crosses lifecycle instances — and would cross tests too.
+    const first = wedged();
+    const status = await lifecycleOver(first).boot("run-wedge-relaunch");
+    // The one relaunch: the corpse is killed and provisioning starts fresh,
+    // reported as provisioning rather than failed.
+    expect(status.state).toBe("provisioning");
+    const methods = first.calls.map((c) => c.method);
+    expect(methods).toContain("killAllProcesses");
+    expect(methods.filter((m) => m === "startProcess")).toHaveLength(1);
+
+    // Same run wedges AGAIN: the cause is in the current code, and relaunching
+    // in a loop would re-create the poll-until-step-ceiling death this
+    // detection exists to prevent. Terminal, with the reason in the note.
+    const second = wedged();
+    const verdict = await lifecycleOver(second).boot("run-wedge-relaunch");
+    expect(verdict.state).toBe("failed");
+    expect(verdict.note).toContain("wedged");
+    expect(second.calls.map((c) => c.method)).not.toContain("startProcess");
+  });
+
+  it("does not call a young silent process wedged", async () => {
+    const fake = makeFakeSandbox({
+      process: { id: "provision", status: "running", startTime: new Date(Date.now() - 20_000) },
+      stdout: "",
+    });
+    const status = await lifecycleOver(fake).boot("run-wedge-young");
+    expect(status.state).toBe("provisioning");
+    expect(status.note).toBe("starting up");
+  });
+
   it("names the failing step and does not retry a failed provision", async () => {
     const fake = makeFakeSandbox({
       process: {

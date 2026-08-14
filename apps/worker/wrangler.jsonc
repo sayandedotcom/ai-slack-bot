@@ -221,7 +221,14 @@
       "class_name": "Sandbox",
       "image": "./sandbox/Dockerfile",
       "instance_type": "standard-4",
-      "max_instances": 3
+      "max_instances": 3,
+      // Operator SSH from the Cloudflare dashboard, for exactly one purpose:
+      // when boot wedges with no output, the only alternative diagnostic is
+      // redeploy-and-reproduce, which burned an evening on 2026-08-14. This is
+      // a dashboard-authenticated door for the operator, not a container
+      // capability — nothing inside the container or the model's surface can
+      // reach it, and it holds no credential the container didn't already have.
+      "ssh": { "enabled": true }
     }
   ],
   "durable_objects": {
