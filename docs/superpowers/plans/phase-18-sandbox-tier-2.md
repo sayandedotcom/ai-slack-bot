@@ -179,12 +179,20 @@ The Dockerfile sits under `apps/worker/` because wrangler resolves `image` relat
 
 ## Execution speed rules — READ BEFORE DISPATCHING ANY TASK
 
-1. **Focused tests by exact path:** `cd apps/worker && pnpm exec vitest run test/<exact-file>.test.ts`. Never a pattern.
-2. **One `pnpm exec tsc --noEmit -p tsconfig.json` per task**, at the end.
+**The long pole in this phase is not tests. It is Docker builds and container boots.** A rebuild is minutes; the full worker suite is ~2. Rules 7–10 below are worth more here than 1–3.
+
+1. **Focused tests by exact path:** `cd apps/worker && pnpm exec vitest run test/<exact-file>.test.ts`. NEVER `pnpm --filter @workspace/worker test -- <pattern>` — a measured pattern run in this repo cost 71s where the exact-path run costs ~5s.
+2. **One `pnpm exec tsc --noEmit -p tsconfig.json` per task**, at the end. Never per step.
 3. **The full suite runs exactly once** — Task 8, before the live proof.
 4. **Container I/O is stubbed in every unit test.** No test boots a real container; Tasks 1 and 8 are the only places real containers run, and both are manual.
 5. **Read the installed `.d.ts` before writing any SDK call.** `@cloudflare/sandbox`'s docs pages are hubs; the spike found the type declarations were the only reliable source, and `interceptHttps`/`sleepAfter`/`outboundByHost` live on `Container` in `@cloudflare/containers`, not on `Sandbox`. Every API the model invents goes in `phase-18-notes.md`.
 6. **Review depth:** deep for Tasks 2, 3 and 5 (credential path, env injection); medium for 4, 6, 7; light for 1.
+7. **Build the image ONCE per real change to it.** Never rebuild to test worker-side code — Tasks 3, 4, 6 and 7 are TypeScript against stubs and touch no image. If a boot-time behaviour needs changing, change `provision.sh` and re-run it inside a live container rather than rebuilding: `provision.sh` exists precisely so the image is not the iteration loop.
+8. **Order the Dockerfile so the expensive layer is the stable one.** Clone and `pnpm install` before anything that changes often, so editing a later line does not re-fetch the monorepo and re-populate the store. A badly ordered Dockerfile turns a 30-second edit into a full rebuild, repeatedly.
+9. **Task 1 is human-paced and blocks almost nothing — start it before anything else and never wait on it.** The Infisical answer gates only Task 5's real values, and Task 5 is written against a stubbed secret regardless (invariant: the secret is injected, never baked). If the answer has not arrived by wave C, build Task 5 with a fake, land it, and swap the value in Task 8. Do not let a Slack reply idle four subagents.
+10. **Dispatch = the task's own text + the Public contracts section + this section.** A subagent must not re-explore the repo to rediscover what the plan already states; grant it the files its task names plus their direct imports. Within a wave, run the subagents CONCURRENTLY — the file sets are disjoint by construction.
+11. **No new dependencies** beyond `@cloudflare/sandbox` and what the Dockerfile installs. Every other package is a review question.
+12. **Commit after every task**, conventional prefixes.
 
 ### Parallel wave schedule
 
@@ -197,6 +205,19 @@ The Dockerfile sits under `apps/worker/` because wrangler resolves `image` relat
 | E | **8** | full gate, then live proof — serial by nature |
 
 **The namespace is built last, on purpose.** Tasks 4, 5 and 6 produce pure, independently testable modules (`lifecycle.ts`, `env.ts`, `diff.ts`) and **none of them touches `bindings/sandbox.ts`**. Task 7 is the only writer of that file, so three subagents can run without a merge conflict and the binding is assembled once, over surfaces that already have tests.
+
+### Which tasks a subagent should own, and which it should not
+
+This phase is **partially** subagent-driven, unlike 11–17. The split is not about difficulty, it is about whether the work has a feedback loop a subagent can actually close.
+
+| Task | Who | Why |
+|---|---|---|
+| 1 — unblocks and measurement | **You** | Posts in Slack, creates a PAT, runs `wrangler secret put`, watches real container timings. None of it is code, and a subagent cannot hold a credential or read a human's reply. |
+| 2 — the baked image | **You** | A subagent writing a Dockerfile it cannot build is writing blind, and this is the file where being wrong costs minutes per attempt. Build it yourself against the spike's working file, with the measured numbers from Task 1 in front of you. |
+| 3, 4, 5, 6, 7 | **Subagents** | Ordinary TypeScript against stubbed container I/O, with named files, fixed contracts and fast exact-path tests. Exactly the shape that has worked all week. Waves B and C run two at a time. |
+| 8 — gate and live proof | **You** | Boots real containers, runs the drill, spends real money. Judgement and observation, not code. |
+
+So: dispatch subagents for waves B, C and D. Own waves A and E yourself. If Task 2 turns out to need several rebuild attempts, that is expected — it is why it is not delegated.
 
 ## Task order
 
