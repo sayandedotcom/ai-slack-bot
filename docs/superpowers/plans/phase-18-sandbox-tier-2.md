@@ -30,7 +30,7 @@ Phase 00 Task 1 **GO** (recorded in the spike), Phase 09 (the registry, `audited
 
 Established from `staging` at `aca7b2e`.
 
-1. ⚠ **`AGENTS.md` exists on `staging`** (678 lines) — the brief was right and the first pass was wrong. `CLAUDE.md` there is a one-line pointer to it. Four more root docs matter: `architecture.md`, `backend.md`, `conventions.md`, `frontend.md`. (The default branch has no `AGENTS.md` and a 529-line `CLAUDE.md` pinning different versions — reading it is how the first pass went wrong.)
+1. ⚠ **`AGENTS.md` exists on `staging`** (678 lines) — the brief was right and the first pass was wrong. `CLAUDE.md` there is a one-line pointer to it. Four more root docs matter: `architecture.md`, `backend.md`, `conventions.md`, `frontend.md`. (At the time of that first pass the default branch had no `AGENTS.md`, only a 529-line `CLAUDE.md` pinning different versions — reading that file is how the first pass went wrong. `AGENTS.md` has since landed on the default branch too, so the discrepancy is gone; confirmed 2026-08-15. Do not resurrect the version pins from the old file.)
 2. ⚠ **pnpm is `11.17.0`**, not 9.12.2 (`packageManager` + `volta`). **Node `>=22`**, `.nvmrc` and volta both `22.22.3`. The base image's 22.23.2 satisfies it.
 3. ⚠ **There is no `.npmrc` anywhere.** `engineStrict: true` lives in `pnpm-workspace.yaml`, and with `engines.node: ">=22"` it constrains only Node.
 4. ⚠ **`pnpm install` FAILS without `NUCLEO_LICENSE_KEY`.** `apps/dashboard` depends on `nucleo-ui-outline-18`, whose preinstall verifies a license; without it pnpm 11 fails with `ERR_PNPM_IGNORED_BUILDS`. Both `pnpm-workspace.yaml` and `.github/workflows/pr-checks.yml` say so in comments. **This is a second external ask, and a hard blocker on the image build.** `--ignore-scripts` dodges it and is the wrong fix: `allowBuilds` covers esbuild, sharp, workerd, `@prisma/engines`, `unrs-resolver` and a dozen more that fetch or compile platform binaries, so skipping scripts yields a `node_modules` that installs cleanly and fails at the first build.
@@ -364,6 +364,6 @@ The agent boots a machine, gets the monorepo dev server serving, and runs the te
 ## Downstream handoff
 
 - **Phase 19** inherits Chromium already baked (no image rebuild), `spawn`/`checkProcess` for a Playwright run that outlives one execution, and `files.publish` for the recording. Its only image change should be the transcode tool.
-- **Phase 20** consumes `diffRef` — `github.openPR` reads the diff Worker-side via `readDiff` and never asks the model for bytes. `staging` is confirmed as the base branch, and the repo's PR conventions live in `CLAUDE.md`.
+- **Phase 20** consumes `diffRef` — `github.openPR` reads the diff Worker-side via `readDiff` and never asks the model for bytes. `staging` is confirmed as the base branch, and the repo's PR conventions live in `AGENTS.md` §3 plus the `.agents/skills/m-create-pr` skill — read in full, with the traps, in [phase-20-notes.md](phase-20-notes.md).
 - **Phase 21** gets sandbox-capable shadow runs, and the cost lever named in "The fourth effect class" if the corpus proves expensive.
 - **Phase 23** gets the dev-env caveat as written prose for the README's security section, plus container-hours for the cost breakdown.
