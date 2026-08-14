@@ -44,6 +44,10 @@ if [ -d "$REPO_PATH/.git" ]; then
   git fetch --depth 1 origin "$REPO_REF" || fail "fetch"
 else
   step "clone"
+  # A directory without .git is the residue of an interrupted clone; git
+  # refuses to clone into it, so a run would wedge on its predecessor's
+  # corpse. Remove it first — there is nothing in it worth keeping.
+  [ -d "$REPO_PATH" ] && rm -rf "$REPO_PATH"
   # --depth 1 because history is worthless here and costs minutes. Phase 20
   # builds its commit Worker-side from a diff, so the container never needs to
   # push and never needs a full object graph.

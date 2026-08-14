@@ -239,7 +239,15 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
       // started" — every poll would relaunch it, a failure would retry forever,
       // and `ready` would be unreachable.
       autoCleanup: false,
-      cwd: repoPath,
+      // NOT repoPath. The toolchain-only image does not contain the checkout —
+      // creating it is this script's first job — and spawning with a cwd that
+      // does not exist wedges the process record in "starting" with empty logs
+      // forever: boot reports "starting up" on every poll, the model patiently
+      // polls as instructed, and the run dies at its step ceiling. Found live
+      // (run 17d0a274), introduced by the same commit that stopped baking the
+      // repo, invisible to the unit tests because the stub cannot know which
+      // directories exist. The script cds where it needs to on its own.
+      cwd: "/workspace",
       // NUCLEO_LICENSE_KEY rides along because `node_modules` is no longer
       // baked: provision.sh runs the install, and `nucleo-ui-outline-18`'s
       // preinstall verifies this key or the whole install fails with
