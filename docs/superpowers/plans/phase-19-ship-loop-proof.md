@@ -109,6 +109,73 @@ So: a new route (`/proofs/:key`), with a **path-bypass policy on the Access appl
 - Extend: `test/codemode-dts.test.ts`, `test/codemode-contracts.test.ts`
 - Manual, outside the repo: one Access bypass policy for `/proofs/*` (Task 3 flags it before the live proof needs it)
 
+## Execution speed rules — READ BEFORE DISPATCHING ANY TASK
+
+Same regime as Phases 11–13 and 21; overrides per-step commands wherever they conflict.
+One thing is different here and it dominates everything else: **this phase pays an image
+build and registry push, and that is minutes of wall-clock you cannot parallelise away.
+Everything below is arranged so you pay it exactly once.**
+
+1. **ONE image cycle, not two.** Task 1 Step 4 as written ("rebuild and push") fires
+   before Task 2's harness exists, so the harness would need a second build. Task 1's
+   ffmpeg goes into the **base** stage, which invalidates every layer beneath it — that
+   second push is a full one, not the "few kilobytes" the `Dockerfile:100` comment
+   promises for a provision-only change. So: **Task 1 does NOT build.** It edits the
+   Dockerfile (ffmpeg **and** the `COPY` line for `harness/record.cjs`, beside the
+   existing `COPY provision.sh` at line 184) and fixes the provision guard, then stops.
+   The build+push happens once, after Task 2 lands the harness file.
+2. **Start the build the moment Tasks 1+2 land, and let it run in the background while
+   Tasks 3 and 4 are still being written.** The build is I/O; the Worker-side code is not.
+   Serialising them is the single largest avoidable cost in this phase.
+3. **Task 1 owns the Dockerfile alone.** Tasks 1 and 2 would otherwise both edit it and
+   collide. Task 2 creates `harness/record.cjs` and nothing else; its `COPY` line is
+   Task 1's job.
+4. **Front-load the human-blocking ask.** Task 3 Step 4 says to request the `/proofs/*`
+   Access bypass policy. Ask on **minute one of the phase**, not when Task 3 gets there —
+   it is a manual console action with human latency, and Task 5 Step 4 (confirming the
+   recording plays **logged out**) is dead until it exists. Same pattern as `/slack/events`.
+5. **Focused tests by exact path:** `cd apps/worker && pnpm exec vitest run test/<exact-file>.test.ts`.
+   Never a pattern.
+6. **One `pnpm exec tsc --noEmit -p tsconfig.json` per task**, at the end of that task.
+7. **The full worker suite runs exactly once**, after Task 4 and before Task 5's live
+   proof. Nowhere else. The plan currently has no such step — add it. Do not enter a live
+   proof on an unverified tree; a red suite discovered mid-drill-rehearsal is
+   indistinguishable from a broken container.
+8. **`codemode:dts:check` is Task 4's gate, not a separate pass.** Regenerate and check
+   inside Task 4, so the drift check never blocks the suite run in rule 7.
+9. **Dispatch = the task's own text + Global Constraints + Non-negotiable invariants +
+   these rules.** Task 2's subagent additionally reads `phase-19-notes.md` (the CJS/
+   `NODE_PATH` measurement and the `context.close()` flush are requirements, not
+   background); Task 3's reads `src/api/artifacts.ts` (the GET+HEAD lesson it cites) and
+   Phase 09's publisher (to see what it is deliberately NOT reusing). No wider exploration.
+10. **Review depth:** deep for Task 3 (this phase's only new public unauthenticated
+    surface — an unguessable-key R2 route is the whole security story) and Task 1 Step 3
+    (a wrong cache guard poisons every future boot silently); medium for Task 4; light
+    for Task 2.
+11. **Task 5 is NOT subagent-drivable.** Like Phase 18's live proof, it needs a deployed
+    Worker, an Access session, a logged-out browser, and a human planting a bug in the
+    monorepo. Do not dispatch it. Run it interactively and record what actually happened.
+12. **Task 5 Step 1 is a gate, not a step.** If `record` comes back `browser-unavailable`
+    on a live machine, STOP — no Chromium install has ever been observed succeeding
+    live. Everything after it is meaningless until that is fixed, and discovering it at
+    Step 3 wastes a full boot cycle.
+13. **No new dependencies.** Playwright is already global in the image; ffmpeg comes from
+    apt. No node ffmpeg wrapper, no video library, no S3 SDK.
+14. **Commit after every task**, conventional prefixes.
+
+### Parallel wave schedule
+
+| Wave | Tasks (concurrent) | Why safe |
+|---|---|---|
+| A | **1** ∥ **2** ∥ **3** ∥ **4** | disjoint file sets once rule 3 gives the Dockerfile to Task 1. 3 owns `record.ts`/`proofs.ts`/`index.ts`; 4 owns `bindings/browser.ts`/`registry.ts`/`gateways.ts`/`sandbox/gateway.ts` |
+| B | **image build + push** | starts as soon as 1+2 land — overlaps the tail of 3 and 4 rather than following them |
+| C | full suite (rule 7) | serial, once, on the merged result of wave A |
+| D | **5** | live proof — interactive, human-in-the-loop, not dispatchable |
+
+Task 4 has a soft dependency on Task 3's `SandboxGateway` extension. Agree that signature
+up front from the "File structure" section and both can be written concurrently against
+it; do not serialise the waves for it.
+
 ## Task order
 
 ### Task 1 — ffmpeg in the image, and an honest browser-cached guard
@@ -116,7 +183,9 @@ So: a new route (`/proofs/:key`), with a **path-bypass policy on the Access appl
 - [ ] **Step 1:** Add `ffmpeg` via apt to the Dockerfile's base stage, beside redis, with `--no-install-recommends` — already proven sufficient: apt's 4.4.2 carries `libx264` and the `mp4` muxer (asserted by name in the deployed image, 2026-08-15). Record the layer's size delta in `phase-19-notes.md` — it is the one layer this phase adds.
 - [ ] **Step 2:** Re-assert in the **built** image that `ffmpeg -encoders` names `libx264` and `-muxers` names `mp4` — cheap, and it pins the property that matters against a future base-image bump. "ffmpeg exists" is not that property.
 - [ ] **Step 3:** Fix `provision.sh`'s browser-cached guard: today it declares the browser cached if `/root/.cache/ms-playwright` is merely non-empty, so an interrupted download poisons every later boot into skipping the install. Test for the Chromium executable itself, not the directory.
-- [ ] **Step 4:** Rebuild and push. Commit: `feat(sandbox): ffmpeg in the image, because Playwright's bundled build cannot mux mp4`
+- [ ] **Step 4:** Add the `COPY` line for `harness/record.cjs` beside the existing `COPY provision.sh` (line 184) — the harness ships in the same cheap trailing layer. The file itself is Task 2's; this is only the Dockerfile edit, so one image cycle covers both tasks.
+- [ ] **Step 5: Do NOT build yet** (speed rule 1). ffmpeg lands in the base stage and invalidates every layer below it, so a build now means a second full push once Task 2's harness exists. Commit and stop: `feat(sandbox): ffmpeg in the image, because Playwright's bundled build cannot mux mp4`
+- [ ] **Step 6:** The moment Task 2's harness file lands, kick off the single build+push **in the background** and carry on with Tasks 3 and 4 while it runs (speed rule 2). Record the layer's size delta in `phase-19-notes.md` when it completes.
 
 ### Task 2 — The in-container harness
 
