@@ -116,6 +116,22 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    *  result, an audit arg or a log — key NAMES are fine and useful. */
   MONOREPO_DEV_ENV?: string;
   /**
+   * Phase 18's monorepo install licence — a SECRET, and one that has to reach
+   * the CONTAINER rather than only the build.
+   *
+   * `apps/dashboard` depends on `nucleo-ui-outline-18`, whose preinstall
+   * verifies this key; without it a full `pnpm install` fails with
+   * `ERR_PNPM_IGNORED_BUILDS`. Because `node_modules` is no longer baked into
+   * the image (a 3.74 GB layer cannot be pushed from a domestic uplink), the
+   * install now happens at boot, so `provision.sh` needs the key and the
+   * lifecycle passes it per-process.
+   *
+   * Optional in the type so absence stays visible: `provision.sh` fails with a
+   * named step rather than dying deep inside a preinstall script, which reads
+   * like a corrupt lockfile.
+   */
+  NUCLEO_LICENSE_KEY?: string;
+  /**
    * Phase 18's container opt-out, and the twin of `AGENT_MODEL_DISABLED` above
    * in every respect: a deliberate off switch, read strictly, and deliberately
    * NOT in wrangler.jsonc `vars` so a deployed Worker never carries it.

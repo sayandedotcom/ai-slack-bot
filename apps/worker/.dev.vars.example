@@ -249,3 +249,4 @@ MONOREPO_PAT=
 MONOREPO_DEV_ENV=
 
 # Later phases add more. Add each here as its phase introduces it.
+NUCLEO_LICENSE_KEY=

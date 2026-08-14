@@ -42,14 +42,36 @@ step "reset"
 git reset --hard "origin/${REPO_REF}" || fail "reset"
 git clean -fd -e node_modules -e .turbo || fail "clean"
 
-# Delta install against the store baked into the image. --offline would be
-# wrong here: if the lockfile moved since the bake, the missing packages are
-# exactly what we need and the network is available.
+# The install. On a cold container this is a full 3217-package install, because
+# node_modules is deliberately not baked — see the Dockerfile for why (a 3.74 GB
+# layer cannot be pushed from a domestic uplink). On a warm container it is a
+# near no-op: the filesystem persists between boots while the sandbox lives.
+#
+# WITH scripts, deliberately. `--ignore-scripts` skips the allowBuilds set —
+# esbuild, sharp, workerd, @prisma/engines and a dozen more that compile or
+# fetch platform binaries — producing a node_modules that installs cleanly and
+# then fails at the first build.
+#
+# Retried, because pnpm's store fills incrementally: an install killed by a
+# tarball timeout leaves what it fetched behind and the next attempt resumes.
+# Measured on a thin link as 3114 packages, then 3202, then the tail.
 step "install"
-pnpm install --prefer-offline --ignore-scripts || fail "install"
+if [ -z "${NUCLEO_LICENSE_KEY:-}" ]; then
+  # Named explicitly. Without it the install dies deep inside a preinstall
+  # script with ERR_PNPM_IGNORED_BUILDS, which reads like a corrupt lockfile.
+  fail "install-missing-nucleo-license-key"
+fi
+export NUCLEO_LICENSE_KEY
+INSTALLED=0
+for attempt in 1 2 3; do
+  if pnpm install --frozen-lockfile; then INSTALLED=1; break; fi
+  echo "STEP install-retry-${attempt}"
+done
+[ "$INSTALLED" = "1" ] || fail "install"
 
-# Turbo's cache is baked too, so an unchanged packages/ tree makes this close to
-# a no-op rather than a rebuild.
+# Turbo's cache persists on a warm container, so an unchanged packages/ tree
+# makes this close to a no-op. Cold, it is the 3677-icon SVGR pass plus prisma
+# generate and two tsup builds — measured at 27s.
 step "build-packages"
 pnpm build-packages || fail "build-packages"
 

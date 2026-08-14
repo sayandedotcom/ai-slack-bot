@@ -137,53 +137,41 @@ RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable
 
 COPY --from=repo /workspace/web2app-rebuild/ ./
 
-# Fetch and install in ONE layer, deliberately.
+# ---------------------------------------------------------------------------
+# `node_modules` is deliberately NOT baked, and this is a reversal worth
+# explaining because the first version of this file did bake it.
 #
-# The tempting split — COPY the lockfile, `pnpm fetch`, COPY the tree, install —
-# caches better and costs roughly twice the disk. pnpm hardlinks node_modules
-# entries to the store, and hardlinks only dedupe WITHIN a filesystem: across
-# two overlayfs layers the lower layer's file is copied up, so the ~4 GB store
-# is paid for twice. On a machine with 8 GB free that is the difference between
-# a build and an ENOSPC three quarters of the way in. One layer, one copy.
+# Baking install + build-packages produced a working 6.26 GB image whose install
+# step was a single 3.74 GB layer. That image cannot be pushed from a domestic
+# uplink: `docker push` resumes at LAYER granularity and never within a layer,
+# so a 3.74 GB layer must transfer in one unbroken window, and Cloudflare's
+# registry credential expires long before ~1 MB/s gets through it. Three
+# attempts, one of 62 minutes, all died `unauthorized` mid-layer while the 22
+# smaller layers uploaded and cached fine.
 #
-# Install runs WITH scripts.
+# So the expensive-but-unpushable half moves to boot, where it runs on
+# Cloudflare's network rather than ours. What stays baked is everything that is
+# expensive AND small: the toolchain, Chromium, and the repository itself.
+# provision.sh does install + build-packages on first boot and is a near no-op
+# on every boot after, because the container keeps its filesystem while warm.
 #
-# `--ignore-scripts` would be the easy way past the license check below, and it
-# is wrong: the allowBuilds list in pnpm-workspace.yaml covers esbuild, sharp,
-# workerd, @prisma/engines, unrs-resolver and a dozen more that fetch or
-# compile platform binaries. Skipping them yields a node_modules that installs
-# cleanly and then fails at the first build.
+# The honest cost: first boot of a cold container now pays an install. Measured
+# at ~13 minutes here on a thin link; on a datacenter uplink it should be a
+# small fraction of that, but it is unmeasured until Task 8 and it is the number
+# to watch. If it proves too slow for the drill, the fix is not to re-bake — it
+# is to split the install across several smaller layers, which needs ~4 GB more
+# build disk than this machine had.
 #
-# NUCLEO_LICENSE_KEY: apps/dashboard depends on nucleo-ui-outline-18, whose
-# preinstall verifies a license. Without the key a full install fails with
-# ERR_PNPM_IGNORED_BUILDS — pnpm-workspace.yaml and .github/workflows say so
-# explicitly. A build secret, so it is never in a layer.
-#
-# `enable-global-virtual-store=false` comes from the npmrc above and mirrors the
-# repo's own CI and Docker convention. It must stay false: Turbopack cannot
-# resolve outside the project root, and `next build` fails with "We couldn't
-# find the Next.js package" when it is on.
-#
-# Retried three times, and that is not superstition. pnpm's store is populated
-# incrementally, so a run that dies on a tarball timeout leaves everything it
-# already fetched behind and the next attempt resumes rather than restarts —
-# measured here as 3114 packages on the first pass, then 3202, then the tail.
-# On a thin or flaky link a single-shot install fails at the 97% mark and
-# discards twenty minutes of a build; the loop converges instead.
-RUN --mount=type=secret,id=nucleo_license_key \
-    NUCLEO_LICENSE_KEY="$(cat /run/secrets/nucleo_license_key 2>/dev/null || true)" \
-    sh -c 'for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install attempt $i failed; resuming from the store"; done; exit 1'
-
-# Workspace packages resolve from built dist/, not from source, so this is
-# mandatory before any app can start or any test can run (turbo's `test` task
-# declares dependsOn ^build).
-#
-# It is also the single most expensive thing in this file: @web2app/icons runs
-# SVGR over 3677 SVGs, and turbo's `dev` task depends on that build plus
-# @web2app/funnel's — so WITHOUT this baked, every container start pays the
-# icons codegen again. Baking the .turbo cache alongside the outputs is what
-# makes the boot-time re-run a cache hit rather than a repeat.
-RUN pnpm build-packages
+# Kept here rather than in provision.sh: the NUCLEO_LICENSE_KEY note, because
+# whoever re-bakes will look for it here. `apps/dashboard` depends on
+# nucleo-ui-outline-18, whose preinstall verifies a license; without the key a
+# full install fails with ERR_PNPM_IGNORED_BUILDS. `--ignore-scripts` is not the
+# way past it: pnpm-workspace.yaml's allowBuilds covers esbuild, sharp, workerd,
+# @prisma/engines and a dozen more that compile or fetch platform binaries, so
+# skipping scripts yields a node_modules that installs cleanly and then fails at
+# the first build. The key therefore has to reach the CONTAINER at boot, which
+# is why it is a Worker secret and not only a build secret.
+# ---------------------------------------------------------------------------
 
 # The boot-time catch-up script. Kept OUT of the repo tree so a `git reset
 # --hard` inside provision.sh cannot delete the script that is running.

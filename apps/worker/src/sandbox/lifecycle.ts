@@ -244,7 +244,17 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
       // and `ready` would be unreachable.
       autoCleanup: false,
       cwd: repoPath,
-      env: { SANDBOX_REPO_PATH: repoPath, SANDBOX_REPO_REF: REPO_REF },
+      // NUCLEO_LICENSE_KEY rides along because `node_modules` is no longer
+      // baked: provision.sh runs the install, and `nucleo-ui-outline-18`'s
+      // preinstall verifies this key or the whole install fails with
+      // ERR_PNPM_IGNORED_BUILDS. Per-process like everything else, so it is
+      // absent from the container's ambient environment; `''` when unset, which
+      // provision.sh surfaces as a named failure rather than a mystery.
+      env: {
+        SANDBOX_REPO_PATH: repoPath,
+        SANDBOX_REPO_REF: REPO_REF,
+        NUCLEO_LICENSE_KEY: env.NUCLEO_LICENSE_KEY ?? "",
+      },
     });
 
     return {
