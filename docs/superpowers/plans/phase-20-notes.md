@@ -236,6 +236,40 @@ Copied here because they are easy to violate while writing plausible code.
    20's roadmap exit criteria only names the PR. Whoever writes the plan should
    assert the Slack side too, or it will be nobody's task.
 
+## Monorepo operational facts (AGENTS.md §3) — these bear on Phase 19 too
+
+`CLAUDE.md` is a pointer; `AGENTS.md` is canonical (commit "make agents.md
+canonical"). Read 2026-08-15.
+
+```bash
+pnpm install
+pnpm build-packages      # MUST run before first dev/build -- builds packages to real dist/
+pnpm dev --filter=@web2app/<app>
+pnpm test                # turbo, vitest where present
+pnpm check-types         # "skip unless asked -- slow in this monorepo"
+```
+
+Three things the sandbox has to respect:
+
+1. **`pnpm build-packages` is mandatory before the first dev server or build.**
+   Phase 18's provision.sh already does install + build-packages, which matches.
+   Without it the packages resolve to source rather than `dist/`.
+2. **The global virtual store is OFF and must stay off.** With it on,
+   `next build` dies with "We couldn't find the Next.js package
+   (`next/package.json`)" because Turbopack refuses to resolve outside the
+   project boundary. The repo writes **every** CI/Docker install as
+   `pnpm --config.enable-global-virtual-store=false install --frozen-lockfile`,
+   deliberately redundant, as a guard that makes a re-enable non-fatal. The
+   sandbox's install should carry the same flag for the same reason.
+3. **`pnpm check-types` is slow enough that the repo tells agents to skip it.**
+   A ship-loop run should verify through the dev server and `pnpm test`, not by
+   typechecking the whole monorepo — that is a wall-clock trap inside a run
+   already paying a ~3-minute cold boot.
+
+**Release path:** `staging` → `prod`, either a whole-branch `Staging` PR or
+cherry-picks onto a branch off `prod`. The fire-fighter never touches this; it
+only ever opens `→ staging`.
+
 ## Still open
 
 - **`AGENTS.md` §3** is cited by both skills as the authority on `staging` vs
