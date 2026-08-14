@@ -146,14 +146,19 @@ describe("boot", () => {
     const order = fake.calls.map((call) => call.method);
     expect(order.indexOf("killAllProcesses")).toBeLessThan(order.indexOf("startProcess"));
 
-    const setUrl = fake.calls.find(
-      (call) => call.method === "exec" && String(call.args[0]).includes("remote set-url"),
+    // The remote reaches provision.sh as an environment value rather than a
+    // separate `git remote set-url` exec, because a cold container has no
+    // repository to configure — it clones. What matters is unchanged and is what
+    // this asserts: the URL the container receives names the sentinel and
+    // carries the PLACEHOLDER, never a real credential.
+    const start = fake.calls.find((call) => call.method === "startProcess");
+    expect(start).toBeDefined();
+    const remote = String(
+      (start?.args[1] as { env?: Record<string, string> } | undefined)?.env?.SANDBOX_GIT_REMOTE,
     );
-    expect(setUrl).toBeDefined();
-    const command = String(setUrl?.args[0]);
-    expect(command).toContain(GIT_SENTINEL_HOST);
-    expect(command).toContain(MONOREPO_SLUG);
-    expect(command).toContain(PLACEHOLDER_CREDENTIAL);
+    expect(remote).toContain(GIT_SENTINEL_HOST);
+    expect(remote).toContain(MONOREPO_SLUG);
+    expect(remote).toContain(PLACEHOLDER_CREDENTIAL);
   });
 
   it("is single-flight: a concurrent pair provisions exactly once", async () => {

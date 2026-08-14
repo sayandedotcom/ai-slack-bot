@@ -22,18 +22,34 @@ set -euo pipefail
 
 REPO_PATH="${SANDBOX_REPO_PATH:-/workspace/web2app-rebuild}"
 REPO_REF="${SANDBOX_REPO_REF:-staging}"
+GIT_REMOTE="${SANDBOX_GIT_REMOTE:-}"
 
 step() { echo "STEP $1"; }
 fail() { echo "FAILED $1"; exit 1; }
 
-cd "$REPO_PATH" || fail "repo-missing"
+[ -n "$GIT_REMOTE" ] || fail "missing-git-remote"
 
-# Fetch through the sentinel host. The container holds no credential: the
-# remote points at github.com and the Worker's outbound interceptor substitutes
-# the real token on egress. If this fails, everything after it is meaningless,
-# so it fails loudly rather than proceeding against a stale tree.
-step "fetch"
-git fetch --depth 1 origin "$REPO_REF" || fail "fetch"
+# Clone or fetch, through the sentinel host either way.
+#
+# The image no longer bakes the repository — see the Dockerfile — so a cold
+# container arrives empty and clones, while a warm one already has the tree and
+# only fetches. Both go through the sentinel: the URL carries a placeholder and
+# the Worker substitutes the real token on egress, so no credential ever exists
+# inside this container.
+if [ -d "$REPO_PATH/.git" ]; then
+  cd "$REPO_PATH" || fail "repo-unreadable"
+  step "set-remote"
+  git remote set-url origin "$GIT_REMOTE" || fail "set-remote"
+  step "fetch"
+  git fetch --depth 1 origin "$REPO_REF" || fail "fetch"
+else
+  step "clone"
+  # --depth 1 because history is worthless here and costs minutes. Phase 20
+  # builds its commit Worker-side from a diff, so the container never needs to
+  # push and never needs a full object graph.
+  git clone --depth 1 --branch "$REPO_REF" "$GIT_REMOTE" "$REPO_PATH" || fail "clone"
+  cd "$REPO_PATH" || fail "repo-unreadable"
+fi
 
 # Discard whatever a previous run left behind. This is why provision.sh lives
 # in /usr/local/bin: a reset that deleted the running script would be a

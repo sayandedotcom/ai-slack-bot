@@ -232,10 +232,6 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
     // Worker's outbound interceptor swaps in the real PAT on egress. The
     // credential written here is a placeholder by name, and the interceptor
     // overwrites the Authorization header regardless of what the container sent.
-    await sandbox.exec(`git -C ${repoPath} remote set-url origin ${gitRemoteUrl(env)}`, {
-      timeout: GIT_CONFIG_TIMEOUT_MS,
-    });
-
     await sandbox.startProcess(PROVISION_SCRIPT, {
       processId: PROVISION_PROCESS_ID,
       // WITHOUT THIS, BOOT CANNOT BE A POLL. The SDK cleans a process record up
@@ -250,9 +246,18 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
       // ERR_PNPM_IGNORED_BUILDS. Per-process like everything else, so it is
       // absent from the container's ambient environment; `''` when unset, which
       // provision.sh surfaces as a named failure rather than a mystery.
+      // The remote is passed rather than configured by a separate `exec`,
+      // because the repository may not exist yet: the image no longer bakes it
+      // (see the Dockerfile), so a cold container clones and a warm one fetches,
+      // and only provision.sh knows which case it is in.
+      //
+      // What must stay true either way, and what the test pins: this URL carries
+      // the PLACEHOLDER, never a real credential. The sentinel host is swapped
+      // for github.com Worker-side on egress.
       env: {
         SANDBOX_REPO_PATH: repoPath,
         SANDBOX_REPO_REF: REPO_REF,
+        SANDBOX_GIT_REMOTE: gitRemoteUrl(env),
         NUCLEO_LICENSE_KEY: env.NUCLEO_LICENSE_KEY ?? "",
       },
     });

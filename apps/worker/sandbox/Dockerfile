@@ -77,34 +77,31 @@ EXPOSE 4101
 EXPOSE 4102
 
 # ---------------------------------------------------------------------------
-# The private clone, in its own stage so the credential cannot reach the final
-# image. BuildKit secrets are never written to a layer; a build ARG would be,
-# and `docker history` would print it.
+# The final image. Toolchain only.
 #
-# Cloning in a stage also sidesteps the repo's `.dockerignore`, which is `*`
-# plus an allowlist of built output only. A build context rooted at the repo
-# would COPY nothing at all — no source, no lockfile, no package.json.
+# The repository is NOT baked, and neither is anything derived from it. That is
+# the second half of the same lesson as `node_modules` below: this image has to
+# cross a domestic uplink to Cloudflare's registry, and the registry credential
+# expires on any push that runs long. A 6.26 GB image failed at its 3.74 GB
+# layer; a 2.76 GB image failed at its 904 MB layer. Layer size was never the
+# real variable — total transfer time was.
 #
-# Built with plain `docker build --secret`, NOT through `wrangler deploy`'s
-# Dockerfile path, which exposes no way to pass one. See sandbox/build.sh.
-# ---------------------------------------------------------------------------
-FROM base AS repo
-
-ARG REPO_REF=staging
-RUN --mount=type=secret,id=monorepo_pat \
-    git clone --depth 1 --branch "${REPO_REF}" \
-      "https://x-access-token:$(cat /run/secrets/monorepo_pat)@github.com/Zellify/web2app-rebuild.git" \
-      /workspace/web2app-rebuild \
-    && cd /workspace/web2app-rebuild \
-    && git remote set-url origin https://github.com/Zellify/web2app-rebuild.git
-
-# ---------------------------------------------------------------------------
-# The final image. Only repository CONTENT crosses from the repo stage — never
-# its build environment, and never the secret mount.
+# What remains is ~2 GB of toolchain whose layers are ALREADY in the registry
+# from the failed attempts, so a push is now near-instant, and a rebuild that
+# changes only provision.sh pushes a few kilobytes.
+#
+# It also removes every build secret. Cloning moved to boot, so the PAT is no
+# longer needed at build time, and `wrangler deploy` can build this Dockerfile
+# directly — the reason the plan reached for `wrangler containers push` in the
+# first place is gone.
+#
+# A pleasant side effect worth keeping: the boot-time clone exercises the
+# sentinel-host credential swap on every cold container, so the security
+# mechanism is on the live path rather than only in a test.
 # ---------------------------------------------------------------------------
 FROM base AS final
 
-WORKDIR /workspace/web2app-rebuild
+WORKDIR /workspace
 
 # Insurance against git's dubious-ownership refusal.
 #
@@ -135,19 +132,19 @@ RUN git config --global --add safe.directory /workspace/web2app-rebuild
 # committed to a PR.
 RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable-global-virtual-store=false\n' > /root/.npmrc
 
-COPY --from=repo /workspace/web2app-rebuild/ ./
 
 # ---------------------------------------------------------------------------
 # `node_modules` is deliberately NOT baked, and this is a reversal worth
 # explaining because the first version of this file did bake it.
 #
-# Baking install + build-packages produced a working 6.26 GB image whose install
-# step was a single 3.74 GB layer. That image cannot be pushed from a domestic
-# uplink: `docker push` resumes at LAYER granularity and never within a layer,
-# so a 3.74 GB layer must transfer in one unbroken window, and Cloudflare's
-# registry credential expires long before ~1 MB/s gets through it. Three
-# attempts, one of 62 minutes, all died `unauthorized` mid-layer while the 22
-# smaller layers uploaded and cached fine.
+# Baking install + build-packages produced a working 6.26 GB image that could
+# not be pushed from a domestic uplink. The first theory was layer size —
+# `docker push` resumes at LAYER granularity and never within a layer, so a
+# 3.74 GB layer must cross in one unbroken window. That theory was wrong, or at
+# least incomplete: slimming to 2.76 GB with a 904 MB largest layer failed the
+# same way, on a different layer. The real variable is TOTAL transfer time
+# against a registry credential that expires — at ~1 MB/s, anything measured in
+# gigabytes loses.
 #
 # So the expensive-but-unpushable half moves to boot, where it runs on
 # Cloudflare's network rather than ours. What stays baked is everything that is
