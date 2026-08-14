@@ -68,6 +68,15 @@ A 5–50 MB video cannot go through `toSafeJson` (24 000 chars) and should not g
 
 **Settled (was open):** bytes cross container→Worker as a raw stream. `@cloudflare/sandbox` 0.12.5's `readFile(path, { encoding: 'none' })` returns `content: ReadableStream<Uint8Array>` over capnp — no base64, no SSE framing, no buffering — and feeds `R2Bucket.put` directly, so there is no Worker-memory ceiling to fight. It is **RPC-transport only** (HTTP/WebSocket throw), and both our `getSandbox` call sites already pass `{ transport: "rpc" }`. One caveat carried into Task 3: RPC-only APIs are the same family as the spike's `tunnels.*` trap, so the first live use asserts the stream survives the DO hop rather than assuming it.
 
+**Pinned for wave-A concurrency — the `SandboxGateway` extension is exactly:**
+
+```ts
+/** Raw binary read of a file in the container. RPC transport only. */
+readBinary(path: string): Promise<ReadableStream<Uint8Array>>;
+```
+
+Task 4 implements it in `src/codemode/gateways.ts` + `src/sandbox/gateway.ts` (its files per the wave table); Task 3's `record.ts` consumes it and its tests stub it. Neither renames it, neither widens it — a second parameter or an options bag is a review finding, not a judgment call.
+
 ### 3. The recording URL is a dedicated Worker route behind an Access **bypass** — not the Phase 09 publisher, not a public bucket
 
 Slack has to fetch the video with no Access token, and a customer clicks the link cold. Neither existing path can serve that:
@@ -116,11 +125,13 @@ One thing is different here and it dominates everything else: **this phase pays 
 build and registry push, and that is minutes of wall-clock you cannot parallelise away.
 Everything below is arranged so you pay it exactly once.**
 
-1. **ONE image cycle, not two.** Task 1 Step 4 as written ("rebuild and push") fires
-   before Task 2's harness exists, so the harness would need a second build. Task 1's
-   ffmpeg goes into the **base** stage, which invalidates every layer beneath it — that
-   second push is a full one, not the "few kilobytes" the `Dockerfile:100` comment
-   promises for a provision-only change. So: **Task 1 does NOT build.** It edits the
+1. **ONE image cycle, not two.** Task 1's Dockerfile edit adds a `COPY` line for
+   `harness/record.cjs` — a file Task 2 creates. A build before that file exists
+   **fails outright** at the `COPY`, so Task 1 cannot build even if it wanted to; and
+   two cycles would double the build+push overhead and open a second
+   registry-credential-expiry window for zero benefit (the registry dedupes by layer
+   digest, so the transfer total is the same either way — it is the overhead and the
+   risk window that double, not the bytes). So: **Task 1 does NOT build.** It edits the
    Dockerfile (ffmpeg **and** the `COPY` line for `harness/record.cjs`, beside the
    existing `COPY provision.sh` at line 184) and fixes the provision guard, then stops.
    The build+push happens once, after Task 2 lands the harness file.
@@ -137,10 +148,10 @@ Everything below is arranged so you pay it exactly once.**
 5. **Focused tests by exact path:** `cd apps/worker && pnpm exec vitest run test/<exact-file>.test.ts`.
    Never a pattern.
 6. **One `pnpm exec tsc --noEmit -p tsconfig.json` per task**, at the end of that task.
-7. **The full worker suite runs exactly once**, after Task 4 and before Task 5's live
-   proof. Nowhere else. The plan currently has no such step — add it. Do not enter a live
-   proof on an unverified tree; a red suite discovered mid-drill-rehearsal is
-   indistinguishable from a broken container.
+7. **The full worker suite runs exactly once**, at the "Gate — the full suite" step
+   between Tasks 4 and 5. Nowhere else. Do not enter a live proof on an unverified tree;
+   a red suite discovered mid-drill-rehearsal is indistinguishable from a broken
+   container.
 8. **`codemode:dts:check` is Task 4's gate, not a separate pass.** Regenerate and check
    inside Task 4, so the drift check never blocks the suite run in rule 7.
 9. **Dispatch = the task's own text + Global Constraints + Non-negotiable invariants +
@@ -172,9 +183,9 @@ Everything below is arranged so you pay it exactly once.**
 | C | full suite (rule 7) | serial, once, on the merged result of wave A |
 | D | **5** | live proof — interactive, human-in-the-loop, not dispatchable |
 
-Task 4 has a soft dependency on Task 3's `SandboxGateway` extension. Agree that signature
-up front from the "File structure" section and both can be written concurrently against
-it; do not serialise the waves for it.
+Task 4 has a soft dependency on the `SandboxGateway` extension, whose exact signature is
+pinned in decision 2 (`readBinary`). Both sides code against that pin concurrently; do
+not serialise the waves for it.
 
 ## Task order
 
@@ -218,6 +229,10 @@ The container→Worker read is settled (decision 2): `readFile(path, { encoding:
 - [ ] **Step 2:** Implement. `.d.ts` prose is prompt engineering: say that `page` is in scope, that throwing is how you fail, that a failing repro is a useful result worth keeping, and that the URL is safe to put in a PR body and a Slack message.
 - [ ] **Step 3:** Regenerate declarations, verify `codemode:dts:check` clean.
 - [ ] **Step 4:** Commit: `feat(codemode): the browser namespace — record, and keep the proof`
+
+### Gate — the full suite, once (speed rule 7)
+
+- [ ] On the merged result of wave A, with the image push landed: `cd apps/worker && pnpm exec vitest run` and one `tsc --noEmit`. Green is the entry ticket to Task 5; red means fix before any live run, because a red suite discovered mid-drill is indistinguishable from a broken container. Also deploy here — Task 5 runs against the deployed Worker, not a local one.
 
 ### Task 5 — Live proof
 
