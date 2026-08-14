@@ -26,20 +26,25 @@ Phase 00 Task 1 **GO** (recorded in the spike), Phase 09 (the registry, `audited
 
 ## Ground truth about the monorepo — read before anything
 
-Established by reading the repo on 2026-08-14. Several of these contradict what the roadmap assumed:
+> **Corrected 2026-08-14, second pass.** The first pass read the repo's **default branch**. That was the wrong branch: `staging` is what the sandbox runs and what PRs target, and it differs materially. Four items below were wrong the first time and are marked ⚠. The lesson is worth keeping — *the branch is part of the question*.
 
-1. **There is no root `AGENTS.md`.** The brief's instruction resolves to **`CLAUDE.md`** (529 lines) at the repo root. That file is the source for everything below.
-2. **pnpm is pinned to `9.12.2`** (`packageManager`, Volta, and `.npmrc` `engine-strict=true`). The spike's image baked `10.33.4`; that pin now fails the engine check. The image must ship 9.12.2.
-3. **Node**: `engines.node: ">=18"`, Volta pins 22.22.3. The base image's Node 22.23.2 satisfies both.
-4. **`pnpm build-packages` MUST run before the first dev or build** — workspace packages resolve from built `dist/`, not source. This is the expensive step baking exists to eliminate.
-5. **Every `dev` script is Infisical-wrapped**: `infisical run --env=dev --path=/apps/<app> -- next dev --port <n>`. The container has no Infisical auth. The dev server is started by running the *inner* command directly, with env supplied by the Worker.
-6. **`apps/web`'s dev script binds port 3000** — the sandbox's own control-server port, and the spike's worst trap (`waitForPort(3000)` succeeds against the sandbox itself and reports a server that was never running). Every server this agent starts must pass an explicit non-3000 `--port`.
-7. **Ports:** web 3000, auth 3001, dashboard 3002, template-landing 3003, standalone-api 3005, docs 3010, attribution-worker 5555, storybook 6006. Use **4100+** for anything we start, to stay clear of both 3000 and the repo's own conventions.
-8. **Redis is the only local service** (`docker/docker-compose.yml`). Docker-in-container is not available, so `redis-server` is baked and started as a plain process when something needs it. Supabase is remote — there is no local Supabase lane in the container.
-9. **`apps/dashboard` dev asks for a 6 GB heap** (`NODE_OPTIONS=--max-old-space-size=6144`). `standard-4` has 12 GiB, so exactly one such server fits at a time. This is a real ceiling, not a comfortable one.
-10. **Lint is Biome via Ultracite**, with a lefthook pre-commit hook. We never commit inside the container, so the hook never runs — which means edited files must be passed through `pnpm exec biome check --write` explicitly or the PR arrives unformatted.
-11. **Branch flow:** `apps/agent` and sandbox-stack work merges to `staging`, which is deliberately not promoted to prod. `staging` exists and is the PR base.
-12. **`pnpm check-types` is slow and the repo asks you not to run it unattended.** Prefer `pnpm --filter <pkg> check-types` on the touched package.
+Established from `staging` at `aca7b2e`.
+
+1. ⚠ **`AGENTS.md` exists on `staging`** (678 lines) — the brief was right and the first pass was wrong. `CLAUDE.md` there is a one-line pointer to it. Four more root docs matter: `architecture.md`, `backend.md`, `conventions.md`, `frontend.md`. (The default branch has no `AGENTS.md` and a 529-line `CLAUDE.md` pinning different versions — reading it is how the first pass went wrong.)
+2. ⚠ **pnpm is `11.17.0`**, not 9.12.2 (`packageManager` + `volta`). **Node `>=22`**, `.nvmrc` and volta both `22.22.3`. The base image's 22.23.2 satisfies it.
+3. ⚠ **There is no `.npmrc` anywhere.** `engineStrict: true` lives in `pnpm-workspace.yaml`, and with `engines.node: ">=22"` it constrains only Node.
+4. ⚠ **`pnpm install` FAILS without `NUCLEO_LICENSE_KEY`.** `apps/dashboard` depends on `nucleo-ui-outline-18`, whose preinstall verifies a license; without it pnpm 11 fails with `ERR_PNPM_IGNORED_BUILDS`. Both `pnpm-workspace.yaml` and `.github/workflows/pr-checks.yml` say so in comments. **This is a second external ask, and a hard blocker on the image build.** `--ignore-scripts` dodges it and is the wrong fix: `allowBuilds` covers esbuild, sharp, workerd, `@prisma/engines`, `unrs-resolver` and a dozen more that fetch or compile platform binaries, so skipping scripts yields a `node_modules` that installs cleanly and fails at the first build.
+5. **`pnpm build-packages` is mandatory** before any dev, build, or test (turbo's `test` task declares `dependsOn: ["^build"]`). It is also the expensive step: `@web2app/icons` runs SVGR over **3677 SVGs**, plus `prisma generate`, two `tsup` builds, and `openapi-typescript`. Turbo's `dev` task depends on the icons and funnel builds, so **without this baked, every container start repeats the icons codegen**. Bake `.turbo/` and the generated outputs, not just the install.
+6. **`enableGlobalVirtualStore: false`** in `pnpm-workspace.yaml` must never be flipped — Turbopack cannot resolve outside the project root and `next build` fails with "We couldn't find the Next.js package". The repo's own CI passes `--config.enable-global-virtual-store=false` explicitly; the image does the same.
+7. **The repo's `.dockerignore` is `*`** plus an allowlist of built output only (`.next/standalone`, `.next/static`, `public`, `deploy`). A build context rooted at the repo would copy **no source, no lockfile, no `package.json`**. Cloning inside a build stage sidesteps this entirely, which is what the Dockerfile does.
+8. **Every Next app's `dev` script is Infisical-wrapped** (`infisical run --env=dev --path=/apps/<app> -- next dev …`), and the CLI is not a dependency. The image bakes `@infisical/cli@0.43.65` so the wrapper at least *runs*; env values still come from the Worker. There is **no `.env.example`** anywhere — required vars are defined by zod modules: `apps/web/lib/env.{client,server}.ts`, `apps/dashboard/src/_lib/env.client.ts`.
+9. **`IS_BUILD=true` short-circuits env validation** in every one of those modules — but the dev scripts do not set it, so a dev server with missing vars throws `Invalid client environment variables`. Setting it ourselves is a way to boot with placeholder values; pages render until something dereferences a missing one. `apps/web` validates **eagerly at import**; `apps/dashboard` uses a lazy Proxy that throws on first property read.
+10. ⚠ **Three apps land on port 3000**, not one: `apps/web` (hardcoded `--port 3000` flag), `apps/landing` and `apps/storybook`'s `dev` (Next's default). Because the port is a **CLI flag inside the package script, a `PORT` env var does not override it** — the reliable form is `pnpm --filter @web2app/web exec next dev --port 4100`. 3000 is the sandbox's own control server, and the spike's worst trap: `waitForPort(3000)` succeeds against the sandbox itself and reports a server that was never running. Other ports: auth 3001, dashboard 3002, template-landing 3003, standalone-api 3005 (`PORT` works), docs 3010, funnel-gallery 4748, attribution-worker 5555 (`PORT` works), storybook 6006, agent 8787, funnel-server 8788. **Use 4100+.**
+11. **Tests need no database and no real credentials** — 409 test files, vitest almost everywhere (`apps/dashboard` uses `node:test`). `packages/api` injects a placeholder Anthropic key purely to satisfy a constructor at module load. Single file: `pnpm --filter @web2app/<pkg> test path/to/file.test.ts`.
+12. **Install-time scripts are safe.** Root `postinstall` (`agents sync`) needs no network, no credentials and no env, writes only inside the repo, and never throws on a normal run. `prepare` (`lefthook install`) needs a `.git` dir, which a clone has.
+13. **Lint is Biome 2.4.15 via Ultracite**, with a lefthook pre-commit hook that blocks on errors. We never commit inside the container, so edited files must go through `pnpm exec biome check --write <explicit paths>` or the PR arrives unformatted. **Never pass a directory or a computed-empty file list** — it sweeps the whole repo (it once rewrote 1585 files).
+14. **PR conventions** (`.agents/skills/m-create-pr/SKILL.md`, `m-commit/SKILL.md` — note `.claude/skills/*` is generated symlinks, gitignored, absent from a fresh clone): branch `<type>/<short-slug>`, base **`staging`** always (never `dev` — abandoned, ~1339 commits behind), title `<type>: <imperative summary>` under 70 chars, and a body of exactly `## Description` + `## Acceptance Criteria`. Linear closes on merge only when **`Fixes ZEL-<n>` is the first line of the PR body** — `Fixes`, not `Closes`. Commits are single-line, 3-8 words, prefixes `feat: fix: chore: refactor: ds:` only. **Both skills explicitly forbid any AI-attribution trailer** (`Co-Authored-By: Claude`, "Generated with Claude Code") in commits *and* PR bodies, and `m-create-pr` §6 overrides any parent instruction to add one. **Phase 20 must suppress our own trailer convention when writing into that repo.**
+15. **`apps/agent/sandbox-image/Dockerfile` is Zellify's own agent-sandbox image** and the best available model — it solves headless Chromium, a pnpm auth wrapper, and git credential helpers for the same problem. Read it before changing ours.
 
 ## The two findings that shaped this design
 
@@ -164,6 +169,21 @@ declare const sandbox: {
 Secrets (`wrangler secret put`, names only):
 - `MONOREPO_PAT` — fine-grained, `Zellify/web2app-rebuild`, Contents: read-only. Used by the egress swap at runtime and by the image build as a BuildKit secret.
 - `MONOREPO_DEV_ENV` — JSON object of dev-tier env values for the monorepo's apps.
+- `NUCLEO_LICENSE_KEY` — **build-time only**, never a Worker secret. `pnpm install` fails without it (ground truth §4). A second external ask.
+
+### The image is built outside `wrangler deploy`
+
+Corrected after checking the docs rather than assuming. `wrangler deploy` builds a Dockerfile-path image itself and **exposes no way to pass a BuildKit secret**, which this build needs twice over. The supported alternative is to build locally and push:
+
+```
+./sandbox/build.sh [tag]                       # docker build --secret ×2, then verifies no leak
+wrangler containers push firefighter-sandbox:<tag>
+# → set containers[0].image to the printed registry.cloudflare.com/<account>/… URI
+```
+
+This is better than the Dockerfile path anyway: an explicit tag per build makes a stale container visible in a diff, where the spike found that deploying a new image does **not** recycle a running one — a live sandbox keeps serving the old image indefinitely and `/env` reports stale contents.
+
+Note for Task 8: with a Dockerfile-path `image`, **`wrangler deploy --dry-run` actually builds the image**, so the gate is a multi-minute step. Pointing `image` at a registry URI removes Docker from the deploy path entirely.
 
 Vars (`wrangler.jsonc`, non-secret): `SANDBOX_REPO_PATH` (`/workspace/web2app-rebuild`), `SANDBOX_GIT_HOST` (the sentinel), `SANDBOX_SLEEP_AFTER` (`45m`), `SANDBOX_MAX_INSTANCES`.
 
@@ -225,7 +245,11 @@ So: dispatch subagents for waves B, C and D. Own waves A and E yourself. If Task
 
 Human-paced and started first, because everything downstream is cheaper once the numbers are real. No code.
 
-- [ ] **Step 1: Post the env ask in `#eng-firefighter`.** Request either an Infisical machine identity with read on `dev` for `/shared`, `/apps/web` and `/apps/dashboard`, or a one-time `infisical export --env=dev` for those paths — stating that it is stored as a Worker secret and injected into a sandbox at boot, never baked into an image and never committed. Record the answer and its date in `phase-18-notes.md`.
+- [ ] **Step 1: Post the env ask in `#eng-firefighter`.** Two things, not one:
+  - **`NUCLEO_LICENSE_KEY`** — the hard blocker. `pnpm install` fails without it (ground truth §4), so the image cannot bake at all. Ask for this first; it blocks more than the Infisical answer does.
+  - **Infisical `dev` access** — a machine identity with read on `/shared`, `/apps/web` and `/apps/dashboard`, or a one-time `infisical export --env=dev` for those paths. State that it is stored as a Worker secret and injected into a sandbox process at boot, never baked into an image and never committed.
+
+  Record both answers and their dates in `phase-18-notes.md`.
 - [ ] **Step 2: Create the fine-grained PAT** on your own account: resource owner Zellify, only `web2app-rebuild`, Contents read-only. If the org blocks or holds fine-grained tokens for approval, ask in the same channel; note in `phase-18-notes.md` whether a classic PAT had to be used and what that widens.
 - [ ] **Step 3: `wrangler secret put MONOREPO_PAT`.** Confirm by name only.
 - [ ] **Step 4: Re-run the spike's six numbers against the real monorepo.** Point `spikes/sandbox`'s `TARGET_REPO` at `web2app-rebuild` (with the PAT as a BuildKit secret), rebuild, and measure: cold boot, `git fetch`, `pnpm install --prefer-offline`, `pnpm build-packages` (cold **and** warm — this is the number that decides whether baking is sufficient), a dev server reaching listening state on port 4100, and image build+push time. This is the roadmap's named unknown — *can a `standard-4` run Zellify's monorepo* — being answered.
@@ -252,7 +276,9 @@ Human-paced and started first, because everything downstream is cheaper once the
 
 - [ ] **Step 1: Read** `spikes/sandbox/src/sandbox-class.ts` and `docs/inspired-from-ronit.md` §7.
 - [ ] **Step 2: The `Sandbox` class.** Extend `BaseSandbox<Env>`, `interceptHttps = true`, `sleepAfter: string | number = SANDBOX_SLEEP_AFTER` — **keep the `string | number` type**; narrowing to `string` breaks assignability to `SandboxEnv<Sandbox<any>>` and surfaces the error far from the cause. Re-export `ContainerProxy` from the Worker entrypoint or interception fails at runtime.
-- [ ] **Step 3: The git credential swap.** A sentinel host (`git.firefighter.local`) whose handler rewrites the request to `https://github.com/...` carrying `Authorization: Basic base64("x-access-token:" + MONOREPO_PAT)`. Prefer the runtime **`setOutboundByHost`** per-instance API over agent-os's module-scope static — the spike found it and our credential is per-run. Registered **only** for the sentinel; no catch-all `outbound`, no `allowedHosts`/`deniedHosts`, so R2, npm and apt flow direct through the container's own namespace.
+- [ ] **Step 3: The git credential swap.** A sentinel host (`git.firefighter.local`) whose handler rewrites the request to `https://github.com/...` carrying `Authorization: Basic base64("x-access-token:" + MONOREPO_PAT)`. Registered **only** for the sentinel; no catch-all `outbound`, no `allowedHosts`/`deniedHosts`, so R2, npm and apt flow direct through the container's own namespace.
+
+  > **Corrected during implementation — use the module-scope `static outboundByHost`, NOT the runtime `setOutboundByHost`.** The plan originally preferred the runtime API on the grounds that "our credential is per-run". It is not: `MONOREPO_PAT` is one Worker secret, identical for every run. Worse, the runtime API is mutually exclusive with per-host mode — `setOutboundByHost` writes to `outboundByHostOverrides`, which makes `hasMutableOutboundConfiguration()` true, which makes `shouldInterceptAllOutbound()` true, which registers `interceptOutboundHttps('*')`. One call silently promotes the container to intercept-all and (per the SDK's own comment) keeps it there until restart, re-exposing the HEAD `Content-Length` normalisation that broke agent-os's R2 mount. None of this is in the `.d.ts`; it is only visible in the compiled `container.js`.
 - [ ] **Step 4: wrangler config.** `containers` entry (`class_name: "Sandbox"`, `image: "./sandbox/Dockerfile"`, `instance_type: "standard-4"`, `max_instances` from the budget), DO binding `SANDBOX`, `migrations` gains `{ "tag": "v2", "new_sqlite_classes": ["Sandbox"] }` alongside RunDO's `v1`, plus the four vars. **Do not** add `proxyToSandbox` to the fetch handler — see "What this phase deliberately does not do".
 - [ ] **Step 5: Deploy and verify the swap live** — from a container, `git ls-remote` through the sentinel succeeds; then `grep` `/workspace`, `/tmp`, `/etc/environment` and the process environment for the PAT and assert **zero** occurrences. Mirror the spike's discipline: the container receives a verdict, never a reflection of its own egress.
 - [ ] **Step 6: Typecheck + `wrangler deploy --dry-run`.** Commit: `feat(sandbox): container class, sentinel-host credential swap, wrangler wiring`
