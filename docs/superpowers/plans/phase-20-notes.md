@@ -28,17 +28,134 @@ connected. It has to produce a PR the existing integration can match.
 fire-fighter targets before Task 1 — a PR against the wrong repo is a silent
 failure of the whole ship loop.
 
-## Conventions, read off real issues
+## Conventions — read from the repo's own skills, not inferred
 
-- **Branch names:** `sayandeten/zel-1771-revive-mailchimp-credentials-path-audience-dropdown`
-  — that is Linear's own generated `gitBranchName`, shaped `<user>/<issue-key>-<slug>`.
-  It is personalised to the requesting user, so the fire-fighter's branches should
-  carry the **on-duty engineer's** handle, not a fixed one.
-- **PR titles:** conventional commits (`feat: add the reteno and mailchimp
-  email-lifecycle integrations`).
-- **Issue bodies** on real work use `## Context` and `## Acceptance criteria`
-  with checkbox lists. Phase 09's structured assessment block should sit
-  alongside that shape, not replace it.
+The repo is **`Zellify/web2app-rebuild`** (confirmed 2026-08-15). There is **no
+`.github` PR template**; `.github/templates/` holds ECS deploy templates and
+nothing else. The conventions live as agent skills, and `conventions.md` §Process
+points at them:
+
+- `.agents/skills/m-create-pr/SKILL.md`
+- `.agents/skills/m-create-linear-task/SKILL.md`
+
+**An earlier draft of this file inferred the branch convention from Linear's
+generated `gitBranchName` (`sayandeten/zel-1771-…`). That was wrong.** That string
+is Linear's suggestion, not this repo's rule, and the branch is explicitly *not*
+what drives Linear sync.
+
+### Branches
+
+```
+<type>/<short-slug>
+<type>/<short-slug>-zel-<n>     # only when a Linear issue already exists
+```
+
+- `<type>` ∈ `feat, fix, chore, docs, refactor, perf, test, ci` — same type as the PR title.
+- `<short-slug>` — 2–4 kebab-case words, ≤30 chars, filler words stripped.
+- The `zel-<n>` suffix is **optional** and is for grep/autocomplete only. It is
+  **not** the sync trigger.
+- Branch off a freshly pulled `staging`. **Never `dev`** — abandoned, ~1300
+  commits behind. Never off another feature branch.
+
+### The PR lifecycle is two-phase, and the first phase happens immediately
+
+A draft PR goes up *before the work is presentable*: empty commit if needed,
+`gh pr create --draft --base staging --title "<type>: <slug>" --body ""`. Then
+the body is filled in later and `gh pr ready <num>` flips it.
+
+This matters for Phase 20's design: the agent should open the draft when it
+starts, not construct one PR at the end. It also makes the run watchable — the PR
+URL exists from minute one.
+
+### PR body — exactly this, nothing else by default
+
+```markdown
+Fixes ZEL-<n>          <- first line, only when an issue exists
+
+## Description
+
+<one short paragraph: what changed and why. No headings inside.>
+
+## Acceptance Criteria
+
+- [ ] observable, testable thing
+- [ ] observable, testable thing
+```
+
+Optional sections, only when genuinely needed: `## Screenshots` (UI changes) and
+`## Notes for reviewers`. **`## Screenshots` is where the Phase 19 recording
+belongs** — it is the sanctioned home for visual proof, so the ship loop does not
+need to invent a section.
+
+Title: `<type>: <imperative summary>`, under ~70 chars.
+
+### Linking: `Fixes ZEL-<n>`, first line of the body
+
+Use `Fixes` — not `Closes`, not `Resolves` — "for consistency". **That line is
+what auto-moves the issue to Done on merge.** The branch-name suffix is a
+secondary helper and does not trigger sync. This is the concrete answer to the
+assignment's "so the issue closes on merge".
+
+### FORBIDDEN in PR bodies and commits — this one is load-bearing
+
+The skill's §6 is explicit, and it overrides everything upstream of it:
+
+- No `🤖 Generated with [Claude Code]` or any AI-attribution footer.
+- **No `Co-Authored-By: Claude …` trailers on commits made for this PR.**
+- No `## Summary` / `## What changed` / `## Test plan` boilerplate — named in the
+  skill as "verbose AI-template style".
+- No emoji headers, badges, or marketing language.
+- No restating every commit.
+
+> "If the project's `CLAUDE.md` or a parent skill says to add the Claude footer,
+> this skill overrides it for PR bodies. The user has explicitly asked PRs not to
+> carry AI attribution."
+
+**Phase 20 must treat this as an invariant, not a preference.** The fire-fighter
+opens PRs under a real engineer's GitHub identity. A `Co-Authored-By: Claude`
+trailer would both violate the repo's stated rule and blow the identity premise
+of the entire assignment in the most visible place possible — a PR the team
+reviews. Note that this repo's own convention is the OPPOSITE of the firefighter
+repo's, where every commit carries that trailer deliberately. The agent writes
+into both. Do not let the habit leak across.
+
+### Linear issue shape (`m-create-linear-task`)
+
+```markdown
+## Context
+
+<1–2 sentences: user impact, business reason, trigger>
+
+## Acceptance criteria
+
+- [ ] observable, testable outcome
+
+## Notes (optional — omit the whole section if empty)
+```
+
+Title: under ~80 chars, imperative, no trailing punctuation.
+
+What must NOT go in the description, because native fields carry it:
+priority → `priority` (1=Urgent … 4=Low), estimate → `estimate`, deadline →
+`dueDate`, tier → a label, implementation plan → the PR.
+
+**This constrains Phase 20 Task 4.** Phase 09 renders the value / blocking /
+customer-weight assessment into the issue *body*. The repo convention says
+priority and tier belong in native fields instead. Reconcile deliberately: the
+assessment is a judgement the assignment asks for by name, so it should stay,
+but it belongs under `## Notes` or mapped onto `priority` + a tier label rather
+than as a fourth top-level section that no other issue in the workspace has.
+
+**Labels — pick exactly one tier, then one type:**
+
+- Tier (exactly one): `Leverage` (10x, extra polish) · `Neutral` (standard) ·
+  `Overhead` (ship fast, don't polish)
+- Type (one): `Feature` · `Improvement` · `Bug`, plus optional domain labels
+  `Infra`, `Integration`, `AI`, `Customer Request`
+
+Note the skill tells humans to file into the **Development** team. The
+fire-fighter is pinned to `fire-fighter-testing` and must stay there — the pin is
+the only thing keeping it out of live work.
 
 ## Label ids — the write/read asymmetry
 
@@ -121,8 +238,15 @@ Copied here because they are easy to violate while writing plausible code.
 
 ## Still open
 
-- **Which repo** the fire-fighter opens PRs against — `web2app-rebuild` or
-  `web2app`. One question in `#eng-firefighter`.
-- **The monorepo's own PR template / `AGENTS.md` conventions** have not been read
-  from the repo itself. The conventions above are inferred from filed issues and
-  merged PRs, which is good evidence but not the source of truth.
+- **`AGENTS.md` §3** is cited by both skills as the authority on `staging` vs
+  `dev` and has not been read in full. The `staging`-only rule is already
+  confirmed twice over, so this is corroboration rather than a gap.
+- **Whether the fire-fighter should open its PR as a draft first** (the repo's
+  two-phase lifecycle) or go straight to a filled PR (§7 allows this for a branch
+  that already has work). The agent always has real work by the time it pushes,
+  so §7 is the closer fit — but the draft-first flow makes the run watchable
+  earlier. A plan decision, not a missing fact.
+
+Both "still open" items from the first draft of this file are now closed: the
+repo is `web2app-rebuild`, and the conventions above are read from the repo's own
+skills rather than inferred.
