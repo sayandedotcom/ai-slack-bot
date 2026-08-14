@@ -162,9 +162,59 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
     return { id: issue.id };
   }
 
+  /**
+   * Labels whose automation belongs to someone else. Verified live 2026-08-15:
+   * the workspace carries a `Devin Playbooks` group — `!triage`, `!plan`,
+   * `!implement`, `!review` — and labels are WORKSPACE-wide, not team-scoped,
+   * so the team pin does not keep them out of reach. Applying one from here
+   * would hand our issue to another team's agent. The model picks label names
+   * freely, so this is a filter, not a convention we can document and trust.
+   */
+  const FOREIGN_AUTOMATION_LABEL = /^!/;
+
+  /**
+   * Linear's read API returns label NAMES (`labels: ["Leverage","Integration"]`)
+   * but `issueCreate` requires label UUIDs. Passing the names straight through
+   * silently drops every label — the issue files, unlabelled, and nothing
+   * errors. Verified against the live workspace: `Bug` is
+   * `1222a88e-6b42-46c0-b19b-1c7ec3190393`.
+   *
+   * Resolved at call time rather than from a hardcoded table, because a table
+   * goes stale the first time someone adds a label and the failure is silent
+   * in exactly the same way.
+   *
+   * An unknown name is DROPPED, not an error. The issue is the deliverable; a
+   * label the model invented is not worth failing a create that a customer is
+   * waiting on. The dropped names are returned so the caller can say so.
+   */
+  async function resolveLabelIds(
+    names: readonly string[],
+  ): Promise<{ ids: string[]; dropped: string[] }> {
+    if (names.length === 0) return { ids: [], dropped: [] };
+    const result = await query<{ issueLabels: { nodes: Array<{ id: string; name: string }> } }>(
+      `query { issueLabels(first: 250) { nodes { id name } } }`,
+      {},
+    );
+    const nodes = result.data?.issueLabels?.nodes ?? [];
+    const byName = new Map(nodes.map((n) => [n.name.toLowerCase(), n]));
+
+    const ids: string[] = [];
+    const dropped: string[] = [];
+    for (const name of names) {
+      const hit = byName.get(name.toLowerCase());
+      if (hit === undefined || FOREIGN_AUTOMATION_LABEL.test(hit.name)) {
+        dropped.push(name);
+        continue;
+      }
+      ids.push(hit.id);
+    }
+    return { ids, dropped };
+  }
+
   return {
     async createIssue(input): Promise<IssueRef> {
       const id = issueIdFromEffectKey(input.idempotencyKey);
+      const { ids: labelIds } = await resolveLabelIds(input.labels);
       const result = await query<{
         issueCreate: { success: boolean; issue: IssueRef | null };
       }>(
@@ -180,7 +230,8 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
           description: input.description,
           // The team is injected here and appears in no model-facing schema.
           teamId: config.teamId,
-          labelIds: input.labels.length > 0 ? input.labels : undefined,
+          // UUIDs, never the names the model supplied — see resolveLabelIds.
+          labelIds: labelIds.length > 0 ? labelIds : undefined,
         },
       );
 

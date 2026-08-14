@@ -19,6 +19,13 @@ function mockTransport(replies: unknown[]) {
   vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as { query: string; variables: Record<string, unknown> };
     sent.push({ document: body.query, variables: body.variables, headers: new Headers(init.headers) });
+    // Label resolution is answered by intent and does NOT consume the queue.
+    // A labelled create makes two round trips and an unlabelled one makes a
+    // single trip, so a positional queue would silently hand the create the
+    // label reply the moment a test's `labels` changed.
+    if (body.query.includes("issueLabels")) {
+      return new Response(JSON.stringify(labelsReply()), { status: 200 });
+    }
     const reply = replies[Math.min(i++, replies.length - 1)];
     return new Response(JSON.stringify(reply), { status: 200 });
   });
@@ -30,6 +37,37 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const created = (identifier = "FIR-1") => ({
   data: { issueCreate: { success: true, issue: { id: "iss-1", identifier, url: `https://linear.app/z/issue/${identifier}` } } },
 });
+
+/**
+ * Linear's write API takes label UUIDs while its read API hands back names, so
+ * a labelled create is TWO round trips: resolve, then file. These are the real
+ * ids, read from the live workspace on 2026-08-15.
+ */
+const LABEL_IDS = {
+  bug: "1222a88e-6b42-46c0-b19b-1c7ec3190393",
+  security: "80515b29-3269-4a74-af82-6f7d06d4f9fe",
+} as const;
+
+const labelsReply = () => ({
+  data: {
+    issueLabels: {
+      nodes: [
+        { id: LABEL_IDS.bug, name: "bug" },
+        { id: LABEL_IDS.security, name: "security" },
+        // A foreign team's automation trigger. Present in the real workspace,
+        // and labels are workspace-wide, so the team pin does not exclude it.
+        { id: "a7f51500-d732-48ff-a39e-b79da75ed83a", name: "!implement" },
+      ],
+    },
+  },
+});
+
+/**
+ * The requests that actually filed something. Asserting on `sent[0]` broke the
+ * moment label resolution was added — index into intent, not into arrival
+ * order.
+ */
+const creates = (sent: Sent[]): Sent[] => sent.filter((s) => s.document.includes("issueCreate"));
 
 /**
  * A fresh run/turn per call. createIssue reserves through the effect ledger,
@@ -124,7 +162,7 @@ describe("linear.createIssue always uses the pinned team", () => {
     ]) {
       const sent = mockTransport([created()]);
       await call(await linearTools(), "createIssue", { ...validCreate, ...patch });
-      expect(sent[0].variables.teamId).toBe(TEAM_ID);
+      expect(creates(sent)[0].variables.teamId).toBe(TEAM_ID);
       vi.unstubAllGlobals();
     }
   });
@@ -216,9 +254,36 @@ describe("linear effect keys name everything that changes the effect", () => {
     await call(await linearTools(makeLinearGateway(config), scope), "createIssue",
       { ...validCreate, labels: ["security"] });
 
-    expect(sent).toHaveLength(2);
-    expect(sent[0].variables.labelIds).toEqual(["bug"]);
-    expect(sent[1].variables.labelIds).toEqual(["security"]);
+    const filed = creates(sent);
+    expect(filed).toHaveLength(2);
+    // UUIDs, not the names the model supplied. Passing the names through was a
+    // silent no-op: Linear filed the issue and applied no label at all.
+    expect(filed[0].variables.labelIds).toEqual([LABEL_IDS.bug]);
+    expect(filed[1].variables.labelIds).toEqual([LABEL_IDS.security]);
+  });
+
+  it("drops a label the workspace does not have rather than failing the create", async () => {
+    const scope = await freshScope();
+    const sent = mockTransport([created("FIR-1")]);
+    const issue = await call(await linearTools(makeLinearGateway(config), scope), "createIssue",
+      { ...validCreate, labels: ["bug", "not-a-real-label"] });
+
+    // The issue is the deliverable. A label the model invented is not worth
+    // failing a create that a customer is waiting on.
+    expect(creates(sent)[0].variables.labelIds).toEqual([LABEL_IDS.bug]);
+    expect(issue).toBeDefined();
+  });
+
+  it("refuses a foreign team's automation trigger", async () => {
+    const scope = await freshScope();
+    const sent = mockTransport([created("FIR-1")]);
+    await call(await linearTools(makeLinearGateway(config), scope), "createIssue",
+      { ...validCreate, labels: ["bug", "!implement"] });
+
+    // Labels are workspace-wide, so the team pin does not keep the Devin
+    // Playbooks triggers out of reach. Applying one hands our issue to another
+    // team's agent.
+    expect(creates(sent)[0].variables.labelIds).toEqual([LABEL_IDS.bug]);
   });
 
   it("still replays a genuinely identical create", async () => {
@@ -227,7 +292,7 @@ describe("linear effect keys name everything that changes the effect", () => {
     const args = { ...validCreate, labels: ["bug"] };
     const a = await call(await linearTools(makeLinearGateway(config), scope), "createIssue", args);
     const b = await call(await linearTools(makeLinearGateway(config), scope), "createIssue", args);
-    expect(sent).toHaveLength(1);          // ONE issue filed
+    expect(creates(sent)).toHaveLength(1);          // ONE issue filed
     expect(b).toEqual(a);
   });
 
@@ -241,7 +306,7 @@ describe("linear effect keys name everything that changes the effect", () => {
       { ...validCreate, labels: ["bug", "security"] });
     await call(await linearTools(makeLinearGateway(config), scope), "createIssue",
       { ...validCreate, labels: ["security", "bug"] });
-    expect(sent).toHaveLength(1);
+    expect(creates(sent)).toHaveLength(1);
   });
 });
 
