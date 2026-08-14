@@ -16,6 +16,7 @@ import {
   isLegacySystemAuthorityTurn,
   PROMPT_SECTION_ORDER,
   PromptAuthorityError,
+  renderEngineerVoice,
   renderStablePolicy,
   renderTrustedContext,
   renderVoiceExamples,
@@ -175,6 +176,21 @@ describe("input authority", () => {
 
 // --- Step 2: the section order ----------------------------------------------
 
+/**
+ * A resolved engineer voice, built by hand so the ordering assertions do not
+ * need D1. The freeze, the bounds and the query itself are proved against real
+ * rows in `test/prompt-voice.test.ts`; what is proved HERE is where the block
+ * lands and what cache mark it carries.
+ */
+const voice = {
+  shiftIndex: 400,
+  email: "luka@zellify.app",
+  samples: Array.from({ length: 6 }, (_, index) => ({
+    text: `a real message the engineer typed, number ${index}`,
+    ts: `17200000${index}.000100`,
+  })),
+};
+
 describe("prompt section order", () => {
   it("is stable policy, voice examples, trusted context, then untrusted messages", () => {
     const prompt = buildAgentPrompt({
@@ -185,10 +201,13 @@ describe("prompt section order", () => {
     expect(PROMPT_SECTION_ORDER).toEqual([
       "stable_policy",
       "stable_voice_examples",
+      "engineer_voice",
       "dynamic_trusted_context",
       "untrusted_model_messages",
     ]);
 
+    // No voice supplied, so the block is absent entirely — the layout that
+    // shipped before it existed, unchanged.
     expect(prompt.instructions).toHaveLength(3);
     expect(prompt.instructions.map((block) => block.role)).toEqual(["system", "system", "system"]);
     expect(prompt.instructions[0].content).toBe(renderStablePolicy());
@@ -221,6 +240,75 @@ describe("prompt section order", () => {
     // Never on the dynamic block: it changes every run, so caching it would pay
     // the write multiplier for a prefix nothing can reuse.
     expect(prompt.instructions[2].providerOptions).toBeUndefined();
+  });
+
+  /**
+   * The engineer-voice block, placed and marked.
+   *
+   * It sits AFTER the two build-stable blocks (which are reused across shifts
+   * and rotations) and BEFORE the dynamic trusted context (which changes every
+   * run). It carries the SECOND of Anthropic's four breakpoints, ending the
+   * shift-stable prefix — safe only because the block is frozen for the whole
+   * shift, which `test/prompt-voice.test.ts` proves against real D1 rows.
+   */
+  it("places the engineer voice after the stable pair, before trusted context", () => {
+    const prompt = buildAgentPrompt({ context, voice, messages: [] });
+
+    expect(prompt.instructions).toHaveLength(4);
+    expect(prompt.instructions[0].content).toBe(renderStablePolicy());
+    expect(prompt.instructions[1].content).toBe(renderVoiceExamples());
+    expect(prompt.instructions[2].content).toBe(renderEngineerVoice(voice));
+    expect(prompt.instructions[2].content).toContain("How the on-duty engineer actually writes");
+    expect(prompt.instructions[3].content).toBe(renderTrustedContext(context));
+    expect(prompt.instructions.every((block) => block.role === "system")).toBe(true);
+  });
+
+  it("gives the engineer voice its own cache mark, and still none to the dynamic block", () => {
+    const prompt = buildAgentPrompt({ context, voice, messages: [] });
+
+    expect(prompt.instructions[0].providerOptions).toBeUndefined();
+    // Two breakpoints of the four available: build-stable, then shift-stable.
+    expect(prompt.instructions[1].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: "ephemeral", ttl: "5m" } },
+    });
+    expect(prompt.instructions[2].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: "ephemeral", ttl: "5m" } },
+    });
+    expect(prompt.instructions[3].providerOptions).toBeUndefined();
+  });
+
+  /**
+   * Below the usable floor the render is `""`, and an empty block is DROPPED
+   * rather than emitted. A zero-length system block would be a byte-stable way
+   * to spend one of four breakpoints on nothing.
+   */
+  it("omits the block entirely rather than emitting an empty one", () => {
+    const thin = { ...voice, samples: voice.samples.slice(0, 4) };
+    expect(renderEngineerVoice(thin)).toBe("");
+
+    for (const supplied of [{ voice: thin }, { voice: null }, {}]) {
+      const prompt = buildAgentPrompt({ context, messages: [], ...supplied });
+      expect(prompt.instructions).toHaveLength(3);
+      expect(prompt.instructions[2].content).toBe(renderTrustedContext(context));
+      expect(prompt.instructions[2].providerOptions).toBeUndefined();
+    }
+  });
+
+  /**
+   * The block is shift-stable, not run-stable: two unrelated runs inside one
+   * shift must produce the same bytes for blocks 0-2, or the shift-stable
+   * prefix is not a prefix and every request re-pays for it.
+   */
+  it("keeps the engineer voice byte-identical across unrelated runs in one shift", () => {
+    const a = buildAgentPrompt({ context, voice, messages: [] });
+    const b = buildAgentPrompt({
+      context: { ...context, runId: "different", customerSlug: "othercorp", shadow: true },
+      voice,
+      messages: [],
+    });
+
+    expect(b.instructions[2].content).toBe(a.instructions[2].content);
+    expect(b.instructions[3].content).not.toBe(a.instructions[3].content);
   });
 
   it("never lets customer bytes reach a system message", () => {
