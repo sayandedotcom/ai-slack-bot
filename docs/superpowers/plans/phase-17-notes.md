@@ -1,9 +1,12 @@
 # Phase 17 notes — Chat page: navigation, visual pass, gate
 
 Task 4 of the phase-17 plan wires navigation between the dashboard and the
-new chat page (`apps/dashboard/src/chat/chat-page.tsx`, shipped in Task 3)
-and closes the phase gate. This note records what was actually verified in
-this pass, and what is deliberately still open.
+new chat page (`apps/dashboard/src/chat/chat-page.tsx`, shipped in Task 3).
+This note records what was actually verified in this pass and what was
+deliberately left unverified. It does not close the phase gate: the plan's
+central exit criterion — citations opening real Slack threads — is still
+unproven, and the phase remains open until the steps recorded under "Open
+gate" below are run.
 
 ## What changed
 

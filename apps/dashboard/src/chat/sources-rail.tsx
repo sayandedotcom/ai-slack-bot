@@ -12,7 +12,9 @@ export function SourcesRail({ sources }: { sources: SourceChip[] }): ReactNode {
   return (
     <section aria-label="Sources" className="space-y-2">
       <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">Sources</h3>
-      <ul className="space-y-2">
+      {/* Bounded height + own scroll so a long citation list can never squeeze
+          the transcript above it down to nothing. */}
+      <ul className="max-h-64 space-y-2 overflow-y-auto">
         {sources.map((source) => (
           <li key={source.permalink}>
             <a

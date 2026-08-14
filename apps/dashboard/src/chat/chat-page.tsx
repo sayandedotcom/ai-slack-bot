@@ -49,9 +49,20 @@ function NewChat({ onCreated }: { onCreated: (id: string) => void }): ReactNode 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // One requestId per submission attempt, held across retries: the worker
-  // dedupes on it, so a flaky network cannot open two runs for one question.
+  // One requestId per submission attempt, held across retries. This does NOT
+  // dedupe runs — the worker mints a new run on every POST regardless; it
+  // only stabilizes the first turn's id inside whichever run gets created.
+  // Kept anyway because that turn-id stability is still correct and useful.
+  // The actual guard against a double-submit is the `sending` in-flight flag
+  // below, which blocks a second submit while the first is still outstanding.
   const requestIdRef = useRef<string | null>(null);
+
+  // Shared by the textarea and the suggestion buttons so both paths reset
+  // requestIdRef the same way — new text always means a new question.
+  const setText = useCallback((value: string) => {
+    setDraft(value);
+    requestIdRef.current = null;
+  }, []);
 
   const submit = useCallback(async () => {
     const firstMessage = draft.trim();
@@ -92,11 +103,7 @@ function NewChat({ onCreated }: { onCreated: (id: string) => void }): ReactNode 
         <div className="flex items-end gap-2">
           <textarea
             value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              // New text is a new question; a retained retry id belongs to the old one.
-              requestIdRef.current = null;
-            }}
+            onChange={(event) => setText(event.target.value)}
             onKeyDown={onKeyDown}
             rows={3}
             disabled={sending}
@@ -114,7 +121,7 @@ function NewChat({ onCreated }: { onCreated: (id: string) => void }): ReactNode 
             <button
               key={suggestion}
               type="button"
-              onClick={() => setDraft(suggestion)}
+              onClick={() => setText(suggestion)}
               className="block w-full rounded-md border bg-card px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
               “{suggestion}”
