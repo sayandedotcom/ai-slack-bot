@@ -54,6 +54,49 @@ act, and Task 4 gives `record` a named refusal for the browserless case.
   The recording harness is therefore **`record.cjs`**, not `.mjs`. Found by the
   smoke test failing, not by reading docs.
 
+### The ffmpeg layer, measured (Task 1)
+
+Image with ffmpeg + the harness: **1.45 GB**, against 871 MB for the deployed
+phase-18 image — a **~579 MB delta**, all of it apt's ffmpeg and its transitive
+libs (the harness itself is 10 kB). Larger than the 449 MB the in-container
+probe suggested, because the image pays for the `.deb` metadata and a handful of
+recommends the probe's container already had.
+
+Asserted **in the built image**, not in a probe container: `ffmpeg -encoders`
+names `libx264` (and `libx264rgb`), `ffmpeg -muxers` names `mp4`, and
+`/usr/local/bin/record-harness.cjs` is present. That is the property Task 1
+Step 2 asks for — "ffmpeg exists" would not have been.
+
+Worth knowing for the push: this is one new layer on top of layers the registry
+already holds, so the phase-18 economics survive — but 579 MB is not free on a
+domestic uplink, and it is the one unavoidable transfer of this phase.
+
+### The harness, proven in the rebuilt image (not stubbed)
+
+The unit tests exercise the Worker side against a stubbed container. Before
+spending a live boot, the real `record-harness.cjs` was run inside
+`firefighter-sandbox:p19` against four cases. All four behaved as designed:
+
+| Case | RESULT |
+|---|---|
+| passing script | `state: passed`, `bytes: 9693` — **exactly the file's size on disk** — and `ffprobe` reports `codec_name=h264` |
+| script throws (`click` on a missing selector) | `state: failed` carrying Playwright's own `TimeoutError` text, **video kept** (3911 B) |
+| script calls `process.exit(0)` | **exactly one RESULT line still printed**; the script sees `TypeError: Cannot read properties of undefined (reading 'exit')` |
+| script hangs against an 8 s budget | `state: failed`, "script exceeded timeoutMs (8000ms)", settled at 8.6 s, video kept |
+
+The third row is the one worth keeping. A review found that `new Function`
+runs the model's source with the true Node globals reachable, so a script
+ending in `process.exit(0)` — a common habit in generated code — would kill the
+harness before it printed anything, leaving the Worker polling a process that
+had silently died. Shadowing the dangerous globals as unbound parameters turns
+that into an ordinary script error the model can read and fix. Argued in
+review, then confirmed here against the real binary.
+
+Also confirmed: the rebuild after the harness changed touched **only the
+trailing COPY layer** — every other layer reported CACHED and the build took
+under a second. That is the layer ordering in the Dockerfile doing its job, and
+it is why the harness could be edited late without paying for the image twice.
+
 ### The recording-URL decision, grounded
 
 - The Phase 09 artifact pipeline cannot serve recordings, four independent
