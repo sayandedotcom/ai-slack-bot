@@ -88,15 +88,6 @@
     // the Slack app's `im:write` scope was an open question (roadmap line 398)
     // and both paths are implemented, so switching is a config change and not
     // a deploy of new code.
-    // How ingest recognises this app's OWN user-token posts (agent replies
-    // sent as the on-duty engineer). Slack stamps bot_id + app_id on every
-    // API-posted message, so without these two pins the blanket bot drop
-    // erased the agent's replies from D1 (found live, 2026-08-14). Both are
-    // public identifiers, not credentials: they appear in every message the
-    // app posts. app_id from the app's own settings URL; bot user id from
-    // auth.test.
-    "SLACK_APP_ID": "A0BPVS02D1N",
-    "SLACK_BOT_USER_ID": "U0BNZGM7422",
     "NUDGE_MODE": "dm",
     // The #eng-firefighter channel id, used in "channel" mode AND whenever the
     // on-duty engineer has no Slack identity row — fallback beats silence.
@@ -122,6 +113,14 @@
     // Where the nudge's "Review" button points: `${DASHBOARD_BASE_URL}/?approval=${id}`.
     // The Worker's own origin — the dashboard is served from it (see "assets").
     "DASHBOARD_BASE_URL": "https://firefighter.sayandeten.workers.dev",
+    // How ingest recognises this app's OWN user-token posts (agent replies sent
+    // as the on-duty engineer). Slack stamps bot_id + app_id on every
+    // API-posted message, so without these two pins the blanket bot drop erased
+    // the agent's replies from D1 (found live, 2026-08-14). Both are public
+    // identifiers, not credentials: they appear in every message the app posts.
+    // app_id from the app's own settings URL; bot user id from auth.test.
+    "SLACK_APP_ID": "A0BPVS02D1N",
+    "SLACK_BOT_USER_ID": "U0BNZGM7422",
     // --------------------------------------------------------- Phase 18
     //
     // The Tier 2 sandbox. All three are non-secret by construction: a path

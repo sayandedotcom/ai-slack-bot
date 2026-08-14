@@ -93,6 +93,56 @@ postable without failing the suite.
 
 ---
 
+## What the sandbox is allowed to know
+
+The Tier 2 container holds **no write credentials**. It emits artifacts — a diff, a
+recording, logs — and the Worker performs every write. There is no Slack token, no GitHub
+token and no Linear key inside it to exfiltrate. Its one credential-shaped need, cloning a
+private monorepo, is met without a credential: git's remote points at a sentinel host, and
+the real PAT is substituted Worker-side on egress, so the container only ever sees a
+placeholder.
+
+A dev server is the exception that has to be stated rather than glossed. `apps/web` and
+`apps/dashboard` validate their environment with zod at startup and will not boot without
+real values, so while one runs, those values exist inside the container.
+
+**The container receives 28 environment variables, not the 115 the dev environment
+contains.** The excluded 87 are the ones that could do damage and that a dev server
+rendering a funnel page has no use for: both Stripe secret keys, every payment provider's
+credentials, the Discord webhooks, the Tinybird token, the analytics database URLs, the
+Meta/TikTok/Snapchat tokens, `ANTHROPIC_API_KEY`. What is included is every `NEXT_PUBLIC_*`
+(they ship in the client bundle and are public by construction), the Supabase pair,
+`REDIS_URL`, and the S3 trio.
+
+The selection is an allowlist with a deny-list on top, and it was **verified against the
+apps' own zod modules** — `apps/web/lib/env.{client,server}.ts` and
+`apps/dashboard/src/_lib/env.client.ts` — so every variable those modules require is
+present. It deliberately errs wide *within* the harmless set: a missing variable at drill
+time is a worse failure than a slightly larger payload.
+
+Cloudflare's 5.1 kB limit on a text binding is what surfaced this — the full 115-key blob is
+8.2 kB and was refused. **The limit is not the reason to keep the curation.** Least privilege
+is. Splitting the secret across two bindings would have satisfied the platform and left the
+container holding a payment credential it never needed.
+
+Two limits stated plainly rather than implied away:
+
+- **Per-process injection is a reduction in blast radius, not a boundary.** Values are passed
+  to the process that needs them rather than into the container's ambient environment, but
+  `exec({ cmd: "env", injectDevEnv: true })` returns stdout to the model. Known dev-env values
+  are therefore redacted from every output that crosses back — `stdout`, `stderr`, process
+  tails, file reads. That defeats the case that actually happens: a value landing in a run
+  transcript, then in memory, then conceivably in a customer-facing draft.
+- **Redaction does not stop deliberate encoding.** A model that runs `env | base64` defeats it;
+  both `base64` and `rev` are in the image. Values shorter than 16 characters are also left
+  alone, because redacting every occurrence of `dev` would destroy the build logs it appears in.
+
+These are dev-tier read credentials, disjoint from every write path, never baked into the
+image, and sourced from a Worker secret the model cannot name or enumerate. The exposure is
+the same shape as an engineer running `pnpm dev` on a laptop.
+
+---
+
 ## Development
 
 ```bash
