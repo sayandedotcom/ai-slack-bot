@@ -135,8 +135,10 @@ function ToolCallRow({ call }: { call: ToolCallView }): ReactNode {
 
 function TurnRow({
   turn,
+  renderContent,
 }: {
   turn: { role: string; source: string; content: string; createdAt: number };
+  renderContent?: (content: string) => ReactNode;
 }): ReactNode {
   return (
     <div className={`rounded-lg border px-3 py-2 ${ROLE_CLASS[turn.role] ?? ROLE_CLASS.system}`}>
@@ -146,15 +148,23 @@ function TurnRow({
           {new Date(turn.createdAt).toLocaleTimeString()}
         </span>
       </div>
-      <p className="mt-1 text-sm whitespace-pre-wrap break-words">{turn.content}</p>
+      <p className="mt-1 text-sm whitespace-pre-wrap break-words">
+        {renderContent === undefined ? turn.content : renderContent(turn.content)}
+      </p>
     </div>
   );
 }
 
-function ItemRow({ item }: { item: SessionItem }): ReactNode {
+function ItemRow({
+  item,
+  renderContent,
+}: {
+  item: SessionItem;
+  renderContent?: (content: string) => ReactNode;
+}): ReactNode {
   switch (item.kind) {
     case "turn":
-      return <TurnRow turn={item.turn} />;
+      return <TurnRow turn={item.turn} renderContent={renderContent} />;
     case "tool_call":
       return <ToolCallRow call={item.call} />;
     case "status":
@@ -168,7 +178,7 @@ function ItemRow({ item }: { item: SessionItem }): ReactNode {
         <div className="rounded-lg border border-border bg-card px-3 py-2">
           <Caption>agent</Caption>
           <p className="mt-1 text-sm whitespace-pre-wrap break-words">
-            {item.text}
+            {renderContent === undefined ? item.text : renderContent(item.text)}
             {/* The cursor is the only signal that this text is still arriving. */}
             <span className="ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 animate-pulse bg-foreground align-middle" />
           </p>
@@ -197,11 +207,13 @@ export function SessionView({
   connection,
   onSteer,
   composerPlaceholder,
+  renderContent,
 }: {
   session: SessionState;
   connection: Connection;
   onSteer: (content: string) => void;
   composerPlaceholder?: string;
+  renderContent?: (content: string) => ReactNode;
 }): ReactNode {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Whether the reader is parked at the tail. Starts true so a freshly opened
@@ -282,7 +294,7 @@ export function SessionView({
           </p>
         ) : (
           session.items.map((item, index) => (
-            <ItemRow key={itemKey(item, index)} item={item} />
+            <ItemRow key={itemKey(item, index)} item={item} renderContent={renderContent} />
           ))
         )}
 

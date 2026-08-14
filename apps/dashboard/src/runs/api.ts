@@ -58,7 +58,7 @@ export type RunSync = {
  * names the path and never the response body, and the request is same-origin
  * so no credential can be sent anywhere else.
  */
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+export async function postJson<T>(path: string, body: unknown): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, {

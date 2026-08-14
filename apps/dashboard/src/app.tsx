@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ApprovalsPanel } from "./approvals/approvals-panel";
 import { useApprovals } from "./approvals/use-approvals";
+import { ChatPage } from "./chat/chat-page";
 import { ConnectPanel } from "./components/connect-panel";
 import { CountersPanel } from "./components/counters-panel";
 import { Header, SignedOutPage, useIdentity } from "./components/header";
@@ -14,33 +15,54 @@ import { SessionView } from "./runs/session-view";
 import { useRunSession } from "./runs/use-run-session";
 
 /**
- * Which run the drawer is showing, kept in `location.hash` rather than React
- * state alone. A run is the thing an operator pastes into Slack and reloads
- * into at 3am; a selection that evaporates on refresh would make the drawer
- * unshareable. No router — one hash key is the entire routing need here.
+ * Which page is showing, and which run the dashboard drawer or the chat page
+ * has open, kept in `location.hash` rather than React state alone. A run is
+ * the thing an operator pastes into Slack and reloads into at 3am; a
+ * selection that evaporates on refresh would make the drawer unshareable. No
+ * router library — one hash key is the entire routing need here.
  */
-function useSelectedRun(): [string | null, (id: string | null) => void] {
-  const read = () => {
-    const match = /^#run=(.+)$/.exec(location.hash);
-    return match ? decodeURIComponent(match[1] as string) : null;
-  };
-  const [runId, setRunId] = useState<string | null>(read);
+type Route =
+  | { page: "dashboard"; runId: string | null }
+  | { page: "chat"; runId: string | null };
+
+function parseHash(hash: string): Route {
+  const chat = /^#chat(?:\/run=(.+))?$/.exec(hash);
+  if (chat !== null) {
+    const chatRunId = chat[1];
+    return { page: "chat", runId: chatRunId === undefined ? null : decodeURIComponent(chatRunId) };
+  }
+  const drawer = /^#run=(.+)$/.exec(hash);
+  if (drawer !== null) {
+    const drawerRunId = drawer[1] as string;
+    return { page: "dashboard", runId: decodeURIComponent(drawerRunId) };
+  }
+  return { page: "dashboard", runId: null };
+}
+
+function routeToHash(route: Route): string {
+  if (route.page === "chat") {
+    return route.runId === null ? "#chat" : `#chat/run=${encodeURIComponent(route.runId)}`;
+  }
+  return route.runId === null ? "" : `#run=${encodeURIComponent(route.runId)}`;
+}
+
+/** Same discipline as the old `useSelectedRun`: the hash is the state; back,
+ * forward, and a hand-edited hash are all the same event to us. */
+function useHashRoute(): [Route, (route: Route) => void] {
+  const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
 
   useEffect(() => {
-    // Back/forward and a hand-edited hash are the same event to us.
-    const onHashChange = () => setRunId(read());
+    const onHashChange = () => setRoute(parseHash(location.hash));
     addEventListener("hashchange", onHashChange);
     return () => removeEventListener("hashchange", onHashChange);
   }, []);
 
-  const select = useCallback((id: string | null) => {
-    // Writing the hash fires `hashchange`, which sets the state; assigning it
-    // here too keeps the drawer instant rather than waiting on the event.
-    location.hash = id === null ? "" : `run=${encodeURIComponent(id)}`;
-    setRunId(id);
+  const navigate = useCallback((next: Route) => {
+    location.hash = routeToHash(next);
+    setRoute(next);
   }, []);
 
-  return [runId, select];
+  return [route, navigate];
 }
 
 /**
@@ -76,42 +98,56 @@ export function App() {
   const { identity, error: identityError } = useIdentity();
   const roster = usePoll(getRoster, 60_000);
   const approvals = useApprovals();
-  const [selectedRun, selectRun] = useSelectedRun();
+  const [route, navigate] = useHashRoute();
+  const selectedRun = route.page === "dashboard" ? route.runId : null;
+  const selectRun = useCallback(
+    (id: string | null) => navigate({ page: "dashboard", runId: id }),
+    [navigate],
+  );
   const closeDrawer = useCallback(() => selectRun(null), [selectRun]);
 
   if (identityError) return <SignedOutPage error={identityError} />;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <Header identity={identity} />
-      <main className="mx-auto grid max-w-5xl grid-cols-1 gap-4 p-6 md:grid-cols-2">
-        {/* First in the grid, deliberately: a pending escalation is the only
-            thing on this page with a human waiting on the other end of it, so
-            it is pinned above the fold ahead of the rotation and the counters. */}
-        <div data-slot="approvals-panel" className="md:col-span-2">
-          <ApprovalsPanel
-            state={approvals.state}
-            role={identity?.role ?? "viewer"}
-            onDecide={approvals.decideCard}
-          />
-        </div>
-        <div className="md:col-span-2">
-          <RotationStrip state={roster} />
-        </div>
-        <ConnectPanel state={roster} identity={identity} />
-        <CountersPanel />
-        <div data-slot="runs-panel" className="md:col-span-2">
-          <RunList onSelect={selectRun} />
-        </div>
-      </main>
-      {selectedRun === null ? null : (
-        <RunSession
-          // Keyed by run id so switching runs remounts the session rather than
-          // feeding a second run's events into the first one's reducer.
-          key={selectedRun}
-          runId={selectedRun}
-          onClose={closeDrawer}
+      <Header identity={identity} page={route.page} />
+      {route.page === "chat" ? (
+        <ChatPage
+          runId={route.runId}
+          onSelectRun={(id) => navigate({ page: "chat", runId: id })}
         />
+      ) : (
+        <>
+          <main className="mx-auto grid max-w-5xl grid-cols-1 gap-4 p-6 md:grid-cols-2">
+            {/* First in the grid, deliberately: a pending escalation is the only
+                thing on this page with a human waiting on the other end of it, so
+                it is pinned above the fold ahead of the rotation and the counters. */}
+            <div data-slot="approvals-panel" className="md:col-span-2">
+              <ApprovalsPanel
+                state={approvals.state}
+                role={identity?.role ?? "viewer"}
+                onDecide={approvals.decideCard}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <RotationStrip state={roster} />
+            </div>
+            <ConnectPanel state={roster} identity={identity} />
+            <CountersPanel />
+            <div data-slot="runs-panel" className="md:col-span-2">
+              <RunList onSelect={selectRun} />
+            </div>
+          </main>
+          {selectedRun === null ? null : (
+            <RunSession
+              // Keyed by run id so switching runs remounts the session rather than
+              // feeding a second run's events into the first one's reducer.
+              key={selectedRun}
+              runId={selectedRun}
+              onClose={closeDrawer}
+            />
+          )}
+        </>
       )}
     </div>
   );

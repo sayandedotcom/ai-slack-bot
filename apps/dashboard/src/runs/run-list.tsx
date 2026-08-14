@@ -46,7 +46,7 @@ const STATUS_CLASS: Record<RunStatus, string> = {
  * string is as precise as the data underneath it; seconds would flicker and
  * imply a freshness the five-second poll cannot back.
  */
-function ago(thenMs: number, nowMs: number): string {
+export function ago(thenMs: number, nowMs: number): string {
   const seconds = Math.max(0, Math.round((nowMs - thenMs) / 1000));
   if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
