@@ -51,7 +51,7 @@ export function makeBrowserTools(ctx: BindingContext): ToolDescriptors {
     record: auditedCapability(ctx, "browser", "record", {
       effect: "sandbox_write",
       description:
-        "Run a Playwright script with video recording, on this run's own container. `page` is already in scope — do not open a browser or a context yourself, and do not call recordVideo; the harness owns both. Write the script as you would a Playwright test body and THROW to fail: the last expression's truthiness is never consulted. This does not block — it starts the recording and returns a recordingId; poll checkRecording for the result on a LATER turn, across blocks rather than in a loop inside this one, because a real run is minutes and this execution has seconds. `timeoutMs` defaults to a generous budget and anything above 180000 (3 minutes) is REFUSED rather than quietly shortened — a script still running after three minutes is stuck, not working. A script that throws is not a wasted call: the harness still flushes a playable video of the failure, and checkRecording returns it — that recording IS the proof a bug is real, so keep it rather than re-running for a clean one. If this run's machine never got a working browser, checkRecording reports that by name (browser-unavailable) instead of a generic failure or a hang.",
+        "Run a Playwright script with video recording, on this run's own container. `page` is already in scope — do not open a browser or a context yourself, and do not call recordVideo; the harness owns both. Write the script as you would a Playwright test body and THROW to fail: the last expression's truthiness is never consulted. This does not block — it starts the recording and returns a recordingId; poll checkRecording for the result on a LATER turn, across blocks rather than in a loop inside this one, because a real run is minutes and this execution has seconds. `timeoutMs` defaults to 60000 (60 seconds) and bounds the SCRIPT: raise it when the first navigation has to wait for a cold dev server to compile the page, which routinely takes 20-40 seconds — otherwise the run fails with \"script exceeded timeoutMs\", which looks exactly like the bug reproducing and is not. Anything above 180000 (3 minutes) is REFUSED rather than quietly shortened. `script` is capped at 20000 characters and `label` at 200; both are refused, not truncated. A script that throws is not a wasted call: the harness still flushes a playable video of the failure, and checkRecording returns it — that recording IS the proof a bug is real, so keep it rather than re-running for a clean one. If this run's machine never got a working browser, checkRecording reports that by name (browser-unavailable) instead of a generic failure or a hang.",
       input: z.strictObject({
         script: z.string().min(1).max(20_000),
         label: z.string().min(1).max(200),
@@ -87,10 +87,10 @@ export function makeBrowserTools(ctx: BindingContext): ToolDescriptors {
  *
  * The ceiling itself is `record.ts`'s `MAX_RECORDING_TIMEOUT_MS`, imported
  * rather than declared here a second time. Two constants for one bound is
- * exactly how this drifted once already (Ruling 11): this file's `300_000`
- * let a `timeoutMs` between 180001 and 300000 pass validation, consume a
- * call, and then throw two layers deeper against a number the model was never
- * told about. The layer that enforces the value now owns it.
+ * exactly how this drifted once already: this file's `300_000` let a
+ * `timeoutMs` between 180001 and 300000 pass validation, consume a call, and
+ * then throw two layers deeper against a number the model was never told
+ * about. The layer that enforces the value now owns it.
  */
 function assertRecordTimeoutInBudget(timeoutMs: number): void {
   if (timeoutMs <= MAX_RECORDING_TIMEOUT_MS) return;

@@ -9,8 +9,8 @@
  * import the generator.
  *
  * `tracing` was added when `bindings/browser.ts` started importing a plain
- * constant (`MAX_RECORDING_TIMEOUT_MS`) from `sandbox/record.ts` — Ruling 11's
- * "one constant, owned by the enforcing layer." That value import pulls in
+ * constant (`MAX_RECORDING_TIMEOUT_MS`) from `sandbox/record.ts` — one
+ * constant, owned by the layer that enforces it. That value import pulls in
  * `record.ts` → `sandbox/gateway.ts` → `@cloudflare/sandbox`'s `getSandbox`,
  * whose RPC control path does `import { tracing } from "cloudflare:workers"`
  * at the top level, so the generator now fails at load time on a name this
