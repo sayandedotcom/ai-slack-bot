@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { isProofKey } from "../src/api/proofs";
 import { MAX_RECORDING_BYTES } from "../src/sandbox/record";
-import { INTERNAL_KEY_PREFIX } from "../src/sandbox/diff";
+import { INTERNAL_KEY_PREFIX, isInternalKey } from "../src/sandbox/diff";
 
 /**
  * THE ONE UNAUTHENTICATED SURFACE IN THIS WORKER.
@@ -64,13 +64,25 @@ describe("the key shape is decided before R2 is touched", () => {
     // A raw `_internal/diff/…` path has too many segments to match `:key`, so
     // the reachable probe is the percent-encoded one — the same lesson the
     // artifacts route learned in Phase 18.
+    //
+    // THE TWO REFUSALS ARE PINNED SEPARATELY, on purpose. Every probe below is
+    // ALSO rejected by `isProofKey` (a leading `_` is not hex), so asserting
+    // only the 404 would leave this case green with the `isInternalKey` guard
+    // deleted — vacuous with respect to the property it claims to protect. The
+    // positive refusal still earns its place: it is what keeps the private
+    // namespace unreachable if the key pattern is ever loosened, which is
+    // exactly the change a future format (webm, a thumbnail) would make.
     for (const key of [
       `${INTERNAL_KEY_PREFIX}diff/${hex("a")}.patch`,
       `${INTERNAL_KEY_PREFIX}${hex("a")}.mp4`,
       INTERNAL_KEY_PREFIX,
     ]) {
-      const response = await fetchProof(encodeURIComponent(key));
-      expect(response.status).toBe(404);
+      const probe = encodeURIComponent(key);
+      // What the handler receives is the DECODED param, and it is genuinely
+      // internal-shaped — so the first guard is the one that fires.
+      expect(isInternalKey(decodeURIComponent(probe))).toBe(true);
+      expect(isProofKey(decodeURIComponent(probe))).toBe(false);
+      expect((await fetchProof(probe)).status).toBe(404);
     }
   });
 
@@ -169,17 +181,21 @@ describe("every failure is the same 404", () => {
     expect((await fetchProof(key)).status).toBe(404);
   });
 
-  it("never lets a dot-segment name a recording", async () => {
-    // `..` never reaches the handler at all: the URL parser resolves dot
-    // segments — including the percent-encoded `%2e%2e` form — before any router
-    // sees the path, so `/proofs/..` IS `/`, a request for the dashboard root.
-    // The property that matters is not the status code (the SPA legitimately
-    // answers `/` with 200) but that no traversal shape can ever produce a
-    // recording, which `isProofKey` above pins from the other side.
-    for (const path of ["..", "%2e%2e", "%2e%2e/%2e%2e"]) {
-      const response = await fetchProof(path);
-      expect(response.headers.get("content-type")).not.toContain("video/");
-      expect(response.headers.get("content-disposition")).toBeNull();
+  it("404s a traversal that actually reaches the handler", async () => {
+    // ENCODED SLASHES, because those are the traversal shapes that survive.
+    // A bare `/proofs/..` is resolved to `/` by the URL parser before any
+    // router sees it — it is a request for the dashboard root, and asserting
+    // anything about its response would be asserting properties of the SPA. An
+    // encoded slash is NOT a path separator, so the segment stays one segment,
+    // matches `:key`, and Hono hands the handler the decoded `../../secrets.mp4`
+    // — which is exactly the string the key pattern has to reject.
+    for (const probe of [
+      "..%2F..%2Fsecrets.mp4",
+      `..%2F${hex("a")}.mp4`,
+      `%2E%2E%2F${INTERNAL_KEY_PREFIX}${hex("a")}.mp4`,
+    ]) {
+      expect(isProofKey(decodeURIComponent(probe))).toBe(false);
+      expect((await fetchProof(probe)).status).toBe(404);
     }
   });
 
@@ -194,11 +210,15 @@ describe("every failure is the same 404", () => {
     expect(await unknown.text()).toBe(await malformed.text());
   });
 
-  it("names no bucket, prefix or account in its refusal", async () => {
-    const body = await (await fetchProof("nonsense")).text();
+  it("names no bucket, prefix or account in its refusal, and states its own type", async () => {
+    const response = await fetchProof("nonsense");
+    const body = await response.text();
     expect(body).not.toContain("firefighter-artifacts");
     expect(body).not.toContain("proofs/");
     expect(body).not.toContain("R2");
+    // The refusal is as inert as the success path — this is the one surface
+    // here that no Access application stands in front of.
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
   it("does not fall through to the SPA for a multi-segment path", async () => {

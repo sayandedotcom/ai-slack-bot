@@ -21,6 +21,17 @@
  * or a browserless machine are all reported as a RESULT, never a crash. The
  * only way this process itself should exit nonzero is a bug in the harness,
  * and even that is caught below and turned into a RESULT line first.
+ *
+ * RESULT carries `bytes` alongside `video`, and it is not decoration. The
+ * Worker streams the mp4 out of this container and into R2 without ever
+ * holding it whole, so it has no independent way to know when a transport
+ * ended EARLY: a stream that stops short without erroring produces a shorter
+ * object that uploads cleanly, resolves at its URL, and plays for a few
+ * seconds before stopping. Nothing downstream could catch that — a human
+ * clicking the link in a customer thread would. `bytes` is the file's real
+ * size, statted immediately before this line is emitted, so the Worker can
+ * compare it against what it actually received and refuse rather than publish
+ * a truncated proof. It is `null` whenever `video` is `null`.
  */
 
 const fs = require('fs');
@@ -134,6 +145,7 @@ async function main() {
       state: 'browser-unavailable',
       error: 'the boot-time Chromium install did not complete on this machine; re-provisioning installs it',
       video: null,
+      bytes: null,
       durationMs: 0,
     });
     return;
@@ -248,6 +260,9 @@ async function main() {
   }
 
   let video = null;
+  // The mp4's real size, and null unless `video` is set. Paired with `video`
+  // rather than reported independently so the two can never disagree.
+  let bytes = null;
   if (webmPath) {
     // resolve, not join: the contract promises an ABSOLUTE mp4 path in the
     // RESULT line regardless of whether the Worker passed outDir as
@@ -265,6 +280,10 @@ async function main() {
         // concern from whether the run itself succeeded.
       } else {
         video = mp4Path;
+        // Statted here, from the same `statSync` the ceiling check above
+        // already performs, and nothing writes to the file after this point —
+        // so this number is the length the Worker must receive in full.
+        bytes = size;
       }
     } else {
       error = error ? `${error}; ffmpeg: ${result.error}` : result.error;
@@ -293,7 +312,7 @@ async function main() {
     error = error.slice(0, ERROR_CHAR_CAP);
   }
 
-  emit({ state, error, video, durationMs });
+  emit({ state, error, video, bytes, durationMs });
 }
 
 main().catch((err) => {
@@ -303,6 +322,7 @@ main().catch((err) => {
     state: 'failed',
     error: trimError(err),
     video: null,
+    bytes: null,
     durationMs: 0,
   });
 });

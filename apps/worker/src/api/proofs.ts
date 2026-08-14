@@ -88,7 +88,13 @@ function hasBody(object: R2Object | R2ObjectBody): object is R2ObjectBody {
 function missing(): Response {
   return new Response(JSON.stringify({ code: "not_found", message: "no such recording" }), {
     status: 404,
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      // Costs nothing, and matches the success path. This is the one
+      // unauthenticated surface in the Worker, so every response it can emit
+      // states its own type rather than leaving one to be guessed.
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 

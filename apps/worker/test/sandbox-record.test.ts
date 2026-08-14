@@ -4,6 +4,7 @@ import {
   checkRecording,
   MAX_RECORDING_BYTES,
   MAX_RECORDING_TIMEOUT_MS,
+  RECORDING_ERROR_CHARS,
   RECORDING_HARNESS_PATH,
   RECORDING_TAIL_CHARS,
   RECORDING_WORKDIR_ROOT,
@@ -45,6 +46,8 @@ type HarnessResult = {
   state: "passed" | "failed" | "browser-unavailable";
   error: string | null;
   video: string | null;
+  /** The mp4's real size, statted by the harness right before it reported. */
+  bytes: number | null;
   durationMs: number;
 };
 
@@ -139,6 +142,9 @@ function stub(
       state: "passed",
       error: null,
       video: `${RECORDING_WORKDIR_ROOT}/${recordingId}/video.mp4`,
+      // The default matches the stub's default video exactly, so the
+      // truncation guard is satisfied unless a case deliberately breaks it.
+      bytes: MP4.byteLength,
       durationMs: 4_200,
       ...result,
     } satisfies HarnessResult)}`;
@@ -318,7 +324,12 @@ describe("a failing run publishes the video AND surfaces the error", () => {
       "Chromium is not installed in this container: run `npx playwright install chromium` before recording.";
     const { deps, finish } = stub({ video: MP4 });
     const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
-    finish(recordingId, { state: "browser-unavailable", error: actionable, video: null });
+    finish(recordingId, {
+      state: "browser-unavailable",
+      error: actionable,
+      video: null,
+      bytes: null,
+    });
 
     const status = await checkRecording(deps, recordingId);
 
@@ -417,6 +428,112 @@ describe("an over-ceiling video is refused readably", () => {
   });
 });
 
+describe("a poll reports a publish failure, it never throws one", () => {
+  /**
+   * A poll has already collected the harness's verdict, the error the model has
+   * to act on, and the tail of its output by the time the upload is attempted.
+   * An exception escaping `publish` would throw all of that away and turn a
+   * routine poll into a capability failure — and the container being torn down
+   * between the RESULT line and the poll is not exotic, it is what happens when
+   * a run ends.
+   */
+  it("survives a container read that fails, keeping the verdict and the tail", async () => {
+    // The stub's readBinary throws when no video is configured.
+    const { deps, finish } = stub({});
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, { state: "passed" }, { stdout: "step 1: signed in\n" });
+
+    const status = await checkRecording(deps, recordingId);
+
+    // The browser journey PASSED. The upload is what failed, and saying
+    // otherwise would send the agent to fix code that works.
+    expect(status.state).toBe("passed");
+    expect(status.url).toBeNull();
+    expect(status.error).toContain("could not be published");
+    expect(status.stdoutTail).toContain("step 1: signed in");
+  });
+
+  it("survives a bucket read that fails, and does NOT delete an already-published proof", async () => {
+    const { deps, finish } = stub({ video: MP4 });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, {});
+
+    const published = await checkRecording(deps, recordingId);
+    const key = keyOf(published.url!);
+    expect(await env.ARTIFACTS.head(key)).not.toBeNull();
+
+    // A later poll where the metadata read itself fails. `head` is now inside
+    // the try, so the failure is caught — and the cleanup must NOT fire, or a
+    // transient R2 blip would destroy the proof an earlier poll published.
+    const failing = new Proxy(env.ARTIFACTS, {
+      get(target, property) {
+        if (property === "head") return () => Promise.reject(new Error("R2 unavailable"));
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    }) as R2Bucket;
+
+    const status = await checkRecording({ ...deps, bucket: failing }, recordingId);
+
+    expect(status.state).toBe("passed");
+    expect(status.url).toBeNull();
+    expect(status.error).toContain("could not be published");
+    expect(await env.ARTIFACTS.head(key)).not.toBeNull();
+  });
+});
+
+describe("a stream that ends early is refused, not published", () => {
+  /**
+   * The failure mode this guards is the quiet one. A read that ERRORS is caught
+   * and cleaned up; a read that simply ends early — a torn-down container, a
+   * lost RPC frame — looks identical to a complete one from the Worker's side:
+   * no exception, a shorter object, a clean upload, and a URL reported as
+   * proof. The file plays for a few seconds and stops. Nothing downstream can
+   * detect that; a human clicking the link in a customer thread would.
+   */
+  it("refuses when fewer bytes arrive than the harness statted", async () => {
+    const { deps, finish } = stub({ video: new Uint8Array([1, 2, 3]) });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, { state: "passed", bytes: 4_096 });
+
+    const before = (await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects.length;
+    const status = await checkRecording(deps, recordingId);
+
+    expect(status.state).toBe("passed");
+    expect(status.url).toBeNull();
+    expect(status.error).toContain("3 of 4096 bytes");
+    expect(status.error).toMatch(/again/i);
+    // Nothing partial is left for the route to find and serve as evidence.
+    expect((await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects.length).toBe(
+      before,
+    );
+  });
+
+  it("publishes normally when the sizes agree", async () => {
+    const { deps, finish } = stub({ video: MP4 });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, { state: "passed", bytes: MP4.byteLength });
+
+    const status = await checkRecording(deps, recordingId);
+    expect(status.url).not.toBeNull();
+    expect(status.error).toBeNull();
+  });
+
+  it("still publishes when the harness reports no size at all", async () => {
+    // A harness predating the `bytes` field downgrades the check to
+    // "unavailable" rather than breaking every publish.
+    const { deps, finish } = stub({ video: MP4 });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, { state: "passed", bytes: null });
+
+    const status = await checkRecording(deps, recordingId);
+    expect(status.url).not.toBeNull();
+    expect(status.error).toBeNull();
+  });
+});
+
 describe("dev-env values never reach the model", () => {
   const SECRET = "sb-secret-9f3a7c21d4e6b8a0";
   const devEnv = { SUPABASE_SECRET_API_KEY: SECRET };
@@ -462,6 +579,36 @@ describe("dev-env values never reach the model", () => {
 
     expect(status.stdoutTail).not.toContain(SECRET.slice(-7));
     expect(status.stdoutTail.length).toBeLessThanOrEqual(RECORDING_TAIL_CHARS + 200);
+  });
+
+  it("scrubs the error before it trims it, too", async () => {
+    const { deps, finish } = stub({ video: MP4, devEnv });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    // Straddling the head-clamp boundary: trimming first would keep the value's
+    // first characters and drop the rest, which reads as a scrub that worked.
+    finish(recordingId, {
+      state: "failed",
+      error: `${"A".repeat(RECORDING_ERROR_CHARS - 10)}${SECRET}${"B".repeat(50)}`,
+    });
+
+    const status = await checkRecording(deps, recordingId);
+
+    expect(status.error).not.toContain(SECRET.slice(0, 10));
+    expect(status.error).not.toContain(SECRET);
+  });
+
+  it("keeps the publish problem even when the harness error fills the budget", async () => {
+    // Bounded per part rather than across the join: a single slice over the
+    // joined string would drop the half this module wrote, which is the half
+    // that explains why there is no URL.
+    const { deps, finish } = stub({});
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, { state: "failed", error: "E".repeat(RECORDING_ERROR_CHARS * 3) });
+
+    const status = await checkRecording(deps, recordingId);
+
+    expect(status.error).toContain("error truncated");
+    expect(status.error).toContain("could not be published");
   });
 
   it("redacts a running run's tail too, not only a terminal one", async () => {
