@@ -36,6 +36,13 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# `.env*` anchors at the START of a filename, so it does NOT cover `web.dev.env`
+# or anything else that merely ENDS in .env — which is exactly the shape
+# Infisical's "download secrets" button produces. Three such files were sitting
+# untracked in the repo root on 2026-08-14; one `git add -A` would have
+# committed a customer's dev credentials.
+*.env
+!*.env.example
 
 # wrangler local secrets — NOT covered by .env*
 .dev.vars
