@@ -270,6 +270,75 @@ Three things the sandbox has to respect:
 cherry-picks onto a branch off `prod`. The fire-fighter never touches this; it
 only ever opens `→ staging`.
 
+## BLOCKER — no push access to the monorepo
+
+Measured 2026-08-15 with a classic PAT carrying full `repo` scope, org membership
+`active`, role `member`.
+
+| repo | `push` |
+|---|---|
+| `Zellify/firefighter` | `true` |
+| `Zellify/web2app-rebuild` | **`false`** |
+
+Same token, same org, same request. `GET /repos/Zellify/web2app-rebuild/collaborators/<user>/permission`
+and `GET .../branches/staging/protection` both return 404, which is what
+read-only access returns for those endpoints. So this is a per-repository
+permission, not a token scope problem and not SSO.
+
+**Phase 20 pushes a feature branch to this repo and cannot.** Drill scenarios 2
+(small feature → PR) and 3 (planted bug → PR) both fail at the push, after the
+agent has done all the expensive work: boot, repro, fix, record.
+
+What this does NOT mean: the design is not wrong. In production the PR is
+authored with the **on-duty engineer's** OAuth token, and Ronit / Luka / Zurab /
+Misho presumably have push. The gap is that during the trial the rotation
+override makes the tester the on-duty engineer, so the only identity available to
+test with is the one that lacks access.
+
+`GITHUB_SCOPE` in `src/oauth/github.ts` is already `repo`, correctly — GitHub has
+no narrower classic scope that can both read a repository and push a branch. The
+scope is right; the grant is missing.
+
+Three ways out, in order of preference:
+
+1. **Push access on `web2app-rebuild` for the trial account.** One org setting,
+   and it makes the loop testable end to end before day 7.
+2. **A fork.** `allow_forking: true` and the repo is private, so a private fork is
+   possible if the org permits it. PRs from a fork still open under the
+   engineer's own identity and still carry `Fixes ZEL-<n>`, so the assignment's
+   identity and linking requirements survive. It changes Phase 20's Task 1: the
+   commit lands on the fork's ref, and the PR is cross-repository.
+3. **Run the drill with a real engineer on duty.** Works without any change, but
+   it cannot be rehearsed, and the first time the push path executes would be
+   during the benchmark.
+
+Option 2 is the only one that does not depend on someone else acting, so Phase 20
+should be written so the target repo and the head ref are configuration, not
+assumptions — cheap now, and it makes 1 and 2 the same code path.
+
+**`staging` is a protected branch** (`"protected": true`); the rules are not
+readable at this permission level. Protection does not block opening a PR into
+it, and "merged after human review" is what the assignment asks for anyway, so
+this is a note rather than a problem. Confirm required status checks before the
+drill if push access lands.
+
+**Default branch is `staging`** — confirmed via the API, consistent with
+`AGENTS.md` §3.
+
+## Untested, and only testable with a real PR
+
+Whether Linear's GitHub integration matches **`FIR-`** identifiers or only
+**`ZEL-`**. The integration is confirmed live for `ZEL-` against
+`web2app-rebuild` (ZEL-1771 → PR #1489). The fire-fighter is pinned to the
+`fire-fighter-testing` team, whose issues are `FIR-<n>`, and whether that team's
+identifiers are matched by the same integration is a workspace setting nobody has
+looked at. If they are not, `Fixes FIR-2` links nothing and the "closes on merge"
+requirement fails silently.
+
+Cheapest check once push access exists: open a throwaway draft PR with
+`Fixes FIR-2` as the first body line and see whether the issue picks up the
+attachment. Until then, treat auto-close as unproven for `FIR-` issues.
+
 ## Still open
 
 - **`AGENTS.md` §3** is cited by both skills as the authority on `staging` vs
