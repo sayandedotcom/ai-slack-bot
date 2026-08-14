@@ -225,7 +225,23 @@ export function makeSandboxGateway(
   }
 
   return {
-    boot: () => lifecycle.boot(runId),
+    // A LONG poll, deliberately: while provisioning, hold the call up to ~14s
+    // (re-reading every 3s) before answering. Without this, every poll costs
+    // one model step and buys ~2 seconds of wall time, and the arithmetic can
+    // never close: a cold boot is minutes, MAX_STEPS_PER_GENERATION is finite,
+    // and the run dies at its ceiling while the machine underneath is HEALTHY —
+    // observed live, run 317111cd, mid-`installing dependencies`. 14s stays
+    // inside the 20s execution wall budget with room for the model's other
+    // calls in the same block.
+    boot: async () => {
+      const deadline = Date.now() + 14_000;
+      let status = await lifecycle.boot(runId);
+      while (status.state === "provisioning" && Date.now() + 3_000 < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+        status = await lifecycle.boot(runId);
+      }
+      return status;
+    },
 
     async exec(input): Promise<SandboxCommandResult> {
       await assertReady();

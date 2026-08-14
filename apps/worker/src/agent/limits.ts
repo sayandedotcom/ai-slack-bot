@@ -86,13 +86,24 @@ export const PROJECTION_LEASE_MS = 30_000;
 /**
  * Steps one unsettled generation may take before the loop stops asking.
  *
- * Ten, not fifty: one Code Mode call already aggregates many reads, so a
- * generation that has not converged in ten model turns is looping, not
- * working. This is a STEP ceiling and explicitly not a spend ceiling — see
- * `agent/cost.ts` and invariant 28. A cheap loop and an expensive one both
- * stop here; only the spend caps below stop an expensive one sooner.
+ * Was ten, on the reasoning that one Code Mode call aggregates many reads, so
+ * ten unconverged turns meant looping, not working. Phase 18 broke that
+ * premise: a cold container boot is 2–4 minutes of legitimate waiting, and a
+ * generation that polls it spends steps on turns that do almost nothing —
+ * observed live (run 317111cd) dying at the ceiling mid-install with a healthy
+ * machine underneath.
+ *
+ * Twenty-four is not a loosened belt, it is the same judgement under new
+ * arithmetic: boot now long-polls ~14s per call (sandbox/gateway.ts), so a
+ * 3-minute cold boot costs ~13 poll steps, plus a realistic 5–8 steps of
+ * actual work. A generation that has not converged in twenty-four turns under
+ * THOSE economics is looping. The marginal cost of a poll step is small —
+ * prompt caching makes the context resend a cached read, and the step's output
+ * is one tool call — and the spend caps below remain the true cost authority
+ * (invariant 28): a cheap loop and an expensive one both stop here, an
+ * expensive one stops sooner.
  */
-export const MAX_STEPS_PER_GENERATION = 10;
+export const MAX_STEPS_PER_GENERATION = 24;
 
 /**
  * Output tokens one step may produce, before the pre-step spend guard clamps
