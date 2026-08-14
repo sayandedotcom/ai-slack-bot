@@ -48,13 +48,19 @@ function emit(result) {
   setTimeout(() => process.exit(0), 2000).unref();
 }
 
+// Shared cap for every string that lands in the RESULT line's `error` field
+// — the harness spec's "~2000 chars", named once so trimError, the ffmpeg
+// stderr tail, and the final (possibly multiply-appended) error all agree
+// on the same number.
+const ERROR_CHAR_CAP = 2000;
+
 // "constructor name + message, trimmed to ~2000 chars" per the harness spec.
 function trimError(err) {
   if (err === undefined || err === null) return 'unknown error';
   const name = (err.constructor && err.constructor.name) || err.name || 'Error';
   const message = err.message !== undefined ? err.message : String(err);
   const full = `${name}: ${message}`;
-  return full.length > 2000 ? full.slice(0, 2000) : full;
+  return full.length > ERROR_CHAR_CAP ? full.slice(0, ERROR_CHAR_CAP) : full;
 }
 
 // Invariant 6: refuse immediately rather than launch-and-crash-opaquely if
@@ -113,7 +119,7 @@ async function transcode(webmPath, mp4Path) {
     // execFile's promisified rejection carries .stderr on it; fall back to
     // the trimmed error if for some reason it doesn't.
     const tail = err && typeof err.stderr === 'string' && err.stderr.length > 0 ? err.stderr : trimError(err);
-    return { ok: false, error: tail.length > 2000 ? tail.slice(-2000) : tail };
+    return { ok: false, error: tail.length > ERROR_CHAR_CAP ? tail.slice(-ERROR_CHAR_CAP) : tail };
   }
   return { ok: true };
 }
@@ -155,8 +161,30 @@ async function main() {
 
     // The model's script source, wrapped as an async function body with
     // `page` as its only bound name — the exact shape the controller pinned
-    // for the harness/Worker contract.
-    const runScript = new Function('page', 'return (async () => {\n' + source + '\n})()');
+    // for the harness/Worker contract. `new Function` doesn't close over
+    // this file's lexical scope, so `browser`/`context`/`state` etc. are
+    // already unreachable — but it still runs against the TRUE Node
+    // globals, and model-written Playwright scripts routinely end with a
+    // defensive `process.exit(0)`. That call would kill this process before
+    // `emit()` ever runs, leaving the Worker polling a process that exited
+    // silently with no RESULT line — destroying the one thing the whole
+    // protocol depends on. Naming the dangerous globals as extra unbound
+    // parameters (and invoking with only `page`) shadows them with a local
+    // `undefined` instead: a reference inside the script resolves to that,
+    // not the real global. This isn't a real sandbox — a script can still
+    // reach globals it can enumerate some other way — it only needs to
+    // close this one trivial, extremely common route to silently destroying
+    // the RESULT line.
+    const runScript = new Function(
+      'page',
+      'process',
+      'require',
+      'module',
+      'exports',
+      '__dirname',
+      '__filename',
+      'return (async () => {\n' + source + '\n})()'
+    );
 
     const scriptPromise = runScript(page);
     // If the timeout below wins the race, scriptPromise is abandoned but
@@ -189,10 +217,14 @@ async function main() {
     try {
       if (context) await context.close();
     } catch (closeErr) {
-      if (!error) {
-        state = 'failed';
-        error = trimError(closeErr);
-      }
+      // Ruling 8, same reasoning as the ffmpeg/oversize branches below: a
+      // close-time IPC error is the harness's own infrastructure trouble,
+      // not evidence the model's script failed. Leave `state` alone —
+      // it already reflects the script's own outcome from the try/catch
+      // above — and only surface this in `error`, appended rather than
+      // overwriting whatever the script's own error already said.
+      const closeMsg = trimError(closeErr);
+      error = error ? `${error}; ${closeMsg}` : closeMsg;
     }
     try {
       if (browser) await browser.close();
@@ -217,7 +249,10 @@ async function main() {
 
   let video = null;
   if (webmPath) {
-    const mp4Path = path.join(outDir, 'out.mp4');
+    // resolve, not join: the contract promises an ABSOLUTE mp4 path in the
+    // RESULT line regardless of whether the Worker passed outDir as
+    // relative or absolute.
+    const mp4Path = path.resolve(outDir, 'out.mp4');
     const result = await transcode(webmPath, mp4Path);
     if (result.ok) {
       const { size } = fs.statSync(mp4Path);
@@ -247,6 +282,15 @@ async function main() {
     // Same reasoning: no video landed at all, but the script itself didn't
     // throw, so state stays "passed" — only the artifact is missing.
     error = error || 'script completed but no video was produced';
+  }
+
+  // `error` can grow through several appends by now (a close-time error,
+  // an ffmpeg stderr tail, an oversize message, or several of those at
+  // once) — re-cap it through the same ~2000-char convention as trimError
+  // so one pathological message can't blow past the cap the concatenation
+  // was supposed to respect.
+  if (error && error.length > ERROR_CHAR_CAP) {
+    error = error.slice(0, ERROR_CHAR_CAP);
   }
 
   emit({ state, error, video, durationMs });
