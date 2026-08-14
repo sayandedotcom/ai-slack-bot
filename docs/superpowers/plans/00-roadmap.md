@@ -523,15 +523,14 @@ in flight, then swapped when 12 merges.
 
 **Depends on:** Phase 18 · **Day 6**
 
-**Files:** `sandbox/playwright/`, `src/sandbox/record.ts`, `src/files/r2.ts` (reuse/extend Phase 09's publisher for large streamed proof)
+**Files:** `apps/worker/sandbox/harness/`, `src/sandbox/record.ts`, `src/api/` (a dedicated public-by-bypass recordings route — Phase 09's artifacts route is deliberately unable to serve video; see the plan)
 
 **Tasks:**
-1. **Playwright in the image**, driven from model-authored code via `exec`.
-2. **`browser.record(fn)`** wrapping a context with `recordVideo` — no screen-capture rig.
+1. **ffmpeg in the image** (Playwright + Chromium install at boot, per Phase 18's layer economics; the bundled ffmpeg cannot mux mp4 — verified in the deployed image).
+2. **`browser.record({script})`** — source-as-string, because a closure cannot cross the isolate→container RPC boundary; the harness owns `recordVideo`. No screen-capture rig.
 3. **webm → mp4 transcode** so the link previews usefully.
-4. **R2 upload returning a public URL**, reusing Phase 09's trusted publisher but streaming large recordings outside the small Code Mode binary limit. This sidesteps the `files:write` scope question entirely: a link needs no Slack file scope.
+4. **Recording streamed container→Worker→R2** (`readFile` `encoding:'none'`, RPC transport) and served from a dedicated unauthenticated route — NOT Phase 09's publisher, whose caps, allowlist, inert headers and Access gate all refuse video by design.
 5. **The verify cycle:** repro fails → apply fix → repro passes → record the passing run.
-6. **`diff()` returns the change as a string** — the container's entire output, per D5.
 
 **Exit criteria:** A planted bug is reproduced, fixed, re-verified, and a playable recording sits at an R2 URL.
 
