@@ -120,11 +120,10 @@ async function connectEngineer(email = ENGINEER, externalId = SLACK_ID): Promise
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM messages WHERE event_id LIKE 'voice-%'").run();
   await env.DB.prepare("DELETE FROM events_seen WHERE event_id LIKE 'voice-%'").run();
-  // Only this file's rotation members, by email: the identities table is shared
-  // with every other suite in the pool.
-  await env.DB.prepare("DELETE FROM identities WHERE email = ? AND provider = 'slack'")
-    .bind(ENGINEER)
-    .run();
+  // BY EXTERNAL ID, not by email. The identities table is shared with every
+  // other suite in the pool, and the rotation emails are not this file's to
+  // clear; the fake Slack id is.
+  await env.DB.prepare("DELETE FROM identities WHERE external_id = ?").bind(SLACK_ID).run();
 });
 
 describe("the freeze (invariant 1)", () => {
@@ -139,9 +138,8 @@ describe("the freeze (invariant 1)", () => {
     await seedUsable(8);
 
     const first = await freshVoice();
-    const before = first.renderEngineerVoice(
-      await first.resolveEngineerVoice(env.DB, SHIFT_START + 1_000),
-    );
+    const resolved = await first.resolveEngineerVoice(env.DB, SHIFT_START + 1_000);
+    const before = first.renderEngineerVoice(resolved);
     expect(before).not.toBe("");
 
     await seed({
@@ -150,10 +148,12 @@ describe("the freeze (invariant 1)", () => {
       receivedAt: SHIFT_START + 5_000,
     });
 
-    // Same isolate, cached: this is what production would serve.
-    const cached = first.renderEngineerVoice(
-      await first.resolveEngineerVoice(env.DB, MID_SHIFT),
-    );
+    // Same isolate, cached: this is what production would serve. The SAME OBJECT
+    // comes back, which is the memo hit — no second identity read, no second
+    // query, whatever the step count.
+    const again = await first.resolveEngineerVoice(env.DB, MID_SHIFT);
+    expect(again).toBe(resolved);
+    const cached = first.renderEngineerVoice(again);
     expect(cached).toBe(before);
 
     // Fresh isolate, cache empty: this is what a cold worker would serve, and it
