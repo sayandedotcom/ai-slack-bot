@@ -86,19 +86,19 @@ export type SandboxOpsHandle = {
   getProcess(id: string): Promise<ProcessSnapshot | null>;
   getProcessLogs(id: string): Promise<{ stdout: string; stderr: string }>;
   killProcess(id: string, signal?: string): Promise<void>;
-  readFile(path: string): Promise<{ content: string }>;
+  /**
+   * Overloaded on purpose, matching the SDK's own `readFile` exactly —
+   * `{ encoding: "none" }` is the RPC-transport raw-byte variant `readBinary`
+   * needs; the no-options call is the existing TEXT read every other method
+   * here uses. See `readBinaryFile` below for why this is the ONLY correct
+   * way to get raw bytes out of the container: the SDK's separately-named
+   * `readFileStream` looks like it does the same thing and does not.
+   */
+  readFile(path: string, options: { encoding: "none" }): Promise<{ content: ReadableStream<Uint8Array> }>;
+  readFile(path: string, options?: { encoding?: string }): Promise<{ content: string }>;
   writeFile(path: string, content: string): Promise<{ success: boolean }>;
   destroy(): Promise<void>;
   tunnels: { get(port: number): Promise<{ url: string }> };
-  /**
-   * Phase 19's raw-byte read. A SEPARATE method from `readFile` above rather
-   * than the SDK's own `readFile(path, { encoding: 'none' })` overload,
-   * deliberately: overloading `readFile` here would force every existing fake
-   * container (built for the TEXT `readFile` above) to grow a case it never
-   * exercises. Optional for the same reason — the real class always has it;
-   * only a narrower test double may not.
-   */
-  readFileStream?(path: string): Promise<ReadableStream<Uint8Array>>;
 };
 
 /**
@@ -245,17 +245,24 @@ export function makeSandboxGateway(
    * Raw bytes out of the container, for `readBinary` and for `record.ts`'s own
    * `readBinary` dependency — one implementation, because both callers want
    * the identical stream and neither wants to buffer it.
+   *
+   * MUST be `readFile(path, { encoding: "none" })`, never `readFileStream`.
+   * The two look interchangeable — both are named for streaming and both type
+   * as `Promise<ReadableStream<Uint8Array>>` — and they are not the same
+   * call. `readFileStream` is Server-Sent-Events framing: `data: {...}`
+   * envelopes carrying base64 chunks, meant to be decoded with the SDK's own
+   * `streamFile`/`parseSSEStream` helpers. Piped straight into `R2Bucket.put`
+   * as this function does, that produces an object that uploads cleanly,
+   * resolves at its URL, and is not a valid mp4 — nothing in this path would
+   * catch it; a human clicking the link in a customer thread would.
+   * `readFile(path, { encoding: "none" })` is documented as the RPC
+   * transport's raw-byte variant — "no base64 encoding, no SSE framing, no
+   * buffering" — which is what a recording's bytes actually need to stay.
    */
   async function readBinaryFile(path: string): Promise<ReadableStream<Uint8Array>> {
     await assertReady();
-    const handle = sandbox();
-    if (!handle.readFileStream) {
-      throw new CapabilityError(
-        "upstream_unavailable",
-        "this container has no binary file read available, so the recording could not be read out.",
-      );
-    }
-    return handle.readFileStream(path);
+    const result = await sandbox().readFile(path, { encoding: "none" });
+    return result.content;
   }
 
   /**

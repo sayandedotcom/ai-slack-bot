@@ -108,6 +108,42 @@ function makeFakeSandbox(options: FakeOptions = {}): Fake {
       : { id: "provision", status: "completed", exitCode: 0, startTime: new Date() };
   const spawned = new Map<string, ProcessState>();
 
+  // Declared as an overloaded FUNCTION rather than an object-literal method:
+  // a single method-shorthand implementation is checked against each
+  // overload's own return type and fails (a branch that can return
+  // `{content: string}` does not satisfy the `{ encoding: "none" }` overload's
+  // `Promise<{content: ReadableStream}>`). Real overload signatures plus one
+  // wider implementation signature is the pattern TypeScript actually
+  // supports, and it mirrors the real SDK exactly: `{ encoding: "none" }` is
+  // the RPC raw-byte variant `readBinary` (Phase 19) calls; everything else is
+  // the existing TEXT read every other case here exercises.
+  function fakeReadFile(
+    path: string,
+    readFileOptions: { encoding: "none" },
+  ): Promise<{ content: ReadableStream<Uint8Array> }>;
+  function fakeReadFile(
+    path: string,
+    readFileOptions?: { encoding?: string },
+  ): Promise<{ content: string }>;
+  async function fakeReadFile(
+    path: string,
+    readFileOptions?: { encoding?: string },
+  ): Promise<{ content: string } | { content: ReadableStream<Uint8Array> }> {
+    calls.push({ method: "readFile", args: [path, readFileOptions] });
+    if (readFileOptions?.encoding === "none") {
+      const bytes = new TextEncoder().encode(options.fileContent ?? "");
+      return {
+        content: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+      };
+    }
+    return { content: options.fileContent ?? "" };
+  }
+
   const handle: SandboxOpsHandle = {
     async exec(command, execOptions) {
       calls.push({ method: "exec", args: [command, execOptions] });
@@ -149,10 +185,7 @@ function makeFakeSandbox(options: FakeOptions = {}): Fake {
       calls.push({ method: "killProcess", args: [id, signal] });
       spawned.delete(id);
     },
-    async readFile(path) {
-      calls.push({ method: "readFile", args: [path] });
-      return { content: options.fileContent ?? "" };
-    },
+    readFile: fakeReadFile,
     async writeFile(path, content) {
       calls.push({ method: "writeFile", args: [path, content] });
       return { success: true };
