@@ -22,16 +22,19 @@
  * only way this process itself should exit nonzero is a bug in the harness,
  * and even that is caught below and turned into a RESULT line first.
  *
- * RESULT carries `bytes` alongside `video`, and it is not decoration. The
- * Worker streams the mp4 out of this container and into R2 without ever
- * holding it whole, so it has no independent way to know when a transport
- * ended EARLY: a stream that stops short without erroring produces a shorter
- * object that uploads cleanly, resolves at its URL, and plays for a few
- * seconds before stopping. Nothing downstream could catch that — a human
- * clicking the link in a customer thread would. `bytes` is the file's real
- * size, statted immediately before this line is emitted, so the Worker can
- * compare it against what it actually received and refuse rather than publish
- * a truncated proof. It is `null` whenever `video` is `null`.
+ * RESULT carries `bytes` alongside `video`: the mp4's real size, statted
+ * immediately before this line is emitted, `null` whenever `video` is `null`.
+ * It is NO LONGER what protects the Worker from a truncated upload — the
+ * container's own file server reports the same length on the read, which is
+ * authoritative and arrives before any byte does, so the Worker bounds the
+ * transfer with that instead. `bytes` stays because this contract is already
+ * deployed, it costs nothing, and it states the size the harness saw.
+ *
+ * BOUNDED END TO END. `timeoutMs` races the model's script only. Everything
+ * after it — the context close, the browser close, the ffmpeg transcode — has
+ * its own budget, and the whole process has a wall clock on top, because a
+ * harness that never exits is a `checkRecording` that answers "running"
+ * forever while the model is told to keep polling.
  */
 
 const fs = require('fs');
@@ -40,14 +43,57 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 
-// Mirrors the Worker's PROOFS_BASE_URL cap (wrangler.jsonc / Task 3). Kept as
-// a separate literal here rather than imported: this file runs inside the
+// Mirrors MAX_RECORDING_BYTES in apps/worker/src/sandbox/record.ts. Kept as a
+// separate literal here rather than imported: this file runs inside the
 // container, isolated from the Worker's source tree.
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
+// Mirrors BROWSER_UNAVAILABLE_MESSAGE in apps/worker/src/sandbox/record.ts,
+// which is the definition of record. The token has to be IN the sentence: the
+// Worker collapses this `state` into "failed" before the model sees it, so the
+// only place `browser-unavailable` can survive to the model — which the
+// browser namespace's own description promises it can look for — is the text.
+// The Worker substitutes its own copy of this sentence if what arrives does
+// not carry the token, so a machine running an older image still keeps the
+// promise; that is the safety net, not the plan.
+//
+// "Do not retry" rather than "re-provision": there is no re-provision method
+// in any namespace, and naming an action the agent cannot take sends it
+// looping instead of reporting.
+const BROWSER_UNAVAILABLE_MESSAGE =
+  "browser-unavailable: this run's container never got a working Chromium install (the boot-time install is non-fatal by design). Do not retry; report it and continue without a recording.";
+
 const PLAYWRIGHT_CACHE = '/root/.cache/ms-playwright';
 
+// The transcode's own budget, and the harness's overall wall clock.
+//
+// WHY BOTH. The Worker's `timeoutMs` bounds the model's SCRIPT and nothing
+// else. Everything after it — context.close(), browser.close(), ffmpeg — was
+// unbounded, so a wedged ffmpeg or a hung browser close meant this process
+// never exited, `checkRecording` answered "running" forever, and the .d.ts
+// tells the model to keep polling. A recording that can never settle is worse
+// than one that fails: it costs the agent every remaining turn.
+const TRANSCODE_TIMEOUT_MS = 120_000;
+
+// The transcode budget plus a slice for the two closes and the stat. Added to
+// the script's own budget at runtime.
+const SHUTDOWN_ALLOWANCE_MS = TRANSCODE_TIMEOUT_MS + 30_000;
+
+// ffmpeg is chatty on stderr and the promisified execFile buffers all of it.
+// The default 1MB cap turns a verbose encode into an ENOBUFS kill; 4MB with
+// `-loglevel error` is far more headroom than a quiet encode can use.
+const FFMPEG_MAX_BUFFER = 4 * 1024 * 1024;
+
+// The RESULT line is emitted EXACTLY ONCE, whichever path gets there first:
+// the normal end of main(), the top-level catch, or the wall clock below. The
+// Worker reads the last RESULT line it can parse, so a second one would not
+// corrupt it — but "exactly one line" is the stated contract and the guard is
+// what makes the wall clock safe to arm at all.
+let emitted = false;
+
 function emit(result) {
+  if (emitted) return;
+  emitted = true;
   process.stdout.write('RESULT ' + JSON.stringify(result) + '\n');
   process.exitCode = 0;
   // Setting exitCode (not calling process.exit()) lets Node flush stdout
@@ -114,18 +160,33 @@ function findChromiumExecutable() {
 
 async function transcode(webmPath, mp4Path) {
   try {
-    await execFileAsync('ffmpeg', [
-      '-y',
-      '-i',
-      webmPath,
-      '-c:v',
-      'libx264',
-      '-pix_fmt',
-      'yuv420p',
-      '-movflags',
-      '+faststart',
-      mp4Path,
-    ]);
+    await execFileAsync(
+      'ffmpeg',
+      [
+        // Never wait on a terminal that isn't there: without -nostdin ffmpeg
+        // can block reading stdin when it wants to ask about overwriting, and
+        // a blocked ffmpeg is a harness that never exits.
+        '-nostdin',
+        // Errors only. The default level narrates every frame, which is what
+        // makes the buffer cap below a live concern rather than a formality.
+        '-loglevel',
+        'error',
+        '-y',
+        '-i',
+        webmPath,
+        '-c:v',
+        'libx264',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+        mp4Path,
+      ],
+      // BOUNDED, both ways. `timeout` kills a wedged encode instead of hanging
+      // the harness; `maxBuffer` is raised because the 1MB default turns a
+      // chatty stderr into an ENOBUFS kill whose message explains nothing.
+      { timeout: TRANSCODE_TIMEOUT_MS, maxBuffer: FFMPEG_MAX_BUFFER },
+    );
   } catch (err) {
     // execFile's promisified rejection carries .stderr on it; fall back to
     // the trimmed error if for some reason it doesn't.
@@ -143,7 +204,7 @@ async function main() {
   if (!chromiumExe) {
     emit({
       state: 'browser-unavailable',
-      error: 'the boot-time Chromium install did not complete on this machine; re-provisioning installs it',
+      error: BROWSER_UNAVAILABLE_MESSAGE,
       video: null,
       bytes: null,
       durationMs: 0,
@@ -161,6 +222,48 @@ async function main() {
   let context = null;
   let state = 'passed';
   let error = null;
+  // Whether the script's own race is over, so `state` means something. Read by
+  // the wall clock below, which must not report an unfinished script as a pass.
+  let settled = false;
+
+  // THE WHOLE HARNESS IS BOUNDED, not just the script.
+  //
+  // timeoutMs races the model's script and nothing else. context.close(),
+  // browser.close() and the transcode all ran unbounded after it, so any one
+  // of them wedging left this process alive with no RESULT line — and
+  // `checkRecording` reports "running" for a process that is still alive,
+  // while the .d.ts tells the model to keep polling. That is an unkillable
+  // poll loop costing every remaining turn. This timer converts the worst case
+  // into an ordinary readable result.
+  //
+  // Unref'd on purpose: it must never hold the process open past a clean
+  // finish, and in the case it exists for (a live ffmpeg or browser handle)
+  // the loop is alive anyway, so it still fires. `emit` is idempotent, so
+  // whichever path arrives first wins and the other is a no-op; emit's own
+  // unref'd 2s fallback is what actually forces the exit afterwards.
+  const scriptBudgetMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
+  const wallClockMs = scriptBudgetMs + SHUTDOWN_ALLOWANCE_MS;
+  const harnessStartedAt = Date.now();
+  const wallClock = setTimeout(() => {
+    // `state` and `error` are read at FIRE TIME, and only once `settled` says
+    // the script's own race is over: `state` starts at 'passed' and would
+    // otherwise report a script that never finished as a pass, which is the
+    // one false finding this design forbids. Once the verdict IS known it is
+    // the one reported, with the harness's own trouble appended to `error`
+    // rather than overwriting it — exactly as the transcode and oversize
+    // branches below do.
+    const stuck = settled
+      ? `the recording harness exceeded its overall ${wallClockMs}ms budget after the script's own ${scriptBudgetMs}ms — the browser close or the mp4 transcode did not finish — so no video was published. Nothing is still running to wait for; record it again.`
+      : `the recording harness exceeded its overall ${wallClockMs}ms budget without the script ever settling, so there is no verdict and no video. Record a shorter interaction.`;
+    emit({
+      state: settled ? state : 'failed',
+      error: error ? `${error}; ${stuck}` : stuck,
+      video: null,
+      bytes: null,
+      durationMs: Date.now() - harnessStartedAt,
+    });
+  }, wallClockMs);
+  wallClock.unref();
 
   // durationMs is wall time from launch to close only — it deliberately
   // excludes the ffmpeg transcode that happens after this block, per the
@@ -216,7 +319,12 @@ async function main() {
     } finally {
       clearTimeout(timer);
     }
+    // The script's own race is over and `state` now means something. Set on
+    // both paths, before the `finally` runs, because everything in `finally`
+    // is the harness's business rather than the script's.
+    settled = true;
   } catch (err) {
+    settled = true;
     state = 'failed';
     error = trimError(err);
   } finally {
@@ -229,7 +337,7 @@ async function main() {
     try {
       if (context) await context.close();
     } catch (closeErr) {
-      // Ruling 8, same reasoning as the ffmpeg/oversize branches below: a
+      // Same reasoning as the ffmpeg/oversize branches below: a
       // close-time IPC error is the harness's own infrastructure trouble,
       // not evidence the model's script failed. Leave `state` alone —
       // it already reflects the script's own outcome from the try/catch
@@ -281,9 +389,20 @@ async function main() {
       } else {
         video = mp4Path;
         // Statted here, from the same `statSync` the ceiling check above
-        // already performs, and nothing writes to the file after this point —
-        // so this number is the length the Worker must receive in full.
+        // already performs, and nothing writes to the file after this point.
+        // The Worker no longer depends on this number — the container's file
+        // server reports the same length on the read — but it is already
+        // deployed, it is free, and it states the contract.
         bytes = size;
+      }
+      // The webm has done its job the moment the mp4 exists: nothing reads it
+      // again, and a container that records several times would otherwise
+      // carry every intermediate for the rest of its life. Best-effort — a
+      // failure to tidy up must never cost the caller its proof.
+      try {
+        fs.rmSync(videoDir, { recursive: true, force: true });
+      } catch {
+        // Ignored on purpose; see above.
       }
     } else {
       error = error ? `${error}; ffmpeg: ${result.error}` : result.error;
@@ -312,6 +431,10 @@ async function main() {
     error = error.slice(0, ERROR_CHAR_CAP);
   }
 
+  // Nothing left to bound. Unref'd, so this only tidies up rather than
+  // shortening anything, but leaving an armed timer around a finished run is
+  // how a "no-op" fires one day.
+  clearTimeout(wallClock);
   emit({ state, error, video, bytes, durationMs });
 }
 
