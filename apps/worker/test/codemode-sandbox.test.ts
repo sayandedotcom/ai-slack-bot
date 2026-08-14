@@ -325,8 +325,12 @@ describe("the fourth effect class", () => {
 /* --------------------------------------------------------- the namespace -- */
 
 describe("the sandbox namespace", () => {
-  it("is appended to the end of the frozen namespace order", () => {
-    expect(PHASE_09_NAMESPACES[PHASE_09_NAMESPACES.length - 1]).toBe("sandbox");
+  // Phase 19 appends `browser` after this one, so `sandbox` is no longer the
+  // LAST namespace — it is the ninth, immediately before the tenth. The
+  // property this case actually guards (append-only, no reordering) is
+  // unchanged: sandbox's own position in the frozen order is still fixed.
+  it("is appended after approval, ninth in the frozen namespace order", () => {
+    expect(PHASE_09_NAMESPACES.indexOf("sandbox")).toBe(PHASE_09_NAMESPACES.indexOf("approval") + 1);
     expect(PHASE_09_NAMESPACES).toEqual([
       "slack",
       "memory",
@@ -337,17 +341,19 @@ describe("the sandbox namespace", () => {
       "files",
       "approval",
       "sandbox",
+      "browser",
     ]);
   });
 
-  it("is the last provider the registry builds", () => {
+  it("is the second-to-last provider the registry builds, right before browser", () => {
     const names = buildRegistry(
       slackScope,
       { ...fakeDeps(), db: env.DB },
       TEST_LIMITS,
       testExecution({ audit: fakeAuditSink() }),
     ).map((p) => p.name);
-    expect(names[names.length - 1]).toBe("sandbox");
+    expect(names[names.length - 1]).toBe("browser");
+    expect(names[names.length - 2]).toBe("sandbox");
   });
 
   it("reports boot state without blocking on provisioning", async () => {

@@ -40,6 +40,11 @@ import {
   type ProcessSnapshot,
   type SandboxLifecycleDeps,
 } from "./lifecycle";
+import {
+  startRecording,
+  checkRecording as runCheckRecording,
+  type RecordDeps,
+} from "./record";
 import { getSandbox } from "@cloudflare/sandbox";
 
 /**
@@ -85,6 +90,15 @@ export type SandboxOpsHandle = {
   writeFile(path: string, content: string): Promise<{ success: boolean }>;
   destroy(): Promise<void>;
   tunnels: { get(port: number): Promise<{ url: string }> };
+  /**
+   * Phase 19's raw-byte read. A SEPARATE method from `readFile` above rather
+   * than the SDK's own `readFile(path, { encoding: 'none' })` overload,
+   * deliberately: overloading `readFile` here would force every existing fake
+   * container (built for the TEXT `readFile` above) to grow a case it never
+   * exercises. Optional for the same reason — the real class always has it;
+   * only a narrower test double may not.
+   */
+  readFileStream?(path: string): Promise<ReadableStream<Uint8Array>>;
 };
 
 /**
@@ -225,6 +239,53 @@ export function makeSandboxGateway(
         ? `the container for this run failed to provision (${status.note}), so nothing was run on it. Do not retry in a loop; report what failed.`
         : `the container for this run is still provisioning (${status.note}), so nothing was run on it. Call sandbox.boot() and check its state again on your next turn — boot is a poll, not a wait.`,
     );
+  }
+
+  /**
+   * Raw bytes out of the container, for `readBinary` and for `record.ts`'s own
+   * `readBinary` dependency — one implementation, because both callers want
+   * the identical stream and neither wants to buffer it.
+   */
+  async function readBinaryFile(path: string): Promise<ReadableStream<Uint8Array>> {
+    await assertReady();
+    const handle = sandbox();
+    if (!handle.readFileStream) {
+      throw new CapabilityError(
+        "upstream_unavailable",
+        "this container has no binary file read available, so the recording could not be read out.",
+      );
+    }
+    return handle.readFileStream(path);
+  }
+
+  /**
+   * `record.ts` remembers nothing between calls (see its own header), so this
+   * is rebuilt on every `record`/`checkRecording` rather than cached — cheap,
+   * since every field here is either a closure over `handle` or a plain read.
+   */
+  function buildRecordDeps(): RecordDeps {
+    const handle = sandbox();
+    const proofsBaseUrl = env.PROOFS_BASE_URL;
+    if (!proofsBaseUrl) {
+      throw new CapabilityError(
+        "upstream_unavailable",
+        "this deployment has no PROOFS_BASE_URL configured, so a recording could not be started or published.",
+      );
+    }
+    return {
+      writeFile: (path, content) => handle.writeFile(path, content),
+      startProcess: (command, options) => handle.startProcess(command, options),
+      getProcess: (id) => handle.getProcess(id),
+      getProcessLogs: (id) => handle.getProcessLogs(id),
+      readBinary: readBinaryFile,
+      bucket: env.ARTIFACTS,
+      proofsBaseUrl,
+      // The VALUES, exactly as `redact` scrubs every other model-visible
+      // field: a recording script drives a dev server that was handed these,
+      // and `record.ts` redacts `stdoutTail` and `error` the same way `exec`
+      // redacts its own output.
+      devEnv: devEnvFor(env),
+    };
   }
 
   return {
@@ -369,6 +430,23 @@ export function makeSandboxGateway(
       // to carry faithfully and the transcript must not repeat.
       const captured = await captureDiff(env, runId, result.stdout);
       return { ...captured, preview: redact(captured.preview) };
+    },
+
+    readBinary: (path) => readBinaryFile(path),
+
+    // Both delegate to `record.ts` — this gateway supplies the container
+    // primitives and the R2/URL wiring, `record.ts` owns the harness
+    // contract, the R2 key and the redaction of what it reads back. Gated by
+    // `assertReady` up front, same as every other method here: a call before
+    // `boot` refuses with `sandbox_not_ready` before either function runs.
+    async record(input) {
+      await assertReady();
+      return startRecording(buildRecordDeps(), input);
+    },
+
+    async checkRecording(recordingId) {
+      await assertReady();
+      return runCheckRecording(buildRecordDeps(), recordingId);
     },
   };
 }

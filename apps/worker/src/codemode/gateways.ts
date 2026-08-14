@@ -228,6 +228,26 @@ export type SandboxProcessState = {
 };
 
 /**
+ * What `browser.checkRecording` reports on one recording — Phase 19.
+ *
+ * `state: "failed"` is not an error to be caught and hidden: a script that
+ * throws still gets a flushed, playable video out of the harness, and that
+ * video is the proof a bug is real. `error` carries Playwright's own message
+ * when the script threw, trimmed to the useful part, and the harness's own
+ * named refusal (`browser-unavailable`) when the machine's Chromium install
+ * never completed — either way the model gets a reason it can act on rather
+ * than a bare failure.
+ */
+export type RecordingStatus = {
+  state: "running" | "passed" | "failed";
+  /** Public URL, present once state is terminal AND a video was produced. */
+  url: string | null;
+  error: string | null;
+  stdoutTail: string;
+  durationMs: number;
+};
+
+/**
  * The one run's container, Phase 18.
  *
  * Every method acts on THIS run's machine and no other: there is no id
@@ -247,6 +267,11 @@ export type SandboxProcessState = {
  *    execution" is execution-scoped knowledge and the gateway outlives
  *    executions — two long-polls in one code block is how a 20s budget dies
  *    at 25.7s, observed live in run 29f027e4.
+ *
+ * `readBinary`, `record` and `checkRecording` are Phase 19's addition, reached
+ * from the `browser` namespace rather than `sandbox` — a real browser and its
+ * recording are a different model-facing surface than a shell, even though
+ * both run on the same container and share this one gate.
  */
 export interface SandboxGateway {
   boot(longPoll: boolean): Promise<BootStatus>;
@@ -268,6 +293,27 @@ export interface SandboxGateway {
   preview(port: number): Promise<{ url: string }>;
   /** Captures the working tree's diff by reference. Never returns the bytes. */
   diff(): Promise<DiffResult>;
+  /**
+   * Raw binary read of a file in the container. RPC transport only.
+   *
+   * Phase 19's one caller is `record.ts`: it streams a finished recording
+   * straight from the container to R2 without the bytes ever materialising in
+   * this Worker's memory, the same shape `diff()` uses for a patch that can
+   * run to megabytes.
+   */
+  readBinary(path: string): Promise<ReadableStream<Uint8Array>>;
+  /**
+   * Start a Playwright recording — Phase 19's `preview`-shaped counterpart:
+   * it does not block past the execution budget, it returns a handle, and
+   * `checkRecording` is the poll. `script` is Playwright source, not a
+   * closure — a function cannot cross the isolate/container boundary.
+   */
+  record(input: {
+    script: string;
+    label: string;
+    timeoutMs?: number;
+  }): Promise<{ recordingId: string }>;
+  checkRecording(recordingId: string): Promise<RecordingStatus>;
 }
 
 export interface ArtifactPublisher {

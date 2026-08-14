@@ -421,3 +421,34 @@ declare const sandbox: {
 	 */
 	diff: (input: DiffInput) => Promise<DiffOutput>;
 }
+
+type RecordInput = {
+    script: string;
+    label: string;
+    timeoutMs?: number;
+}
+type RecordOutput = {
+    recordingId: string;
+}
+type CheckRecordingInput = {
+    recordingId: string;
+}
+type CheckRecordingOutput = {
+    state: "running" | "passed" | "failed";
+    url: string | null;
+    error: string | null;
+    stdoutTail: string;
+    durationMs: number;
+}
+
+declare const browser: {
+	/**
+	 * Run a Playwright script with video recording, on this run's own container. `page` is already in scope — do not open a browser or a context yourself, and do not call recordVideo; the harness owns both. Write the script as you would a Playwright test body and THROW to fail: the last expression's truthiness is never consulted. This does not block — it starts the recording and returns a recordingId; poll checkRecording for the result on a LATER turn, across blocks rather than in a loop inside this one, because a real run is minutes and this execution has seconds. `timeoutMs` defaults to a generous budget and anything above 300000 (5 minutes) is REFUSED rather than quietly shortened. A script that throws is not a wasted call: the harness still flushes a playable video of the failure, and checkRecording returns it — that recording IS the proof a bug is real, so keep it rather than re-running for a clean one. If this run's machine never got a working browser, checkRecording reports that by name (browser-unavailable) instead of a generic failure or a hang.
+	 */
+	record: (input: RecordInput) => Promise<RecordOutput>;
+
+	/**
+	 * Poll a recording record started. state: "running" means keep waiting — call again on a later turn, never in a tight loop here. Once it settles ("passed" or "failed"), url — when present — is a public link to a playable mp4: safe to paste as-is into a pull request body or a Slack message, no signing, no escaping, nothing else to fetch. error carries Playwright's own message when the script threw, trimmed to the useful part, or names browser-unavailable when this run's machine never got a working browser — either way it is a reason you can act on. A FAILED recording is a first-class result, not a dead end: its video is what proves the bug is real, and it is worth linking exactly like a passing one, not discarded in favor of a cleaner rerun.
+	 */
+	checkRecording: (input: CheckRecordingInput) => Promise<CheckRecordingOutput>;
+}

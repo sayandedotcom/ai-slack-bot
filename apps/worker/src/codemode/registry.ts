@@ -21,6 +21,7 @@ import { makeBetterStackTools } from "./bindings/betterstack";
 import { FILES_DECLARATIONS, makeFilesTools } from "./bindings/files";
 import { makeApprovalTools } from "./bindings/approval";
 import { makeSandboxTools } from "./bindings/sandbox";
+import { makeBrowserTools } from "./bindings/browser";
 
 /**
  * The Phase 09 namespace order, frozen.
@@ -44,6 +45,10 @@ export const PHASE_09_NAMESPACES = [
   // Phase 18's. Appended for the same reason: inserting it anywhere else would
   // rewrite every later block of the committed `.d.ts` for no gain.
   "sandbox",
+  // Phase 19's tenth. Same reason again — a real browser and its recording
+  // are a distinct model-facing surface from a shell, even though both run on
+  // the `sandbox` gateway's one container.
+  "browser",
 ] as const;
 
 /**
@@ -286,6 +291,7 @@ export function buildRegistry(
     { name: "files", tools: makeFilesTools(ctx), types: FILES_DECLARATIONS },
     { name: "approval", tools: makeApprovalTools(ctx) },
     { name: "sandbox", tools: makeSandboxTools(ctx) },
+    { name: "browser", tools: makeBrowserTools(ctx) },
   ]);
 }
 

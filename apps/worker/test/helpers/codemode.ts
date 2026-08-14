@@ -275,6 +275,23 @@ export function fakeSandboxGateway(): CapabilityDependencies["sandbox"] {
         diffRef: null,
       };
     },
+    // Phase 19's three, same "up and does nothing" contract as the rest of
+    // this fake: a suite that only builds and classifies the `browser`
+    // namespace gets a shaped result rather than an error it has no context
+    // for. `codemode-browser.test.ts` overrides these per case.
+    async readBinary() {
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      });
+    },
+    async record() {
+      return { recordingId: "rec_0" };
+    },
+    async checkRecording() {
+      return { state: "passed", url: "https://example.invalid/rec_0.mp4", error: null, stdoutTail: "", durationMs: 0 };
+    },
   };
 }
 
