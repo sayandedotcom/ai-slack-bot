@@ -45,8 +45,52 @@ Phases 07 (stored `triage_decisions`), 10 (prompt assembly, shadow wakes), **11*
 2. **Voice sampling is bounded:** ≤ 20 samples, each trimmed to 300 chars, total ≤ 6,000 chars; fewer than 5 usable samples ⇒ the block renders as the empty string (Phase 10's static contrast examples still teach the register). Empty is also byte-stable.
 3. **Sampled text is the engineer's own authored messages only:** `user_id` = their `identities.external_id`, customer channels only (`customer_slug IS NOT NULL`), `subtype IS NULL`. Never another user's text, never DMs (none exist in D1 by the ingest drop), never bot messages.
 4. **Prompt authority is unchanged:** the voice block is host-written instructions (it precedes the dynamic context and carries no untrusted framing beyond quoted sample text, delimited as data exactly like the existing `VOICE_EXAMPLES` quoting).
-5. **Ground truth is one written definition:** a triage decision counts as `humanEngaged` iff a message by a different `user_id` exists in the same channel and thread within 24 h after the triggering message. It lives in ONE SQL query with a comment; the scorer never re-derives it.
+5. **Ground truth is one written definition:** a triage decision counts as `humanEngaged` iff **a genuinely human** message by a different `user_id` exists in the same channel and thread within 24 h after the triggering message. It lives in ONE SQL query with a comment; the scorer never re-derives it.
+7. **Never read `messages` without excluding the agent's own posts.** Since 2026-08-14 the agent's replies are ingested (`events_seen.outcome = 'ingested_self'`) and they carry **the on-duty engineer's `user_id`**, because that is whose identity they were sent under. Every query in this phase therefore reads
+
+   ```sql
+   FROM messages m JOIN events_seen e ON e.event_id = m.event_id
+   WHERE e.outcome = 'ingested'   -- humans only; 'ingested_self' is us
+   ```
+
+   and never `FROM messages` alone. Two things break without it, both silently and both in the flattering direction — see "Validation" below.
 6. **Eval responses carry `n` beside every rate**, and rates over an empty class are `null`, never `0` or `100` — a recall of `null` says "no positives existed", which is the honest answer.
+
+## Validation against shipped code, 2026-08-14
+
+Re-checked after Phases 12–17 merged and after the day's live fixes. Three
+findings, two of which would have produced numbers that flatter the system.
+
+**1. Ground truth was contaminated (invariant 5, Task 5).** The original
+definition — "a message by a different `user_id` in the same thread within
+24 h" — was written when only humans reached `messages`. The agent's replies
+now land there too, under the on-duty engineer's `user_id`. On any woken run
+the agent replies, that reply satisfies "a different user engaged", and the
+decision scores as a **true positive by construction**. Precision would have
+climbed toward 1.0 as a direct function of the agent replying more, which is
+the one thing an eval must never reward. Fixed by invariant 7's join.
+
+**2. Voice sampling would have trained the agent on itself (invariant 3,
+Task 3).** The sampler selects `messages` where `user_id` equals the on-duty
+engineer's Slack id — which is exactly what the agent's own sends carry. Left
+alone, each rotation would few-shot the model on its previous output rather
+than on the human's writing, and the drift would compound every shift while
+looking like it was working. This is the more damaging of the two: a bad
+number is visible, an imitation loop is not. Fixed by the same join.
+
+**3. `VOICE_EXAMPLES` is at its ceiling.** A fourth contrast pair landed on
+2026-08-14 (the em-dash rewrite), so the array is now 4 of
+`VOICE_EXAMPLE_MAX_COUNT = 4`, asserted by a test. Task 3 adds engineer samples
+as their **own block**, not as entries here, so nothing collides — but any task
+that wants a fifth static example must raise the cap deliberately and say why.
+
+**Still accurate:** the prompt block order and cache marks, `triage_decisions`'
+columns, the write-guard's shadow denial, `suppressed` as the shadow delivery
+terminal, and `escalate` remaining permitted in shadow. The AI-tell detector's
+rule list should now be cross-checked against the typography rules added to
+`policy.ts` on 2026-08-14 (no em dash, no semicolon, no emoji, no exclamation
+marks) — the detector and the policy must ban the same things, or the drafts
+will pass one and fail the other.
 
 ## Public contracts
 
@@ -100,6 +144,11 @@ Same regime as Phases 11–13; overrides per-step commands wherever they conflic
 4. **Dispatch = the task's own text + Public contracts + these rules.** Task 3's subagent additionally reads `src/agent/prompt/policy.ts` + `index.ts` (the caching comments are the requirements); Task 5's reads `src/api/identity.ts` (authz helper) and `migrations/0007_approvals.sql` (join columns). No wider exploration.
 5. **Review depth:** deep for Task 3 (cache safety — the one place this phase can silently cost real money) and Task 5 (authz + query shape); light for 1, 2, 6; medium for 4.
 6. **Pure cores get exhaustive tests; I/O shells get thin ones.** The scorer/detector/sampler carry the coverage; routes assert authz, shape, and D1-only-ness, not re-proofs of the cores.
+7. **Within a wave, run the subagents CONCURRENTLY.** The file sets are disjoint by construction (see the table below); dispatching them serially doubles wall-clock for no safety gain. This phase is fully subagent-drivable — unlike Phase 18, every task here has a fast local feedback loop.
+8. **Seed fixtures in code, never by hand.** Tasks 1, 2 and 5 all need `triage_decisions` + `messages` rows. Write ONE helper in `test/helpers/` that inserts a scored scenario (woken + human reply, woken + silence, not-woken + human reply, not-woken + silence) and have all three tasks import it. Three subagents inventing three fixture builders is the most likely duplicated work in this phase.
+9. **No new dependencies.** No stats library, no NLP, no date library. The scorer is arithmetic and the detector is a pattern table.
+10. **The live numbers in Task 7 are not a gate.** If `n` is small, record it and move on — the deliverable is an honest number with its sample size, not a good one. Do not spend the tail of the week generating synthetic traffic to make a rate look better.
+11. **Commit after every task**, conventional prefixes.
 
 ### Parallel wave schedule
 
@@ -128,6 +177,7 @@ Same regime as Phases 11–13; overrides per-step commands wherever they conflic
 - [ ] **Step 1: Failing tests.** Each tell detected and each near-miss left alone: `preamble` ("Thanks for reaching out!", "I'd be happy to help" openers — but not a reply that merely starts with "Thanks" before substance? No: keep the rule mechanical — flag greeting-openers from a fixed list, and document that the list is the rule); `great_question` (case-insensitive "great/good question"); `bulleted_recap` (a bullet list whose intro line contains "to summarize/recap"); `closing_restatement` ("Let me know if you have any other questions", "Hope this helps" closers); `exclaimed_thanks` ("Thanks for flagging!" — exclamation-marked gratitude). A clean, direct reply (use `VOICE_EXAMPLES[0].good` verbatim) returns `[]`. Multiple tells all reported.
 - [ ] **Step 2: Run, verify FAIL.**
 - [ ] **Step 3: Implement.** Fixed pattern tables, case-insensitive; comment each pattern with the spec line it encodes. No NLP, no scoring — present/absent.
+- [ ] **Step 3b: Cross-check against `policy.ts`.** The typography rules added on 2026-08-14 ban an em dash, a semicolon, an emoji and an exclamation mark in customer-facing text. The detector must flag exactly what the policy bans, or a draft passes one and fails the other. Add `em_dash`, `semicolon`, `emoji` and `exclamation` to `AiTell` with the same patterns, and assert in a test that `VOICE_EXAMPLES[].good` — the copy we hold up as correct — returns `[]` for every entry.
 - [ ] **Step 4: Run + typecheck; PASS. Commit:** `feat(eval): mechanical AI-tell detection matching the spec's copy rules`
 
 ### Task 3 — Engineer voice, frozen per shift
@@ -137,7 +187,23 @@ Same regime as Phases 11–13; overrides per-step commands wherever they conflic
 - [ ] **Step 1: Read the caching comments** in `prompt/index.ts` ("THE ORDER IS THE DELIVERABLE") and `STABLE_PREFIX_CACHE_OPTIONS` in `policy.ts`. They are requirements.
 - [ ] **Step 2: Failing tests.** Real D1: seed messages for a connected engineer (identity row + authored customer-channel messages before and after a shift boundary). Assert: `resolveEngineerVoice` at two instants **within the same shift** returns byte-identical `renderEngineerVoice` output even though a new message landed between the calls (the freeze — invariant 1); at an instant in the **next shift** the new message may appear; only that engineer's messages are sampled (another user's seeded rows never appear); trimming to 300 chars, total ≤ 6,000, count ≤ 20; 4 usable samples ⇒ `""`; unconnected engineer ⇒ `""`; `subtype`-marked and non-customer-channel rows excluded; assembled prompt: `buildPrompt` (or the assembly seam in `index.ts`) places the block after the stable pair and before trusted context, with a cache mark on it — extend the existing prompt-order test rather than writing a parallel one.
 - [ ] **Step 3: Run, verify FAIL.**
-- [ ] **Step 4: Implement.** One SQL: `SELECT text, ts FROM messages WHERE user_id = ? AND customer_slug IS NOT NULL AND subtype IS NULL AND length(text) >= 40 AND received_at < ? ORDER BY received_at DESC LIMIT 20` (the `received_at < shiftStartMs` bound is the freeze). Per-isolate `Map<number, EngineerVoice>` keyed by `shiftIndex` (from `onDuty(nowMs)`); `external_id` via `getIdentity(db, onDuty(nowMs).email, "slack")`. Render mirrors `renderVoiceExamples`' quoting (samples are data, JSON-stringified).
+- [ ] **Step 4: Implement.** One SQL — note the join, which is what keeps the model from few-shotting on its own prior output (invariant 7):
+
+  ```sql
+  SELECT m.text, m.ts
+    FROM messages m
+    JOIN events_seen e ON e.event_id = m.event_id
+   WHERE e.outcome = 'ingested'        -- NOT 'ingested_self': that is us
+     AND m.user_id = ?                 -- the engineer's Slack external_id
+     AND m.customer_slug IS NOT NULL
+     AND m.subtype IS NULL
+     AND length(m.text) >= 40
+     AND m.received_at < ?             -- shiftStartMs: this bound IS the freeze
+   ORDER BY m.received_at DESC
+   LIMIT 20
+  ```
+
+  Per-isolate `Map<number, EngineerVoice>` keyed by `shiftIndex` (from `onDuty(nowMs)`); `external_id` via `getIdentity(db, onDuty(nowMs).email, "slack")`. Render mirrors `renderVoiceExamples`' quoting (samples are data, JSON-stringified).
 - [ ] **Step 5: Run + typecheck; PASS. Commit:** `feat(prompt): few-shot the on-duty engineer's own voice, frozen per shift`
 
 ### Task 4 — Shadow posture
@@ -155,7 +221,24 @@ Same regime as Phases 11–13; overrides per-step commands wherever they conflic
 
 - [ ] **Step 1: Failing tests.** Through `SELF.fetch` with the injected fake verifier (the Phase 11/12 pattern): 401/403 for outsiders on both routes; **triage** — seed `triage_decisions` + `messages` fixtures covering all four cells (a woken message with a 25-hour-later reply is a false positive — the 24 h window is asserted; a same-author follow-up does not count as engagement); response carries `score.n` and nulls per invariant 6; `days` clamped to 1..90; **shadow** — seed suppressed approvals + a human reply in one thread and none in another; pairs carry the reply where it exists and `null` where not, `tells` populated by the detector, newest first, `limit` clamped to 1..50; a `pending` or `sent` approval never appears; **zero DO invocations for both routes** (assert via the run-layer test helper the API tests already use).
 - [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.** The ground-truth SQL (invariant 5) as one commented query; the shadow join reads `approvals WHERE delivery='suppressed'` and, per row, the first later non-agent message in `(channel_id, thread_ts)`.
+- [ ] **Step 3: Implement.** The ground-truth SQL (invariants 5 and 7) as one commented query. Both halves of this route must exclude the agent's own posts, and for the same reason:
+
+  ```sql
+  -- humanEngaged: did a REAL person reply in this thread within 24h?
+  -- The e.outcome filter is load-bearing. Without it the agent's own reply
+  -- counts as engagement and every woken run scores true-positive.
+  SELECT 1
+    FROM messages m
+    JOIN events_seen e ON e.event_id = m.event_id
+   WHERE e.outcome = 'ingested'
+     AND m.channel_id = ?
+     AND m.thread_ts  = ?
+     AND m.user_id   != ?           -- not the person who triggered it
+     AND m.received_at BETWEEN ? AND ? + 86400000
+   LIMIT 1
+  ```
+
+  The shadow join reads `approvals WHERE delivery='suppressed'` and, per row, the first later message in `(channel_id, thread_ts)` that carries the same `e.outcome = 'ingested'` filter — a shadow draft compared against the agent's own send would be comparing the model to itself.
 - [ ] **Step 4: Run + typecheck; PASS. Commit:** `feat(api): triage scores and the shadow corpus, D1-only`
 
 ### Task 6 — Side-by-side panel
