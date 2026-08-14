@@ -30,6 +30,21 @@ export const ACTIVE_RUN_STATUSES = ["live", "awaiting_approval", "idle"] as cons
 
 export type ActiveRunStatus = (typeof ACTIVE_RUN_STATUSES)[number];
 
+/**
+ * The complement of `ACTIVE_RUN_STATUSES`, named because Phase 18 has to act on
+ * it: a run reaching one of these destroys its container, and the sweeper reads
+ * exactly this set out of D1 to find the orphans. Spelling it once means adding
+ * a sixth status can only ever put it in one list or the other, rather than
+ * leaving it silently in neither.
+ */
+export const TERMINAL_RUN_STATUSES = ["done", "failed"] as const;
+
+export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
+
+export function isTerminalRunStatus(status: RunStatus): status is TerminalRunStatus {
+  return (TERMINAL_RUN_STATUSES as readonly RunStatus[]).includes(status);
+}
+
 export function isRunStatus(value: unknown): value is RunStatus {
   return typeof value === "string" && (RUN_STATUSES as readonly string[]).includes(value);
 }

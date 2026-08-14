@@ -14,6 +14,7 @@ import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
 import { sweepNudges } from "./notify/nudge";
+import { sweepSandboxes } from "./sandbox/lifecycle";
 import { ZepMemory } from "./memory/zep";
 import { handleTriageBatch, type TriageJob } from "./triage/consumer";
 import { makeTriageRunner } from "./triage/run";
@@ -114,6 +115,19 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    *  everything but starting a dev server. Values must never reach a capability
    *  result, an audit arg or a log — key NAMES are fine and useful. */
   MONOREPO_DEV_ENV?: string;
+  /**
+   * Phase 18's container opt-out, and the twin of `AGENT_MODEL_DISABLED` above
+   * in every respect: a deliberate off switch, read strictly, and deliberately
+   * NOT in wrangler.jsonc `vars` so a deployed Worker never carries it.
+   *
+   * Set only where there is no container runtime to reach — the vitest pool
+   * binds it, because `@cloudflare/containers` throws from the `Sandbox`
+   * CONSTRUCTOR when containers are not enabled and the pool reports that as an
+   * unhandled rejection no `catch` at the call site can reach. See
+   * `sandboxContainersAvailable` for exactly which two paths consult it, and
+   * why the model-facing ones deliberately do not.
+   */
+  SANDBOX_DISABLED?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -247,10 +261,18 @@ export default {
     // more attempt. Independent of the other two for exactly the reason stated
     // above, and safe to run beside a live projection because both go through
     // the same `claimNudge` CAS.
+    //
+    // The fourth sweep (Phase 18) gives back the machines. A run reaching a
+    // terminal status destroys its own container, but that happens in a
+    // `waitUntil` a crashed or evicted object never runs — and a container is
+    // the most expensive thing this system can leak. Independent of the other
+    // three for exactly the reason above: a throwing memory sweep must not be
+    // what keeps a container alive for 45 minutes on `sleepAfter` alone.
     const results = await Promise.allSettled([
       sweepMemoryOutbox(env),
       sweepUndeliveredApprovals(env),
       sweepNudges(env),
+      sweepSandboxes(env),
     ]);
     // The other two sweeps report their own counts from inside themselves
     // (`console.warn("memory sweep"…)`, `console.warn("approval sweep"…)`);
@@ -260,6 +282,13 @@ export default {
     const nudges = results[2];
     if (nudges?.status === "fulfilled" && nudges.value > 0) {
       console.warn("nudge sweep", { sent: nudges.value });
+    }
+    // Same reasoning, and one more: this number is the only routine evidence
+    // that containers are being reclaimed at all, and container-hours are what
+    // this phase is spending against a fixed budget.
+    const sandboxes = results[3];
+    if (sandboxes?.status === "fulfilled" && sandboxes.value.destroyed > 0) {
+      console.warn("sandbox sweep", { destroyed: sandboxes.value.destroyed });
     }
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length > 0) {

@@ -136,6 +136,26 @@ export default defineConfig({
           // own env object (`test/notify-nudge.test.ts`), which is a stubbed
           // `fetch` away from Slack by construction.
           NUDGE_FALLBACK_CHANNEL_ID: "",
+          // THERE IS NO CONTAINER RUNTIME IN THIS POOL, AND EVERY SUITE THAT
+          // FINISHES A RUN WOULD OTHERWISE FIND OUT THE HARD WAY.
+          //
+          // A run reaching `done` or `failed` destroys its Tier 2 container
+          // (Phase 18, invariant 4), and the cron sweep re-attempts the same
+          // thing every minute for every terminal run — so `worker.scheduled()`
+          // and any suite that settles a run both reach `env.SANDBOX`. Merely
+          // touching that stub constructs the `Sandbox` Durable Object, and
+          // `@cloudflare/containers` throws "Containers have not been enabled
+          // for this Durable Object class" from the CONSTRUCTOR, which
+          // vitest-pool-workers reports as an unhandled rejection from inside
+          // its own stub wrapper. No `catch` at the call site can reach it; the
+          // only fix is not to make the call.
+          //
+          // Same precedent as AGENT_MODEL_DISABLED above: a deliberate opt-out
+          // that production must never carry, read strictly (`1`/`true`), and
+          // consulted by exactly the two paths that reach a container without a
+          // caller having asked for one. `test/sandbox-lifecycle.test.ts` opts
+          // back IN with its own env object, over a fake container.
+          SANDBOX_DISABLED: "true",
         },
       },
     }),

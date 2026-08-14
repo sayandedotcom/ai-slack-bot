@@ -8,7 +8,8 @@ import type {
   RunTurnInput,
   ToolCallUpdateInput,
 } from "./protocol";
-import { parseClientMessage } from "./protocol";
+import { isTerminalRunStatus, parseClientMessage } from "./protocol";
+import { makeSandboxLifecycle, sandboxContainersAvailable } from "../sandbox/lifecycle";
 import { broadcastEvent } from "./broadcast";
 import { getRunById, projectRunIndex } from "./repository";
 import {
@@ -855,7 +856,40 @@ export class RunDO extends DurableObject<Env> {
     if (result.event) this.#broadcast(result.event);
     await this.#armAlarm();
     this.#kickProjection();
+    this.#kickSandboxTeardown(result);
     return { ok: true, changed: result.changed, status: result.status, event: result.event };
+  }
+
+  /**
+   * A run that has finished gives its container back (Phase 18, invariant 4).
+   *
+   * Fired from the ONE place a public status changes, and only on a transition
+   * that actually changed — `done -> done` on a redelivered message must not
+   * destroy a container the reopened run is using.
+   *
+   * `waitUntil` rather than an await, and swallowed rather than propagated, for
+   * the same reason `#kickProjection` is: destroying a container is a several-
+   * second control-plane call, and a run must not fail, hang, or refuse a status
+   * change because a machine it no longer needs is slow to die. The sweeper
+   * (`sweepSandboxes`) is what makes that safe — it re-attempts terminal runs
+   * every minute, so a lost `waitUntil` costs a container one extra minute of
+   * life rather than leaking it.
+   */
+  #kickSandboxTeardown(result: StatusResult): void {
+    if (!result.changed || !isTerminalRunStatus(result.status)) return;
+    if (!sandboxContainersAvailable(this.env)) return;
+    const runId = readState(this.ctx.storage)?.runId;
+    if (!runId) return;
+
+    const lifecycle = makeSandboxLifecycle(this.env);
+    this.ctx.waitUntil(
+      lifecycle.teardown(runId).catch((error: unknown) => {
+        console.warn("sandbox teardown failed", {
+          runId,
+          error: safeErrorText(error, "container destroy failed"),
+        });
+      }),
+    );
   }
 
   /**
