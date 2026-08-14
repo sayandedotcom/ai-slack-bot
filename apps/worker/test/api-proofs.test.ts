@@ -170,6 +170,117 @@ describe("a published recording plays", () => {
   });
 });
 
+describe("Range, because Safari and iOS will not start an mp4 without it", () => {
+  /**
+   * The original handler argued that ranges were only for scrubbing and could
+   * wait. True of Chrome and Firefox; false of the audience this URL actually
+   * has. WebKit's media stack probes with a range request and treats a
+   * 200-only origin as unplayable, so an engineer opening the Slack thread on a
+   * Mac or a phone gets a dead player instead of the proof — and Slack's own
+   * inline player is the same family. What must NOT change on the way in is any
+   * refusal: shape first, `_internal/` first of all, one indistinguishable 404,
+   * the ceiling, `inline`, `nosniff`.
+   */
+  const BYTES = new Uint8Array([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+
+  it("advertises accept-ranges on the plain 200, which is where WebKit looks", async () => {
+    const key = await seed(`${hex("ab")}.mp4`, { bytes: BYTES });
+    const response = await fetchProof(key);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(response.headers.get("content-range")).toBeNull();
+  });
+
+  it("answers a range with 206, the right bytes, and a content-range naming the full size", async () => {
+    const key = await seed(`${hex("ac")}.mp4`, { bytes: BYTES, label: "checkout" });
+    const response = await fetchProof(key, { headers: { range: "bytes=2-5" } });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
+    expect(response.headers.get("content-length")).toBe("4");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES.slice(2, 6));
+    // Every refusal-side property survives a partial response.
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+    expect(response.headers.get("content-disposition")).toBe('inline; filename="checkout.mp4"');
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("serves an open-ended range to the end of the object", async () => {
+    const key = await seed(`${hex("ad")}.mp4`, { bytes: BYTES });
+    const response = await fetchProof(key, { headers: { range: "bytes=7-" } });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 7-9/10");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES.slice(7));
+  });
+
+  it("serves a suffix range, which is how a player reads an mp4's trailing atoms", async () => {
+    const key = await seed(`${hex("ae")}.mp4`, { bytes: BYTES });
+    const response = await fetchProof(key, { headers: { range: "bytes=-3" } });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 7-9/10");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES.slice(7));
+  });
+
+  it("clamps an end past the last byte instead of refusing it", async () => {
+    const key = await seed(`${hex("af")}.mp4`, { bytes: BYTES });
+    const response = await fetchProof(key, { headers: { range: "bytes=8-9999" } });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 8-9/10");
+  });
+
+  it("answers HEAD with a range the same way, and with no body", async () => {
+    const key = await seed(`${hex("ba")}.mp4`, { bytes: BYTES });
+    const response = await fetchProof(key, { method: "HEAD", headers: { range: "bytes=2-5" } });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
+    expect(await response.text()).toBe("");
+  });
+
+  it("answers an unsatisfiable range with the SAME 404, not a 416", async () => {
+    const key = await seed(`${hex("bc")}.mp4`, { bytes: BYTES });
+
+    for (const range of ["bytes=10-20", "bytes=99-", "bytes=-0"]) {
+      const response = await fetchProof(key, { headers: { range } });
+      // 416 carries the object's true size and can only be produced by a REAL
+      // key, which would turn this route back into the oracle that the single
+      // 404 exists to prevent.
+      expect(response.status).toBe(404);
+      expect(response.headers.get("content-range")).toBeNull();
+      expect(await response.text()).toBe(await (await fetchProof("nonsense")).text());
+    }
+  });
+
+  it("ignores a range it cannot parse and serves the whole object", async () => {
+    const key = await seed(`${hex("bd")}.mp4`, { bytes: BYTES });
+
+    // RFC 9110: an unparseable Range is ignored, not refused. Multi-range and
+    // non-`bytes` units land here too.
+    for (const range of ["bytes=5-3", "items=0-1", "bytes=0-1,4-5", "garbage"]) {
+      const response = await fetchProof(key, { headers: { range } });
+      expect(response.status).toBe(200);
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    }
+  });
+
+  it("still refuses a bad key, the internal namespace and an unknown object under a Range", async () => {
+    // A Range header must not become a way around the checks that run first.
+    for (const key of [
+      "nonsense",
+      encodeURIComponent(`${INTERNAL_KEY_PREFIX}${hex("a")}.mp4`),
+      `${hex("f")}.png`,
+      `${hex("9")}.mp4`,
+    ]) {
+      const response = await fetchProof(key, { headers: { range: "bytes=0-1" } });
+      expect(response.status).toBe(404);
+    }
+  });
+});
+
 describe("every failure is the same 404", () => {
   it.each([
     ["an encoded absolute path", encodeURIComponent("/etc/passwd")],

@@ -40,7 +40,15 @@ import { MAX_RECORDING_BYTES, PROOF_KEY_PREFIX, RECORDING_LABEL } from "../sandb
  *    this route echo it.
  *  - the SIZE is bounded twice, here as well as at capture, so an object written
  *    by some other path cannot turn a public URL into unbounded egress.
- *  - every failure is ONE INDISTINGUISHABLE 404.
+ *  - every failure is ONE INDISTINGUISHABLE 404 — including an unsatisfiable
+ *    `Range`, which is a 404 rather than the RFC's 416 precisely because a 416
+ *    is an answer only a real key could produce.
+ *  - `Range` IS honoured (206 + `content-range`, `accept-ranges: bytes` on
+ *    every success). Not for scrubbing: Safari and iOS WebKit will not start
+ *    playing an mp4 at all from an origin that cannot answer a range request,
+ *    and the audience for this URL is somebody opening a Slack thread on a Mac
+ *    or a phone. The range is resolved against the object's real length before
+ *    the body is fetched, so a range never reaches R2 unvalidated.
  *
  * WHERE IT DELIBERATELY INVERTS `src/api/artifacts.ts`, and why that is not a
  * weakening. `inline` instead of `attachment`, because the file has to play in a
@@ -75,6 +83,69 @@ export function isProofKey(key: string): boolean {
  */
 function hasBody(object: R2Object | R2ObjectBody): object is R2ObjectBody {
   return "body" in object;
+}
+
+/** A byte range this route will actually serve, resolved against a real size. */
+type ServedRange = { offset: number; length: number };
+
+/**
+ * `unsatisfiable` is a real answer, and it is NOT an error shape.
+ *
+ * A range that starts past the end of the object is a 416 by the letter of RFC
+ * 9110. This route does not send one: 416 carries the object's true size in its
+ * `content-range` and, more importantly, it is a response that only a REAL key
+ * can produce — which turns the route back into the oracle that the single 404
+ * exists to prevent. `null` means "no usable range header, serve the whole
+ * thing", which is also what a malformed or multi-range header gets: RFC 9110
+ * says an unparseable Range must be ignored rather than refused.
+ */
+type RangeDecision = ServedRange | null | "unsatisfiable";
+
+/**
+ * `Range`, honoured — because Safari and iOS WebKit will not start playing an
+ * mp4 without it.
+ *
+ * The original note here argued ranges were only for scrubbing and could wait.
+ * That is true of Chrome and Firefox and false of the audience this URL
+ * actually has: WebKit's media stack probes with a range request and treats a
+ * 200-only origin as unplayable, so an engineer opening the Slack thread on a
+ * Mac or a phone gets a dead player rather than the proof. Slack's own inline
+ * player is the same family.
+ *
+ * Only the single-range forms are handled — `bytes=a-b`, `bytes=a-`, `bytes=-n`
+ * — which is everything a media element sends. Anything else falls back to the
+ * full 200, which is a valid answer to any Range request.
+ */
+function decideRange(header: string | undefined, size: number): RangeDecision {
+  if (header === undefined) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (match === null) return null;
+
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === "" && rawEnd === "") return null;
+
+  if (rawStart === "") {
+    // A SUFFIX range: the last n bytes. `bytes=-0` asks for nothing, which is
+    // the one suffix that cannot be satisfied.
+    const suffix = Number(rawEnd);
+    if (suffix === 0) return "unsatisfiable";
+    const length = Math.min(suffix, size);
+    return { offset: size - length, length };
+  }
+
+  const start = Number(rawStart);
+  // Past the end of the object: unsatisfiable, and answered as the same 404 as
+  // everything else that fails here.
+  if (start >= size) return "unsatisfiable";
+  if (rawEnd === "") return { offset: start, length: size - start };
+
+  const end = Number(rawEnd);
+  // Backwards is malformed rather than unsatisfiable, so it is ignored and the
+  // whole object is served — the RFC's own instruction.
+  if (end < start) return null;
+  // An end past the last byte is clamped, not refused: that is exactly what a
+  // player sends when it asks for a chunk bigger than what is left.
+  return { offset: start, length: Math.min(end, size - 1) - start + 1 };
 }
 
 /**
@@ -117,12 +188,30 @@ proofsApi.on(["GET", "HEAD"], "/proofs/:key", async (c) => {
 
   if (!isProofKey(key)) return missing();
 
-  // `head()` for HEAD, so there is no stream to fetch and none to release.
+  // `head()` for HEAD, so there is no stream to fetch and none to release —
+  // and also for a ranged GET, because the range has to be resolved against
+  // the object's real length BEFORE the body is requested. A plain GET, the
+  // overwhelmingly common case, still costs exactly one round trip.
   const isHead = c.req.method === "HEAD";
   const storedKey = `${PROOF_KEY_PREFIX}${key}`;
-  const object = isHead
-    ? await c.env.ARTIFACTS.head(storedKey)
-    : await c.env.ARTIFACTS.get(storedKey);
+  const rangeHeader = c.req.header("range");
+  const metadata =
+    isHead || rangeHeader !== undefined ? await c.env.ARTIFACTS.head(storedKey) : null;
+  if ((isHead || rangeHeader !== undefined) && metadata === null) return missing();
+
+  const range = metadata === null ? null : decideRange(rangeHeader, metadata.size);
+  // The SAME 404, not a 416. A distinguishable answer here would confirm that a
+  // given 64-character string names a real recording, and the key is the only
+  // thing protecting one on an Access-bypassed route.
+  if (range === "unsatisfiable") return missing();
+
+  const object =
+    metadata !== null && isHead
+      ? metadata
+      : await c.env.ARTIFACTS.get(
+          storedKey,
+          range === null ? undefined : { range: { offset: range.offset, length: range.length } },
+        );
   if (object === null) return missing();
 
   /** Refuse, releasing the body we are not going to send. */
@@ -146,30 +235,32 @@ proofsApi.on(["GET", "HEAD"], "/proofs/:key", async (c) => {
   const stored = object.customMetadata?.label;
   const filename = typeof stored === "string" && RECORDING_LABEL.test(stored) ? stored : "proof";
 
-  // NO `accept-ranges`, DELIBERATELY, AND THIS IS THE FOLLOW-UP IF SEEKING
-  // MATTERS. `R2Bucket.get` takes a `range` option, so serving 206s is a small
-  // change — but neither thing this route exists for needs one: Slack's unfurler
-  // fetches the whole object, and a `<video>` element plays a 200 from the start
-  // perfectly well. What ranges buy is scrubbing to the middle of a long
-  // recording without downloading the front of it. Implement it when somebody
-  // wants that, with an `if-range`/`etag` check, rather than shipping a partial
-  // implementation now that advertises a capability the handler does not have.
+  const headers: Record<string, string> = {
+    // Re-derived from the validated extension, never echoed from metadata.
+    "content-type": PROOF_CONTENT_TYPE,
+    "content-length": String(range === null ? object.size : range.length),
+    // `inline`, not `attachment`: it must PLAY in a browser tab and unfurl in
+    // Slack. Safe because the type above is a literal and cannot be anything
+    // scriptable.
+    "content-disposition": `inline; filename="${filename}.mp4"`,
+    "x-content-type-options": "nosniff",
+    // Content is fixed for the life of the key, and the key is the secret —
+    // so `public`, unlike an artifact, which is private because Access is what
+    // protects it.
+    "cache-control": "public, max-age=31536000, immutable",
+    etag: object.httpEtag,
+    // ADVERTISED ON EVERY SUCCESS, including the plain 200: WebKit decides
+    // whether an mp4 is seekable — and in practice whether to play it at all —
+    // from this header on the first response, before it ever sends a Range.
+    "accept-ranges": "bytes",
+  };
+  if (range !== null) {
+    headers["content-range"] = `bytes ${range.offset}-${range.offset + range.length - 1}/${object.size}`;
+  }
+
   return new Response(hasBody(object) ? object.body : null, {
-    headers: {
-      // Re-derived from the validated extension, never echoed from metadata.
-      "content-type": PROOF_CONTENT_TYPE,
-      "content-length": String(object.size),
-      // `inline`, not `attachment`: it must PLAY in a browser tab and unfurl in
-      // Slack. Safe because the type above is a literal and cannot be anything
-      // scriptable.
-      "content-disposition": `inline; filename="${filename}.mp4"`,
-      "x-content-type-options": "nosniff",
-      // Content is fixed for the life of the key, and the key is the secret —
-      // so `public`, unlike an artifact, which is private because Access is what
-      // protects it.
-      "cache-control": "public, max-age=31536000, immutable",
-      etag: object.httpEtag,
-    },
+    status: range === null ? 200 : 206,
+    headers,
   });
 });
 
