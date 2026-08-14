@@ -81,7 +81,12 @@ import {
 } from "./steering";
 import { makeApprovalPort } from "../approval/port";
 import { makeUserTokenSource } from "../identity/user-token";
-import { makeAgentTools, type CapabilityDependencyFactory } from "./dependencies";
+import {
+  makeAgentTools,
+  makeEngineerVoiceSource,
+  type CapabilityDependencyFactory,
+  type EngineerVoiceSource,
+} from "./dependencies";
 import { makeProvenanceSink } from "./memory";
 import type { AgentExecutionGuard } from "../codemode/contracts";
 import type { CodeModeOutput } from "../codemode/tool";
@@ -304,6 +309,21 @@ export type ContinuationDeps = {
   model: ModelHandle;
   /** Resolved from D1 and `run_state`; never from anything anybody typed. */
   context: TrustedContext;
+  /**
+   * The on-duty engineer's own writing, for the prompt's shift-stable block.
+   *
+   * Optional, and its ABSENCE means "no such block" rather than "an empty one":
+   * a test that builds `ContinuationDeps` by hand gets exactly the three-block
+   * prompt that shipped before Phase 21, byte for byte.
+   *
+   * A PORT rather than a resolved value, because `prepareTurn` re-queries its
+   * durable input before every step and the voice has to be read at the same
+   * point — not captured once at invocation start. It is asked at the loop's own
+   * clock, so a test driving a fixed instant gets a deterministic block. The
+   * resolve is memoised per isolate by shift ordinal, so this is a map lookup on
+   * every step after the first of each shift; see `prompt/voice.ts`.
+   */
+  voice?: EngineerVoiceSource;
   limits?: AgentLimits;
   clock?: StreamClock;
   /**
@@ -533,7 +553,15 @@ export async function runContinuation(
       });
     }
 
-    const prompt = buildAgentPrompt({ context, messages: repaired.messages });
+    // Asked at the LOOP'S clock, never `Date.now()`. The rotation and the shift
+    // boundary are pure functions of an instant, so reading a second clock here
+    // would let one step's prompt carry a different shift's samples from the
+    // step beside it — and would make the freeze untestable, since a test
+    // driving a fixed instant could not reach it. Frozen for the whole shift, so
+    // this is byte-identical on every step of every run until the boundary.
+    const voice = deps.voice === undefined ? null : await deps.voice.resolve(clock.now());
+
+    const prompt = buildAgentPrompt({ context, voice, messages: repaired.messages });
 
     // A step ceiling is not a spend ceiling (invariant 28). This is the one that
     // actually bounds money, and it runs before every billed call.
@@ -1506,6 +1534,9 @@ async function composeAndRun(
     tools: { [OUTER_TOOL_NAME]: withOuterToolEvents(tools.run_code, claim.generationId, writer) },
     model,
     context: resolved.context,
+    // THE PRODUCTION SOURCE for the engineer-voice block. This deployment's D1,
+    // and nothing a request, a turn or the model can reach.
+    voice: makeEngineerVoiceSource(env),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),
     ...(options.flush === undefined ? {} : { flush: options.flush }),

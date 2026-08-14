@@ -10,6 +10,7 @@ import { makeLinearGateway } from "../linear/client";
 import type { MemoryStore } from "../memory/store";
 import type { ProvenanceSink } from "../memory/episode";
 import { ZepMemory } from "../memory/zep";
+import { resolveEngineerVoice, type EngineerVoice } from "./prompt/voice";
 import { getRunById } from "../run/repository";
 import type { RunState } from "../run/session";
 import { makeSlackGateway } from "../slack/gateway";
@@ -174,6 +175,37 @@ export async function resolveCodeModeScope(
             slackUserId: onDutyToken.slackUserId,
           },
   });
+}
+
+/* ------------------------------------------------------------ voice port -- */
+
+/**
+ * Where the prompt's engineer-voice block comes from.
+ *
+ * A port rather than a direct import at the assembly site, for the same reason
+ * everything else in this file is one: `buildAgentPrompt` is a pure function of
+ * its inputs, and it must stay that way. Reading D1 inside it would make the
+ * prompt a function of the moment it was assembled, which is precisely the
+ * property the freeze exists to remove.
+ *
+ * `nowMs` is a PARAMETER, never a `Date.now()` read inside. The rotation is a
+ * pure function of an instant, and a caller that already knows the instant it is
+ * acting at must not get a different engineer — or a different shift's samples —
+ * from a clock read microseconds later. Same discipline as `UserTokenSource`.
+ */
+export type EngineerVoiceSource = {
+  resolve(nowMs: number): Promise<EngineerVoice>;
+};
+
+/**
+ * The production source: this deployment's D1, and nothing else.
+ *
+ * Cheap to call on every turn. `resolveEngineerVoice` memoises per isolate by
+ * the monotonic shift ordinal, so the two D1 reads happen once per isolate per
+ * three-day shift and every other call is a map lookup.
+ */
+export function makeEngineerVoiceSource(env: Env): EngineerVoiceSource {
+  return { resolve: (nowMs) => resolveEngineerVoice(env.DB, nowMs) };
 }
 
 /* ----------------------------------------------------------- dependencies -- */

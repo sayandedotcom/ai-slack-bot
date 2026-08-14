@@ -7,6 +7,7 @@ import { runsApi, runsWs } from "./api/runs";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
 import { identityApi } from "./api/identity";
+import { evalApi } from "./api/eval";
 import { slackOAuth } from "./oauth/slack";
 import { githubOAuth } from "./oauth/github";
 import { routeSlackMessageToOwnedRun, wakeSlackRun } from "./run/coordinator";
@@ -184,6 +185,11 @@ app.route("/api", artifactsApi);
 app.route("/api", identityApi);
 app.route("/api", slackOAuth);
 app.route("/api", githubOAuth);
+// Phase 21. Read-only, D1-only: triage precision/recall and the shadow corpus.
+// Same /api mount, so it is gated by the same Access application and the same
+// `requireTeamMember` roster check as `GET /api/identity` — the eval numbers are
+// exactly as private as the runs they are computed from.
+app.route("/api", evalApi);
 // Not JSON, so it is mounted outside /api — but still above the asset
 // catch-all, and still behind the same Access application as the dashboard.
 app.route("/ws", runsWs);

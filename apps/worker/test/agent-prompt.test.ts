@@ -16,6 +16,7 @@ import {
   isLegacySystemAuthorityTurn,
   PROMPT_SECTION_ORDER,
   PromptAuthorityError,
+  renderEngineerVoice,
   renderStablePolicy,
   renderTrustedContext,
   renderVoiceExamples,
@@ -31,6 +32,8 @@ import { makeRunCodeTool } from "../src/codemode/tool";
 import { alwaysFresh } from "../src/codemode/contracts";
 import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
 import type { RunTurn } from "../src/run/protocol";
+import { assertExternalWritePermitted } from "../src/codemode/write-guard";
+import { CapabilityError } from "../src/codemode/errors";
 
 /**
  * The string this whole task exists for. It is the exact payload that would
@@ -175,6 +178,21 @@ describe("input authority", () => {
 
 // --- Step 2: the section order ----------------------------------------------
 
+/**
+ * A resolved engineer voice, built by hand so the ordering assertions do not
+ * need D1. The freeze, the bounds and the query itself are proved against real
+ * rows in `test/prompt-voice.test.ts`; what is proved HERE is where the block
+ * lands and what cache mark it carries.
+ */
+const voice = {
+  shiftIndex: 400,
+  email: "luka@zellify.app",
+  samples: Array.from({ length: 6 }, (_, index) => ({
+    text: `a real message the engineer typed, number ${index}`,
+    ts: `17200000${index}.000100`,
+  })),
+};
+
 describe("prompt section order", () => {
   it("is stable policy, voice examples, trusted context, then untrusted messages", () => {
     const prompt = buildAgentPrompt({
@@ -185,10 +203,13 @@ describe("prompt section order", () => {
     expect(PROMPT_SECTION_ORDER).toEqual([
       "stable_policy",
       "stable_voice_examples",
+      "engineer_voice",
       "dynamic_trusted_context",
       "untrusted_model_messages",
     ]);
 
+    // No voice supplied, so the block is absent entirely — the layout that
+    // shipped before it existed, unchanged.
     expect(prompt.instructions).toHaveLength(3);
     expect(prompt.instructions.map((block) => block.role)).toEqual(["system", "system", "system"]);
     expect(prompt.instructions[0].content).toBe(renderStablePolicy());
@@ -221,6 +242,75 @@ describe("prompt section order", () => {
     // Never on the dynamic block: it changes every run, so caching it would pay
     // the write multiplier for a prefix nothing can reuse.
     expect(prompt.instructions[2].providerOptions).toBeUndefined();
+  });
+
+  /**
+   * The engineer-voice block, placed and marked.
+   *
+   * It sits AFTER the two build-stable blocks (which are reused across shifts
+   * and rotations) and BEFORE the dynamic trusted context (which changes every
+   * run). It carries the SECOND of Anthropic's four breakpoints, ending the
+   * shift-stable prefix — safe only because the block is frozen for the whole
+   * shift, which `test/prompt-voice.test.ts` proves against real D1 rows.
+   */
+  it("places the engineer voice after the stable pair, before trusted context", () => {
+    const prompt = buildAgentPrompt({ context, voice, messages: [] });
+
+    expect(prompt.instructions).toHaveLength(4);
+    expect(prompt.instructions[0].content).toBe(renderStablePolicy());
+    expect(prompt.instructions[1].content).toBe(renderVoiceExamples());
+    expect(prompt.instructions[2].content).toBe(renderEngineerVoice(voice));
+    expect(prompt.instructions[2].content).toContain("How the on-duty engineer actually writes");
+    expect(prompt.instructions[3].content).toBe(renderTrustedContext(context));
+    expect(prompt.instructions.every((block) => block.role === "system")).toBe(true);
+  });
+
+  it("gives the engineer voice its own cache mark, and still none to the dynamic block", () => {
+    const prompt = buildAgentPrompt({ context, voice, messages: [] });
+
+    expect(prompt.instructions[0].providerOptions).toBeUndefined();
+    // Two breakpoints of the four available: build-stable, then shift-stable.
+    expect(prompt.instructions[1].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: "ephemeral", ttl: "5m" } },
+    });
+    expect(prompt.instructions[2].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: "ephemeral", ttl: "5m" } },
+    });
+    expect(prompt.instructions[3].providerOptions).toBeUndefined();
+  });
+
+  /**
+   * Below the usable floor the render is `""`, and an empty block is DROPPED
+   * rather than emitted. A zero-length system block would be a byte-stable way
+   * to spend one of four breakpoints on nothing.
+   */
+  it("omits the block entirely rather than emitting an empty one", () => {
+    const thin = { ...voice, samples: voice.samples.slice(0, 4) };
+    expect(renderEngineerVoice(thin)).toBe("");
+
+    for (const supplied of [{ voice: thin }, { voice: null }, {}]) {
+      const prompt = buildAgentPrompt({ context, messages: [], ...supplied });
+      expect(prompt.instructions).toHaveLength(3);
+      expect(prompt.instructions[2].content).toBe(renderTrustedContext(context));
+      expect(prompt.instructions[2].providerOptions).toBeUndefined();
+    }
+  });
+
+  /**
+   * The block is shift-stable, not run-stable: two unrelated runs inside one
+   * shift must produce the same bytes for blocks 0-2, or the shift-stable
+   * prefix is not a prefix and every request re-pays for it.
+   */
+  it("keeps the engineer voice byte-identical across unrelated runs in one shift", () => {
+    const a = buildAgentPrompt({ context, voice, messages: [] });
+    const b = buildAgentPrompt({
+      context: { ...context, runId: "different", customerSlug: "othercorp", shadow: true },
+      voice,
+      messages: [],
+    });
+
+    expect(b.instructions[2].content).toBe(a.instructions[2].content);
+    expect(b.instructions[3].content).not.toBe(a.instructions[3].content);
   });
 
   it("never lets customer bytes reach a system message", () => {
@@ -332,7 +422,7 @@ describe("the reviewed Anthropic provider options", () => {
 // --- Step 8: the behavioural contract, as prompt text only ------------------
 
 describe("stable policy content", () => {
-  it("has exactly the nine reviewed sections, in order", () => {
+  it("has exactly the ten reviewed sections, in order", () => {
     expect(STABLE_POLICY_SECTIONS.map((section) => section.id)).toEqual([
       "mission",
       "one_generic_agent",
@@ -341,6 +431,7 @@ describe("stable policy content", () => {
       "prompt_injection",
       "voice",
       "escalation_judgment",
+      "shadow",
       "failure_policy",
       "surface_policy",
     ]);
@@ -380,6 +471,19 @@ describe("stable policy content", () => {
     ]) {
       expect(policy).toContain(rule);
     }
+  });
+
+  /**
+   * The punctuation rules read as absolutes ("Never use a semicolon"), which is
+   * wrong for an agent that supports a codebase: a reply routinely carries a
+   * shell one-liner or a query. The carve-out is stated in the policy rather
+   * than only implemented in the detector, so the model and the eval agree on
+   * what counts.
+   */
+  it("exempts code spans from the punctuation rules", () => {
+    const policy = flat(renderStablePolicy());
+    expect(policy).toContain("about prose, not code");
+    expect(policy).toContain("Inside backticks or a fenced block");
   });
 
   it("holds a professional register: no emoji, no exclamation, no slang", () => {
@@ -464,6 +568,23 @@ describe("stable policy content", () => {
       "call `approval.escalate({draft, why})` with the reply you would have sent",
     );
     expect(policy).toContain("Never call `approval.escalate` for a clarifying question");
+  });
+
+  /**
+   * The shadow posture, Phase 21 Task 4. This text must be UNCONDITIONAL —
+   * present in every render, not gated on whether the run in question is
+   * actually shadow — because it lives in `STABLE_POLICY_SECTIONS`, which is
+   * the cached prefix. A conditional here would break byte-identity across
+   * requests and pay the write multiplier every time. The dedicated
+   * byte-identity test below (and the pre-existing "renders byte-identically
+   * across two independent module builds" test above) both cover this text,
+   * since it is just another stable section.
+   */
+  it("tells a shadow run to draft for approval instead of fighting a denied send", () => {
+    const policy = flat(renderStablePolicy());
+    expect(policy).toContain("shadow_write_denied");
+    expect(policy).toContain("Produce your best draft and call `approval.escalate({draft, why})`");
+    expect(policy).toContain("The draft is what the run is measured on");
   });
 
   it("states the surface policy both ways round", () => {
@@ -772,5 +893,77 @@ describe("trusted context", () => {
 
   it("says the engineer identity is unavailable rather than hiding it", () => {
     expect(renderTrustedContext(context)).toContain("identity_unavailable");
+  });
+
+  /**
+   * Shadow posture, Phase 21 Task 4. `context.ts` already carried this before
+   * this task started — `shadow` is sourced from the D1 `runs` row (the only
+   * authority; see the comment above `resolveTrustedContext`) and rendered as
+   * a `- shadow: …` line whose shadow-true branch already reads as a notice
+   * ("draft only, nothing is sent"). That is verified here, unchanged, rather
+   * than reimplemented: a shadow run's rendered context carries the notice,
+   * and a non-shadow run's carries only the flat fact that it is not shadow —
+   * nothing that reads as shadow guidance.
+   */
+  it("gives a shadow run's context the shadow notice, and a non-shadow run's context none of it", () => {
+    const shadowRendered = renderTrustedContext({ ...context, shadow: true });
+    const liveRendered = renderTrustedContext({ ...context, shadow: false });
+
+    expect(shadowRendered).toContain("shadow: yes");
+    expect(shadowRendered).toContain("draft only, nothing is sent");
+
+    expect(liveRendered).toContain("shadow: no");
+    expect(liveRendered).not.toContain("draft only, nothing is sent");
+  });
+});
+
+/**
+ * Shadow posture, Phase 21 Task 4, the write-guard half.
+ *
+ * The guard itself is out of scope for this task — it already enforces the
+ * matrix, and Task 4 only owns whether the MODEL is told what to do about it.
+ * `write-guard.ts`'s `shadow_write_denied` message already reads "this run is
+ * observing only; nothing was changed. Report what you would have done." —
+ * which steers toward reporting rather than retrying, and the new "Shadow
+ * runs" policy section (above) is what turns "report" into the concrete
+ * instruction to call `approval.escalate` with a draft. This test asserts the
+ * guard's existing copy and changes nothing in `write-guard.ts`.
+ */
+describe("shadow posture: the write-guard message the policy now explains", () => {
+  const runId = "22222222-2222-4222-8222-222222222222";
+
+  it("already steers away from retrying and toward reporting, unchanged", async () => {
+    await env.DB.prepare("DELETE FROM runs").run();
+    await env.DB.prepare("DELETE FROM channels").run();
+    await env.DB.prepare(
+      `INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES ('C2', 'shadow-eng', 'pulsefit', 'live')`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
+       VALUES (?, ?, 'slack', 'C2', '1720000000.000200', 'live', 1, NULL, 1, 1)`,
+    )
+      .bind(runId, "slack:C2:1720000000.000200")
+      .run();
+
+    const scope = {
+      ...slackScope,
+      runId,
+      shadow: true,
+      slackThread: { channelId: "C2", threadTs: "1720000000.000200" },
+    };
+
+    await expect(assertExternalWritePermitted({ db: env.DB }, scope)).rejects.toMatchObject({
+      code: "shadow_write_denied",
+    });
+
+    try {
+      await assertExternalWritePermitted({ db: env.DB }, scope);
+      throw new Error("expected assertExternalWritePermitted to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CapabilityError);
+      const message = (error as CapabilityError).message;
+      expect(message).toContain("nothing was changed");
+      expect(message).toContain("Report what you would have done");
+    }
   });
 });
