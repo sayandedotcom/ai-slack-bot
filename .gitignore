@@ -44,6 +44,13 @@ yarn-error.log*
 !.dev.vars.example
 .wrangler
 
+# Build-time secrets for the sandbox image (BuildKit --secret sources).
+# Not Worker secrets: these are consumed by `docker build`, never by the
+# runtime, so they deliberately do not live in .dev.vars.
+.build-secrets
+.build-secrets.*
+!.build-secrets.example
+
 # vercel
 .vercel
 
