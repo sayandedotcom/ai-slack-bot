@@ -184,6 +184,31 @@ the failure arrives at the most expensive possible moment and reads like nothing
 to do with the install. Note this also contradicts the earlier finding that
 `agents sync` "never throws on a normal run" — it throws when git refuses.
 
+### A Worker secret is capped at 5.1 kB, and that turned out to be a good thing
+
+`MONOREPO_DEV_ENV` was designed as "the dev env, as JSON". The dev env is **115
+keys / 8176 bytes**, and `wrangler secret put` refuses it:
+
+> Text binding 'MONOREPO_DEV_ENV' is too large, its size of 8.2 kB exceeds the limit of 5.1 kB. [code: 10054]
+
+The fix is not to split the secret across two bindings. It is to notice that
+shipping all 115 was wrong on its own terms: the container was going to receive
+every Discord webhook, both Stripe secret keys, the Tinybird token, the
+analytics database URLs and the Meta/TikTok credentials — **none of which a dev
+server rendering a funnel page needs**, and all of which the model can read out
+of a process it started.
+
+The secret now carries a **curated 28 keys / 1823 bytes** — every
+`NEXT_PUBLIC_*`, the Supabase pair, `REDIS_URL`, the S3 trio — chosen by an
+allowlist with a deny-list on top, and verified to contain every variable the
+apps' zod modules actually require. **87 keys excluded.** Headroom to 5.1 kB is
+deliberate: a missing variable at drill time is a worse failure than a slightly
+larger blob, so the list errs wide within the "could not do damage" set.
+
+This is the phase's clearest case of a platform limit pushing the design toward
+least privilege rather than away from it, and it belongs in the README's
+security section.
+
 ### Infisical
 
 The CLI installed locally was **0.38.0**, below the **0.43.99 floor the
