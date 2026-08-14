@@ -746,3 +746,195 @@ describe("writeFile and killProcess", () => {
     expect((started?.args[1] as { autoCleanup?: boolean }).autoCleanup).toBe(false);
   });
 });
+
+/* --------------------------------------------- readBinary, record, checkRecording -- */
+
+/**
+ * PHASE 19'S THIRD, THE ONE THIS FILE DID NOT ORIGINALLY COVER.
+ *
+ * Every other suite above proves the gateway through the CAPABILITY layer
+ * (`sandboxTools`, over `buildRegistry`). `readBinary`, `record` and
+ * `checkRecording` are reached from the SEPARATE `browser` namespace, whose
+ * own test file (`codemode-browser.test.ts`) deliberately stops at a stubbed
+ * `SandboxGateway` — see that file's header. That leaves the real
+ * `readBinaryFile()` and `buildRecordDeps()` wiring in `sandbox/gateway.ts`
+ * with no test that calls them at all: a regression back to the SSE-framed
+ * `readFileStream` (Ruling 10) or a mis-built `RecordDeps` field would pass
+ * every other suite in this repo silently. These cases call the REAL
+ * `makeSandboxGateway` against `makeFakeSandbox()` and assert on results —
+ * actual bytes, actual R2 objects, actual harness command lines — so each one
+ * fails if the wiring regresses rather than merely if a stub disagrees.
+ */
+describe("readBinary reaches the container's raw bytes, not an SSE envelope", () => {
+  it("returns exactly the bytes the container holds", async () => {
+    const raw = "these are the container's raw bytes, unmodified";
+    const fake = makeFakeSandbox({ fileContent: raw });
+    const gateway = makeSandboxGateway(sandboxEnv(), RUN_ID, {
+      resolve: () => fake.handle,
+      sleep: async () => {},
+    });
+
+    const stream = await gateway.readBinary("/tmp/recordings/x/video.mp4");
+    const text = new TextDecoder().decode(await collectStream(stream));
+
+    expect(text).toBe(raw);
+    // The SSE variant (`readFileStream`) wraps content as `data: {...}\n\n`
+    // envelopes carrying a base64 payload. A regression back to it would
+    // still type-check and still resolve a stream — it would just fail this
+    // exact assertion, which is the point of testing the real gateway at all.
+    expect(text.startsWith("data:")).toBe(false);
+    expect(text).not.toContain("\"chunk\"");
+  });
+
+  it("calls the container's readFile with the raw-byte encoding, not the text default", async () => {
+    const fake = makeFakeSandbox({ fileContent: "x" });
+    const gateway = makeSandboxGateway(sandboxEnv(), RUN_ID, {
+      resolve: () => fake.handle,
+      sleep: async () => {},
+    });
+
+    await gateway.readBinary("/tmp/video.mp4");
+
+    const readCall = fake.calls.find((c) => c.method === "readFile");
+    expect((readCall?.args[1] as { encoding?: string } | undefined)?.encoding).toBe("none");
+  });
+
+  it("refuses before boot, the same as every other sandbox method", async () => {
+    const fake = makeFakeSandbox({ provisioned: false });
+    const gateway = makeSandboxGateway(sandboxEnv(), RUN_ID, {
+      resolve: () => fake.handle,
+      sleep: async () => {},
+    });
+    await expect(gateway.readBinary("/tmp/video.mp4")).rejects.toThrow(/sandbox_not_ready/);
+  });
+});
+
+describe("record and checkRecording reach record.ts with correctly-built deps", () => {
+  const PROOFS_BASE = "https://firefighter.example/proofs";
+  const keyOf = (url: string): string => `proofs/${url.slice(`${PROOFS_BASE}/`.length)}`;
+
+  it("writes the script, spawns the pinned harness, and publishes the container's real bytes", async () => {
+    const videoBytes = "not really an mp4, but real end-to-end bytes";
+    const resultLine = `RESULT ${JSON.stringify({
+      state: "passed",
+      error: null,
+      video: "/tmp/recordings/whatever/video.mp4",
+      durationMs: 4_200,
+    })}`;
+    const fake = makeFakeSandbox({
+      fileContent: videoBytes,
+      processStatus: "completed",
+      processExitCode: 0,
+      processStdout: `${resultLine}\n`,
+    });
+    const gateway = makeSandboxGateway(sandboxEnv({ PROOFS_BASE_URL: PROOFS_BASE }), RUN_ID, {
+      resolve: () => fake.handle,
+      sleep: async () => {},
+    });
+
+    const { recordingId } = await gateway.record({
+      script: "await page.goto('https://x');",
+      label: "checkout",
+    });
+    expect(recordingId).toMatch(/^checkout_/);
+
+    // The script is WRITTEN into the container, never passed on a command
+    // line — `record.ts`'s own protection against a script full of quotes.
+    const writeCall = fake.calls.find((c) => c.method === "writeFile");
+    expect(writeCall?.args[1]).toBe("await page.goto('https://x');");
+
+    // The harness `buildRecordDeps` spawns is the one this run's image ships,
+    // keyed by the recordingId so `checkRecording` can find it statelessly.
+    const spawnCall = fake.calls.find((c) => c.method === "startProcess");
+    expect(String(spawnCall?.args[0])).toContain("record-harness.cjs");
+    expect((spawnCall?.args[1] as { processId?: string } | undefined)?.processId).toBe(
+      recordingId,
+    );
+
+    const status = await gateway.checkRecording(recordingId);
+    expect(status.state).toBe("passed");
+    expect(status.url).toMatch(new RegExp(`^${PROOFS_BASE}/[0-9a-f]{64}\\.mp4$`));
+
+    // record.ts's own publish path ran for real: readBinary's bytes are what
+    // landed in R2, proven through the gateway end to end rather than assumed
+    // from record.ts's own unit tests (which stub `readBinary` directly).
+    const object = await env.ARTIFACTS.get(keyOf(status.url!));
+    expect(object).not.toBeNull();
+    expect(new TextDecoder().decode(await object!.arrayBuffer())).toBe(videoBytes);
+    expect(object!.httpMetadata?.contentType).toBe("video/mp4");
+  });
+
+  it("passes timeoutMs through to the harness command", async () => {
+    const fake = makeFakeSandbox({ processStatus: "running" });
+    const gateway = makeSandboxGateway(sandboxEnv({ PROOFS_BASE_URL: PROOFS_BASE }), RUN_ID, {
+      resolve: () => fake.handle,
+      sleep: async () => {},
+    });
+
+    await gateway.record({ script: "x", label: "checkout", timeoutMs: 45_000 });
+
+    const spawnCall = fake.calls.find((c) => c.method === "startProcess");
+    expect(String(spawnCall?.args[0])).toMatch(/ 45000$/);
+  });
+
+  it("reports running with no URL while the harness is still going", async () => {
+    const fake = makeFakeSandbox({ processStatus: "running" });
+    const gateway = makeSandboxGateway(sandboxEnv({ PROOFS_BASE_URL: PROOFS_BASE }), RUN_ID, {
+      resolve: () => fake.handle,
+      sleep: async () => {},
+    });
+
+    const { recordingId } = await gateway.record({ script: "x", label: "checkout" });
+    const status = await gateway.checkRecording(recordingId);
+
+    expect(status.state).toBe("running");
+    expect(status.url).toBeNull();
+  });
+
+  it("refuses record before boot with sandbox_not_ready, and never contacts the container", async () => {
+    const fake = makeFakeSandbox({ provisioned: false });
+    const gateway = makeSandboxGateway(sandboxEnv({ PROOFS_BASE_URL: PROOFS_BASE }), RUN_ID, {
+      resolve: () => fake.handle,
+      sleep: async () => {},
+    });
+
+    await expect(
+      gateway.record({ script: "await page.goto('https://x');", label: "repro" }),
+    ).rejects.toThrow(/sandbox_not_ready/);
+    // `startProcess` itself fires once, for `boot`'s own provisioning kickoff
+    // — that is `assertReady`'s job and is correct. What must NOT happen is
+    // the harness spawn `record.ts` would issue on success.
+    expect(fake.calls.some((c) => String(c.args[0]).includes("record-harness.cjs"))).toBe(false);
+    expect(fake.calls.some((c) => c.method === "writeFile")).toBe(false);
+  });
+
+  it("refuses checkRecording before boot the same way", async () => {
+    const fake = makeFakeSandbox({ provisioned: false });
+    const gateway = makeSandboxGateway(sandboxEnv({ PROOFS_BASE_URL: PROOFS_BASE }), RUN_ID, {
+      resolve: () => fake.handle,
+      sleep: async () => {},
+    });
+
+    await expect(gateway.checkRecording("rec_whatever")).rejects.toThrow(/sandbox_not_ready/);
+  });
+});
+
+/** Drain a stream into one buffer — small, and used only to assert on bytes. */
+async function collectStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.length;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}

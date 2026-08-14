@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ToolDescriptors } from "@cloudflare/codemode/ai";
 import { CapabilityError } from "../errors";
 import { auditedCapability, type BindingContext } from "../registry";
+import { MAX_RECORDING_TIMEOUT_MS } from "../../sandbox/record";
 
 /**
  * The tenth namespace: a real browser on this run's own machine, and the
@@ -37,18 +38,6 @@ import { auditedCapability, type BindingContext } from "../registry";
  * it means everywhere else in this layer: the CALL failed, not the recording.
  */
 
-/**
- * Five minutes. A repro-fix-reverify loop composes several of these, so it
- * has to be well short of anything an operator would call "stuck" — and long
- * enough for a real page to load, a flow to run, and a video to flush.
- *
- * REFUSED ABOVE THIS, NEVER CLAMPED, for the identical reason
- * `EXEC_TIMEOUT_CEILING_MS` in `sandbox.ts` is: a silent clamp tells the model
- * it has ten minutes, kills the harness at five, and hands back a recording
- * that looks like it failed for no reason.
- */
-export const RECORD_TIMEOUT_CEILING_MS = 300_000;
-
 const recordingStatus = z.strictObject({
   state: z.enum(["running", "passed", "failed"]),
   url: z.string().nullable(),
@@ -62,7 +51,7 @@ export function makeBrowserTools(ctx: BindingContext): ToolDescriptors {
     record: auditedCapability(ctx, "browser", "record", {
       effect: "sandbox_write",
       description:
-        "Run a Playwright script with video recording, on this run's own container. `page` is already in scope — do not open a browser or a context yourself, and do not call recordVideo; the harness owns both. Write the script as you would a Playwright test body and THROW to fail: the last expression's truthiness is never consulted. This does not block — it starts the recording and returns a recordingId; poll checkRecording for the result on a LATER turn, across blocks rather than in a loop inside this one, because a real run is minutes and this execution has seconds. `timeoutMs` defaults to a generous budget and anything above 300000 (5 minutes) is REFUSED rather than quietly shortened. A script that throws is not a wasted call: the harness still flushes a playable video of the failure, and checkRecording returns it — that recording IS the proof a bug is real, so keep it rather than re-running for a clean one. If this run's machine never got a working browser, checkRecording reports that by name (browser-unavailable) instead of a generic failure or a hang.",
+        "Run a Playwright script with video recording, on this run's own container. `page` is already in scope — do not open a browser or a context yourself, and do not call recordVideo; the harness owns both. Write the script as you would a Playwright test body and THROW to fail: the last expression's truthiness is never consulted. This does not block — it starts the recording and returns a recordingId; poll checkRecording for the result on a LATER turn, across blocks rather than in a loop inside this one, because a real run is minutes and this execution has seconds. `timeoutMs` defaults to a generous budget and anything above 180000 (3 minutes) is REFUSED rather than quietly shortened — a script still running after three minutes is stuck, not working. A script that throws is not a wasted call: the harness still flushes a playable video of the failure, and checkRecording returns it — that recording IS the proof a bug is real, so keep it rather than re-running for a clean one. If this run's machine never got a working browser, checkRecording reports that by name (browser-unavailable) instead of a generic failure or a hang.",
       input: z.strictObject({
         script: z.string().min(1).max(20_000),
         label: z.string().min(1).max(200),
@@ -95,11 +84,18 @@ export function makeBrowserTools(ctx: BindingContext): ToolDescriptors {
  * `sandbox.ts`'s `assertTimeoutInBudget` uses, and for the same reason: the
  * model needs the number to pick a smaller one, so this is the one place that
  * quotes a limit rather than leaving it to `formatZodIssues`.
+ *
+ * The ceiling itself is `record.ts`'s `MAX_RECORDING_TIMEOUT_MS`, imported
+ * rather than declared here a second time. Two constants for one bound is
+ * exactly how this drifted once already (Ruling 11): this file's `300_000`
+ * let a `timeoutMs` between 180001 and 300000 pass validation, consume a
+ * call, and then throw two layers deeper against a number the model was never
+ * told about. The layer that enforces the value now owns it.
  */
 function assertRecordTimeoutInBudget(timeoutMs: number): void {
-  if (timeoutMs <= RECORD_TIMEOUT_CEILING_MS) return;
+  if (timeoutMs <= MAX_RECORDING_TIMEOUT_MS) return;
   throw new CapabilityError(
     "invalid_input",
-    `timeoutMs ${timeoutMs} is above the ${RECORD_TIMEOUT_CEILING_MS}ms ceiling and the recording was NOT started. Use a smaller budget, or split the script into a shorter repro.`,
+    `timeoutMs ${timeoutMs} is above the ${MAX_RECORDING_TIMEOUT_MS}ms ceiling and the recording was NOT started. Use a smaller budget, or split the script into a shorter repro.`,
   );
 }

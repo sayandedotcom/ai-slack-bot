@@ -6,7 +6,7 @@ import {
   capabilityEffectOf,
   PHASE_09_NAMESPACES,
 } from "../src/codemode/registry";
-import { RECORD_TIMEOUT_CEILING_MS } from "../src/codemode/bindings/browser";
+import { MAX_RECORDING_TIMEOUT_MS } from "../src/sandbox/record";
 import {
   fakeAuditSink,
   fakeDeps,
@@ -221,11 +221,11 @@ describe("record's timeout ceiling", () => {
     const error = await call(tools, "record", {
       script: "await page.goto('https://x');",
       label: "repro",
-      timeoutMs: RECORD_TIMEOUT_CEILING_MS + 1,
+      timeoutMs: MAX_RECORDING_TIMEOUT_MS + 1,
     }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(CapabilityError);
-    expect((error as CapabilityError).message).toMatch(String(RECORD_TIMEOUT_CEILING_MS));
+    expect((error as CapabilityError).message).toMatch(String(MAX_RECORDING_TIMEOUT_MS));
     // A clamp would have started the recording anyway — the case this rules out.
     expect(called).toBe(false);
   });
@@ -241,9 +241,9 @@ describe("record's timeout ceiling", () => {
     await call(tools, "record", {
       script: "await page.goto('https://x');",
       label: "repro",
-      timeoutMs: RECORD_TIMEOUT_CEILING_MS,
+      timeoutMs: MAX_RECORDING_TIMEOUT_MS,
     });
-    expect((seen as { timeoutMs?: number }).timeoutMs).toBe(RECORD_TIMEOUT_CEILING_MS);
+    expect((seen as { timeoutMs?: number }).timeoutMs).toBe(MAX_RECORDING_TIMEOUT_MS);
   });
 
   it("omits timeoutMs entirely when the caller does not supply one", async () => {
