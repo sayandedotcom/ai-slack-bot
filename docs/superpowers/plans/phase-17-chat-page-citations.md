@@ -1,5 +1,13 @@
 # Phase 17 — Chat Page + Citations — Implementation Plan
 
+> ⚠️ **SUPERSEDED, 2026-08-14 — DO NOT EXECUTE THIS FILE.**
+> Execute [`2026-08-14-phase-17-chat-page-amended.md`](2026-08-14-phase-17-chat-page-amended.md)
+> instead. This plan was written on 2026-08-13 against Phase 15's *plan*; the
+> amended version was written against Phase 15's *shipped code* and corrects
+> four things this file gets wrong — most importantly that `CiteOutput` has no
+> `channel_id` (the binding strips it), which makes this file's
+> `SourceChip.channelId: string` unsatisfiable. Kept for provenance only.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** "What happened with X?" answered on a chat page whose citations open the actual Slack threads — built almost entirely from parts that already exist.
