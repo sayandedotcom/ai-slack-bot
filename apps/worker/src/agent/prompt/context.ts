@@ -1,4 +1,5 @@
 import { getChannelPolicy } from "../../db/channels";
+import type { UserTokenSource } from "../../identity/user-token";
 import { getRunById } from "../../run/repository";
 import { openApproval } from "../../run/session";
 import type { RunOrigin } from "../../run/keys";
@@ -64,8 +65,20 @@ export type TrustedContext = {
   hasSlackTarget: boolean;
   /** The unsettled approval from `approval_state`, or null if none is open. */
   pendingApproval: PendingApproval | null;
-  /** Engineer identity. Null until Phase 12 supplies one. */
-  actor: null;
+  /**
+   * Who the run would speak as, or null if nobody.
+   *
+   * FACTS ONLY — never the credential. The token is re-resolved at the last
+   * trusted moment inside the gateway, exactly as it is for the capability
+   * scope; this is the model's picture of whether a voice exists, and a prompt
+   * is the last place a bearer token should ever appear.
+   *
+   * This was hardcoded `null` until 2026-08-14, which was correct in Phase 10
+   * and became a lie in Phase 13: identity reached the scope and the gateway
+   * but not this block, so the model was told `slack.reply` would refuse on
+   * runs where it would have worked, and dutifully escalated every reply.
+   */
+  actor: { engineerEmail: string; slackUserId: string } | null;
 };
 
 /**
@@ -129,6 +142,21 @@ export async function resolveTrustedContext(
      * omitting it is impossible to do by accident.
      */
     storage: DurableObjectStorage | null;
+    /**
+     * Resolves the on-duty engineer, or null when nobody is connected.
+     *
+     * OPTIONAL, and its absence means `actor: null` — the pre-Phase-13 answer.
+     * That default is safe in the only direction that matters: a caller that
+     * forgets it understates what the run can do, so the model escalates
+     * something it could have sent. The opposite default would have the model
+     * attempt a send with no voice behind it.
+     *
+     * A `SealError` from a tampered ciphertext or a mis-rotated `IDENTITY_KEY`
+     * propagates rather than reading as "not connected", and does so HERE —
+     * before any provider spend — which is strictly earlier than the capability
+     * scope would have caught it.
+     */
+    identity?: UserTokenSource;
   },
 ): Promise<TrustedContextOutcome> {
   const pendingApproval = readPendingApproval(input.storage);
@@ -176,6 +204,22 @@ export async function resolveTrustedContext(
   if (!policy.known) return { outcome: "refused", reason: "channel_unknown" };
   if (!policy.customer_slug) return { outcome: "refused", reason: "customer_unknown" };
 
+  /**
+   * The same gate the capability scope applies (`dependencies.ts`): a pinned
+   * Slack thread that is not shadowed. Reaching this line already proves the
+   * thread, so only `shadow` is left to test.
+   *
+   * Deliberately asked twice per generation — once here for the prompt, once
+   * there for the scope — rather than resolved once and threaded through. The
+   * scope is built after this function returns, so sharing would mean either
+   * reordering the generation's composition or handing the prompt a value the
+   * capability layer had not yet validated. Two reads of one indexed row and
+   * one decryption is the cheaper trade, and both callers ask the SAME question
+   * of the SAME source, so they cannot disagree about who is on duty.
+   */
+  const onDutyToken =
+    input.identity === undefined || run.shadow ? null : await input.identity.onDutyToken(Date.now());
+
   return {
     outcome: "resolved",
     context: {
@@ -186,7 +230,13 @@ export async function resolveTrustedContext(
       customerSlug: policy.customer_slug,
       hasSlackTarget: true,
       pendingApproval,
-      actor: null,
+      actor:
+        onDutyToken === null
+          ? null
+          : {
+              engineerEmail: onDutyToken.email,
+              slackUserId: onDutyToken.slackUserId,
+            },
     },
   };
 }

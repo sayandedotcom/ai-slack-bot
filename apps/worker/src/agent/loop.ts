@@ -80,6 +80,7 @@ import {
   SteeringAbort,
 } from "./steering";
 import { makeApprovalPort } from "../approval/port";
+import { makeUserTokenSource } from "../identity/user-token";
 import { makeAgentTools, type CapabilityDependencyFactory } from "./dependencies";
 import { makeProvenanceSink } from "./memory";
 import type { AgentExecutionGuard } from "../codemode/contracts";
@@ -1414,6 +1415,10 @@ async function composeAndRun(
       channelId: state.channelId,
       threadTs: state.threadTs,
     },
+    // Without this the prompt asserts `identity_unavailable` on runs where
+    // `slack.reply` actually works, and the model — correctly trusting the
+    // host's own facts — escalates replies it could have sent.
+    identity: makeUserTokenSource(env),
   });
   if (resolved.outcome === "refused") {
     return {

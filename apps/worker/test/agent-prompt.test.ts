@@ -561,6 +561,90 @@ describe("trusted context", () => {
     });
   });
 
+  /**
+   * Regression, 2026-08-14. `actor` was hardcoded `null` on the Slack branch
+   * from Phase 10, when no identity existed. Phase 13 wired the real identity
+   * into the capability SCOPE and the gateway but never here, so the prompt
+   * told the model "engineer identity: unavailable — `slack.reply` will answer
+   * identity_unavailable" on runs where `slack.reply` would in fact have
+   * worked. The model believed it and escalated everything, which is the
+   * click-per-message failure the approval path exists to avoid. Observed live
+   * on run 9967082a.
+   */
+  const fakeIdentity = (token: { email: string; slackUserId: string } | null) => ({
+    onDutyToken: async () => (token === null ? null : { ...token, token: "xoxp-not-read-here" }),
+  });
+
+  it("reports the on-duty engineer when one is connected", async () => {
+    await seedRun();
+    await seedChannel("pulsefit");
+
+    const outcome = await resolveTrustedContext(env.DB, {
+      generationId: "gen:1",
+      run: slackRun,
+      storage: null,
+      identity: fakeIdentity({ email: "luka@zellify.app", slackUserId: "U123" }),
+    });
+
+    expect(outcome.outcome).toBe("resolved");
+    if (outcome.outcome !== "resolved") return;
+    expect(outcome.context.actor).toEqual({
+      engineerEmail: "luka@zellify.app",
+      slackUserId: "U123",
+    });
+    // The rendered block is what the model actually reads.
+    expect(renderTrustedContext(outcome.context)).toContain("engineer identity: available");
+    expect(renderTrustedContext(outcome.context)).not.toContain("identity_unavailable");
+  });
+
+  it("still says unavailable when nobody is connected", async () => {
+    await seedRun();
+    await seedChannel("pulsefit");
+
+    const outcome = await resolveTrustedContext(env.DB, {
+      generationId: "gen:1",
+      run: slackRun,
+      storage: null,
+      identity: fakeIdentity(null),
+    });
+
+    expect(outcome.outcome).toBe("resolved");
+    if (outcome.outcome !== "resolved") return;
+    expect(outcome.context.actor).toBeNull();
+    expect(renderTrustedContext(outcome.context)).toContain("identity_unavailable");
+  });
+
+  it("never resolves an actor for a shadow run — it cannot send", async () => {
+    await seedRun({ shadow: 1 });
+    await seedChannel("pulsefit");
+
+    const outcome = await resolveTrustedContext(env.DB, {
+      generationId: "gen:1",
+      run: slackRun,
+      storage: null,
+      identity: fakeIdentity({ email: "luka@zellify.app", slackUserId: "U123" }),
+    });
+
+    expect(outcome.outcome).toBe("resolved");
+    if (outcome.outcome !== "resolved") return;
+    expect(outcome.context.actor).toBeNull();
+  });
+
+  it("never asks for an identity when no source is supplied", async () => {
+    await seedRun();
+    await seedChannel("pulsefit");
+
+    const outcome = await resolveTrustedContext(env.DB, {
+      generationId: "gen:1",
+      run: slackRun,
+      storage: null,
+    });
+
+    expect(outcome.outcome).toBe("resolved");
+    if (outcome.outcome !== "resolved") return;
+    expect(outcome.context.actor).toBeNull();
+  });
+
   it("fails closed when the run row is missing", async () => {
     await seedChannel("pulsefit");
     expect(
