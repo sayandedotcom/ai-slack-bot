@@ -1,6 +1,8 @@
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
+  BROWSER_UNAVAILABLE_MESSAGE,
+  BROWSER_UNAVAILABLE_TOKEN,
   checkRecording,
   MAX_RECORDING_BYTES,
   MAX_RECORDING_TIMEOUT_MS,
@@ -60,24 +62,16 @@ const streamOf = (bytes: Uint8Array): ReadableStream<Uint8Array> =>
   });
 
 /**
- * More than the ceiling, produced lazily.
+ * A stream that fails the test if anything ever pulls from it.
  *
- * Materialising 50MB in one buffer would prove nothing about a streaming
- * publisher — the point is that the refusal happens while the bytes are moving,
- * so the chunks are generated on demand and the stream is expected to be torn
- * down partway through.
+ * The ceiling is now decided from the length the container reports, before a
+ * byte moves, so "no byte was read" is the property — not "the refusal happened
+ * partway through". A 50MB fixture would prove the opposite of what is wanted.
  */
-function oversizedStream(): ReadableStream<Uint8Array> {
-  const chunk = new Uint8Array(1024 * 1024).fill(7);
-  let sent = 0;
+function unreadableStream(): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent > MAX_RECORDING_BYTES) {
-        controller.close();
-        return;
-      }
-      controller.enqueue(chunk);
-      sent += chunk.byteLength;
+    pull() {
+      throw new Error("the publisher read bytes it had already been told to refuse");
     },
   });
 }
@@ -85,6 +79,9 @@ function oversizedStream(): ReadableStream<Uint8Array> {
 function stub(
   options: {
     video?: Uint8Array | ReadableStream<Uint8Array>;
+    /** What the container claims the file's length is. Defaults to the real
+     *  length of `video`; set it apart to model a transfer that ends early. */
+    size?: number;
     devEnv?: Record<string, string>;
     bucket?: R2Bucket;
     now?: () => number;
@@ -94,9 +91,17 @@ function stub(
   const spawns: Array<{ command: string; options?: { processId?: string; cwd?: string } }> = [];
   const processes = new Map<string, StubProcess>();
   const reads: string[] = [];
+  /** Every container file operation, in order — `mkdir` must precede the
+   *  write, or the write lands in a directory nothing created. */
+  const fileOps: string[] = [];
 
   const deps: RecordDeps = {
+    async mkdir(path, mkdirOptions) {
+      fileOps.push(`mkdir ${path} recursive=${String(mkdirOptions.recursive)}`);
+      return { success: true };
+    },
     async writeFile(path, content) {
+      fileOps.push(`writeFile ${path}`);
       files.set(path, content);
       return { success: true };
     },
@@ -123,7 +128,12 @@ function stub(
       reads.push(path);
       const video = options.video;
       if (video === undefined) throw new Error(`no such file: ${path}`);
-      return video instanceof ReadableStream ? video : streamOf(video);
+      // `size` alongside `content`, exactly as the container's file server
+      // reports it: authoritative, free, and known before a byte is read.
+      return {
+        content: video instanceof ReadableStream ? video : streamOf(video),
+        size: options.size ?? (video instanceof ReadableStream ? 0 : video.byteLength),
+      };
     },
     bucket: options.bucket ?? env.ARTIFACTS,
     proofsBaseUrl: BASE,
@@ -163,7 +173,7 @@ function stub(
     processes.set(recordingId, { ...process, status: "completed", exitCode, stderr });
   };
 
-  return { deps, files, spawns, processes, reads, finish, crash };
+  return { deps, files, fileOps, spawns, processes, reads, finish, crash };
 }
 
 const MP4 = new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
@@ -172,6 +182,22 @@ const MP4 = new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d
 const keyOf = (url: string): string => `proofs/${url.slice(`${BASE}/`.length)}`;
 
 describe("startRecording writes the script and spawns the harness", () => {
+  it("creates the recording's directory BEFORE writing the script into it", async () => {
+    // `writeFile` is a POST to the container's file server and creates no
+    // parents — the SDK's own mount path calls `mkdir` first. Without this the
+    // very first await of every `record` call fails, and the model reads the
+    // resulting error as a browser problem.
+    const { deps, fileOps } = stub({ video: MP4 });
+
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+
+    const workdir = `${RECORDING_WORKDIR_ROOT}/${recordingId}`;
+    expect(fileOps).toEqual([
+      `mkdir ${workdir} recursive=true`,
+      `writeFile ${workdir}/script.js`,
+    ]);
+  });
+
   it("puts the model's script at <workdir>/script.js and never passes it as an argument", async () => {
     const { deps, files, spawns } = stub({ video: MP4 });
     const script = "await page.goto('http://localhost:4100');";
@@ -319,26 +345,55 @@ describe("a failing run publishes the video AND surfaces the error", () => {
     expect(await env.ARTIFACTS.head(keyOf(status.url!))).not.toBeNull();
   });
 
-  it("surfaces browser-unavailable as a failure with the harness's own words", async () => {
-    const actionable =
-      "Chromium is not installed in this container: run `npx playwright install chromium` before recording.";
+  it("surfaces browser-unavailable as a failure carrying the token the model is told to look for", async () => {
     const { deps, finish } = stub({ video: MP4 });
     const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
     finish(recordingId, {
       state: "browser-unavailable",
-      error: actionable,
+      error: BROWSER_UNAVAILABLE_MESSAGE,
       video: null,
       bytes: null,
     });
 
     const status = await checkRecording(deps, recordingId);
 
-    // The capability layer's tests depend on this exact sentence reaching the
-    // model: "browser-unavailable" is not a state the model can act on, and
-    // the harness's message is.
+    // THE STATE IS DISCARDED — this module reports the SCRIPT's outcome, so
+    // "browser-unavailable" collapses to "failed" before the model sees it.
+    // The `browser` namespace's description promises the model the name
+    // `browser-unavailable`, so the only place that promise can be kept is the
+    // sentence. Asserted against the exported constant, not a retyped string.
     expect(status.state).toBe("failed");
-    expect(status.error).toContain(actionable);
+    expect(status.error).toContain(BROWSER_UNAVAILABLE_TOKEN);
+    expect(status.error).toContain(BROWSER_UNAVAILABLE_MESSAGE);
     expect(status.url).toBeNull();
+  });
+
+  it("names an action the agent can take, and never one it cannot", async () => {
+    // There is no re-provision method in any namespace. A message telling the
+    // model to re-provision names a capability it does not have, so it loops
+    // or invents one; invariant 6 asks for what happened AND what to do.
+    expect(BROWSER_UNAVAILABLE_MESSAGE).toMatch(/do not retry/i);
+    expect(BROWSER_UNAVAILABLE_MESSAGE).not.toMatch(/re-?provision/i);
+    expect(BROWSER_UNAVAILABLE_MESSAGE).not.toMatch(/playwright install/i);
+  });
+
+  it("substitutes the canonical sentence when an older harness omits the token", async () => {
+    // A container can be running an image older than this Worker. The .d.ts's
+    // promise has to hold against one, so the token is enforced here rather
+    // than trusted from across the boundary.
+    const { deps, finish } = stub({ video: MP4 });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, {
+      state: "browser-unavailable",
+      error: "the boot-time Chromium install did not complete on this machine",
+      video: null,
+      bytes: null,
+    });
+
+    const status = await checkRecording(deps, recordingId);
+
+    expect(status.state).toBe("failed");
+    expect(status.error).toBe(BROWSER_UNAVAILABLE_MESSAGE);
   });
 
   it("reports a harness that died without a RESULT line, naming the exit code", async () => {
@@ -352,6 +407,83 @@ describe("a failing run publishes the video AND surfaces the error", () => {
     expect(status.url).toBeNull();
     expect(status.error).toContain("127");
     expect(status.error).toContain("cannot find module");
+  });
+
+  it("re-reads the logs once when a clean exit has no RESULT line, and publishes what it finds", async () => {
+    // EXIT 0 WITH NO RESULT IS A LOG-FLUSH RACE, NOT A CRASH. The harness sets
+    // `process.exitCode` rather than calling `process.exit` precisely so stdout
+    // drains — the cost of that choice is a window where the process reads
+    // "completed" and its last line has not landed yet. Treating that as
+    // terminal throws away a recording that SUCCEEDED.
+    const { deps, processes, recordingId, reads } = await (async () => {
+      const s = stub({ video: MP4 });
+      const { recordingId: id } = await startRecording(s.deps, { script: "x", label: "checkout" });
+      s.processes.set(id, { ...s.processes.get(id)!, status: "completed", exitCode: 0 });
+      return { ...s, recordingId: id };
+    })();
+
+    let logReads = 0;
+    const racing: RecordDeps = {
+      ...deps,
+      async getProcessLogs(id) {
+        logReads += 1;
+        // The line lands between the first read and the second, which is
+        // exactly the shape of the race.
+        if (logReads === 1) return { stdout: "step 1: signed in\n", stderr: "" };
+        const line = `RESULT ${JSON.stringify({
+          state: "passed",
+          error: null,
+          video: `${RECORDING_WORKDIR_ROOT}/${id}/video.mp4`,
+          bytes: MP4.byteLength,
+          durationMs: 4_200,
+        })}`;
+        return { stdout: `step 1: signed in\n${line}\n`, stderr: "" };
+      },
+    };
+
+    const status = await checkRecording(racing, recordingId);
+
+    expect(logReads).toBe(2);
+    expect(status.state).toBe("passed");
+    expect(status.url).not.toBeNull();
+    expect(reads).toHaveLength(1);
+    expect(processes.get(recordingId)!.exitCode).toBe(0);
+  });
+
+  it("gives up after the second read, and says the exit was clean so a human recognises the race", async () => {
+    const { deps, processes } = stub({ video: MP4 });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    processes.set(recordingId, {
+      ...processes.get(recordingId)!,
+      status: "completed",
+      exitCode: 0,
+    });
+
+    const status = await checkRecording(deps, recordingId);
+
+    expect(status.state).toBe("failed");
+    expect(status.error).toMatch(/exited cleanly \(code 0\)/);
+    expect(status.error).toMatch(/second read/);
+  });
+
+  it("does not re-read the logs for a nonzero exit, which is a real crash", async () => {
+    const { deps, crash } = stub({ video: MP4 });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    crash(recordingId, "segfault\n", 139);
+
+    let logReads = 0;
+    const counted: RecordDeps = {
+      ...deps,
+      async getProcessLogs(id) {
+        logReads += 1;
+        return deps.getProcessLogs(id);
+      },
+    };
+
+    const status = await checkRecording(counted, recordingId);
+
+    expect(logReads).toBe(1);
+    expect(status.error).toContain("139");
   });
 
   it("reports an id the container has never heard of as a failure, not a hang", async () => {
@@ -407,8 +539,11 @@ describe("a run still in the browser is running", () => {
 });
 
 describe("an over-ceiling video is refused readably", () => {
-  it("stores nothing, hands back no URL, and says why in the status", { timeout: 60_000 }, async () => {
-    const { deps, finish } = stub({ video: oversizedStream() });
+  it("refuses on the reported length, before reading a single byte", async () => {
+    // The container tells us how big the file is on the same call that hands
+    // back the stream, so a 50MB refusal costs one metadata round trip instead
+    // of 50MB of transfer. `unreadableStream` throws if anything pulls it.
+    const { deps, finish } = stub({ video: unreadableStream(), size: MAX_RECORDING_BYTES + 1 });
     const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
     finish(recordingId, { state: "passed" });
 
@@ -492,38 +627,42 @@ describe("a stream that ends early is refused, not published", () => {
    * no exception, a shorter object, a clean upload, and a URL reported as
    * proof. The file plays for a few seconds and stops. Nothing downstream can
    * detect that; a human clicking the link in a customer thread would.
+   *
+   * The guard is now a PROPERTY OF THE STREAM rather than a comparison this
+   * module performs: the container's reported length goes into a
+   * `FixedLengthStream`, so a short body fails the `put` itself.
    */
-  it("refuses when fewer bytes arrive than the harness statted", async () => {
-    const { deps, finish } = stub({ video: new Uint8Array([1, 2, 3]) });
+  it("refuses when fewer bytes arrive than the container said the file holds", async () => {
+    const { deps, finish } = stub({ video: new Uint8Array([1, 2, 3]), size: 4_096 });
     const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
-    finish(recordingId, { state: "passed", bytes: 4_096 });
+    finish(recordingId, { state: "passed" });
 
     const before = (await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects.length;
     const status = await checkRecording(deps, recordingId);
 
     expect(status.state).toBe("passed");
     expect(status.url).toBeNull();
-    expect(status.error).toContain("3 of 4096 bytes");
-    expect(status.error).toMatch(/again/i);
+    expect(status.error).toContain("could not be published");
+    expect(status.error).toMatch(/partly transferred|partial mp4/i);
     // Nothing partial is left for the route to find and serve as evidence.
     expect((await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects.length).toBe(
       before,
     );
   });
 
-  it("publishes normally when the sizes agree", async () => {
-    const { deps, finish } = stub({ video: MP4 });
+  it("refuses an empty file rather than publishing a zero-byte proof", async () => {
+    const { deps, finish } = stub({ video: new Uint8Array(0) });
     const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
-    finish(recordingId, { state: "passed", bytes: MP4.byteLength });
+    finish(recordingId, { state: "passed" });
 
     const status = await checkRecording(deps, recordingId);
-    expect(status.url).not.toBeNull();
-    expect(status.error).toBeNull();
+    expect(status.url).toBeNull();
+    expect(status.error).toMatch(/empty/i);
   });
 
-  it("still publishes when the harness reports no size at all", async () => {
-    // A harness predating the `bytes` field downgrades the check to
-    // "unavailable" rather than breaking every publish.
+  it("publishes normally when the length matches, whatever the harness reported", async () => {
+    // `bytes` is no longer consulted: the container's own figure is
+    // authoritative, so a harness that under-reports cannot block a publish.
     const { deps, finish } = stub({ video: MP4 });
     const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
     finish(recordingId, { state: "passed", bytes: null });
@@ -531,6 +670,35 @@ describe("a stream that ends early is refused, not published", () => {
     const status = await checkRecording(deps, recordingId);
     expect(status.url).not.toBeNull();
     expect(status.error).toBeNull();
+  });
+});
+
+describe("the URL checkRecording hands back is the URL the route serves", () => {
+  /**
+   * NOTHING ELSE TESTS THIS SEAM. The publish side reads its object back out of
+   * `env.ARTIFACTS` directly and the serving side seeds keys by hand, so URL
+   * construction, the `PROOFS_BASE_URL` shape, the key derivation and the route
+   * are each proven alone and never together — which is precisely the property
+   * the drill depends on: somebody clicks the link the agent reported.
+   */
+  it("fetches the published recording back through the real route", async () => {
+    const bytes = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 9, 9, 9, 9, 7, 7]);
+    // `BASE` is this Worker's own origin plus `/proofs`, which is what
+    // `PROOFS_BASE_URL` holds in production — so the URL below is fetched from
+    // the real route rather than from a shape a test invented.
+    const { deps, finish } = stub({ video: bytes });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, { state: "passed" });
+
+    const status = await checkRecording(deps, recordingId);
+    expect(status.url).not.toBeNull();
+
+    const response = await SELF.fetch(status.url!);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+    expect(response.headers.get("content-disposition")).toBe('inline; filename="checkout.mp4"');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
   });
 });
 

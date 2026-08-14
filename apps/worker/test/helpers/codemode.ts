@@ -280,11 +280,14 @@ export function fakeSandboxGateway(): CapabilityDependencies["sandbox"] {
     // namespace gets a shaped result rather than an error it has no context
     // for. `codemode-browser.test.ts` overrides these per case.
     async readBinary() {
-      return new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.close();
-        },
-      });
+      return {
+        content: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        size: 0,
+      };
     },
     async record() {
       return { recordingId: "rec_0" };

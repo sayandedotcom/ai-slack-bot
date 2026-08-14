@@ -120,7 +120,7 @@ function makeFakeSandbox(options: FakeOptions = {}): Fake {
   function fakeReadFile(
     path: string,
     readFileOptions: { encoding: "none" },
-  ): Promise<{ content: ReadableStream<Uint8Array> }>;
+  ): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
   function fakeReadFile(
     path: string,
     readFileOptions?: { encoding?: string },
@@ -128,11 +128,16 @@ function makeFakeSandbox(options: FakeOptions = {}): Fake {
   async function fakeReadFile(
     path: string,
     readFileOptions?: { encoding?: string },
-  ): Promise<{ content: string } | { content: ReadableStream<Uint8Array> }> {
+  ): Promise<
+    { content: string } | { content: ReadableStream<Uint8Array>; size: number }
+  > {
     calls.push({ method: "readFile", args: [path, readFileOptions] });
     if (readFileOptions?.encoding === "none") {
       const bytes = new TextEncoder().encode(options.fileContent ?? "");
       return {
+        // `size` next to `content`, exactly as `ReadFileStreamResult` reports
+        // it — the figure the publisher bounds the transfer with.
+        size: bytes.byteLength,
         content: new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(bytes);
@@ -188,6 +193,10 @@ function makeFakeSandbox(options: FakeOptions = {}): Fake {
     readFile: fakeReadFile,
     async writeFile(path, content) {
       calls.push({ method: "writeFile", args: [path, content] });
+      return { success: true };
+    },
+    async mkdir(path, mkdirOptions) {
+      calls.push({ method: "mkdir", args: [path, mkdirOptions] });
       return { success: true };
     },
     async destroy() {
@@ -759,7 +768,7 @@ describe("writeFile and killProcess", () => {
  * `SandboxGateway` — see that file's header. That leaves the real
  * `readBinaryFile()` and `buildRecordDeps()` wiring in `sandbox/gateway.ts`
  * with no test that calls them at all: a regression back to the SSE-framed
- * `readFileStream` (Ruling 10) or a mis-built `RecordDeps` field would pass
+ * `readFileStream` or a mis-built `RecordDeps` field would pass
  * every other suite in this repo silently. These cases call the REAL
  * `makeSandboxGateway` against `makeFakeSandbox()` and assert on results —
  * actual bytes, actual R2 objects, actual harness command lines — so each one
@@ -774,10 +783,13 @@ describe("readBinary reaches the container's raw bytes, not an SSE envelope", ()
       sleep: async () => {},
     });
 
-    const stream = await gateway.readBinary("/tmp/recordings/x/video.mp4");
-    const text = new TextDecoder().decode(await collectStream(stream));
+    const { content, size } = await gateway.readBinary("/tmp/recordings/x/video.mp4");
+    const text = new TextDecoder().decode(await collectStream(content));
 
     expect(text).toBe(raw);
+    // The length comes back with the bytes, which is what lets `record.ts`
+    // enforce the ceiling before reading and publish in one `put`.
+    expect(size).toBe(new TextEncoder().encode(raw).byteLength);
     // The SSE variant (`readFileStream`) wraps content as `data: {...}\n\n`
     // envelopes carrying a base64 payload. A regression back to it would
     // still type-check and still resolve a stream — it would just fail this
@@ -815,10 +827,15 @@ describe("record and checkRecording reach record.ts with correctly-built deps", 
 
   it("writes the script, spawns the pinned harness, and publishes the container's real bytes", async () => {
     const videoBytes = "not really an mp4, but real end-to-end bytes";
+    // `bytes` IS PART OF THE WIRE SHAPE and the fixture states it, even though
+    // the publisher now bounds the transfer with the container's own reported
+    // length instead. A fixture that omits a field the harness always emits is
+    // a fixture that exercises a shape production never produces.
     const resultLine = `RESULT ${JSON.stringify({
       state: "passed",
       error: null,
       video: "/tmp/recordings/whatever/video.mp4",
+      bytes: new TextEncoder().encode(videoBytes).byteLength,
       durationMs: 4_200,
     })}`;
     const fake = makeFakeSandbox({

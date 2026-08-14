@@ -24,11 +24,13 @@ import { makeRedactor } from "./gateway";
  * own key space (`proofs/`), its own ceiling, and its own route.
  *
  * WHY THE BYTES NEVER MATERIALISE HERE. `readBinary` hands back a
- * `ReadableStream` and it goes straight into `R2Bucket.put`. A Worker isolate
- * has a soft memory ceiling in the low hundreds of megabytes; buffering a 50MB
- * video to measure it, and then holding it while R2 writes it, is a spike with
- * no upside. The ceiling is enforced ON THE WAY PAST instead — see
- * `MAX_RECORDING_BYTES`.
+ * `ReadableStream` AND the file's length, and the stream goes straight into
+ * `R2Bucket.put` behind a `FixedLengthStream`. A Worker isolate has a soft
+ * memory ceiling in the low hundreds of megabytes; buffering a 50MB video to
+ * measure it, and then holding it while R2 writes it, is a spike with no
+ * upside. The length is not something this module has to measure — the
+ * container's file server reports it — so the ceiling is enforced BEFORE a byte
+ * is read; see `MAX_RECORDING_BYTES`.
  *
  * WHY THIS MODULE REMEMBERS NOTHING. `startRecording` and `checkRecording` are
  * separated by model turns and, quite possibly, by isolates: the agent polls
@@ -53,6 +55,14 @@ import { makeRedactor } from "./gateway";
  * success message attached.
  */
 export const MAX_RECORDING_BYTES = 50 * 1024 * 1024;
+
+/**
+ * The same ceiling, as a sentence — the `bytes` figure is the only part that
+ * moves, so the wording lives in one place rather than being retyped at each
+ * refusal site.
+ */
+const overCeilingProblem = (bytes: number): string =>
+  `the recording is ${bytes} bytes, larger than the ${MAX_RECORDING_BYTES} byte ceiling, so it was NOT published and there is no URL to share. Record a shorter interaction: a proof is the one journey that demonstrates the fix, not the whole session.`;
 
 /** Long enough for a real user journey, short enough to hold a container. */
 export const DEFAULT_RECORDING_TIMEOUT_MS = 60_000;
@@ -96,15 +106,50 @@ export const RECORDING_LABEL = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** What the harness prints, once, on the line this module reads. */
 const RESULT_PREFIX = "RESULT ";
 
+/**
+ * The token the model is TOLD to look for, and the sentence that carries it.
+ *
+ * `browser.record`'s and `browser.checkRecording`'s descriptions both promise
+ * that a machine with no Chromium is reported "by name (browser-unavailable)".
+ * That promise is only kept if the token survives to `RecordingStatus.error` —
+ * the harness's `state` does not, because this module collapses every terminal
+ * harness state into `passed`/`failed` (invariant: `state` is the SCRIPT's
+ * outcome, not the machine's). So the token has to be IN THE SENTENCE.
+ *
+ * DEFINED HERE, ONCE, AND ENFORCED HERE. The harness ships inside the container
+ * image and cannot import from this tree, so `record.cjs` repeats the same text
+ * as a literal with a comment naming this symbol. That copy is the one that can
+ * drift — a machine can be running an older image than this Worker — so
+ * `checkRecording` does not trust it: if what came back does not carry the
+ * token, this sentence is used instead. Tests import this constant rather than
+ * retyping a plausible string.
+ *
+ * WHAT THE INSTRUCTION HAS TO BE. Invariant 6 wants "what happened AND what to
+ * do", and "what to do" has to be something the agent can actually do. There is
+ * no re-provision method in any namespace, so telling it to re-provision names
+ * an action it cannot take and sends it looping. Stopping and reporting is the
+ * real move.
+ */
+export const BROWSER_UNAVAILABLE_TOKEN = "browser-unavailable";
+
+/** The one sentence a browserless machine produces. See the token above. */
+export const BROWSER_UNAVAILABLE_MESSAGE = `${BROWSER_UNAVAILABLE_TOKEN}: this run's container never got a working Chromium install (the boot-time install is non-fatal by design). Do not retry; report it and continue without a recording.`;
+
 /** The single-frame contract with `record-harness.cjs`. */
 type HarnessResult = {
   state: "passed" | "failed" | "browser-unavailable";
   error: string | null;
   video: string | null;
-  /** The mp4's real size, statted by the harness immediately before it
-   *  reported. Null whenever `video` is null — and treated as null when a
-   *  harness predating the field omits it, which downgrades the truncation
-   *  check to "unavailable" rather than breaking the publish. */
+  /**
+   * The mp4's real size, statted by the harness immediately before it reported.
+   *
+   * NOT LOAD-BEARING ANY MORE, and deliberately still here. `readBinary` now
+   * returns the container file server's own `size` on every call, which is
+   * authoritative, always present, and known BEFORE a byte is read — so the
+   * truncation guard and the ceiling are both enforced against that instead.
+   * This field is parsed because the harness already deployed emits it and the
+   * wire shape is worth stating in one place; nothing in `publish` consults it.
+   */
   bytes: number | null;
   durationMs: number;
 };
@@ -154,6 +199,17 @@ export type RecordProcessSnapshot = {
  * "none" })`, and it is never reachable from a capability.
  */
 export type RecordDeps = {
+  /**
+   * `mkdir -p`, and the reason `startRecording` has no first-await landmine.
+   *
+   * The SDK's `writeFile` is a thin POST to the container server's `/api/write`
+   * and documents no parent creation; the SDK's own mount code runs `mkdir`
+   * before it writes. Assuming otherwise would have made EVERY `record` call
+   * die on its first await, looking like a browser problem. So the directory is
+   * created, explicitly, and that also guarantees the output directory the
+   * harness is handed exists before the harness runs.
+   */
+  mkdir(path: string, options: { recursive: true }): Promise<unknown>;
   writeFile(path: string, content: string): Promise<unknown>;
   startProcess(
     command: string,
@@ -161,8 +217,15 @@ export type RecordDeps = {
   ): Promise<{ id: string }>;
   getProcess(id: string): Promise<RecordProcessSnapshot | null>;
   getProcessLogs(id: string): Promise<{ stdout: string; stderr: string }>;
-  /** Raw bytes, streamed. Never buffered on this side. */
-  readBinary(path: string): Promise<ReadableStream<Uint8Array>>;
+  /**
+   * Raw bytes, streamed, WITH THE LENGTH THE CONTAINER ALREADY KNOWS.
+   *
+   * `ReadFileStreamResult` carries `size` next to `content` on every call, so
+   * the length is free — and having it is what lets the ceiling be checked
+   * before a byte moves and the whole video be published in ONE `put` over a
+   * `FixedLengthStream`. Never buffered on this side either way.
+   */
+  readBinary(path: string): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
   bucket: R2Bucket;
   /** `PROOFS_BASE_URL` — this Worker's own origin plus `/proofs`. */
   proofsBaseUrl: string;
@@ -296,9 +359,18 @@ function parseResult(stdout: string): HarnessResult | null {
   return null;
 }
 
-function startedAtMs(startTime: Date | string): number {
+/**
+ * When did this process start, and NOW when that cannot be answered.
+ *
+ * The fallback used to be 0, which is the epoch: a `running` poll on a process
+ * whose `startTime` did not parse reported a duration of roughly fifty-four
+ * years and told the model its browser had been open since 1970. `now()` makes
+ * the same unparseable case read as "just started" — wrong by at most the age
+ * of the recording, and never absurd.
+ */
+function startedAtMs(startTime: Date | string, now: () => number): number {
   const parsed = startTime instanceof Date ? startTime.getTime() : Date.parse(startTime);
-  return Number.isNaN(parsed) ? 0 : parsed;
+  return Number.isNaN(parsed) ? now() : parsed;
 }
 
 /**
@@ -328,10 +400,17 @@ export async function startRecording(
   const workdir = workdirFor(recordingId);
   const scriptPath = `${workdir}/script.js`;
 
-  // Creates the directory as a side effect, which is why nothing here runs
-  // `mkdir` and why the spawn below passes no `cwd`: every path the harness
-  // receives is absolute, so a working directory that did not exist yet cannot
-  // wedge the process (lifecycle.ts has seen exactly that failure).
+  // CREATED, NOT ASSUMED. `writeFile` is a POST to the container's file server
+  // and nothing in its contract promises to create missing parents — the SDK's
+  // own mount path calls `mkdir` first. This one line is the difference between
+  // `record` working and every call dying on its first await with an error that
+  // reads like a browser problem. It also guarantees the output directory the
+  // harness is handed exists before the harness starts.
+  //
+  // The spawn below still passes no `cwd`: every path the harness receives is
+  // absolute, so a working directory it was never given cannot wedge the
+  // process (lifecycle.ts has seen exactly that failure).
+  await deps.mkdir(workdir, { recursive: true });
   await deps.writeFile(scriptPath, input.script);
 
   await deps.startProcess(
@@ -378,38 +457,73 @@ export async function checkRecording(
     };
   }
 
-  const logs = await deps.getProcessLogs(recordingId);
-  // REDACTED FIRST, BOUNDED SECOND, never the other way round. Cutting first
-  // can leave the head of a dev-env value in the kept half and its tail in the
-  // dropped half, which defeats the scrub while looking like it worked — the
-  // same ordering rule `codemode/bindings/sandbox.ts` states for exec output.
-  const stdoutTail = clampTail(redact(scriptOutput(logs.stdout)), RECORDING_TAIL_CHARS);
-  const elapsedMs = Math.max(0, now() - startedAtMs(process.startTime));
+  let logs = await deps.getProcessLogs(recordingId);
+  const elapsedMs = Math.max(0, now() - startedAtMs(process.startTime, now));
 
   if (process.status === "starting" || process.status === "running") {
-    return { state: "running", url: null, error: null, stdoutTail, durationMs: elapsedMs };
+    // REDACTED FIRST, BOUNDED SECOND, never the other way round. Cutting first
+    // can leave the head of a dev-env value in the kept half and its tail in
+    // the dropped half, which defeats the scrub while looking like it worked —
+    // the same ordering rule `codemode/bindings/sandbox.ts` states for exec
+    // output.
+    return {
+      state: "running",
+      url: null,
+      error: null,
+      stdoutTail: clampTail(redact(scriptOutput(logs.stdout)), RECORDING_TAIL_CHARS),
+      durationMs: elapsedMs,
+    };
   }
 
-  const result = parseResult(logs.stdout);
+  let result = parseResult(logs.stdout);
+  if (result === null && (process.exitCode ?? -1) === 0) {
+    // A CLEAN EXIT WITH NO RESULT LINE IS A RACE, NOT A CRASH — and it is a
+    // race this harness deliberately created. `emit()` sets `process.exitCode`
+    // instead of calling `process.exit()` precisely so stdout drains naturally
+    // rather than being cut off mid-write; the cost of that choice is a window
+    // where the process is already reported "completed" and the last line has
+    // not landed in the log buffer yet. Declaring failure here throws away a
+    // recording that SUCCEEDED. So the logs are read once more before the
+    // refusal below is built. A nonzero exit gets no second read: that is a
+    // real crash, and its stderr is already the answer.
+    logs = await deps.getProcessLogs(recordingId);
+    result = parseResult(logs.stdout);
+  }
+
+  const stdoutTail = clampTail(redact(scriptOutput(logs.stdout)), RECORDING_TAIL_CHARS);
+
   if (result === null) {
     // The harness died before it could report. Its stderr is the only thing
     // that explains why, and an exit code without it is unactionable.
     const stderr = clampTail(redact(logs.stderr), RECORDING_ERROR_CHARS).trim();
+    const exited =
+      (process.exitCode ?? -1) === 0
+        ? "the recording harness exited cleanly (code 0) but its result line never reached the log, even on a second read, so no video can be published"
+        : `the recording harness exited with code ${process.exitCode ?? "unknown"} without reporting a result, so no video was produced`;
     return {
       state: "failed",
       url: null,
-      error: `the recording harness exited with code ${process.exitCode ?? "unknown"} without reporting a result, so no video was produced.${stderr.length === 0 ? "" : ` Last error output: ${stderr}`}`,
+      error: `${exited}.${stderr.length === 0 ? "" : ` Last error output: ${stderr}`}`,
       stdoutTail,
       durationMs: elapsedMs,
     };
   }
 
-  // "browser-unavailable" is not a state the model can act on, and the
-  // harness's own sentence is — it names the missing binary and the command
-  // that installs it. Preserved verbatim rather than replaced with a summary.
+  // "browser-unavailable" is a STATE, and this module collapses states — the
+  // model only ever sees "passed" or "failed", because `state` reports the
+  // script's outcome and a missing browser is not one. The token therefore has
+  // to survive inside the SENTENCE, which is what the `browser` namespace's
+  // descriptions promise the model it can look for. `BROWSER_UNAVAILABLE_MESSAGE`
+  // is the canonical wording and it is substituted whenever the harness's own
+  // message does not already carry the token — an older image is a real
+  // possibility, and the promise in the .d.ts must hold against one.
   const state: RecordingStatus["state"] = result.state === "passed" ? "passed" : "failed";
-  const published =
-    result.video === null ? null : await publish(deps, recordingId, result.video, result.bytes);
+  const harnessError =
+    result.state === "browser-unavailable" &&
+    !(result.error ?? "").includes(BROWSER_UNAVAILABLE_TOKEN)
+      ? BROWSER_UNAVAILABLE_MESSAGE
+      : result.error;
+  const published = result.video === null ? null : await publish(deps, recordingId, result.video);
 
   // BOUNDED PER PART, NOT ACROSS THE JOIN. The harness's error can be 2000
   // characters on its own, and a single `slice` over the joined string would
@@ -421,10 +535,10 @@ export async function checkRecording(
   // and bounds that piece itself, at the point it is built, so no path out of
   // this module can carry an unredacted or unbounded value.
   //
-  // `result.error` is redacted before it is bounded, for the reason stated
+  // `harnessError` is redacted before it is bounded, for the reason stated
   // above `stdoutTail`; `published.problem` arrives already redacted.
   const reasons = [
-    result.error === null ? null : clampHead(redact(result.error), RECORDING_ERROR_CHARS),
+    harnessError === null ? null : clampHead(redact(harnessError), RECORDING_ERROR_CHARS),
     published?.problem ?? null,
   ].filter((reason): reason is string => typeof reason === "string" && reason.trim().length > 0);
 
@@ -438,36 +552,33 @@ export async function checkRecording(
 }
 
 /**
- * Eight mebibytes: the size of the ONE buffer a publish ever holds.
+ * Container to R2, in ONE call, with the ceiling enforced before a byte moves.
  *
- * WHY MULTIPART AT ALL. `R2Bucket.put` refuses a stream whose length it does
- * not know — "Provided readable stream must have a known length (request/
- * response body or readable half of FixedLengthStream)" — and the length of a
- * video is exactly what the Worker does not have as bytes arrive: the harness
- * reports a PATH, and draining the file to measure it is the memory spike this
- * whole path exists to avoid. A multipart upload is how bytes of not-yet-known
- * total length reach R2.
+ * WHY THERE IS NO MULTIPART UPLOAD HERE ANY MORE. `R2Bucket.put` refuses a
+ * stream whose length it does not know — "Provided readable stream must have a
+ * known length (request/response body or readable half of FixedLengthStream)".
+ * An earlier draft concluded that the Worker could not know a recording's
+ * length as bytes arrived and paid for that with ~120 lines of part-buffering.
+ * It was not true: `readFile(path, { encoding: "none" })` answers with
+ * `ReadFileStreamResult`, whose `size` is the file's length, on every call and
+ * before any byte is read. So the length is free, `FixedLengthStream` is the
+ * whole mechanism, and the upload is one atomic `put`.
  *
- * WHAT THE MEMORY BOUND ACTUALLY IS, stated precisely because a number in a
- * comment that the code does not honour is worse than no number. Bytes are
- * copied straight into a part-sized buffer as they arrive, and that buffer is
- * handed to `uploadPart` and dropped from this frame BEFORE the await, with the
- * next one allocated lazily afterwards. So what is live across an upload is one
- * `PART_BYTES` buffer plus the current stream chunk (tens of kilobytes) — one
- * part, not three. An earlier draft concatenated the held chunks and then
- * sliced the part out of the result, which kept the chunks, the concatenation
- * and the slice all live at once: ~3x. That is why this reads as a copy loop
- * rather than a concat.
+ * That also removes a real failure mode rather than only lines. A multipart
+ * upload spanned many awaits inside a single `checkRecording` poll; an
+ * execution cut in the middle of it ran neither the cleanup nor the catch, so
+ * `abort()` never fired, R2 kept an incomplete upload, the next poll's `head()`
+ * still answered null, and the poll after that started another one. Repeated
+ * polls on a large video accumulated orphaned uploads and never published. One
+ * `put` has nothing to orphan.
  *
- * WHY THIS SIZE. R2 requires every part except the last to be the same size and
- * at least 5MiB, so the floor is not a choice; 8MiB means a typical 3-6MB proof
- * never becomes a multipart upload at all (one `put`, one round trip) while a
- * 50MB one is seven parts.
- */
-const PART_BYTES = 8 * 1024 * 1024;
-
-/**
- * Container to R2, a part at a time, with the ceiling enforced on the way past.
+ * THE TRUNCATION GUARD IS NOW A PROPERTY OF THE STREAM, not a comparison after
+ * the fact. A read that simply ENDS EARLY — a torn-down container, a lost RPC
+ * frame — is indistinguishable from a complete one at the reading end: no
+ * exception, a shorter object, a clean upload, and a URL reported as proof that
+ * plays for a few seconds and stops. `FixedLengthStream(size)` makes that
+ * arithmetic R2's problem: fewer bytes than declared and the `put` itself
+ * fails, which lands in the catch below and is reported as a publish problem.
  *
  * THIS FUNCTION DOES NOT THROW, and that is a contract rather than an
  * accident. It is called from the middle of a poll that has already collected
@@ -486,7 +597,6 @@ async function publish(
   deps: RecordDeps,
   recordingId: string,
   videoPath: string,
-  expectedBytes: number | null,
 ): Promise<{ url: string | null; problem: string | null }> {
   const key = await proofKeyFor(recordingId);
   const url = `${deps.proofsBaseUrl}/${key.slice(PROOF_KEY_PREFIX.length)}`;
@@ -498,129 +608,53 @@ async function publish(
   // `checkRecording`, so nothing downstream of `publish` can forward an
   // unredacted `problem`.
   const redact = makeRedactor(deps.devEnv);
-  const options = {
-    httpMetadata: {
-      contentType: "video/mp4",
-      // Stored for completeness; the route re-derives both of these rather than
-      // echoing metadata back to a browser.
-      contentDisposition: `inline; filename="${label}.mp4"`,
-    },
-    customMetadata: { label, recordedAt: new Date().toISOString() },
-  };
 
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  let upload: R2MultipartUpload | null = null;
-  const parts: R2UploadedPart[] = [];
-  /** Exactly `PART_BYTES` when allocated; null between parts, so it is not
-   *  live across an `uploadPart` await. */
-  let part: Uint8Array | null = null;
-  let partLen = 0;
-  let total = 0;
-  /** Whether anything was actually sent, so a failure BEFORE the first write
-   *  cannot delete an object a previous poll published. */
+  /** Whether anything was actually sent, so a failure BEFORE the write cannot
+   *  delete an object a previous poll published. */
   let wrote = false;
-
-  /** Undo everything, so a refusal never leaves half a proof behind. */
-  const unwind = async (): Promise<void> => {
-    if (reader !== null) await reader.cancel().catch(() => {});
-    if (upload !== null) await upload.abort().catch(() => {});
-  };
-
-  /** Refuse readably, having cleaned up first. */
-  const refuse = async (problem: string): Promise<{ url: null; problem: string }> => {
-    await unwind();
-    return { url: null, problem };
-  };
 
   try {
     // Already there: this is a poll, not a first sight. `head` costs one
     // metadata read against re-uploading tens of megabytes on every turn.
     if ((await deps.bucket.head(key)) !== null) return { url, problem: null };
 
-    reader = (await deps.readBinary(videoPath)).getReader();
+    const { content, size } = await deps.readBinary(videoPath);
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    /** Refuse readably, letting go of the stream we are not going to send. */
+    const refuse = async (problem: string): Promise<{ url: null; problem: string }> => {
+      await content.cancel().catch(() => {});
+      return { url: null, problem };
+    };
 
-      total += value.byteLength;
-      if (total > MAX_RECORDING_BYTES) {
-        // The ceiling as a valve rather than a check, and it fires BEFORE the
-        // part that would carry the excess is uploaded.
-        return await refuse(
-          `the recording is larger than the ${MAX_RECORDING_BYTES} byte ceiling, so it was NOT published and there is no URL to share. Record a shorter interaction: a proof is the one journey that demonstrates the fix, not the whole session.`,
-        );
-      }
+    // BEFORE A BYTE IS READ. The container told us how big the file is, so a
+    // 50MB refusal costs one metadata round trip instead of 50MB of transfer.
+    if (size > MAX_RECORDING_BYTES) return await refuse(overCeilingProblem(size));
 
-      // Copied into the part buffer rather than held as a list of chunks — see
-      // the memory note on PART_BYTES.
-      let offset = 0;
-      while (offset < value.byteLength) {
-        part ??= new Uint8Array(PART_BYTES);
-        const take = Math.min(PART_BYTES - partLen, value.byteLength - offset);
-        part.set(value.subarray(offset, offset + take), partLen);
-        partLen += take;
-        offset += take;
-
-        if (partLen === PART_BYTES) {
-          const full = part;
-          // Dropped from this frame BEFORE the await, and reallocated lazily
-          // on the next chunk, so only one part-sized buffer is ever live.
-          part = null;
-          partLen = 0;
-          upload ??= await deps.bucket.createMultipartUpload(key, options);
-          wrote = true;
-          parts.push(await upload.uploadPart(parts.length + 1, full));
-        }
-      }
-    }
-
-    if (total === 0) {
+    if (size === 0) {
       return await refuse(
         "the recording harness reported a video file that turned out to be empty, so there is nothing to share. The browser most likely closed before the page painted; record the interaction again.",
       );
     }
 
-    // THE TRUNCATION GUARD, and the reason the harness reports `bytes` at all.
-    //
-    // A read that ERRORS is caught below and cleaned up. A read that simply
-    // ends early — a torn-down container, an RPC frame lost, a transport that
-    // signals `done` on an incomplete body — looks identical to a complete one
-    // from here: no exception, a shorter object, a clean `complete()`, and a
-    // URL reported as proof. The resulting file uploads, resolves, and plays
-    // for a few seconds before stopping. Nothing downstream could detect it;
-    // a human clicking the link in a customer thread would. So the length the
-    // harness statted is compared against the length actually received, and a
-    // mismatch is refused in the same readable style as the ceiling.
-    if (expectedBytes !== null && total !== expectedBytes) {
-      return await refuse(
-        `the recording was only partly readable: ${total} of ${expectedBytes} bytes arrived before the stream ended, so it was NOT published and there is no URL to share. A partial mp4 plays for a few seconds and then stops, which is worse than no proof at all. Record it again.`,
-      );
-    }
-
-    if (upload === null) {
-      // The common case by far: a proof that fits in one part never becomes a
-      // multipart upload. `subarray` rather than a copy — R2 honours the view's
-      // bounds, and the tests assert the stored object byte-for-byte.
-      wrote = true;
-      await deps.bucket.put(
-        key,
-        (part === null ? new Uint8Array(0) : part.subarray(0, partLen)) as BufferSource,
-        options,
-      );
-    } else {
-      if (partLen > 0 && part !== null) {
-        wrote = true;
-        parts.push(await upload.uploadPart(parts.length + 1, part.subarray(0, partLen)));
-      }
-      await upload.complete(parts);
-    }
+    wrote = true;
+    // ONE ATOMIC CALL, and the bytes never materialise in this isolate:
+    // `FixedLengthStream` gives `put` the known length it demands while the
+    // stream stays a stream. `test/api-proofs.test.ts` uses the same pattern to
+    // write an over-ceiling fixture without holding 50MB.
+    await deps.bucket.put(key, content.pipeThrough(new FixedLengthStream(size)), {
+      httpMetadata: {
+        contentType: "video/mp4",
+        // Stored for completeness; the route re-derives both of these rather
+        // than echoing metadata back to a browser.
+        contentDisposition: `inline; filename="${label}.mp4"`,
+      },
+      customMetadata: { label, recordedAt: new Date().toISOString() },
+    });
   } catch (error) {
-    await unwind();
-    // A single `put` that threw commits nothing, but a delete is one call and
-    // the alternative is a half-written proof the route might later serve.
+    // A `put` that threw commits nothing, but a delete is one call and the
+    // alternative is a half-written proof the route might later serve.
     //
-    // GUARDED BY `wrote`, because this block now also covers `head` and
+    // GUARDED BY `wrote`, because this block also covers `head` and
     // `readBinary`. A transient failure reading the bucket must never delete a
     // recording an earlier poll successfully published.
     if (wrote) await deps.bucket.delete(key).catch(() => {});
@@ -632,7 +666,7 @@ async function publish(
       // is capped; the wrapping sentence (the actionable "there is no URL to
       // share") is never sliced away, matching the rule `reasons` in
       // `checkRecording` already follows for the harness error.
-      problem: `the recording could not be published, so there is no URL to share (${clampHead(redact(message), RECORDING_ERROR_CHARS)}).`,
+      problem: `the recording could not be published, so there is no URL to share (${clampHead(redact(message), RECORDING_ERROR_CHARS)}). A recording that only partly transferred is refused rather than published: a partial mp4 plays for a few seconds and then stops, which is worse than no proof at all.`,
     };
   }
 

@@ -294,14 +294,24 @@ export interface SandboxGateway {
   /** Captures the working tree's diff by reference. Never returns the bytes. */
   diff(): Promise<DiffResult>;
   /**
-   * Raw binary read of a file in the container. RPC transport only.
+   * Raw binary read of a file in the container, WITH ITS LENGTH. RPC transport
+   * only.
    *
    * Phase 19's one caller is `record.ts`: it streams a finished recording
    * straight from the container to R2 without the bytes ever materialising in
    * this Worker's memory, the same shape `diff()` uses for a patch that can
    * run to megabytes.
+   *
+   * `size` is the container file server's own figure (`ReadFileStreamResult`),
+   * so it costs nothing and is known before a byte is read. It is what lets the
+   * byte ceiling be enforced up front and the upload be a single
+   * `put(key, content.pipeThrough(new FixedLengthStream(size)))` instead of a
+   * hand-rolled multipart loop. The plan pinned the narrower
+   * `Promise<ReadableStream<Uint8Array>>` for wave-A concurrency and said
+   * widening it was a review finding rather than a judgment call; this is that
+   * finding, taken.
    */
-  readBinary(path: string): Promise<ReadableStream<Uint8Array>>;
+  readBinary(path: string): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
   /**
    * Start a Playwright recording — Phase 19's `preview`-shaped counterpart:
    * it does not block past the execution budget, it returns a handle, and

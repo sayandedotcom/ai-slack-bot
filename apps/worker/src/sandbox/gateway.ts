@@ -94,9 +94,19 @@ export type SandboxOpsHandle = {
    * way to get raw bytes out of the container: the SDK's separately-named
    * `readFileStream` looks like it does the same thing and does not.
    */
-  readFile(path: string, options: { encoding: "none" }): Promise<{ content: ReadableStream<Uint8Array> }>;
+  readFile(
+    path: string,
+    options: { encoding: "none" },
+  ): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
   readFile(path: string, options?: { encoding?: string }): Promise<{ content: string }>;
   writeFile(path: string, content: string): Promise<{ success: boolean }>;
+  /**
+   * `mkdir -p`. Present because `writeFile` does NOT create missing parents —
+   * it is a POST to the container's file server and says nothing about them,
+   * and the SDK's own mount path calls this first. `record.ts` needs the
+   * recording's working directory to exist before it writes a script into it.
+   */
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<{ success: boolean }>;
   destroy(): Promise<void>;
   tunnels: { get(port: number): Promise<{ url: string }> };
 };
@@ -258,11 +268,19 @@ export function makeSandboxGateway(
    * `readFile(path, { encoding: "none" })` is documented as the RPC
    * transport's raw-byte variant — "no base64 encoding, no SSE framing, no
    * buffering" — which is what a recording's bytes actually need to stay.
+   *
+   * THE SIZE COMES BACK TOO, and it is not decoration. `ReadFileStreamResult`
+   * is `{ success, path, content, size, mimeType, timestamp }`: the file's
+   * length is authoritative, free on every call, and known before a byte is
+   * read. Discarding it is what previously forced `record.ts` to buffer the
+   * video in 8MiB parts to reach R2 at all.
    */
-  async function readBinaryFile(path: string): Promise<ReadableStream<Uint8Array>> {
+  async function readBinaryFile(
+    path: string,
+  ): Promise<{ content: ReadableStream<Uint8Array>; size: number }> {
     await assertReady();
     const result = await sandbox().readFile(path, { encoding: "none" });
-    return result.content;
+    return { content: result.content, size: result.size };
   }
 
   /**
@@ -280,6 +298,7 @@ export function makeSandboxGateway(
       );
     }
     return {
+      mkdir: (path, options) => handle.mkdir(path, options),
       writeFile: (path, content) => handle.writeFile(path, content),
       startProcess: (command, options) => handle.startProcess(command, options),
       getProcess: (id) => handle.getProcess(id),
