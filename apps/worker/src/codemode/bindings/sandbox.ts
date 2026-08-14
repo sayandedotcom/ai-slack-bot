@@ -104,14 +104,27 @@ const diffResult = z.strictObject({
 const noArgs = z.strictObject({}).default({});
 
 export function makeSandboxTools(ctx: BindingContext): ToolDescriptors {
+  // Execution-scoped on purpose — `makeSandboxTools` runs once per `run_code`
+  // execution (fresh registry per execution, Phase 10 Task 1), so this grants
+  // ONE ~14s provisioning wait per code block, however many times the block
+  // calls boot. Both failure modes were paid for live: no wait at all starved
+  // the step budget (run 317111cd died at the ceiling with a healthy machine),
+  // and a wait on every call blew the 20s execution budget at 25.7s when the
+  // model reasonably called boot twice in one block (run 29f027e4).
+  let bootWaitSpent = false;
+
   return {
     boot: auditedCapability(ctx, "sandbox", "boot", {
       effect: "sandbox_write",
       description:
-        "Start this run's container, or report on one already starting. Idempotent; each call waits up to ~14s for progress before answering, so polling is cheap — but a COLD machine clones the monorepo and installs from scratch, which takes 2-4 minutes (~10-14 boot calls). Budget for that: call boot early, do genuinely useful work between polls (read memory, draft from what you already know, send a brief status reply if warranted), and only wait on the machine when nothing else moves the task. If the question is answerable without code — a how-to, a status — answer it; the machine is for reproducing, editing and running, not a reflex. Every other capability here refuses with sandbox_not_ready until state is 'ready'. `note` names the current provisioning step; `repoPath` is where commands run by default, and `pnpm build-packages` has already run by the time state is 'ready'.",
+        "Start this run's container, or report on one already starting. Idempotent. The FIRST boot call in a code block waits up to ~14s for provisioning progress; any further boot call in the same block returns immediately — so call it once per block, and poll across blocks, not within one. A COLD machine clones the monorepo and installs from scratch, which takes 2-4 minutes (~10-14 blocks). Budget for that: call boot early, do genuinely useful work between polls (read memory, draft from what you already know, send a brief status reply if warranted), and only wait on the machine when nothing else moves the task. If the question is answerable without code — a how-to, a status — answer it; the machine is for reproducing, editing and running, not a reflex. Every other capability here refuses with sandbox_not_ready until state is 'ready'. `note` names the current provisioning step; `repoPath` is where commands run by default, and `pnpm build-packages` has already run by the time state is 'ready'.",
       input: noArgs,
       output: bootStatus,
-      run: () => ctx.deps.sandbox.boot(),
+      run: () => {
+        const wait = !bootWaitSpent;
+        bootWaitSpent = true;
+        return ctx.deps.sandbox.boot(wait);
+      },
     }),
 
     exec: auditedCapability(ctx, "sandbox", "exec", {

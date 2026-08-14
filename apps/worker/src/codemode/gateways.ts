@@ -240,12 +240,16 @@ export type SandboxProcessState = {
  *  - every text field it returns is already scrubbed of dev-env VALUES. The
  *    implementation holds the secret, so it is the only layer that can, and
  *    the binding above it must never be handed a value to leak;
- *  - `boot` is the readiness read. It is idempotent and never blocks, so the
- *    other methods can use it as their gate rather than caching a flag that an
- *    evicted isolate would get wrong.
+ *  - `boot` is the readiness read. It is idempotent, so the other methods can
+ *    use it as their gate rather than caching a flag that an evicted isolate
+ *    would get wrong. `longPoll: true` may hold the call ~14s waiting for
+ *    provisioning progress; the BINDING decides when, because "once per
+ *    execution" is execution-scoped knowledge and the gateway outlives
+ *    executions — two long-polls in one code block is how a 20s budget dies
+ *    at 25.7s, observed live in run 29f027e4.
  */
 export interface SandboxGateway {
-  boot(): Promise<BootStatus>;
+  boot(longPoll: boolean): Promise<BootStatus>;
   exec(input: {
     cmd: string;
     cwd?: string;

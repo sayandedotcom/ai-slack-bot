@@ -171,6 +171,9 @@ export function makeRedactor(devEnv: Record<string, string>): (text: string) => 
  * the lifecycle's own seam type widened to this module's handle, so a test
  * writes one fake container and both halves use it.
  */
+const defaultGatewaySleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 export function makeSandboxGateway(
   env: Env,
   runId: string,
@@ -225,19 +228,27 @@ export function makeSandboxGateway(
   }
 
   return {
-    // A LONG poll, deliberately: while provisioning, hold the call up to ~14s
-    // (re-reading every 3s) before answering. Without this, every poll costs
-    // one model step and buys ~2 seconds of wall time, and the arithmetic can
-    // never close: a cold boot is minutes, MAX_STEPS_PER_GENERATION is finite,
-    // and the run dies at its ceiling while the machine underneath is HEALTHY —
-    // observed live, run 317111cd, mid-`installing dependencies`. 14s stays
-    // inside the 20s execution wall budget with room for the model's other
-    // calls in the same block.
-    boot: async () => {
-      const deadline = Date.now() + 14_000;
+    // A LONG poll, when the binding asks for one: while provisioning, hold the
+    // call up to ~14s (re-reading every 3s) before answering. Without this,
+    // every poll costs one model step and buys ~2 seconds of wall time, and the
+    // arithmetic can never close: a cold boot is minutes,
+    // MAX_STEPS_PER_GENERATION is finite, and the run dies at its ceiling while
+    // the machine underneath is HEALTHY — observed live, run 317111cd,
+    // mid-`installing dependencies`.
+    //
+    // The binding grants the wait to the FIRST boot of each execution only.
+    // Both halves were paid for live: no wait at all killed 317111cd at the
+    // step ceiling, and an unconditional wait killed a block in 29f027e4 at
+    // 25.7s of a 20s budget when the model reasonably called boot twice.
+    boot: async (longPoll) => {
       let status = await lifecycle.boot(runId);
+      if (!longPoll) return status;
+      // Through the injected sleep, not a raw setTimeout: the same seam the
+      // lifecycle uses, so tests exercise this loop in milliseconds.
+      const sleep = deps.sleep ?? defaultGatewaySleep;
+      const deadline = Date.now() + 14_000;
       while (status.state === "provisioning" && Date.now() + 3_000 < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 3_000));
+        await sleep(3_000);
         status = await lifecycle.boot(runId);
       }
       return status;

@@ -186,14 +186,17 @@ function sandboxEnv(overrides: Partial<Env> = {}): Env {
  * Deliberately not a fake gateway: redaction and the readiness gate live in the
  * gateway, and a double would assert them away rather than assert them.
  */
-function sandboxTools(fake: Fake, options: { env?: Env; scope?: CodeModeScope } = {}) {
+function sandboxTools(
+  fake: Fake,
+  options: { env?: Env; scope?: CodeModeScope; sleep?: (ms: number) => Promise<void> } = {},
+) {
   const workerEnv = options.env ?? sandboxEnv();
   const deps = {
     ...fakeDeps(),
     db: env.DB,
     sandbox: makeSandboxGateway(workerEnv, RUN_ID, {
       resolve: () => fake.handle,
-      sleep: async () => {},
+      sleep: options.sleep ?? (async () => {}),
     }),
   };
   return buildRegistry(
@@ -352,6 +355,42 @@ describe("the sandbox namespace", () => {
     const status = (await call(tools, "boot")) as Record<string, unknown>;
     expect(status.state).toBe("ready");
     expect(status.commit).toBe("a".repeat(40));
+  });
+
+  it("spends the ~14s provisioning wait once per execution, not per call", async () => {
+    // Both halves of this behaviour were paid for live. No wait at all starved
+    // the step budget (run 317111cd died at its ceiling with a healthy machine
+    // mid-install); a wait on EVERY call blew the 20s execution budget at 25.7s
+    // when the model reasonably called boot twice in one block (run 29f027e4).
+    // So: first boot in an execution long-polls, later ones answer instantly.
+    const fake = makeFakeSandbox({ stdout: "STEP install\n" });
+    // The fake's provision record is shared by reference, so flipping its
+    // status is how the test scripts "mid-install, then finishes during the
+    // long-poll's first sleep" without real time passing.
+    const record = await fake.handle.getProcess("provision");
+    if (!record) throw new Error("fake lost its provision record");
+    record.status = "running";
+
+    const sleeps: number[] = [];
+    const tools = sandboxTools(fake, {
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        record.status = "completed";
+      },
+    });
+
+    const first = (await call(tools, "boot")) as Record<string, unknown>;
+    expect(first.state).toBe("ready");
+    // Exactly one wait: the long-poll slept once, re-read, saw completion.
+    expect(sleeps).toEqual([3_000]);
+
+    record.status = "running";
+    const second = (await call(tools, "boot")) as Record<string, unknown>;
+    // Still provisioning AND no further sleeps: the execution's one wait is
+    // spent, so the second call answered immediately instead of stacking
+    // another ~14s onto a 20s budget.
+    expect(second.state).toBe("provisioning");
+    expect(sleeps).toEqual([3_000]);
   });
 });
 
