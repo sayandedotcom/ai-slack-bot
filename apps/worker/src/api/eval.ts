@@ -72,12 +72,23 @@ SELECT 1
 `;
 
 /**
- * Every decision in the window, with the message it was made about.
+ * Every RIPE decision in the window, with the message it was made about.
  *
  * An INNER JOIN on purpose: a decision whose message row is gone cannot be
  * scored (there is no thread to look for engagement in, and no text to show a
  * human), and counting it as a silent true/false negative would be inventing
  * ground truth rather than reading it.
+ *
+ * RIPENESS — `m.received_at <= ?` where the bind is `now - 24h` — is the second
+ * filter that decides whether the headline number is honest. Engagement is
+ * sought in `[received_at, received_at + 24h]`, so a decision made an hour ago
+ * is being scored against a window that has not finished yet: it reads FP or TN
+ * today and may become TP or FN tomorrow, purely because time passed. The bias
+ * is downward, so it never flatters — but it makes `?days=1` a different and
+ * worse measurement than `?days=30`, and makes the headline number drift for
+ * reasons that have nothing to do with model quality. Only decisions whose full
+ * 24 hours have elapsed are scored; the rest are counted and reported as
+ * `unripeExcluded` rather than silently dropped.
  */
 const DECISIONS_SQL = `
 SELECT t.event_id, t.wake, t.why,
@@ -85,8 +96,26 @@ SELECT t.event_id, t.wake, t.why,
   FROM triage_decisions t
   JOIN messages m ON m.event_id = t.event_id
  WHERE t.created_at >= ?
+   AND m.received_at <= ?          -- ripe: its full 24h answer window has elapsed
  ORDER BY t.created_at DESC
  LIMIT ${MAX_DECISIONS}
+`;
+
+/**
+ * How many decisions in the same window were left out for being unripe.
+ *
+ * Reported rather than silently excluded, for the same reason invariant 6
+ * reports `null` instead of `0`: `n` is expected to be small, a rate over a
+ * dozen decisions is a direction rather than a grade, and a silently shrinking
+ * denominator is exactly the kind of quiet distortion this route exists to
+ * avoid.
+ */
+const UNRIPE_COUNT_SQL = `
+SELECT COUNT(*) AS unripe
+  FROM triage_decisions t
+  JOIN messages m ON m.event_id = t.event_id
+ WHERE t.created_at >= ?
+   AND m.received_at > ?
 `;
 
 /** The shadow corpus: drafts a human never saw sent. `suppressed` ONLY. */
@@ -164,16 +193,30 @@ type DecisionRow = {
  *
  * `n` accompanies every rate and an unmeasured rate is `null`, both of which
  * are `scoreTriage`'s doing. This route does not touch either.
+ *
+ * Three numbers travel beside the score, and all three exist so that a shrunken
+ * or clipped denominator is VISIBLE rather than silent: `windowDays` (what was
+ * asked for, after clamping), `unripeExcluded` (decisions too recent to have
+ * had their full 24h answer window) and `truncated` (whether the window held
+ * more decisions than one request will score).
  */
 evalApi.get("/eval/triage", async (c) => {
   const member = await requireTeamMember(c);
   if (member instanceof Response) return member;
 
   const windowDays = clampInt(c.req.query("days"), 30, 1, 90);
-  const since = Date.now() - windowDays * DAY_MS;
+  const now = Date.now();
+  const since = now - windowDays * DAY_MS;
+  // A decision is ripe once 24h have passed since the message it was made
+  // about. `<=` on the boundary: at exactly 24h the window has fully elapsed.
+  const ripeBefore = now - DAY_MS;
 
-  const decisions = await c.env.DB.prepare(DECISIONS_SQL).bind(since).all<DecisionRow>();
-  const rows = decisions.results ?? [];
+  const [decisions, unripe] = await c.env.DB.batch<DecisionRow | { unripe: number }>([
+    c.env.DB.prepare(DECISIONS_SQL).bind(since, ripeBefore),
+    c.env.DB.prepare(UNRIPE_COUNT_SQL).bind(since, ripeBefore),
+  ]);
+  const rows = (decisions?.results ?? []) as DecisionRow[];
+  const unripeExcluded = ((unripe?.results ?? []) as { unripe: number }[])[0]?.unripe ?? 0;
 
   /**
    * The engagement lookup runs once per decision, as the ground-truth statement
@@ -186,6 +229,13 @@ evalApi.get("/eval/triage", async (c) => {
    * its replies carry the parent's `ts` as theirs. `user_id ?? ""` because
    * `user_id != NULL` is NULL in SQL, which would silently exclude every row;
    * no real Slack user id is the empty string, so `!= ''` keeps them all.
+   *
+   * The ROW side of that comparison is a decision too, not an inherited
+   * accident: a candidate reply whose own `m.user_id` is NULL fails
+   * `m.user_id != ''` (NULL comparisons are NULL) and therefore never counts as
+   * engagement. Per `src/ingest/consumer.ts` those are the bot and subtype
+   * messages — a join/leave notice or an app post is not a human answering the
+   * customer, so excluding them is correct.
    */
   const lookups = rows.map((row) =>
     c.env.DB.prepare(HUMAN_ENGAGED_SQL).bind(
@@ -208,7 +258,10 @@ evalApi.get("/eval/triage", async (c) => {
   }));
 
   const score: TriageScore = scoreTriage(outcomes);
-  return c.json({ score, windowDays });
+  // `truncated` says the window held at least MAX_DECISIONS scoreable rows, so
+  // `score` describes the NEWEST MAX_DECISIONS of them rather than the window.
+  // The bound is deliberate; reporting it is what stops it being a silent lie.
+  return c.json({ score, windowDays, unripeExcluded, truncated: rows.length === MAX_DECISIONS });
 });
 
 /**

@@ -23,10 +23,19 @@ import {
  * WHY EVERY NUMERIC ASSERTION IS A DELTA. This pool has no `isolatedStorage`,
  * so `triage_decisions`, `messages` and `approvals` are shared with every other
  * suite in the run, and `GET /api/eval/triage` deliberately scores EVERYTHING
- * in the window rather than anything this file owns. Wiping those tables to get
- * a clean count would break the neighbouring suites, so instead each case reads
- * the score, seeds its own tagged rows, reads it again, and asserts the
- * difference. Row-level claims are made by looking up ids this file minted.
+ * in the window rather than anything this file owns — it takes no channel or
+ * tag parameter, because "how are we doing overall" is the question it answers.
+ * Wiping those tables to get a clean count would break the neighbouring suites,
+ * so instead each case reads the score, seeds its own tagged rows, reads it
+ * again, and asserts the difference. Row-level claims are made by looking up
+ * ids this file minted.
+ *
+ * THE PROPERTY THAT MAKES A DELTA SOUND is that nothing else writes to D1
+ * between the two reads. `vitest.config.ts:5-8` records it: vitest-pool-workers
+ * v0.21 "always runs one runtime per project", so test files run sequentially in
+ * one isolate and no neighbouring suite can interleave a write. If that ever
+ * stops being true, this file breaks — and so do the several existing suites
+ * that `DELETE FROM` whole tables in a `beforeEach`.
  */
 
 /* ------------------------------------------------------------- fixtures */
@@ -64,7 +73,12 @@ async function req(path: string, token?: string): Promise<Response> {
   return await SELF.fetch(`https://firefighter.example${path}`, { headers });
 }
 
-type TriageBody = { score: TriageScore; windowDays: number };
+type TriageBody = {
+  score: TriageScore;
+  windowDays: number;
+  unripeExcluded: number;
+  truncated: boolean;
+};
 type ShadowPair = {
   approvalId: string;
   draft: string;
@@ -99,7 +113,15 @@ function delta(before: TriageScore, after: TriageScore) {
   };
 }
 
-/** Seeds one woken decision plus one reply, and reports what it scored as. */
+/**
+ * Seeds one woken decision plus one reply, and reports what it scored as.
+ *
+ * The trigger message is THREE DAYS old so the decision is ripe (the route only
+ * scores decisions whose 24h answer window has elapsed), while the decision row
+ * itself is stamped `now` so it sorts ahead of any neighbouring suite's
+ * leftovers — the same split, for the same two reasons, as
+ * `seedFourCellScenario`.
+ */
 async function wokenWithReply(input: {
   name: string;
   replyUserId: string;
@@ -108,7 +130,7 @@ async function wokenWithReply(input: {
 }): Promise<ReturnType<typeof delta>> {
   const before = (await triage()).score;
   const now = Date.now();
-  const triggeredAt = now - 2 * 60 * 60_000;
+  const triggeredAt = now - 3 * DAY_MS;
   const eventId = `ev:${tag}:${input.name}`;
   const threadTs = `${tag}.${input.name}`;
   await seedMessage({
@@ -121,7 +143,7 @@ async function wokenWithReply(input: {
     permalink: `https://slack.example/${tag}/${input.name}`,
     receivedAt: triggeredAt,
   });
-  await seedDecision({ eventId, wake: true, why: input.name, createdAt: triggeredAt });
+  await seedDecision({ eventId, wake: true, why: input.name, createdAt: now });
   await seedMessage({
     eventId: `ev:${tag}:${input.name}-reply`,
     channelId: `C-${tag}`,
@@ -252,15 +274,102 @@ describe("GET /api/eval/triage", () => {
   });
 
   it("reports n with every rate, and null rather than 0 for an unmeasured rate", async () => {
+    await seedFourCellScenario({ tag });
     const body = await triage();
-    expect(typeof body.score.n).toBe("number");
-    for (const rate of [body.score.precision, body.score.recall]) {
-      expect(rate === null || (typeof rate === "number" && rate >= 0 && rate <= 1)).toBe(true);
+
+    // With the four-cell scenario in the window both classes are non-empty, so
+    // both rates are real numbers — no `if` guard, nothing that can pass by
+    // being skipped.
+    expect(body.score.n).toBeGreaterThanOrEqual(4);
+    expect(body.score.truePos + body.score.falsePos).toBeGreaterThan(0);
+    expect(body.score.truePos + body.score.falseNeg).toBeGreaterThan(0);
+    expect(typeof body.score.precision).toBe("number");
+    expect(typeof body.score.recall).toBe("number");
+    expect(body.score.precision!).toBeGreaterThanOrEqual(0);
+    expect(body.score.precision!).toBeLessThanOrEqual(1);
+    expect(body.score.recall!).toBeGreaterThanOrEqual(0);
+    expect(body.score.recall!).toBeLessThanOrEqual(1);
+
+    // And the invariant itself, stated as an equivalence so it holds whatever
+    // the shared database happens to contain: a rate is null EXACTLY when its
+    // class is empty. Never 0 for "we never measured it".
+    expect(body.score.precision === null).toBe(body.score.truePos + body.score.falsePos === 0);
+    expect(body.score.recall === null).toBe(body.score.truePos + body.score.falseNeg === 0);
+  });
+
+  /**
+   * RIPENESS. Engagement is looked for in `[received_at, received_at + 24h]`,
+   * so a decision younger than 24h is being judged against a window that has
+   * not finished: it would read FP or TN today and might become TP or FN
+   * tomorrow, moving the headline number for reasons unrelated to the model.
+   * Such decisions are excluded from the score and COUNTED in `unripeExcluded`,
+   * so the shrunken denominator is visible rather than silent.
+   */
+  describe("ripeness", () => {
+    /** One woken, unanswered decision whose trigger message is `ageMs` old. */
+    async function seedAged(name: string, ageMs: number): Promise<void> {
+      const now = Date.now();
+      const eventId = `ev:${tag}:${name}`;
+      await seedMessage({
+        eventId,
+        channelId: `C-${tag}`,
+        ts: `${tag}.${name}`,
+        threadTs: `${tag}.${name}`,
+        userId: `U-cust-${tag}`,
+        text: `age ${name}`,
+        receivedAt: now - ageMs,
+      });
+      await seedDecision({ eventId, wake: true, why: name, createdAt: now });
     }
-    // A window with nothing in it measures nothing, and says so.
-    const empty = await triage("?days=1");
-    if (empty.score.truePos + empty.score.falsePos === 0) expect(empty.score.precision).toBeNull();
-    if (empty.score.truePos + empty.score.falseNeg === 0) expect(empty.score.recall).toBeNull();
+
+    it("excludes a decision whose 24h answer window has not elapsed", async () => {
+      const before = await triage();
+      await seedAged("fresh", 60 * 60_000); // one hour old
+      const after = await triage();
+
+      expect(delta(before.score, after.score).n).toBe(0);
+      expect(after.unripeExcluded - before.unripeExcluded).toBe(1);
+    });
+
+    it("scores a decision at exactly the 24h cutoff, and one just inside it", async () => {
+      const before = await triage();
+      // Exactly 24h: the route evaluates `now` a few ms later than this test
+      // does, so `received_at <= now - 24h` holds — the boundary is inclusive.
+      await seedAged("exactly", DAY_MS);
+      await seedAged("justripe", DAY_MS + 5 * 60_000);
+      const after = await triage();
+
+      // Both woken, neither answered: two more false positives, nothing excluded.
+      expect(delta(before.score, after.score)).toEqual({
+        n: 2,
+        truePos: 0,
+        falsePos: 2,
+        falseNeg: 0,
+        trueNeg: 0,
+      });
+      expect(after.unripeExcluded - before.unripeExcluded).toBe(0);
+    });
+
+    it("excludes one just outside the cutoff while scoring one just inside it", async () => {
+      const before = await triage();
+      await seedAged("inside", DAY_MS + 5 * 60_000);
+      await seedAged("outside", DAY_MS - 5 * 60_000);
+      const after = await triage();
+
+      expect(delta(before.score, after.score).n).toBe(1);
+      expect(after.unripeExcluded - before.unripeExcluded).toBe(1);
+    });
+
+    it("reports truncated:false for a window this size", async () => {
+      await seedFourCellScenario({ tag });
+      const body = await triage("?days=90");
+      expect(body.truncated).toBe(false);
+      expect(typeof body.unripeExcluded).toBe("number");
+      expect(body.unripeExcluded).toBeGreaterThanOrEqual(0);
+      // The bound exists and the flag reports it; well under it, `n` is the
+      // window rather than the newest slice of it.
+      expect(body.score.n).toBeLessThan(5000);
+    });
   });
 
   it("clamps days to 1..90 at both ends rather than rejecting", async () => {
@@ -480,7 +589,7 @@ describe("the eval API is D1-only", () => {
     const trappedEnv = { ...env, RUNS: boobyTrap } as unknown as Env;
     const headers = new Headers({ "Cf-Access-Jwt-Assertion": FIREFIGHTER });
 
-    await seedFourCellScenario({ tag });
+    const scenario = await seedFourCellScenario({ tag });
     await seedApproval({
       id: `apr:${tag}:do`,
       runId: `run:${tag}:do`,
@@ -499,6 +608,17 @@ describe("the eval API is D1-only", () => {
 
     expect(triageRes.status).toBe(200);
     expect(shadowRes.status).toBe(200);
+
+    // Both routes did REAL WORK with the booby trap in place — a 200 over an
+    // empty result set would prove nothing about a code path never taken.
+    const triageBody = (await triageRes.json()) as TriageBody;
+    expect(triageBody.score.n).toBeGreaterThanOrEqual(4);
+    expect(triageBody.score.disagreements.map((d) => d.eventId)).toContain(
+      scenario.falsePositive,
+    );
+    const pairs = ((await shadowRes.json()) as { pairs: ShadowPair[] }).pairs;
+    expect(pairs.map((p) => p.approvalId)).toContain(`apr:${tag}:do`);
+
     expect(touched).toEqual([]);
   });
 });

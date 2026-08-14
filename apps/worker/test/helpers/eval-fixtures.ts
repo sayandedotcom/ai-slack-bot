@@ -149,6 +149,18 @@ export type TriageScenario = {
  * `ingested_self` reply — that belongs to the case that proves it does not
  * count, and putting it in the shared scenario would make the invariant look
  * asserted when it was only assumed.
+ *
+ * THE TWO TIMESTAMPS ARE DIFFERENT ON PURPOSE, and both are load-bearing.
+ *
+ *  - `messages.received_at` is THREE DAYS back, because the route only scores
+ *    RIPE decisions: a message less than 24h old has not had its full answer
+ *    window, so it is excluded from the score and counted in `unripeExcluded`
+ *    instead. A scenario seeded two hours back would be excluded entirely and
+ *    every count assertion built on it would pass while measuring nothing.
+ *  - `triage_decisions.created_at` is NOW, because `DECISIONS_SQL` orders by it
+ *    descending and `scoreTriage` caps the disagreement list at 25. Backdating
+ *    it would sort this scenario behind any fresher leftovers from a
+ *    neighbouring suite and let them crowd its rows out of the cap.
  */
 export async function seedFourCellScenario(options: {
   tag: string;
@@ -156,7 +168,7 @@ export async function seedFourCellScenario(options: {
 }): Promise<TriageScenario> {
   const { tag } = options;
   const now = options.now ?? Date.now();
-  const triggeredAt = now - 2 * 60 * 60_000;
+  const triggeredAt = now - 3 * DAY_MS;
   const channelId = `C-${tag}`;
   const triggerUserId = `U-cust-${tag}`;
   const humanUserId = `U-eng-${tag}`;
@@ -186,7 +198,7 @@ export async function seedFourCellScenario(options: {
       eventId,
       wake: cell.wake,
       why: `${cell.name}: seeded by seedFourCellScenario`,
-      createdAt: triggeredAt,
+      createdAt: now,
     });
     if (cell.engaged) {
       await seedMessage({
