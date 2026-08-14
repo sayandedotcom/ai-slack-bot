@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { CONTENT_TYPES, MAX_ARTIFACT_BYTES } from "../files/r2";
+import { isInternalKey } from "../sandbox/diff";
 
 /**
  * The read side of `files.publish`.
@@ -93,6 +94,23 @@ function missing(): Response {
 // eventually probe for exactly that discrepancy.
 artifactsApi.on(["GET", "HEAD"], "/artifacts/:key", async (c) => {
   const key = c.req.param("key");
+
+  // THE INTERNAL NAMESPACE IS NEVER SERVED, checked first and on its own.
+  //
+  // The same bucket now holds Phase 18's captured diffs — the working contents
+  // of a PRIVATE monorepo — under `_internal/`. `ARTIFACT_KEY` already refuses
+  // them, but only as a side effect of its shape, and this route is one
+  // loosened extension away from serving whatever it can name. Phase 19 also
+  // puts proof recordings here, and Slack has to fetch those without an Access
+  // token; the moment that lands, "behind Access" stops being the backstop it
+  // is today. So the refusal is stated positively, before anything else, and
+  // has a test of its own.
+  //
+  // Hono gives back a DECODED param, which is what makes this reachable at all:
+  // a raw `_internal/diff/…` path has too many segments to match `:key`, so the
+  // probe that gets here is the percent-encoded one.
+  if (isInternalKey(key)) return missing();
+
   if (!isArtifactKey(key)) return missing();
 
   // `head()` for HEAD, so there is no stream to fetch and none to release. A
