@@ -345,6 +345,8 @@ describe("every capability declares an effect", () => {
       "langsmith.searchTraces": "read",
       "betterstack.logs": "read",
       "betterstack.monitors": "read",
+      "browser.checkRecording": "sandbox_write",
+      "browser.record": "sandbox_write",
       "files.publish": "external_write",
       "approval.escalate": "control_write",
       "approval.withdraw": "control_write",
