@@ -20,9 +20,50 @@ All of `00-roadmap.md` "Global Constraints" apply. The ones that bite here:
 - **AI-tell rules are the spec's copy rules** (no preamble, no "Great question!", no bulleted recap, no closing restatement) — the detector encodes exactly those, not new taste.
 - **Commit after every task.** Conventional prefixes.
 
+## Where to execute this — READ FIRST
+
+**In a worktree, not the main checkout.** Phase 18 is executing on `main`, and a
+second lane committing into the same working tree tangles both: commits
+interleave onto whichever branch was last checked out, and a `git add -A` in
+one lane sweeps the other's half-finished files. That happened on 2026-08-14
+and cost a commit rescue.
+
+```bash
+git worktree add ~/Desktop/zellify/firefighter-p21 -b phase-21 main
+cd ~/Desktop/zellify/firefighter-p21 && pnpm install
+```
+
+**The two files both phases touch**, each an additive line, so the rebase is
+mechanical:
+
+| File | Phase 18 adds | Phase 21 adds |
+|---|---|---|
+| `src/agent/dependencies.ts` | composes the `sandbox` namespace | threads `resolveEngineerVoice` into prompt assembly |
+| `src/index.ts` | sandbox configuration fields | mounts `evalApi` under `/api` |
+
+**Boundaries for this lane, non-negotiable:**
+
+- **Never touch `src/sandbox/**`, `src/codemode/**`, or `sandbox/Dockerfile`.**
+  Those are Phase 18's, and this phase needs none of them.
+- **Never regenerate `src/codemode/generated/capabilities.d.ts`.** Phase 18 owns
+  it this week because it is adding a namespace; regenerating from a tree
+  without those changes silently reverts them, and the CI drift check would
+  then fail on Phase 18's branch rather than here.
+- **Never deploy.** Phase 18's Task 8 and this phase's Task 7 both want a live
+  proof, and only one deploy can win. Record the live steps as gates in
+  `phase-21-notes.md` and let the operator serialise them.
+- **Never `git add -A` or `git add .`** — stage only the paths the task names.
+
+**Merge order:** Phase 18 first, since it has the larger surface and owns the
+generated `.d.ts`; this phase then rebases its two lines on top. If Phase 18
+stalls on the monorepo invite, merge this one first instead — nothing here is
+blocked on anybody.
+
 ## Depends on
 
 Phases 07 (stored `triage_decisions`), 10 (prompt assembly, shadow wakes), **11** (`suppressed` delivery corpus, escalate-allowed-in-shadow, `requireTeamMember`'s underpinnings), **12** (`identities.external_id` = the engineer's Slack user id, for sampling; `onDuty` for the shift key), 14 (dashboard panel). Execute after the `phase-12-14` merge. The old roadmap sketch's "10, 07" undersold this — corrected in the roadmap.
+
+Not blocked on Phase 18 in either direction.
 
 ## Outcome
 
