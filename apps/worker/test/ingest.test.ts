@@ -154,4 +154,47 @@ describe("handleIngestBatch", () => {
     const msgs = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages").first<{ n: number }>();
     expect(msgs?.n).toBe(1);
   });
+
+  /**
+   * Self-posts (2026-08-14). The agent's replies — sent through this app with
+   * an engineer's user token — arrive stamped `bot_id` + `app_id` and were
+   * being dropped, so the agent could not see its own promises. They must be
+   * STORED and REMEMBERED but never TRIAGED: the triage queue is the only path
+   * that wakes or re-enters a run, and an agent that reacts to its own reply
+   * is a loop.
+   */
+  it("stores a self-post and fans it to memory, but never to triage", async () => {
+    const memorySend = vi.spyOn(env.MEMORY_QUEUE, "send").mockResolvedValue({} as QueueSendResponse);
+    const triageSend = vi.spyOn(env.TRIAGE_QUEUE, "send").mockResolvedValue({} as QueueSendResponse);
+
+    const selfReply = ev({ event_id: "Ev_self" });
+    selfReply.event.bot_id = "B_WHATEVER"; // bot ids are not stable; the pin is app_id
+    selfReply.event.app_id = env.SLACK_APP_ID;
+    selfReply.event.user = "U_HUMAN_ENGINEER";
+    selfReply.event.thread_ts = "1700000000.000100";
+    await handleIngestBatch(batchOf([selfReply]), env);
+
+    const seen = await env.DB.prepare("SELECT outcome FROM events_seen WHERE event_id = 'Ev_self'")
+      .first<{ outcome: string }>();
+    expect(seen?.outcome).toBe("ingested_self");
+    const msg = await env.DB.prepare("SELECT user_id, thread_ts FROM messages WHERE event_id = 'Ev_self'")
+      .first<{ user_id: string; thread_ts: string }>();
+    expect(msg).toEqual({ user_id: "U_HUMAN_ENGINEER", thread_ts: "1700000000.000100" });
+    expect(memorySend).toHaveBeenCalledWith({ event_id: "Ev_self" });
+    expect(triageSend).not.toHaveBeenCalled();
+  });
+
+  it("still drops this app's bot-token posts — the nudge cannot ingest", async () => {
+    const nudge = ev({ event_id: "Ev_nudge" });
+    nudge.event.bot_id = "B_WHATEVER";
+    nudge.event.app_id = env.SLACK_APP_ID;
+    nudge.event.user = env.SLACK_BOT_USER_ID; // bot-token posts speak as the bot user
+    await handleIngestBatch(batchOf([nudge]), env);
+
+    const seen = await env.DB.prepare("SELECT outcome FROM events_seen WHERE event_id = 'Ev_nudge'")
+      .first<{ outcome: string }>();
+    expect(seen?.outcome).toBe("dropped_bot");
+    const msgs = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages").first<{ n: number }>();
+    expect(msgs?.n).toBe(0);
+  });
 });

@@ -61,3 +61,60 @@ describe("classify", () => {
     expect(classify({ ...base, text: "" }, true)).toBe("ingested");
   });
 });
+
+/**
+ * Self-posts, 2026-08-14. Slack stamps `bot_id` + `app_id` onto EVERY message
+ * an app posts through the API — including replies sent with an engineer's
+ * USER token (verified live: both agent replies in C0BPGUXG5RS carry
+ * `user: <human>` plus `bot_id`/`app_id`). The blanket bot_id drop therefore
+ * erased the agent's own replies from D1: the agent could not see what it had
+ * promised, and memory never learned what we told the customer.
+ *
+ * The distinguisher is OUR app_id plus a HUMAN user: a user-token post carries
+ * the engineer's user id, a bot-token post (the nudge) carries the bot's own.
+ */
+describe("classify self-posts", () => {
+  const self = { appId: "A_OURS", botUserId: "U_BOT" };
+  const selfPost: SlackMessageEvent = {
+    ...base,
+    bot_id: "B_ANY",
+    app_id: "A_OURS",
+    user: "U_HUMAN",
+  };
+
+  it("ingests our own user-token post as a self-post", () => {
+    expect(classify(selfPost, true, self)).toBe("ingested_self");
+  });
+
+  it("still drops our own bot-token posts — the nudge must never ingest", () => {
+    expect(classify({ ...selfPost, user: "U_BOT" }, true, self)).toBe("dropped_bot");
+  });
+
+  it("still drops a foreign app's post even when it names a human user", () => {
+    expect(classify({ ...selfPost, app_id: "A_THEIRS" }, true, self)).toBe("dropped_bot");
+  });
+
+  it("still drops a bot_id post with no user at all", () => {
+    expect(classify({ ...selfPost, user: undefined }, true, self)).toBe("dropped_bot");
+  });
+
+  it("still drops subtype bot_message unconditionally", () => {
+    expect(classify({ ...selfPost, subtype: "bot_message" }, true, self)).toBe("dropped_bot");
+  });
+
+  it("fails safe when no self identity is configured — everything bot-flavored drops", () => {
+    expect(classify(selfPost, true)).toBe("dropped_bot");
+  });
+
+  it("a self-post DM is still a DM", () => {
+    expect(classify({ ...selfPost, channel_type: "im" }, true, self)).toBe("dropped_dm");
+  });
+
+  it("a self-post edit is still noise", () => {
+    expect(classify({ ...selfPost, subtype: "message_changed" }, true, self)).toBe("dropped_subtype");
+  });
+
+  it("a plain human message is untouched by the self config", () => {
+    expect(classify(base, true, self)).toBe("ingested");
+  });
+});

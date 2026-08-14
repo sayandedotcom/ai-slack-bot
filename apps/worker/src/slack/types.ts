@@ -5,6 +5,8 @@ export type SlackMessageEvent = {
   channel_type?: string;
   user?: string;
   bot_id?: string;
+  /** Present on every API-posted message, user-token sends included. */
+  app_id?: string;
   text?: string;
   ts: string;
   thread_ts?: string;

@@ -17,7 +17,10 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
     const { event_id, event, received_at } = message.body;
 
     const policy = await getChannelPolicy(env.DB, event.channel);
-    const outcome = classify(event, policy.known);
+    const outcome = classify(event, policy.known, {
+      appId: env.SLACK_APP_ID,
+      botUserId: env.SLACK_BOT_USER_ID,
+    });
 
     const isFirstSighting = await recordEvent(env.DB, {
       event_id,
@@ -27,7 +30,7 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
     });
 
     if (!isFirstSighting) continue;
-    if (outcome !== "ingested") continue;
+    if (outcome !== "ingested" && outcome !== "ingested_self") continue;
 
     await insertMessage(env.DB, {
       event_id,
@@ -48,7 +51,13 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
       await env.MEMORY_QUEUE.send({ event_id });
     } catch {}
 
-    if (shouldTriage(policy)) {
+    // THE LOOP GUARD. A self-post is stored (the agent must see its own words
+    // in the thread) and remembered (memory must know what we told the
+    // customer), but it NEVER reaches the triage queue — which is the only
+    // path that wakes or re-enters a run. Without this line: agent replies →
+    // event → routed back into the owning run as input → the agent reacts to
+    // itself.
+    if (outcome === "ingested" && shouldTriage(policy)) {
       try {
         await env.TRIAGE_QUEUE.send({ event_id });
       } catch {}

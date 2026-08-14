@@ -9,7 +9,7 @@
     "test": "node scripts/check-text-files.mjs && vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "cf-typegen": "wrangler types",
+    "cf-typegen": "wrangler types --strict-vars=false",
     "codemode:dts": "node --import ./scripts/codemode-node-shim.mjs --import tsx scripts/generate-codemode-dts.ts --write",
     "codemode:dts:check": "node scripts/check-text-files.mjs && node --import ./scripts/codemode-node-shim.mjs --import tsx scripts/generate-codemode-dts.ts --check"
   },
