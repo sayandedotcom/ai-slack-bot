@@ -117,6 +117,30 @@ let `../../` or a crafted string reach a published artifact. It parses.
 
 ---
 
+## Live verification — 2026-08-14/15, `#test-firedrill`
+
+The proof ran as a sequence of real customer-shaped messages, each exposing one
+defect, each fixed and redeployed before the next. The sequence itself is the
+honest record; a first-try pass would have proven much less.
+
+| Run | Message | Outcome | What it taught |
+|---|---|---|---|
+| `a8fab904` | funnel editor blows up on second variant | reply in **64s**, then `failed` | Ingest→triage→agent→user-token reply works cold. Runs die silently — no persisted error. |
+| follow-up | "any luck?" | triage `wake=0` | **A failed run swallows its thread**: the agent's own "I'll post what I find" reads to triage as an active investigation. Customer gets permanent silence. Triage needs run status as a FACT (Phase 21 prompt work). |
+| `17d0a274` | copy button does nothing | `failed` at step ceiling | `startProcess` with a nonexistent `cwd` wedges in `starting` with empty logs forever. The toolchain-only image removed the directory the lifecycle still pointed at. |
+| `8f34c4b3` | duplicate a funnel | `failed` fast | Deploy mid-boot preserves the old code's spawn as a corpse (`autoCleanup: false` keeps records, including dead ones) for the new code to poll. → wedge detection + one relaunch. |
+| `317111cd` | per-variant currency | `failed` at step ceiling, machine healthy | **The sentinel-host clone works live**: `note` advanced `clone` at 7.5s → `installing dependencies` at 35s. Clone-through-swap ≈ 28s. But each 2s poll cost one step against `MAX_STEPS_PER_GENERATION = 10` — the arithmetic could never close. → 14s long-poll in `boot`, ceiling 10→24, honest `.d.ts`. |
+| `29f027e4` | which payment providers per funnel | **`idle` — settled** | Full chain: boot → clone (swap) → install → build-packages → `exec` greps the real checkout → **correct, code-derived answer in the thread at 4m20s** (status reply at 64s). Phase 18's core exit criterion, met live. |
+
+**Cold boot (clone + install + build-packages on Cloudflare's network): ~3 minutes**,
+bounded by the answer landing at 4m20s including model turns. A warm container
+is a no-op re-check.
+
+Still to prove (rolls into Phase 19's live proof): dev server + tunnel serving
+200 (needs `MONOREPO_DEV_ENV`, which is set), a test-suite run, and `diff()`
+against a real edit. Known residual noise: the sweeper wakes a Sandbox DO per
+terminal run per minute inside its window — destroys report success, cost only.
+
 ## Measured against the real monorepo
 
 **Base stage (toolchain only, no repo), built without credentials: 2.06 GB.**
