@@ -91,5 +91,26 @@ done
 step "build-packages"
 pnpm build-packages || fail "build-packages"
 
+# Chromium, for Phase 19's proof capture.
+#
+# Installed here rather than baked because it is a 1.19 GB image layer, which
+# is the one thing that reliably fails to push from a domestic uplink before
+# the registry credential expires. Inside the container it downloads over
+# Cloudflare's network in seconds.
+#
+# Idempotent and non-fatal. Idempotent because a warm container already has it
+# and re-running is a no-op. Non-fatal because Phase 18's exit criteria involve
+# no browser at all: a run that only needs to read code, run tests and produce
+# a diff must not be blocked by a browser download, and Phase 19's capability
+# can surface the absence itself with a message about what to do.
+step "browser"
+if [ -d /root/.cache/ms-playwright ] && [ -n "$(ls -A /root/.cache/ms-playwright 2>/dev/null)" ]; then
+  echo "STEP browser-cached"
+else
+  npm i -g playwright@1.58.0 --silent \
+    && npx --yes playwright@1.58.0 install --with-deps chromium \
+    || echo "STEP browser-unavailable"
+fi
+
 step "ready"
 git rev-parse HEAD

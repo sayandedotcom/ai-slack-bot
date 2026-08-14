@@ -38,14 +38,23 @@ RUN npm i -g pnpm@11.17.0 --silent && pnpm --version
 # file and bypass the wrapper entirely.
 RUN npm i -g @infisical/cli@0.43.65 --silent
 
-# Chromium and its system libraries, for Phase 19's Playwright proof capture.
+# Chromium is NOT baked, and this is the third thing to leave this image for the
+# same reason.
 #
-# Baked here even though nothing in Phase 18 drives a browser: installing it at
-# run time measured 16s+ in the spike, and adding it later would cost a full
-# image rebuild during the phase that can least afford one.
-RUN npm i -g playwright@1.58.0 --silent \
-    && npx --yes playwright@1.58.0 install --with-deps chromium \
-    && rm -rf /root/.npm/_cacache
+# The Playwright + Chromium install is a **1.19 GB layer** — larger than every
+# other addition combined. Pushing it from a domestic uplink at ~1 MB/s takes
+# about twenty minutes, and Cloudflare's registry credential expires first:
+# `docker push` uploads some layers, gets `unauthorized` on this one, retries,
+# and fails. Confirmed by elimination — 20 base layers report "already exists",
+# the small additions push, and this one never has across five attempts.
+#
+# provision.sh installs it at boot instead, idempotently, where it runs on
+# Cloudflare's network rather than ours. The spike measured the install at ~16s
+# warm; a cold container pays it once and every boot after that skips it.
+#
+# What stays baked is what is small: pnpm (54 MB), the Infisical CLI (88 MB) and
+# redis (136 MB). The rule this image now follows is simply "bake what is small
+# and stable; fetch what is large at boot, where the network is fast."
 
 # Point Puppeteer at the browser we already have instead of letting it download
 # a second one. Lifted from Zellify's own agent sandbox image
