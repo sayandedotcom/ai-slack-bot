@@ -563,6 +563,33 @@ describe("dev-env values never reach the model", () => {
     expect(status.error).toContain("[redacted:SUPABASE_SECRET_API_KEY]");
   });
 
+  it("redacts a dev-env value embedded in a publish failure's exception message", async () => {
+    // `publish`'s catch block also covers `head()` and `readBinary()` failures
+    // against a torn-down container, and its `problem` sentence embeds the
+    // caught exception's own message verbatim — exactly the shape a stack
+    // trace or an upstream rejection uses to carry a dev-env value. This pins
+    // that the embedded message is scrubbed like every other string that
+    // reaches `RecordingStatus.error`, not just `result.error`.
+    const { deps, finish } = stub({ video: MP4, devEnv });
+    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    finish(recordingId, {});
+
+    const failing: RecordDeps = {
+      ...deps,
+      async readBinary() {
+        throw new Error(`upload rejected by upstream, saw Authorization: Bearer ${SECRET}`);
+      },
+    };
+
+    const status = await checkRecording(failing, recordingId);
+
+    expect(status.state).toBe("passed");
+    expect(status.url).toBeNull();
+    expect(status.error).toContain("could not be published");
+    expect(status.error).not.toContain(SECRET);
+    expect(status.error).toContain("[redacted:SUPABASE_SECRET_API_KEY]");
+  });
+
   it("scrubs before it trims, so a value straddling the cut cannot survive it", async () => {
     const { deps, processes } = stub({ video: MP4, devEnv });
     const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });

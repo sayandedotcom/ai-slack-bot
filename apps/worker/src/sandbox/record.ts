@@ -415,9 +415,14 @@ export async function checkRecording(
   // characters on its own, and a single `slice` over the joined string would
   // then drop the publish problem entirely — which is the half this module
   // wrote, the half that is actionable, and the half that explains why there is
-  // no URL. Our own problem sentences are short and bounded by construction.
+  // no URL. Our own problem sentences are short and bounded by construction,
+  // EXCEPT the one that embeds a caught exception's message (a `head()` or
+  // `readBinary()` failure against a torn-down container) — `publish` redacts
+  // and bounds that piece itself, at the point it is built, so no path out of
+  // this module can carry an unredacted or unbounded value.
   //
-  // Redacted before either is bounded, for the reason stated above `stdoutTail`.
+  // `result.error` is redacted before it is bounded, for the reason stated
+  // above `stdoutTail`; `published.problem` arrives already redacted.
   const reasons = [
     result.error === null ? null : clampHead(redact(result.error), RECORDING_ERROR_CHARS),
     published?.problem ?? null,
@@ -486,6 +491,13 @@ async function publish(
   const key = await proofKeyFor(recordingId);
   const url = `${deps.proofsBaseUrl}/${key.slice(PROOF_KEY_PREFIX.length)}`;
   const label = labelOf(recordingId);
+  // This catch block covers `head()` and `readBinary()` failures against a
+  // torn-down container as well as upload failures, so the exception message
+  // below can carry content from the sandbox side — the same class of value
+  // `stdoutTail` and the harness error are scrubbed for. Built here, not in
+  // `checkRecording`, so nothing downstream of `publish` can forward an
+  // unredacted `problem`.
+  const redact = makeRedactor(deps.devEnv);
   const options = {
     httpMetadata: {
       contentType: "video/mp4",
@@ -612,9 +624,15 @@ async function publish(
     // `readBinary`. A transient failure reading the bucket must never delete a
     // recording an earlier poll successfully published.
     if (wrote) await deps.bucket.delete(key).catch(() => {});
+    const message = error instanceof Error ? error.message : "unknown upload failure";
     return {
       url: null,
-      problem: `the recording could not be published, so there is no URL to share (${error instanceof Error ? error.message : "unknown upload failure"}).`,
+      // REDACTED, THEN BOUNDED — same order as `stdoutTail` and the harness
+      // error, and for the same reason. Only the embedded exception message
+      // is capped; the wrapping sentence (the actionable "there is no URL to
+      // share") is never sliced away, matching the rule `reasons` in
+      // `checkRecording` already follows for the harness error.
+      problem: `the recording could not be published, so there is no URL to share (${clampHead(redact(message), RECORDING_ERROR_CHARS)}).`,
     };
   }
 
