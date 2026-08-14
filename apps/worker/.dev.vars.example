@@ -235,4 +235,17 @@ DASHBOARD_BASE_URL=
 # never lands in a layer), but that is a build-time flag, not this file.
 MONOREPO_PAT=
 
+# The dev-tier environment the monorepo's Next.js apps validate with zod at
+# startup, as ONE JSON object of string to string -- e.g.
+# {"NEXT_PUBLIC_SUPABASE_URL":"...","SUPABASE_SECRET_API_KEY":"..."}. Sourced
+# from Infisical's `dev` environment once and stored as a Worker secret,
+# because the container has no Infisical auth.
+#
+# SECURITY: the model never sees, types, chooses or prints one of these values.
+# Its code sets `injectDevEnv: true` and the Worker supplies the record to that
+# one process; the values are never baked into the image and never set
+# container-wide. A malformed blob fails loudly at parse time naming the key,
+# never the value.
+MONOREPO_DEV_ENV=
+
 # Later phases add more. Add each here as its phase introduces it.

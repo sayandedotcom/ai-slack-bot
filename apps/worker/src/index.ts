@@ -107,6 +107,13 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    * audit arg or a log can reach.
    */
   MONOREPO_PAT?: string;
+  /** Phase 18's dev-tier env for the monorepo's apps — a SECRET, JSON object of
+   *  string to string. Read in exactly one place, `src/sandbox/env.ts`, which
+   *  turns it into a per-process record; absence is a state the code can see
+   *  (`devEnvFor` returns `{}`), so a deployment without it still works for
+   *  everything but starting a dev server. Values must never reach a capability
+   *  result, an audit arg or a log — key NAMES are fine and useful. */
+  MONOREPO_DEV_ENV?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
