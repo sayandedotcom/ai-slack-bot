@@ -91,7 +91,15 @@ Established from `staging` at `aca7b2e`.
 
 ## The dev-env caveat — for the README's security section
 
-The security model's claim is "the container holds no write credentials," and that stays exactly true. But a Next.js dev server cannot start without dev-tier read secrets, so while it runs, those values exist inside the container and model-authored `exec` could read them out of `/proc`. This is the same exposure as an engineer running `pnpm dev` on a laptop, it is dev-tier and not prod, and it is disjoint from every write path — but it must be written down rather than discovered, because the README's security section has to match the code. Mitigations that are real: values are injected per-process rather than into the container environment, they are never baked into the image, and they arrive from a Worker secret the model cannot name.
+The security model's claim is "the container holds no write credentials," and that stays exactly true. But a Next.js dev server cannot start without dev-tier read secrets, so while it runs, those values exist inside the container.
+
+**Be precise about the exposure, because the obvious statement of it understates the case.** The plan originally said model code "could read them out of `/proc`". Task 5's implementer pointed out a much more direct path: `exec({ cmd: "env", injectDevEnv: true })` returns stdout straight to the model, and `spawn` + `checkProcess` does the same through `stdoutTail`. Per-process injection is therefore a **reduction in blast radius, not a boundary**, and must not be described as one.
+
+**Decision — redact, and say so honestly.** Task 7 scrubs every known dev-env *value* from `stdout`, `stderr`, `stdoutTail`, `stderrTail` and `readFile` content before any of it crosses to the model. This is genuine defence in depth: it defeats the accidental case entirely, which is the one that actually happens — a value landing in a run transcript, then in memory, then conceivably in a Slack draft. It is **not** airtight against a model that deliberately encodes a value before printing it, and the README must say that rather than imply a guarantee.
+
+`injectDevEnv` stays available on `exec` as well as `spawn`. Removing it from `exec` would narrow one path while leaving `checkProcess` tails open, at the cost of making "run the test suite with real env" impossible — a bad trade for a partial fix.
+
+What remains true and worth stating: the values are dev-tier and not prod, they are disjoint from every write path, they are never baked into the image, they arrive from a Worker secret the model cannot name or enumerate, and they are injected per-process rather than into the container's ambient environment. This is the same exposure as an engineer running `pnpm dev` on a laptop.
 
 ## Public contracts
 
