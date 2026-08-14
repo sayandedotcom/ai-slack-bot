@@ -32,6 +32,8 @@ import { makeRunCodeTool } from "../src/codemode/tool";
 import { alwaysFresh } from "../src/codemode/contracts";
 import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS } from "./helpers/codemode";
 import type { RunTurn } from "../src/run/protocol";
+import { assertExternalWritePermitted } from "../src/codemode/write-guard";
+import { CapabilityError } from "../src/codemode/errors";
 
 /**
  * The string this whole task exists for. It is the exact payload that would
@@ -420,7 +422,7 @@ describe("the reviewed Anthropic provider options", () => {
 // --- Step 8: the behavioural contract, as prompt text only ------------------
 
 describe("stable policy content", () => {
-  it("has exactly the nine reviewed sections, in order", () => {
+  it("has exactly the ten reviewed sections, in order", () => {
     expect(STABLE_POLICY_SECTIONS.map((section) => section.id)).toEqual([
       "mission",
       "one_generic_agent",
@@ -429,6 +431,7 @@ describe("stable policy content", () => {
       "prompt_injection",
       "voice",
       "escalation_judgment",
+      "shadow",
       "failure_policy",
       "surface_policy",
     ]);
@@ -552,6 +555,23 @@ describe("stable policy content", () => {
       "call `approval.escalate({draft, why})` with the reply you would have sent",
     );
     expect(policy).toContain("Never call `approval.escalate` for a clarifying question");
+  });
+
+  /**
+   * The shadow posture, Phase 21 Task 4. This text must be UNCONDITIONAL —
+   * present in every render, not gated on whether the run in question is
+   * actually shadow — because it lives in `STABLE_POLICY_SECTIONS`, which is
+   * the cached prefix. A conditional here would break byte-identity across
+   * requests and pay the write multiplier every time. The dedicated
+   * byte-identity test below (and the pre-existing "renders byte-identically
+   * across two independent module builds" test above) both cover this text,
+   * since it is just another stable section.
+   */
+  it("tells a shadow run to draft for approval instead of fighting a denied send", () => {
+    const policy = flat(renderStablePolicy());
+    expect(policy).toContain("shadow_write_denied");
+    expect(policy).toContain("Produce your best draft and call `approval.escalate({draft, why})`");
+    expect(policy).toContain("The draft is what the run is measured on");
   });
 
   it("states the surface policy both ways round", () => {
@@ -860,5 +880,77 @@ describe("trusted context", () => {
 
   it("says the engineer identity is unavailable rather than hiding it", () => {
     expect(renderTrustedContext(context)).toContain("identity_unavailable");
+  });
+
+  /**
+   * Shadow posture, Phase 21 Task 4. `context.ts` already carried this before
+   * this task started — `shadow` is sourced from the D1 `runs` row (the only
+   * authority; see the comment above `resolveTrustedContext`) and rendered as
+   * a `- shadow: …` line whose shadow-true branch already reads as a notice
+   * ("draft only, nothing is sent"). That is verified here, unchanged, rather
+   * than reimplemented: a shadow run's rendered context carries the notice,
+   * and a non-shadow run's carries only the flat fact that it is not shadow —
+   * nothing that reads as shadow guidance.
+   */
+  it("gives a shadow run's context the shadow notice, and a non-shadow run's context none of it", () => {
+    const shadowRendered = renderTrustedContext({ ...context, shadow: true });
+    const liveRendered = renderTrustedContext({ ...context, shadow: false });
+
+    expect(shadowRendered).toContain("shadow: yes");
+    expect(shadowRendered).toContain("draft only, nothing is sent");
+
+    expect(liveRendered).toContain("shadow: no");
+    expect(liveRendered).not.toContain("draft only, nothing is sent");
+  });
+});
+
+/**
+ * Shadow posture, Phase 21 Task 4, the write-guard half.
+ *
+ * The guard itself is out of scope for this task — it already enforces the
+ * matrix, and Task 4 only owns whether the MODEL is told what to do about it.
+ * `write-guard.ts`'s `shadow_write_denied` message already reads "this run is
+ * observing only; nothing was changed. Report what you would have done." —
+ * which steers toward reporting rather than retrying, and the new "Shadow
+ * runs" policy section (above) is what turns "report" into the concrete
+ * instruction to call `approval.escalate` with a draft. This test asserts the
+ * guard's existing copy and changes nothing in `write-guard.ts`.
+ */
+describe("shadow posture: the write-guard message the policy now explains", () => {
+  const runId = "22222222-2222-4222-8222-222222222222";
+
+  it("already steers away from retrying and toward reporting, unchanged", async () => {
+    await env.DB.prepare("DELETE FROM runs").run();
+    await env.DB.prepare("DELETE FROM channels").run();
+    await env.DB.prepare(
+      `INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES ('C2', 'shadow-eng', 'pulsefit', 'live')`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
+       VALUES (?, ?, 'slack', 'C2', '1720000000.000200', 'live', 1, NULL, 1, 1)`,
+    )
+      .bind(runId, "slack:C2:1720000000.000200")
+      .run();
+
+    const scope = {
+      ...slackScope,
+      runId,
+      shadow: true,
+      slackThread: { channelId: "C2", threadTs: "1720000000.000200" },
+    };
+
+    await expect(assertExternalWritePermitted({ db: env.DB }, scope)).rejects.toMatchObject({
+      code: "shadow_write_denied",
+    });
+
+    try {
+      await assertExternalWritePermitted({ db: env.DB }, scope);
+      throw new Error("expected assertExternalWritePermitted to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CapabilityError);
+      const message = (error as CapabilityError).message;
+      expect(message).toContain("nothing was changed");
+      expect(message).toContain("Report what you would have done");
+    }
   });
 });

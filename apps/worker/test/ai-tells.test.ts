@@ -5,14 +5,11 @@ import { VOICE_EXAMPLES } from "../src/agent/prompt/policy";
 describe("detectAiTells", () => {
   it("returns [] for the canonical clean reply", () => {
     // Brief says: "Use VOICE_EXAMPLES[0].good verbatim as the canonical
-    // clean-reply case." VOICE_EXAMPLES[0].good is NOT actually clean — it
-    // contains a literal em dash, banned by the 2026-08-14 typography rules
-    // (see the drift test below) — so it is unusable as the "returns []"
-    // example without contradicting the detector's own required behavior.
-    // VOICE_EXAMPLES[2].good is used instead: it is the nearest entry that is
-    // both verbatim from policy.ts and actually clean under every rule.
+    // clean-reply case." Phase 21 Task 4 fixed the em-dash drift in
+    // VOICE_EXAMPLES[0].good and [1].good (policy.ts), so [0] is usable
+    // verbatim again, as originally intended.
     expect(
-      detectAiTells(VOICE_EXAMPLES[2]!.good),
+      detectAiTells(VOICE_EXAMPLES[0]!.good),
     ).toEqual([]);
   });
 
@@ -136,23 +133,12 @@ describe("detectAiTells", () => {
 
   // REQUIRED assertion (task brief): every VOICE_EXAMPLES[*].good must be clean.
   //
-  // It isn't, as written. VOICE_EXAMPLES[0].good and VOICE_EXAMPLES[1].good
-  // ("...04:12 deploy — the report job..." / "...on your account — billing
-  // report only...") each contain a literal em dash. Those two examples predate
-  // the 2026-08-14 typography rules in policy.ts; nobody went back and re-typed
-  // them once the em-dash ban landed. That is real drift between the example
-  // set and the policy it's supposed to illustrate — exactly what this test is
-  // here to catch — not a bug in the detector, and this file does not own
-  // policy.ts to fix it. See task-2-report.md.
-  it("flags the known em-dash drift in VOICE_EXAMPLES[0] and [1], and nothing else", () => {
-    expect(detectAiTells(VOICE_EXAMPLES[0]!.good)).toEqual(["em_dash"]);
-    expect(detectAiTells(VOICE_EXAMPLES[1]!.good)).toEqual(["em_dash"]);
-  });
-
-  it("returns [] for every other VOICE_EXAMPLES[*].good entry", () => {
-    const knownDrift = new Set([0, 1]);
-    VOICE_EXAMPLES.forEach((example, index) => {
-      if (knownDrift.has(index)) return;
+  // Phase 21 Task 4 fixed the em-dash drift that used to live in
+  // VOICE_EXAMPLES[0].good and [1].good — the exclusion that used to carve
+  // those two out is gone, so this now covers the full set and is the guard
+  // against the detector and the policy drifting apart again.
+  it("returns [] for every VOICE_EXAMPLES[*].good entry", () => {
+    VOICE_EXAMPLES.forEach((example) => {
       expect(detectAiTells(example.good)).toEqual([]);
     });
   });

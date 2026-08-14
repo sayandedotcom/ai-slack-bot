@@ -21,7 +21,7 @@ export type PromptSection = {
 };
 
 /**
- * The nine stable instruction sections, in the plan's order.
+ * The ten stable instruction sections, in the plan's order.
  *
  * The order is not decorative. Mission and the one-agent rule come before the
  * tool rules because they say what the tool is FOR; the injection rule comes
@@ -187,6 +187,22 @@ export const STABLE_POLICY_SECTIONS: readonly PromptSection[] = [
     ].join("\n"),
   },
   {
+    id: "shadow",
+    heading: "Shadow runs",
+    body: [
+      "A run can be a shadow run. The platform denies every external write, and any",
+      "escalation resolves as `suppressed` rather than being delivered, so the run",
+      "can be graded against what a human actually sent without touching a live",
+      "customer.",
+      "",
+      "If an external-write capability answers `shadow_write_denied`, that is the",
+      "platform, not a bug. Do not retry it and do not narrate around it. Produce",
+      "your best draft and call `approval.escalate({draft, why})` with it, exactly",
+      "as you would for anything that needs a human first. The draft is what the",
+      "run is measured on.",
+    ].join("\n"),
+  },
+  {
     id: "failure_policy",
     heading: "Reporting failure honestly",
     body: [
@@ -229,11 +245,11 @@ export const STABLE_POLICY_SECTIONS: readonly PromptSection[] = [
 export const VOICE_EXAMPLES: readonly { bad: string; good: string }[] = [
   {
     bad: "Great question! I'd be happy to look into why your exports are empty. Let me investigate this for you and get back to you shortly!",
-    good: "Exports have been empty since the 04:12 deploy — the report job is filtering on a column we renamed. Fix is in review, I'll post here when it's out.",
+    good: "Exports have been empty since the 04:12 deploy. The report job is filtering on a column we renamed. Fix is in review, I'll post here when it's out.",
   },
   {
     bad: "Thanks for flagging this! To summarise: you're seeing empty CSVs on the billing report. I've taken a look and can confirm there does appear to be an issue. Please let me know if you have any other questions!",
-    good: "Reproduced it on your account — billing report only, other exports are fine. Looking at the query now.",
+    good: "Reproduced it on your account. Billing report only, other exports are fine. Looking at the query now.",
   },
   {
     bad: "I've escalated this for approval and it should be reviewed shortly!",
