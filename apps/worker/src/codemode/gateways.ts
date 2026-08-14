@@ -1,5 +1,7 @@
 import type { MemoryStore } from "../memory/store";
 import type { ApprovalPort } from "../approval/contracts";
+import type { DiffResult } from "../sandbox/diff";
+import type { BootStatus } from "../sandbox/lifecycle";
 
 /**
  * The narrow interfaces the capability layer talks to, and the shapes it hands
@@ -206,6 +208,64 @@ export interface BetterStackReader {
   monitors(): Promise<Monitor[]>;
 }
 
+/**
+ * What a command produced. Already scrubbed of dev-env values by the gateway;
+ * bounding it is the binding's job, because the cap is a model-facing promise
+ * rather than a property of the container.
+ */
+export type SandboxCommandResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+};
+
+export type SandboxProcessState = {
+  running: boolean;
+  /** Null while it is still running. */
+  exitCode: number | null;
+  stdoutTail: string;
+  stderrTail: string;
+};
+
+/**
+ * The one run's container, Phase 18.
+ *
+ * Every method acts on THIS run's machine and no other: there is no id
+ * parameter anywhere, because the container is addressed by the run and the
+ * model cannot name one. It is the same rule the Slack gateway follows for a
+ * destination, applied to a machine.
+ *
+ * Two obligations this interface carries that its signatures cannot state:
+ *
+ *  - every text field it returns is already scrubbed of dev-env VALUES. The
+ *    implementation holds the secret, so it is the only layer that can, and
+ *    the binding above it must never be handed a value to leak;
+ *  - `boot` is the readiness read. It is idempotent and never blocks, so the
+ *    other methods can use it as their gate rather than caching a flag that an
+ *    evicted isolate would get wrong.
+ */
+export interface SandboxGateway {
+  boot(): Promise<BootStatus>;
+  exec(input: {
+    cmd: string;
+    cwd?: string;
+    timeoutMs: number;
+    injectDevEnv: boolean;
+  }): Promise<SandboxCommandResult>;
+  spawn(input: {
+    cmd: string;
+    cwd?: string;
+    injectDevEnv: boolean;
+  }): Promise<{ processId: string }>;
+  checkProcess(processId: string): Promise<SandboxProcessState>;
+  killProcess(processId: string): Promise<{ killed: boolean }>;
+  readFile(path: string): Promise<{ content: string }>;
+  writeFile(path: string, content: string): Promise<{ bytesWritten: number }>;
+  preview(port: number): Promise<{ url: string }>;
+  /** Captures the working tree's diff by reference. Never returns the bytes. */
+  diff(): Promise<DiffResult>;
+}
+
 export interface ArtifactPublisher {
   publish(input: {
     bytes: Uint8Array;
@@ -236,5 +296,13 @@ export type CapabilityDependencies = {
    * capability layer can be built and reviewed against a test double first.
    */
   approval: ApprovalPort;
+  /**
+   * Phase 18's seam, and the reason the `sandbox` binding can stay a pure
+   * model-facing surface. The container modules (`src/sandbox/*`) take the
+   * Worker `env` — they hold a PAT, a dev-env secret and an R2 bucket — so
+   * reaching them from a binding directly would put `Env` inside
+   * `src/codemode/`, which is the one thing this type exists to prevent.
+   */
+  sandbox: SandboxGateway;
   clock: () => number;
 };

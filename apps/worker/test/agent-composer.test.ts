@@ -154,7 +154,7 @@ describe("the model is given exactly one tool", () => {
 /* -------------------------------------------------- no Env for a capability -- */
 
 describe("a capability never receives Env", () => {
-  it("hands the capability layer exactly ten narrow ports", async () => {
+  it("hands the capability layer exactly eleven narrow ports", async () => {
     const { state } = await seedLiveRun();
     const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:x");
     const deps = makeCapabilityDependencies(workerEnv(), scope, () => 0, fakeApprovalPort());
@@ -171,6 +171,12 @@ describe("a capability never receives Env", () => {
       "langsmith",
       "linear",
       "memory",
+      // Phase 18's container port. It is the one port whose implementation
+      // closes over the whole `Env` — `sandbox/lifecycle.ts`, `env.ts` and
+      // `diff.ts` were all written against it — which is precisely why it is
+      // reached through a port at all: `Env` stops at this file, and the
+      // binding above it sees nine methods and no configuration.
+      "sandbox",
       "slack",
       "supabase",
     ]);

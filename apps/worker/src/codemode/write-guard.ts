@@ -24,8 +24,35 @@ import { CapabilityError } from "./errors";
  *                       policy: pausing a shadow run for approval is exactly
  *                       what a shadow run should be able to do. It carries its
  *                       own run-state authorization, which Phase 11 builds.
+ *  - `sandbox_write`  — mutates an ephemeral machine THIS RUN OWNS: Phase 18's
+ *                       container. It writes files, starts processes and opens
+ *                       a preview tunnel, and no customer and no colleague can
+ *                       see any of it; the machine is destroyed when the run
+ *                       ends. Gated by neither channel policy nor shadow.
+ *
+ *                       A separate class rather than `read`, because `read`
+ *                       promises "changes nothing there" and `exec` plainly
+ *                       does. Writing it down as its own name is what keeps
+ *                       "the model can run arbitrary commands somewhere"
+ *                       visible in the classification table instead of hidden
+ *                       inside the most permissive class we already had.
+ *
+ *                       SHADOW RUNS MAY BOOT CONTAINERS, DELIBERATELY. A shadow
+ *                       bug run that cannot reproduce produces a draft worth
+ *                       nothing, and measuring the real draft is the entire
+ *                       point of the shadow corpus. This costs container-hours
+ *                       on runs that will never speak, which is a price paid on
+ *                       purpose; if the drill shows it hurts, the lever is one
+ *                       branch in `assertEffectPermitted` below — named here so
+ *                       it is a choice somebody makes rather than a discovery
+ *                       somebody has under pressure.
  */
-export const CAPABILITY_EFFECTS = ["read", "external_write", "control_write"] as const;
+export const CAPABILITY_EFFECTS = [
+  "read",
+  "external_write",
+  "control_write",
+  "sandbox_write",
+] as const;
 
 export type CapabilityEffect = (typeof CAPABILITY_EFFECTS)[number];
 
@@ -114,10 +141,17 @@ export async function assertExternalWritePermitted(
 /**
  * Apply the matrix for one classified capability.
  *
- * `read` and `control_write` pass through. That is not laxity: read-only
- * investigation must stay available in a shadow run — evaluating a draft is the
- * entire point of shadow — and control writes answer to Phase 11's run-state
- * authority rather than to channel policy.
+ * `read`, `control_write` and `sandbox_write` pass through. That is not laxity:
+ * read-only investigation must stay available in a shadow run — evaluating a
+ * draft is the entire point of shadow — control writes answer to Phase 11's
+ * run-state authority rather than to channel policy, and a sandbox write
+ * changes only a machine this run owns and destroys.
+ *
+ * Deliberately still a single `!== "external_write"` test rather than a list of
+ * three passing classes. The rule this file enforces is about what a customer
+ * or a colleague can see, and there is exactly one class where that is true; an
+ * allowlist would have to be edited by whoever adds the fifth class, which is
+ * the person least placed to notice they were widening it.
  */
 export async function assertEffectPermitted(
   deps: WriteGuardDeps,

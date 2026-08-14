@@ -49,6 +49,7 @@ function unreachableDependencies(): CapabilityDependencies {
     betterstack: gateway("betterstack") as never,
     files: gateway("files") as never,
     approval: gateway("approval") as never,
+    sandbox: gateway("sandbox") as never,
     clock: () => 0,
   };
 }

@@ -25,7 +25,17 @@ export type CapabilityErrorCode =
   | "execution_cpu_limit"
   | "upstream_unavailable"
   | "approval_already_open"
-  | "approval_not_open";
+  | "approval_not_open"
+  /**
+   * Phase 18. The container for this run is not `ready`, so nothing was run on
+   * it. Its own code rather than `capability_unavailable` because the two ask
+   * for opposite reactions: `capability_unavailable` means stop and do
+   * something else, while this one means call `sandbox.boot()` on the next turn
+   * and try again. A model that cannot tell them apart either gives up on a
+   * machine that was thirty seconds from ready, or polls one that will never
+   * exist.
+   */
+  | "sandbox_not_ready";
 
 /**
  * Codes where trying the same call again could plausibly succeed.

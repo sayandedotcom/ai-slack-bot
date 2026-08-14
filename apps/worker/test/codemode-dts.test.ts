@@ -11,9 +11,13 @@ const toPascal = (s: string) =>
   s.replace(/_([a-z])/g, (_, c) => c.toUpperCase()).replace(/^[a-z]/, (c) => c.toUpperCase());
 
 describe("capability registry", () => {
-  it("exposes exactly the Phase 09 namespaces plus Phase 11's approval, in order", () => {
+  // Later phases APPEND. The order is the committed `.d.ts`'s identity, so an
+  // insertion rewrites every block after it for nothing — which is why the
+  // assertion is the whole list rather than a membership check.
+  it("exposes exactly the Phase 09 namespaces plus approval and sandbox, in order", () => {
     expect(registry().map((p) => p.name)).toEqual([
       "slack", "memory", "linear", "supabase", "langsmith", "betterstack", "files", "approval",
+      "sandbox",
     ]);
   });
 
@@ -163,7 +167,7 @@ describe("generated declarations", () => {
   it("renders one declaration block per namespace with no duplicate type alias", () => {
     const dts = renderCapabilityDeclarations(registry());
     for (const ns of ["slack", "memory", "linear", "supabase",
-                      "langsmith", "betterstack", "files"]) {
+                      "langsmith", "betterstack", "files", "sandbox"]) {
       expect(dts).toContain(`declare const ${ns}: {`);
     }
     const aliases = [...dts.matchAll(/^type (\w+) =/gm)].map((m) => m[1]);

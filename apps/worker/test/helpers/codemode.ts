@@ -219,7 +219,62 @@ export function fakeDeps(fixtures: FakeFixtures = {}): CapabilityDependencies {
       async publish() { return { url: "https://x", size: 0, sha256: "0".repeat(64) }; },
     },
     approval: fixtures.approval ?? fakeApprovalPort(),
+    sandbox: fakeSandboxGateway(),
     clock: () => 0,
+  };
+}
+
+/**
+ * A container that is up and does nothing.
+ *
+ * Deliberately NOT the real gateway over a fake handle: that composition is
+ * what `codemode-sandbox.test.ts` is for, and every other suite here only needs
+ * the namespace to build and classify without a container runtime in reach. It
+ * reports `ready` so a suite that stumbles into a sandbox call gets a shaped
+ * result rather than a readiness error it has no context for.
+ */
+export function fakeSandboxGateway(): CapabilityDependencies["sandbox"] {
+  return {
+    async boot() {
+      return {
+        state: "ready",
+        commit: null,
+        repoPath: "/repo",
+        elapsedMs: 0,
+        note: "ready",
+      };
+    },
+    async exec() {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    },
+    async spawn() {
+      return { processId: "proc_0" };
+    },
+    async checkProcess() {
+      return { running: false, exitCode: 0, stdoutTail: "", stderrTail: "" };
+    },
+    async killProcess() {
+      return { killed: false };
+    },
+    async readFile() {
+      return { content: "" };
+    },
+    async writeFile() {
+      return { bytesWritten: 0 };
+    },
+    async preview() {
+      return { url: "https://example.invalid" };
+    },
+    async diff() {
+      return {
+        preview: "",
+        truncated: false,
+        filesChanged: 0,
+        insertions: 0,
+        deletions: 0,
+        diffRef: null,
+      };
+    },
   };
 }
 

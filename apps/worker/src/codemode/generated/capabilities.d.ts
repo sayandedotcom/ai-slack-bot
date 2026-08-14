@@ -301,3 +301,123 @@ declare const approval: {
 	 */
 	withdraw: (input: WithdrawInput) => Promise<WithdrawOutput>;
 }
+
+type BootInput = {}
+type BootOutput = {
+    state: "provisioning" | "ready" | "failed";
+    commit: string | null;
+    repoPath: string;
+    elapsedMs: number;
+    note: string;
+}
+type ExecInput = {
+    cmd: string;
+    cwd?: string;
+    timeoutMs?: number;
+    injectDevEnv?: boolean;
+}
+type ExecOutput = {
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    truncated: boolean;
+}
+type SpawnInput = {
+    cmd: string;
+    cwd?: string;
+    injectDevEnv?: boolean;
+}
+type SpawnOutput = {
+    processId: string;
+}
+type CheckProcessInput = {
+    processId: string;
+}
+type CheckProcessOutput = {
+    running: boolean;
+    exitCode: number | null;
+    stdoutTail: string;
+    stderrTail: string;
+}
+type KillProcessInput = {
+    processId: string;
+}
+type KillProcessOutput = {
+    killed: boolean;
+}
+type ReadFileInput = {
+    path: string;
+}
+type ReadFileOutput = {
+    content: string;
+    truncated: boolean;
+}
+type WriteFileInput = {
+    path: string;
+    content: string;
+}
+type WriteFileOutput = {
+    bytesWritten: number;
+}
+type PreviewInput = {
+    port: number;
+}
+type PreviewOutput = {
+    url: string;
+}
+type DiffInput = {}
+type DiffOutput = {
+    preview: string;
+    truncated: boolean;
+    filesChanged: number;
+    insertions: number;
+    deletions: number;
+    diffRef: string | null;
+}
+
+declare const sandbox: {
+	/**
+	 * Start this run's container, or report on one already starting. Idempotent and never blocks: the first call begins provisioning and returns state 'provisioning'; call it again on later turns until state is 'ready'. Every other capability here refuses with sandbox_not_ready until then. The checkout is pre-installed and pre-built in the image, so `pnpm build-packages` — which is required before any dev, build or test — should be a cache hit rather than a rebuild. `repoPath` is where commands run by default.
+	 */
+	boot: (input: BootInput) => Promise<BootOutput>;
+
+	/**
+	 * Run one command to completion and get its output. It blocks, so it must finish inside this execution's budget: timeoutMs defaults to 10000 and anything above 15000 is REFUSED rather than quietly shortened. Use spawn for installs, builds, test suites and servers. Runs in the checkout unless cwd says otherwise. Set injectDevEnv when the command needs the app's dev-tier environment — the monorepo's dev scripts are Infisical-wrapped and there is no credential to authenticate with here, so run the inner command directly and pass this flag instead of running `pnpm dev`. Output is truncated per stream and scrubbed of injected values, so do not try to print them.
+	 */
+	exec: (input: ExecInput) => Promise<ExecOutput>;
+
+	/**
+	 * Start a long-running command in the background and get a processId back. This is how anything slower than a few seconds is run — a dev server, a build, a test suite — because one execution has 20 seconds and a blocking command cannot outlive it. Poll it with checkProcess on later turns. NEVER bind a server to port 3000: three apps here default to it, the port is a CLI flag inside their package script so a PORT variable does NOT override it, and 3000 is the container's own control server. Use 4100 or above, e.g. `pnpm --filter @web2app/web exec next dev --port 4100`. Dev scripts are Infisical-wrapped and cannot authenticate here, so run the inner command directly and pass injectDevEnv: true.
+	 */
+	spawn: (input: SpawnInput) => Promise<SpawnOutput>;
+
+	/**
+	 * Report on a process spawn started: whether it is still running, its exit code once it is not, and the tail of each output stream. This is the poll — call it on a later turn rather than looping here, since waiting burns the same 20 second budget the process needs. A server that is listening but erroring is still 'running'; read the tails to tell those apart.
+	 */
+	checkProcess: (input: CheckProcessInput) => Promise<CheckProcessOutput>;
+
+	/**
+	 * Stop a process this run started. `killed: false` means there was no such process, which is a fact rather than an error. Kill a dev server before starting another on the same port: a process that failed to come up is not reaped, keeps its port, and the next attempt dies with EADDRINUSE pointing at the wrong problem.
+	 */
+	killProcess: (input: KillProcessInput) => Promise<KillProcessOutput>;
+
+	/**
+	 * Read a text file from the container. Content is truncated with a visible marker and scrubbed of injected environment values. Narrow first with exec and grep or sed rather than reading a large file and searching it here — that is the whole reason you are running code instead of calling tools one at a time.
+	 */
+	readFile: (input: ReadFileInput) => Promise<ReadFileOutput>;
+
+	/**
+	 * Write a text file in the container, creating or replacing it whole. Before calling diff, format every file you edited with `pnpm exec biome check --write` and the explicit paths — this repo blocks unformatted commits. NEVER pass a directory or a computed-empty list to that command: it then sweeps the entire repo and rewrites files you never touched.
+	 */
+	writeFile: (input: WriteFileInput) => Promise<WriteFileOutput>;
+
+	/**
+	 * Open a public URL for a port inside the container and wait until it actually serves — a fresh tunnel answers 530 for several seconds, so this retries rather than reporting a broken one. Port 3000 is refused: it is the container's own control server, so a check against it succeeds whether or not your server ever started. Bind and preview 4100 or above.
+	 */
+	preview: (input: PreviewInput) => Promise<PreviewOutput>;
+
+	/**
+	 * Capture everything changed in the checkout, including new files. Returns a bounded preview plus an opaque diffRef; the full patch is stored intact and is what a pull request will be built from, so never reconstruct it from the preview or paste it back. `diffRef: null` means nothing changed. Format your edited files first — an unformatted change arrives as a review comment rather than a merge.
+	 */
+	diff: (input: DiffInput) => Promise<DiffOutput>;
+}

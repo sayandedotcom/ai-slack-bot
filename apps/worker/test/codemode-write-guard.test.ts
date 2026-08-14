@@ -348,6 +348,19 @@ describe("every capability declares an effect", () => {
       "files.publish": "external_write",
       "approval.escalate": "control_write",
       "approval.withdraw": "control_write",
+      // Phase 18. Every one of the nine, including the ones that look like
+      // reads: `readFile` observes a machine `exec` has been mutating, and a
+      // namespace split across two classes would suggest a boundary inside it
+      // that does not exist. `codemode-sandbox.test.ts` carries the rest.
+      "sandbox.boot": "sandbox_write",
+      "sandbox.exec": "sandbox_write",
+      "sandbox.spawn": "sandbox_write",
+      "sandbox.checkProcess": "sandbox_write",
+      "sandbox.killProcess": "sandbox_write",
+      "sandbox.readFile": "sandbox_write",
+      "sandbox.writeFile": "sandbox_write",
+      "sandbox.preview": "sandbox_write",
+      "sandbox.diff": "sandbox_write",
     });
   });
 

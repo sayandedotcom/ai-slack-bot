@@ -20,6 +20,7 @@ import { makeLangSmithTools } from "./bindings/langsmith";
 import { makeBetterStackTools } from "./bindings/betterstack";
 import { FILES_DECLARATIONS, makeFilesTools } from "./bindings/files";
 import { makeApprovalTools } from "./bindings/approval";
+import { makeSandboxTools } from "./bindings/sandbox";
 
 /**
  * The Phase 09 namespace order, frozen.
@@ -40,6 +41,9 @@ export const PHASE_09_NAMESPACES = [
   // `PHASE_09_NAMESPACES` because it is the frozen ORDER's identity, not a
   // claim about which phase last touched it.
   "approval",
+  // Phase 18's. Appended for the same reason: inserting it anywhere else would
+  // rewrite every later block of the committed `.d.ts` for no gain.
+  "sandbox",
 ] as const;
 
 /**
@@ -281,6 +285,7 @@ export function buildRegistry(
     { name: "betterstack", tools: makeBetterStackTools(ctx) },
     { name: "files", tools: makeFilesTools(ctx), types: FILES_DECLARATIONS },
     { name: "approval", tools: makeApprovalTools(ctx) },
+    { name: "sandbox", tools: makeSandboxTools(ctx) },
   ]);
 }
 
@@ -311,7 +316,7 @@ export function assertClassified(registry: CapabilityRegistry): CapabilityRegist
       if (capabilityEffectOf(tool) === null) {
         throw new CapabilityError(
           "invalid_context",
-          `${provider.name}.${method} was not built by auditedCapability with an effect classification, so it has no budget, no audit and no write guard. Define it with auditedCapability(ctx, namespace, method, { effect: "read" | "external_write" | "control_write", … }).`,
+          `${provider.name}.${method} was not built by auditedCapability with an effect classification, so it has no budget, no audit and no write guard. Define it with auditedCapability(ctx, namespace, method, { effect: "read" | "external_write" | "control_write" | "sandbox_write", … }).`,
         );
       }
     }

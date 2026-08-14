@@ -15,6 +15,7 @@ import type { RunState } from "../run/session";
 import { makeSlackGateway } from "../slack/gateway";
 import { PRODUCTION_ALLOWLIST } from "../supabase/allowlist";
 import { makeSupabaseReader } from "../supabase/reader";
+import { makeSandboxGateway } from "../sandbox/gateway";
 import {
   PRODUCTION_LIMITS,
   validateScope,
@@ -275,6 +276,10 @@ export function makeCapabilityDependencies(
       baseUrl: env.ARTIFACTS_BASE_URL,
     }),
     approval,
+    // Pinned to THIS run, exactly like the Slack gateway is pinned to this
+    // thread: the container is addressed as `run:{runId}` and the model has no
+    // argument anywhere with which to name a different one.
+    sandbox: makeSandboxGateway(env, scope.runId),
     clock,
   };
 }
