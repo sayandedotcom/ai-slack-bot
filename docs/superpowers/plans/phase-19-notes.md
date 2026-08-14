@@ -84,6 +84,25 @@ spending a live boot, the real `record-harness.cjs` was run inside
 | script calls `process.exit(0)` | **exactly one RESULT line still printed**; the script sees `TypeError: Cannot read properties of undefined (reading 'exit')` |
 | script hangs against an 8 s budget | `state: failed`, "script exceeded timeoutMs (8000ms)", settled at 8.6 s, video kept |
 
+A fifth case was run separately, on a container with **no Chromium at all** — the
+state a non-fatal boot install failure actually leaves behind, and a path nothing
+had ever exercised:
+
+```
+RESULT {"state":"browser-unavailable","error":"browser-unavailable: this run's
+container never got a working Chromium install (the boot-time install is
+non-fatal by design). Do not retry; report it and continue without a
+recording.","video":null,"bytes":null,"durationMs":0}
+```
+
+That message is the fix for a defect the whole-branch review caught: the
+capability's `.d.ts` told the model `checkRecording` "reports that by name
+(`browser-unavailable`)", but the Worker mapped the state to `failed` and
+forwarded only the message — which did not contain the token. The model would
+have hunted for a string that could never arrive. The old message also told it
+to "re-provision", which no capability can do. Both halves are fixed, and the
+whole table above was re-run after the fix wave with no regression.
+
 The third row is the one worth keeping. A review found that `new Function`
 runs the model's source with the true Node globals reachable, so a script
 ending in `process.exit(0)` — a common habit in generated code — would kill the
