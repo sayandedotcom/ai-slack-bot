@@ -152,9 +152,16 @@ COPY --from=repo /workspace/web2app-rebuild/ ./
 # Docker convention. It must stay false: Turbopack cannot resolve outside the
 # project root and `next build` fails with "We couldn't find the Next.js
 # package" when it is on.
+#
+# Retried three times, and that is not superstition. pnpm's store is populated
+# incrementally, so a run that dies on a tarball timeout leaves everything it
+# already fetched behind and the next attempt resumes rather than restarts —
+# measured here as 3114 packages on the first pass, then 3202, then the tail.
+# On a thin or flaky link a single-shot install fails at the 97% mark and
+# discards twenty minutes of a build; the loop converges instead.
 RUN --mount=type=secret,id=nucleo_license_key \
     NUCLEO_LICENSE_KEY="$(cat /run/secrets/nucleo_license_key 2>/dev/null || true)" \
-    pnpm install --frozen-lockfile
+    sh -c 'for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install attempt $i failed; resuming from the store"; done; exit 1'
 
 # Workspace packages resolve from built dist/, not from source, so this is
 # mandatory before any app can start or any test can run (turbo's `test` task
