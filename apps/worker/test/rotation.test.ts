@@ -19,8 +19,9 @@ import {
 const OVERRIDE_EMAIL = "sayandeten@gmail.com";
 
 describe("rotation constants", () => {
-  it("is the four @zellify.app fire-fighters, in order", () => {
+  it("is the four @zellify.app fire-fighters, in order, behind the trial tester", () => {
     expect(ROTATION).toEqual([
+      OVERRIDE_EMAIL, // TEMPORARY -- release gate G12-5
       "ronit@zellify.app",
       "luka@zellify.app",
       "mikheil@zellify.app",
@@ -33,12 +34,28 @@ describe("rotation constants", () => {
   });
 
   it("starts at the UTC epoch date", () => {
-    expect(ROTATION_EPOCH_MS).toBe(Date.parse("2026-08-10T00:00:00Z"));
+    expect(ROTATION_EPOCH_MS).toBe(Date.parse("2026-08-14T00:00:00Z"));
   });
 
-  it("excludes the personal override that FIREFIGHTERS carries", () => {
+  /**
+   * This test used to assert the OPPOSITE -- that the personal override is
+   * never on duty. It was inverted deliberately on 2026-08-14 (release gate
+   * G12-5), because Phase 13 made the on-duty engineer's Slack token the thing
+   * that sends a customer reply, and no @zellify.app engineer has connected
+   * one. It stays a TEST rather than a deleted assertion so that removing the
+   * override at handover is a red suite, not something anyone has to remember.
+   */
+  it("TEMPORARY: carries the trial tester at index 0 (release gate G12-5)", () => {
     expect(FIREFIGHTERS).toContain(OVERRIDE_EMAIL);
-    expect(ROTATION).not.toContain(OVERRIDE_EMAIL);
+    expect(ROTATION[0]).toBe(OVERRIDE_EMAIL);
+    // The four real fire-fighters must still all be present and in order --
+    // the override is an addition for the trial, never a replacement.
+    expect(ROTATION.slice(1)).toEqual([
+      "ronit@zellify.app",
+      "luka@zellify.app",
+      "mikheil@zellify.app",
+      "zurab@zellify.app",
+    ]);
   });
 });
 
@@ -62,15 +79,19 @@ describe("onDuty", () => {
     expect(shift.shiftStartMs).toBe(ROTATION_EPOCH_MS + SHIFT_MS);
   });
 
-  it("wraps 3 -> 0 after a full cycle", () => {
-    expect(onDuty(ROTATION_EPOCH_MS + 3 * SHIFT_MS).index).toBe(3);
-    const wrapped = onDuty(ROTATION_EPOCH_MS + 4 * SHIFT_MS);
+  // Written against ROTATION.length rather than a literal 4 on purpose: the
+  // trial adds a fifth entry (G12-5) and handover removes it again, and the
+  // property under test -- the cycle wraps at the end -- is true either way.
+  it("wraps back to index 0 after a full cycle", () => {
+    const last = ROTATION.length - 1;
+    expect(onDuty(ROTATION_EPOCH_MS + last * SHIFT_MS).index).toBe(last);
+    const wrapped = onDuty(ROTATION_EPOCH_MS + ROTATION.length * SHIFT_MS);
     expect(wrapped.index).toBe(0);
     expect(wrapped.email).toBe(ROTATION[0]);
   });
 
-  it("names index 0 as next while index 3 is on duty", () => {
-    const shift = onDuty(ROTATION_EPOCH_MS + 3 * SHIFT_MS);
+  it("names index 0 as next while the last member is on duty", () => {
+    const shift = onDuty(ROTATION_EPOCH_MS + (ROTATION.length - 1) * SHIFT_MS);
     expect(shift.nextEmail).toBe(ROTATION[0]);
   });
 
@@ -98,11 +119,22 @@ describe("onDuty", () => {
     }
   });
 
-  it("never puts the personal override on duty across 30 sampled days", () => {
-    for (let day = 0; day < 30; day += 1) {
-      const shift = onDuty(ROTATION_EPOCH_MS + day * 86_400_000);
-      expect(shift.email).not.toBe(OVERRIDE_EMAIL);
-      expect(shift.nextEmail).not.toBe(OVERRIDE_EMAIL);
+  /**
+   * Also inverted on 2026-08-14 (release gate G12-5). The bound it enforces
+   * now is the one that still matters while the override is in the rotation:
+   * the trial tester takes ONE slot like anyone else and does not displace a
+   * real fire-fighter. Deleting the index-0 entry at handover turns this red,
+   * which is the point.
+   */
+  it("TEMPORARY: gives the trial tester exactly one slot per cycle (G12-5)", () => {
+    expect(onDuty(ROTATION_EPOCH_MS).email).toBe(OVERRIDE_EMAIL);
+    for (let slot = 1; slot < ROTATION.length; slot += 1) {
+      expect(onDuty(ROTATION_EPOCH_MS + slot * SHIFT_MS).email).not.toBe(OVERRIDE_EMAIL);
     }
+    // Every real fire-fighter still gets their turn within one cycle.
+    const cycle = Array.from({ length: ROTATION.length }, (_, slot) =>
+      onDuty(ROTATION_EPOCH_MS + slot * SHIFT_MS).email,
+    );
+    expect(new Set(cycle)).toEqual(new Set(ROTATION));
   });
 });

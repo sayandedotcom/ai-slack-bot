@@ -2,29 +2,50 @@
  * Who is on the fire-fighting shift right now, as pure UTC arithmetic.
  *
  * Deliberately NOT derived from `FIREFIGHTERS` in src/access/roster.ts: that
- * list answers "may this email decide an approval" and carries a temporary
- * personal override (sayandeten@gmail.com) for dashboard access. Paging is a
- * different question -- the override is not a fire-fighter and must never be
- * put on duty -- so the rotation gets its own list. Keep them separate even
- * though four of the entries happen to match today.
+ * list answers "may this email decide an approval", which is a different
+ * question from "who gets paged and whose Slack token sends the reply". Keep
+ * them separate even though the entries overlap today.
+ *
+ * TRIAL TESTING OVERRIDE, 2026-08-14 (release gate G12-5): the developer's
+ * personal address sits at index 0. This file previously asserted the opposite
+ * -- that the override must never be put on duty -- and that was right while
+ * the override existed only for dashboard access. It stopped being right when
+ * Phase 13 landed: the on-duty engineer's own Slack token is what sends a
+ * customer reply, none of the four @zellify.app engineers has connected an
+ * account, and a proof that nobody can run is not a proof. So the exclusion is
+ * being changed deliberately and visibly rather than quietly broken.
+ *
+ * REMOVE BEFORE HANDOVER: delete the index-0 entry, restore
+ * ROTATION_EPOCH_MS to the real boundary Ronit supplies, and re-tighten the
+ * test in test/rotation.test.ts that now documents this inclusion.
  *
  * A pure function of `nowMs` rather than stored state: shifts tile the
  * timeline forever, so there is nothing to persist and nothing to drift.
  */
 
-/** The four fire-fighters, in shift order. */
-// UNCONFIRMED: order pending Ronit (question sent 2026-08-13).
+/** The rotation, in shift order. */
+// UNCONFIRMED: the four @zellify.app names and their order are pending Ronit
+// (question sent 2026-08-13). Index 0 is the trial testing override above.
 export const ROTATION: readonly string[] = [
+  "sayandeten@gmail.com", // TEMPORARY -- release gate G12-5, remove before handover
   "ronit@zellify.app",
   "luka@zellify.app",
   "mikheil@zellify.app",
   "zurab@zellify.app",
 ];
 
-/** Start of ROTATION[0]'s first shift. */
-// UNCONFIRMED: epoch pending Ronit (question sent 2026-08-13). An epoch off by
-// a day silently nudges the wrong person -- see phase-12 notes.
-export const ROTATION_EPOCH_MS = Date.parse("2026-08-10T00:00:00Z");
+/**
+ * Start of ROTATION[0]'s first shift.
+ *
+ * Set to 2026-08-14T00:00:00Z so the trial tester at index 0 is on duty for the
+ * live Phase 13 proof rather than an engineer who cannot receive it. This is
+ * CONFIGURATION, not a change to the rotation math: `onDuty` is unchanged and
+ * still tiles the timeline forever. Restoring the real schedule is this one
+ * line plus deleting index 0.
+ */
+// UNCONFIRMED: the real boundary is pending Ronit. An epoch off by a day
+// silently nudges the wrong person -- see phase-12 notes.
+export const ROTATION_EPOCH_MS = Date.parse("2026-08-14T00:00:00Z");
 
 /** Three-day shifts, per the roster's stated cadence. */
 export const SHIFT_MS = 3 * 86_400_000;

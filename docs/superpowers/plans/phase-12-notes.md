@@ -125,6 +125,37 @@ confirm afterwards that `SELECT email, provider, external_id FROM identities`
 shows two rows and that no column of either row is a usable credential.
 Record the result here.
 
+### G12-5 — Remove the trial tester from the rotation ⚠️ NEW, 2026-08-14
+
+`src/identity/rotation.ts` now carries `sayandeten@gmail.com` at **index 0**,
+and `ROTATION_EPOCH_MS` is `2026-08-14T00:00:00Z` so that slot is live during
+the trial.
+
+**Why the exclusion was reversed rather than worked around.** The module was
+written asserting the personal override must never be put on duty, and that was
+correct while the override existed only for dashboard access. Phase 13 changed
+the meaning of "on duty": it is now whose Slack token sends a customer reply and
+who receives the approval push. None of the four `@zellify.app` engineers has
+connected an account, so under the original rotation the live send proof could
+not be run by anyone. The choice was between an unprovable deliverable and a
+documented, gated override; this is the override.
+
+**What was NOT done:** the four real fire-fighters were not removed, reordered,
+or replaced, and `onDuty` itself is untouched — the rotation math is the same
+pure function with the same properties. This is configuration plus one list
+entry.
+
+**To revert at handover:**
+
+1. Delete the index-0 entry in `ROTATION`.
+2. Restore `ROTATION_EPOCH_MS` to the real boundary Ronit supplies (still
+   unconfirmed — see the top of this file).
+3. Re-tighten the two tests in `test/rotation.test.ts` that are marked
+   `TEMPORARY: … (G12-5)` back to their exclusion form.
+
+Steps 1 and 2 make those two tests fail on their own, which is deliberate: the
+revert is enforced by a red suite rather than by anyone remembering it.
+
 ---
 
 ## What this phase deliberately did not do
