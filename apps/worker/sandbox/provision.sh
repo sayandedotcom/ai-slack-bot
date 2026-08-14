@@ -107,8 +107,13 @@ pnpm build-packages || fail "build-packages"
 # no browser at all: a run that only needs to read code, run tests and produce
 # a diff must not be blocked by a browser download, and Phase 19's capability
 # can surface the absence itself with a message about what to do.
+#
+# The guard tests for the Chromium executable itself, not merely a non-empty
+# cache directory. An interrupted download leaves a non-empty directory, and
+# testing directory non-emptiness alone would poison every later boot into
+# skipping the install.
 step "browser"
-if [ -d /root/.cache/ms-playwright ] && [ -n "$(ls -A /root/.cache/ms-playwright 2>/dev/null)" ]; then
+if ls /root/.cache/ms-playwright/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
   echo "STEP browser-cached"
 else
   npm i -g playwright@1.58.0 --silent \

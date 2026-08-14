@@ -69,6 +69,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends redis-server \
     && rm -rf /var/lib/apt/lists/*
 
+# ffmpeg, because Playwright's bundled Chromium build has no h264 encoder and
+# no mp4 muxer. apt's 4.4.2 carries both (verified 2026-08-15).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Resolve globally-installed packages from anywhere, so a script in /workspace
 # can require('playwright') without setting NODE_PATH per invocation.
 ENV NODE_PATH=/usr/local/lib/node_modules
@@ -183,3 +189,7 @@ RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable
 # --hard` inside provision.sh cannot delete the script that is running.
 COPY provision.sh /usr/local/bin/provision.sh
 RUN chmod +x /usr/local/bin/provision.sh
+
+# The harness for recording proof video. Supplied by Task 2 and lives outside
+# the repo tree so provision.sh's `git reset --hard` and `git clean` cannot touch it.
+COPY harness/record.cjs /usr/local/bin/record-harness.cjs
