@@ -6,6 +6,7 @@ import { backfillApi } from "./api/backfill";
 import { runsApi, runsWs } from "./api/runs";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
+import { proofsApi } from "./api/proofs";
 import { identityApi } from "./api/identity";
 import { evalApi } from "./api/eval";
 import { slackOAuth } from "./oauth/slack";
@@ -95,6 +96,18 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   NUDGE_FALLBACK_CHANNEL_ID?: string;
   /** Origin the nudge's "Review" button points at. */
   DASHBOARD_BASE_URL?: string;
+  /**
+   * Phase 19's proof-recording origin — a NON-SECRET `var`, declared here for
+   * the same reason as the three above: `worker-configuration.d.ts` is
+   * generated and this type must not depend on when somebody next runs
+   * `cf-typegen`. It is in wrangler.jsonc alongside ARTIFACTS_BASE_URL, and
+   * regenerating will simply narrow this to a required `string`.
+   *
+   * `${PROOFS_BASE_URL}/<64 hex>.mp4` is what `checkRecording` hands the model,
+   * and it is this Worker's own origin plus `/proofs` — top level, because that
+   * path is the one Cloudflare Access must BYPASS (src/api/proofs.ts).
+   */
+  PROOFS_BASE_URL?: string;
   /**
    * Phase 18's read-only monorepo credential — a SECRET, so `wrangler types`
    * cannot know it, same as every entry above. Fine-grained, `web2app-rebuild`
@@ -190,6 +203,16 @@ app.route("/api", githubOAuth);
 // `requireTeamMember` roster check as `GET /api/identity` — the eval numbers are
 // exactly as private as the runs they are computed from.
 app.route("/api", evalApi);
+// Phase 19's proof recordings. MOUNTED AT THE TOP LEVEL, NOT UNDER /api, AND
+// THAT IS THE WHOLE POINT: this path must be ACCESS-BYPASSABLE. A recording URL
+// is pasted into a Slack thread, and Slack's unfurler carries no Access token —
+// under /api it would inherit the dashboard's Access application and answer
+// every unfurl, and every customer-facing engineer outside the roster, with a
+// login redirect. So `/proofs/*` gets a bypass policy on the Access application,
+// the same shape `/slack/events` already has, and the 64 hex characters of the
+// key are what protect the object instead. See src/api/proofs.ts for the full
+// argument and for everything that guards it.
+app.route("/", proofsApi);
 // Not JSON, so it is mounted outside /api — but still above the asset
 // catch-all, and still behind the same Access application as the dashboard.
 app.route("/ws", runsWs);

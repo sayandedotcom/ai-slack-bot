@@ -54,6 +54,10 @@
     // Where a published artifact is fetched from. The Worker's own origin, not
     // an R2 public bucket URL -- see the r2_buckets comment below.
     "ARTIFACTS_BASE_URL": "https://firefighter.sayandeten.workers.dev/api/artifacts",
+    // Where a proof recording is fetched from (Phase 19). Top level, NOT under
+    // /api, because this path needs a Cloudflare Access BYPASS policy: Slack's
+    // unfurler carries no Access token. See src/api/proofs.ts.
+    "PROOFS_BASE_URL": "https://firefighter.sayandeten.workers.dev/proofs",
     // Cloudflare Access, fronting the dashboard (Phase 11 Task 2). Non-secret:
     // both values are read out of a validated JWT's own claims, not used to
     // authenticate anything themselves. See src/access/jwt.ts.
@@ -181,6 +185,16 @@
   //
   // Phase 19's proof recordings, if they need public links, get their own
   // prefix or bucket and a deliberate decision -- not this one widened.
+  //
+  // That decision is now MADE, and it went the way this comment asked. Proof
+  // recordings live under the `proofs/` prefix in this same bucket and are
+  // served by a SECOND route, /proofs/:key (src/api/proofs.ts), which is
+  // mounted at the top level so Cloudflare Access can bypass it. Nothing about
+  // /api/artifacts moved: its allowlist, its 5MB cap, its `attachment`
+  // disposition and its Access gate are all unchanged, and the two key spaces
+  // are disjoint by shape (`<hex>.<ext>` at the root, `proofs/<hex>.mp4`,
+  // `_internal/...`). The bucket still has no public origin -- what is public
+  // is one Worker route, and only for keys nobody can guess.
   //
   // Access is a binding, never S3 REST keys, so there is no credential here.
   "r2_buckets": [
