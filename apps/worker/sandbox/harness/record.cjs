@@ -233,14 +233,19 @@ async function main() {
       }
     } else {
       error = error ? `${error}; ffmpeg: ${result.error}` : result.error;
-      // Unlike the oversize case, this is not a deliberate refusal of an
-      // otherwise-good artifact — the transcode itself failed, so no video
-      // exists. "passed" requires a produced video, so a script that ran
-      // clean but left nothing playable does not get to keep that verdict.
-      if (state === 'passed') state = 'failed';
+      // state is deliberately UNCHANGED here too, same reasoning as the
+      // oversize branch above: `state` reports the SCRIPT's outcome, never
+      // the harness's own infrastructure trouble. A script that completed
+      // without throwing stays "passed" even when the transcode dies —
+      // flipping it to "failed" would tell the model a bug reproduced when
+      // it did not, which is the one false-finding outcome the agent design
+      // forbids. The missing artifact is `video: null` plus this `error`,
+      // loud enough that the model knows its proof link is gone and says so
+      // rather than claiming a recording it doesn't have.
     }
   } else if (state === 'passed') {
-    state = 'failed';
+    // Same reasoning: no video landed at all, but the script itself didn't
+    // throw, so state stays "passed" — only the artifact is missing.
     error = error || 'script completed but no video was produced';
   }
 
