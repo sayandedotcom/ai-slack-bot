@@ -134,6 +134,21 @@ const WEDGED_NOTE =
  */
 const relaunchedRuns = new Set<string>();
 
+/**
+ * The overall provisioning deadline, covering the hang shape the zero-output
+ * wedge cannot: a process that printed a STEP and THEN stalled forever — a git
+ * fetch that never completes, a tarball that never arrives. Without this, such
+ * a stall reports its last step until the run dies at the step ceiling, which
+ * is the polite-poll death all over again with one line of progress as an
+ * alibi.
+ *
+ * Ten minutes against a measured ~3-minute cold boot: 3x headroom, because the
+ * false-positive cost is a failed run that must re-ask, while the
+ * false-negative cost is bounded anyway by the step ceiling — this deadline
+ * exists to make the failure NAMED rather than ambient.
+ */
+const PROVISION_DEADLINE_MS = 600_000;
+
 const DEFAULT_REPO_PATH = "/workspace/web2app-rebuild";
 
 /** Product PRs target `staging`, so that is what the working tree tracks. */
@@ -318,6 +333,19 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
       // silent-failure shape everything in this phase exists to avoid.
       if (progress.step === null && elapsedMs > WEDGED_AFTER_MS) {
         return { state: "failed", commit: null, repoPath, elapsedMs, note: WEDGED_NOTE };
+      }
+      // The other hang shape: progress WAS made, then stopped. Terminal and
+      // named, not relaunched — a relaunch would redo minutes of work behind an
+      // opaque status, and a stall this long usually means the network path it
+      // stalled on will stall again.
+      if (elapsedMs > PROVISION_DEADLINE_MS) {
+        return {
+          state: "failed",
+          commit: null,
+          repoPath,
+          elapsedMs,
+          note: `provisioning exceeded its ${Math.round(PROVISION_DEADLINE_MS / 60_000)}-minute deadline, last step "${progress.step ?? "none"}"; the machine is unusable for this run`,
+        };
       }
       return { state: "provisioning", commit: null, repoPath, elapsedMs, note: progress.note };
     }

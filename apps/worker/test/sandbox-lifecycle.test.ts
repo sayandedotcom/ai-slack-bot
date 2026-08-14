@@ -257,6 +257,24 @@ describe("boot", () => {
     expect(second.calls.map((c) => c.method)).not.toContain("startProcess");
   });
 
+  it("fails a provision that made progress and then stalled past the deadline", async () => {
+    // The hang shape the zero-output wedge cannot see: STEP install printed,
+    // then nothing, forever. Without the overall deadline this reports
+    // "installing dependencies" until the run dies at its step ceiling — the
+    // polite-poll death with one line of progress as an alibi.
+    const fake = makeFakeSandbox({
+      process: { id: "provision", status: "running", startTime: new Date(Date.now() - 660_000) },
+      stdout: "STEP fetch\nSTEP reset\nSTEP install\n",
+    });
+    const status = await lifecycleOver(fake).boot("run-provision-deadline");
+    expect(status.state).toBe("failed");
+    expect(status.note).toContain("deadline");
+    expect(status.note).toContain("install");
+    // Named failure, not a relaunch: a stall after real progress usually means
+    // the network path it stalled on will stall again.
+    expect(fake.calls.map((c) => c.method)).not.toContain("startProcess");
+  });
+
   it("does not call a young silent process wedged", async () => {
     const fake = makeFakeSandbox({
       process: { id: "provision", status: "running", startTime: new Date(Date.now() - 20_000) },
