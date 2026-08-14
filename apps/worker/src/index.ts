@@ -24,6 +24,15 @@ import type { QueuedEvent } from "./slack/types";
 // the two modules form a real cycle.
 export { RunDO } from "./run/do";
 
+// The SANDBOX binding's class (Phase 18), and the SDK's own ContainerProxy.
+//
+// `ContainerProxy` is not decoration: the Sandbox DO resolves
+// `ctx.exports.ContainerProxy` to build the fetcher that outbound interception
+// runs through, so omitting this export fails at RUNTIME with "ctx.exports
+// .ContainerProxy is undefined" rather than at build time. The requirement is
+// stated only in a comment inside the package's `.d.ts`.
+export { ContainerProxy, Sandbox } from "./sandbox/class";
+
 /**
  * Wrangler-generated bindings, plus the two narrow refinements the application
  * genuinely needs.
@@ -84,6 +93,20 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   NUDGE_FALLBACK_CHANNEL_ID?: string;
   /** Origin the nudge's "Review" button points at. */
   DASHBOARD_BASE_URL?: string;
+  /**
+   * Phase 18's read-only monorepo credential — a SECRET, so `wrangler types`
+   * cannot know it, same as every entry above. Fine-grained, `web2app-rebuild`
+   * only, Contents: read-only.
+   *
+   * It is spent in exactly ONE place: the `outboundByHost` handler in
+   * `src/sandbox/class.ts`, at egress, after the request has already left the
+   * container. Optional in the type because absence must stay a state the code
+   * can see — the handler refuses with `configuration_incomplete` naming the
+   * variable rather than fetching unauthenticated and 404ing on a private
+   * repo. It must never be read anywhere a container, a capability result, an
+   * audit arg or a log can reach.
+   */
+  MONOREPO_PAT?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();

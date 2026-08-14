@@ -121,7 +121,41 @@
     "NUDGE_FALLBACK_CHANNEL_ID": "C0BPA2L4BBP",
     // Where the nudge's "Review" button points: `${DASHBOARD_BASE_URL}/?approval=${id}`.
     // The Worker's own origin — the dashboard is served from it (see "assets").
-    "DASHBOARD_BASE_URL": "https://firefighter.sayandeten.workers.dev"
+    "DASHBOARD_BASE_URL": "https://firefighter.sayandeten.workers.dev",
+    // --------------------------------------------------------- Phase 18
+    //
+    // The Tier 2 sandbox. All three are non-secret by construction: a path
+    // inside a container, a hostname that resolves nowhere, and a duration.
+    // The two secrets this phase adds (MONOREPO_PAT, MONOREPO_DEV_ENV) are
+    // `wrangler secret put`, and no value of either appears in this repo.
+
+    // Where the baked image puts the monorepo checkout. Must match the
+    // Dockerfile's clone target; the model reads it, it never chooses it.
+    "SANDBOX_REPO_PATH": "/workspace/web2app-rebuild",
+
+    // The sentinel host the container's git remote points at. It resolves
+    // nowhere on purpose: it exists so that exactly ONE hostname enters Worker
+    // fetch, where `Sandbox.outboundByHost` (src/sandbox/class.ts) rewrites it
+    // to github.com and attaches the real PAT. The container is handed a
+    // placeholder and never holds a credential it could leak.
+    //
+    // Registering only this host keeps the SDK in per-host interception mode,
+    // so R2, npm, apt — and github.com reached directly — flow through the
+    // container's own network namespace and never touch Worker fetch. That is
+    // load-bearing, not tidiness: Worker fetch normalizes Content-Length on
+    // HEAD responses, which broke agent-os's s3fs-on-R2 mount.
+    //
+    // This value is DUPLICATED as GIT_SENTINEL_HOST in src/sandbox/class.ts,
+    // because `static outboundByHost` is a hostname-keyed registry the SDK
+    // reads at DO construction, with no `env` in scope. `assertGitSentinel()`
+    // throws if the two ever drift.
+    "SANDBOX_GIT_HOST": "git.firefighter.local",
+
+    // The idle backstop, never the plan — teardown is what destroys a
+    // container (Task 4). The SDK's default is 10 minutes, which is shorter
+    // than a monorepo install plus a build, and a container that naps
+    // mid-repro reads as a hang to the human watching the Slack thread.
+    "SANDBOX_SLEEP_AFTER": "45m"
   },
   "assets": {
     // The dashboard's Vite build output (Phase 14). It replaced ./public, which
@@ -167,10 +201,47 @@
   // `migrations` array is used over the newer declarative `exports` map because
   // the official Vitest recipe and spikes/worker-loader both use it. See
   // docs/superpowers/plans/phase-08-notes.md.
+  // The Tier 2 sandbox (Phase 18). One container per run, keyed `run:{runId}`,
+  // provisioned from a fully baked image — repo pre-cloned at `staging`,
+  // `pnpm install` done, `pnpm build-packages` output present, Chromium ready.
+  //
+  // `image` is resolved RELATIVE TO THIS CONFIG FILE, which is why the
+  // Dockerfile lives under apps/worker/ rather than at the repo root.
+  //
+  // standard-4 = 4 vCPU / 12 GiB / 20 GB disk, the largest predefined type
+  // (confirmed against containers/platform-details/limits, 2026-08-11). It is
+  // not generous: `apps/dashboard`'s dev script alone asks for a 6 GB heap, so
+  // exactly one such server fits at a time.
+  //
+  // max_instances 3 = three concurrent runs may hold a machine. The ceiling is
+  // budget, not capability: container-hours are the most expensive thing this
+  // system can spend, and `sleepAfter` is only the backstop — teardown on
+  // terminal status and the orphan sweeper are what actually reclaim them.
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./sandbox/Dockerfile",
+      "instance_type": "standard-4",
+      "max_instances": 3
+    }
+  ],
   "durable_objects": {
-    "bindings": [{ "name": "RUNS", "class_name": "RunDO" }]
+    "bindings": [
+      { "name": "RUNS", "class_name": "RunDO" },
+      // A container IS a Durable Object — `@cloudflare/sandbox`'s Sandbox
+      // extends Container extends DurableObject, and this binding is how the
+      // Worker addresses one. The model can never name an id: the lifecycle
+      // derives it from the run.
+      { "name": "SANDBOX", "class_name": "Sandbox" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RunDO"] }],
+  // APPENDED, never edited. `v1` is RunDO's and is already applied in
+  // production; rewriting an applied tag is how you lose a Durable Object's
+  // storage. A new class gets a new tag.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RunDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["Sandbox"] }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

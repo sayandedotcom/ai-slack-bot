@@ -208,4 +208,31 @@ NUDGE_FALLBACK_CHANNEL_ID=
 # your dev origin) if you want a locally clickable button.
 DASHBOARD_BASE_URL=
 
+# --------------------------------------------------------------- Phase 18
+#
+# The Tier 2 sandbox's read-only monorepo credential. A fine-grained GitHub
+# PAT: resource owner Zellify, ONLY `web2app-rebuild`, Contents: read-only.
+# Create at GitHub -> Settings -> Developer settings -> Fine-grained tokens.
+#
+# It is spent in exactly ONE place -- the `outboundByHost` handler in
+# src/sandbox/class.ts -- and only at EGRESS, after a request has already left
+# the container. The container's git remote points at the sentinel host
+# `git.firefighter.local` (wrangler.jsonc vars) carrying a placeholder string;
+# the Worker rewrites the URL to github.com and swaps in this value on the way
+# out. That is what makes "the container holds no write credential" true by
+# construction rather than by discipline: the value never enters the container,
+# so no `exec` inside it can read the value out of a file, a git config or
+# /proc.
+#
+# SECURITY: read-only is not optional. This token is reachable by every run,
+# and a run's whole purpose is executing model-authored code. A token that can
+# write would make the container's isolation the only thing standing between a
+# model and the monorepo's default branch. If the org blocks fine-grained
+# tokens and a classic PAT has to be used, that widens the scope to every repo
+# the creator can read -- record the fact rather than letting it pass quietly.
+#
+# The image build also needs it (as a BuildKit `--mount=type=secret`, so it
+# never lands in a layer), but that is a build-time flag, not this file.
+MONOREPO_PAT=
+
 # Later phases add more. Add each here as its phase introduces it.
