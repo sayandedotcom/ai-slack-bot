@@ -106,10 +106,29 @@ FROM base AS final
 
 WORKDIR /workspace/web2app-rebuild
 
+# Network settings for the two install steps below.
+#
+# Not premature tuning — measured. A cold install of this lockfile is 3217
+# packages, and on a domestic connection tarballs arrive at 18-45 KiB/s. With
+# pnpm's defaults that produces `error (23)` retries and then an outright
+# `TimeoutError` around the 3100th package: a build that fails after five
+# minutes of apparent progress, for a reason that has nothing to do with this
+# repo. Lower concurrency is deliberate too — parallel streams on a thin link
+# make every individual tarball slower and more likely to trip the timeout.
+#
+# Written as an npmrc rather than passed as flags because pnpm 11 type-checks
+# these: `--config.network-concurrency=6` arrives as the STRING "6" and dies
+# with "Expected `concurrency` to be a number from 1 and up, got `6` (string)".
+# The npmrc parser coerces properly. It also lives at /root rather than in the
+# repo, so provision.sh's `git clean` cannot remove it and it can never be
+# committed to a PR.
+RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable-global-virtual-store=false\n' > /root/.npmrc
+
 # The lockfile alone first, so a change to application source does not
 # re-resolve and re-download 3000-odd packages. `pnpm fetch` populates the
 # store from the lockfile without needing the workspace's package.json files,
-# which is exactly what makes this split possible.
+# which is exactly what makes this split possible — and it is why a rebuild
+# after a source-only change is fast rather than another cold download.
 COPY --from=repo /workspace/web2app-rebuild/pnpm-lock.yaml ./
 RUN pnpm fetch
 
@@ -135,7 +154,7 @@ COPY --from=repo /workspace/web2app-rebuild/ ./
 # package" when it is on.
 RUN --mount=type=secret,id=nucleo_license_key \
     NUCLEO_LICENSE_KEY="$(cat /run/secrets/nucleo_license_key 2>/dev/null || true)" \
-    pnpm --config.enable-global-virtual-store=false install --frozen-lockfile --offline
+    pnpm install --frozen-lockfile
 
 # Workspace packages resolve from built dist/, not from source, so this is
 # mandatory before any app can start or any test can run (turbo's `test` task
