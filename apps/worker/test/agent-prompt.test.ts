@@ -359,6 +359,58 @@ describe("stable policy content", () => {
     }
   });
 
+  /**
+   * Typography, 2026-08-14. The structural rules above stop the obvious tells
+   * (preamble, recap, sign-off) but say nothing about punctuation and rhythm,
+   * which is where machine-written prose actually gives itself away. A real
+   * escalated draft read: "Don't worry about format — paste whatever the export
+   * gives you: the download URL or filename of one of the bad files works, and
+   * if you can't find those, the account name plus a rough timestamp…" — one
+   * 60-word sentence carrying an em dash, a colon-led list and three parallel
+   * clauses. Every structural rule above passed. It still did not read like a
+   * person typing between two other things.
+   */
+  it("bans the punctuation and rhythm that mark machine prose", () => {
+    const policy = flat(renderStablePolicy());
+    for (const rule of [
+      "Never use an em dash",
+      "Never use a semicolon",
+      "one idea per sentence",
+      "Use contractions",
+    ]) {
+      expect(policy).toContain(rule);
+    }
+  });
+
+  it("holds a professional register: no emoji, no exclamation, no slang", () => {
+    const policy = flat(renderStablePolicy());
+    for (const rule of [
+      "Never use an emoji",
+      "No exclamation marks",
+      "No slang",
+    ]) {
+      expect(policy).toContain(rule);
+    }
+  });
+
+  /** A policy that ships an emoji cannot credibly ban one. */
+  it("carries no emoji anywhere in the stable policy or the examples", () => {
+    const emoji = /\p{Extended_Pictographic}/u;
+    expect(renderStablePolicy()).not.toMatch(emoji);
+    expect(renderVoiceExamples()).not.toMatch(emoji);
+  });
+
+  /**
+   * The rules are worthless if the block teaching them breaks them. This is a
+   * guard on our own copy, not on the model's.
+   */
+  it("obeys its own typography rules", () => {
+    const voice = STABLE_POLICY_SECTIONS.find((section) => section.id === "voice");
+    expect(voice).toBeDefined();
+    expect(voice?.body).not.toMatch(/[—–]/);
+    expect(voice?.body).not.toContain(";");
+  });
+
   it("distinguishes clarifying/status messages from committal ones", () => {
     const policy = flat(renderStablePolicy());
     expect(policy).toContain("Send, without asking: clarifying questions, status while a fix is in review");
