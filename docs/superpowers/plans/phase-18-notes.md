@@ -119,5 +119,74 @@ let `../../` or a crafted string reach a published artifact. It parses.
 
 ## Measured against the real monorepo
 
-_Pending `NUCLEO_LICENSE_KEY`. The base stage (toolchain only, no repo) builds
-without credentials and is being timed separately._
+**Base stage (toolchain only, no repo), built without credentials: 2.06 GB.**
+Verified inside the running container: Node 22.23.2, pnpm 11.17.0, Infisical CLI
+0.43.65, redis 6.0.16, Chromium 1208 + headless shell, git 2.34.1. This is the
+half of the image that has nothing to do with Zellify, and it is worth knowing
+it stands alone: every failure after this point is about the monorepo, not the
+toolchain.
+
+**Cold install of the monorepo: ~13 minutes, 3217 packages**, across three
+attempts on a domestic link, including dependency build scripts. This is the
+number that justifies baking rather than installing at boot.
+
+### Three things about `pnpm install` on this monorepo
+
+**1. It needs retries, not a longer timeout.** pnpm's store is populated
+incrementally, so an install killed by a tarball timeout leaves everything it
+already fetched behind and the next attempt resumes. Measured: 3114 packages,
+then 3202, then the tail and the build scripts. A single-shot install fails at
+the 97% mark and discards the whole build; three attempts converge. The
+Dockerfile loops.
+
+**2. pnpm 11 type-checks its config, so flags lie.**
+`--config.network-concurrency=6` arrives as the **string** `"6"` and dies with
+``Expected `concurrency` to be a number from 1 and up, got `6` (string)``. The
+npmrc parser coerces properly, so the settings live in `/root/.npmrc` — which
+also puts them where `provision.sh`'s `git clean` cannot remove them and where
+they can never be committed into a PR.
+
+**3. `NUCLEO_LICENSE_KEY` is real, and confirmed working.** The install reaches
+`nucleo-ui-outline-18 preinstall$ node ./account-check.js` and passes it with
+the key present. **Honest caveat:** the earlier runs *without* the key never
+reached the preinstall — they died on network timeouts first — so "install fails
+without it" rests on the repo's own config comments and CI workflow, not on a
+failure observed here.
+
+### Disk: the failure that had nothing to do with the code
+
+The first full build died with no error line, ~68 seconds into the install. The
+cause was the host at **100% disk** (1.2 GB free of 147 GB). Worth recording
+because the symptom — a build that stops mid-progress, exit 1, no message — is
+indistinguishable from a dozen other things, and Docker reports nothing useful.
+
+**`docker images` sizes overcount badly for estimating reclaim.** Deleting eight
+Phase 00 spike images that `docker images` totalled at ~7 GB freed **1.9 GB**,
+because those tags shared layers with the base image still in use. Estimate
+reclaim from `docker system df`'s RECLAIMABLE column, never by summing image
+sizes.
+
+**Hardlinks do not dedupe across overlayfs layers.** The natural Dockerfile —
+COPY the lockfile, `pnpm fetch`, COPY the tree, `pnpm install` — caches better
+and costs roughly **twice** the disk. pnpm hardlinks `node_modules` entries to
+the store, and a hardlink to a file in a *lower* layer forces a copy-up, so the
+~4 GB store is paid for twice. Fetch and install were merged into one RUN: worse
+caching, half the peak disk. On a machine with 8 GB free that is the difference
+between a build and an ENOSPC three quarters of the way in.
+
+**Bind-mounted host directories break the root `postinstall`.** Probing the
+install against a bind-mounted checkout failed at the very end — after every
+package was on disk — with git's dubious-ownership refusal
+(`safe.directory /workspace/web2app-rebuild`), because the mount is host-owned
+and the container runs as root. It does not affect the real build, where the
+repo is COPYed and root-owned, but the Dockerfile sets `safe.directory` anyway:
+the failure arrives at the most expensive possible moment and reads like nothing
+to do with the install. Note this also contradicts the earlier finding that
+`agents sync` "never throws on a normal run" — it throws when git refuses.
+
+### Infisical
+
+The CLI installed locally was **0.38.0**, below the **0.43.99 floor the
+monorepo's own docs set**. Under that floor a personal override silently
+resolves to the *shared* value with no error — a wrong value, not a crash, which
+is the worst shape a configuration bug can have. Upgraded before use.

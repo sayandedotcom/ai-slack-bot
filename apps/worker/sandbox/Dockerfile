@@ -106,7 +106,18 @@ FROM base AS final
 
 WORKDIR /workspace/web2app-rebuild
 
-# Network settings for the two install steps below.
+# Insurance against git's dubious-ownership refusal.
+#
+# Inside the built image the checkout is root-owned and the container runs as
+# root, so this should never fire. It is here because the failure mode is
+# disproportionate: the root `postinstall` (`agents sync`) shells out to git,
+# and when git refuses the directory the install dies at the very end — after
+# every package is on disk — with an error about ownership that reads like
+# nothing to do with the install. Observed exactly that way while probing the
+# install against a bind-mounted host checkout.
+RUN git config --global --add safe.directory /workspace/web2app-rebuild
+
+# Network settings for the install below.
 #
 # Not premature tuning — measured. A cold install of this lockfile is 3217
 # packages, and on a domestic connection tarballs arrive at 18-45 KiB/s. With
@@ -124,18 +135,18 @@ WORKDIR /workspace/web2app-rebuild
 # committed to a PR.
 RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable-global-virtual-store=false\n' > /root/.npmrc
 
-# The lockfile alone first, so a change to application source does not
-# re-resolve and re-download 3000-odd packages. `pnpm fetch` populates the
-# store from the lockfile without needing the workspace's package.json files,
-# which is exactly what makes this split possible — and it is why a rebuild
-# after a source-only change is fast rather than another cold download.
-COPY --from=repo /workspace/web2app-rebuild/pnpm-lock.yaml ./
-RUN pnpm fetch
-
-# Now the tree.
 COPY --from=repo /workspace/web2app-rebuild/ ./
 
-# Install against the warm store, WITH scripts.
+# Fetch and install in ONE layer, deliberately.
+#
+# The tempting split — COPY the lockfile, `pnpm fetch`, COPY the tree, install —
+# caches better and costs roughly twice the disk. pnpm hardlinks node_modules
+# entries to the store, and hardlinks only dedupe WITHIN a filesystem: across
+# two overlayfs layers the lower layer's file is copied up, so the ~4 GB store
+# is paid for twice. On a machine with 8 GB free that is the difference between
+# a build and an ENOSPC three quarters of the way in. One layer, one copy.
+#
+# Install runs WITH scripts.
 #
 # `--ignore-scripts` would be the easy way past the license check below, and it
 # is wrong: the allowBuilds list in pnpm-workspace.yaml covers esbuild, sharp,
@@ -148,10 +159,10 @@ COPY --from=repo /workspace/web2app-rebuild/ ./
 # ERR_PNPM_IGNORED_BUILDS — pnpm-workspace.yaml and .github/workflows say so
 # explicitly. A build secret, so it is never in a layer.
 #
-# --config.enable-global-virtual-store=false mirrors the repo's own CI and
-# Docker convention. It must stay false: Turbopack cannot resolve outside the
-# project root and `next build` fails with "We couldn't find the Next.js
-# package" when it is on.
+# `enable-global-virtual-store=false` comes from the npmrc above and mirrors the
+# repo's own CI and Docker convention. It must stay false: Turbopack cannot
+# resolve outside the project root, and `next build` fails with "We couldn't
+# find the Next.js package" when it is on.
 #
 # Retried three times, and that is not superstition. pnpm's store is populated
 # incrementally, so a run that dies on a tarball timeout leaves everything it
