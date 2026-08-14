@@ -104,9 +104,15 @@ describe("the tool surface Phase 10 receives", () => {
 
     expect(asConfigured).toContain(`at most ${TEST_LIMITS.maxCodeChars} characters`);
     expect(asOverridden).toContain(`at most ${other.maxCodeChars} characters`);
-    // The old number is gone, so the sentence cannot be a hardcoded constant
-    // that happens to agree with one of the two configurations.
-    expect(asOverridden).not.toContain(String(TEST_LIMITS.maxCodeChars));
+    // The old number is gone FROM THE SENTENCE, so it cannot be a hardcoded
+    // constant that happens to agree with one of the two configurations.
+    //
+    // Scoped to the sentence rather than searching the whole description for a
+    // bare number: this text embeds every namespace's prose, so any unrelated
+    // cap whose digits contain the configured one matches by accident —
+    // `browser.record`'s 20000-character `script` limit contains this file's
+    // 2000 and turned this assertion red without the rendering changing at all.
+    expect(asOverridden).not.toContain(`at most ${TEST_LIMITS.maxCodeChars} characters`);
     expect(asConfigured).not.toContain("{{maxCodeChars}}");   // placeholder was replaced
   });
 
