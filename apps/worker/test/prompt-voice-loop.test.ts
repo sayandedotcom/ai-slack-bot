@@ -1,7 +1,11 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetRunPorts } from "../src/agent/driver";
-import { renderStablePolicy, renderVoiceExamples } from "../src/agent/prompt";
+import {
+  ENGINEER_VOICE_FREEZE_GRACE_MS,
+  renderStablePolicy,
+  renderVoiceExamples,
+} from "../src/agent/prompt";
 import { upsertIdentity } from "../src/db/identities";
 import { onDuty, SHIFT_MS } from "../src/identity/rotation";
 import { FakeClock } from "./helpers/agent-driver";
@@ -67,7 +71,10 @@ function loopFixture(shiftsAhead: number) {
 async function seedMessages(shiftStartMs: number, count: number): Promise<void> {
   for (let i = 0; i < count; i += 1) {
     const eventId = `voiceloop-${shiftStartMs}-${i}`;
-    const receivedAt = shiftStartMs - 1_000 - i;
+    // Behind the FROZEN BOUND, which sits `ENGINEER_VOICE_FREEZE_GRACE_MS`
+    // before the boundary rather than on it. Seeding inside the grace window
+    // would exclude every row and turn the positive cases into vacuous ones.
+    const receivedAt = shiftStartMs - ENGINEER_VOICE_FREEZE_GRACE_MS - 1_000 - i;
     await env.DB.prepare(
       `INSERT OR REPLACE INTO events_seen (event_id, channel_id, outcome, received_at)
        VALUES (?, 'C-VOICE-LOOP', 'ingested', ?)`,
@@ -197,9 +204,14 @@ describe("the assembled request the provider actually receives", () => {
 
   it("is byte-identical to the pre-Phase-21 shape for an unconnected engineer", async () => {
     const { clock, shift } = loopFixture(3);
-    await env.DB.prepare("DELETE FROM identities WHERE email = ? AND provider = 'slack'")
-      .bind(shift.email)
-      .run();
+    // NOTHING IS DELETED BY EMAIL HERE, and it would be wrong to: this file's
+    // own header says the rotation emails belong to every suite, and
+    // `user-token-sender.test.ts` and `notify-nudge.test.ts` both seed them. The
+    // `beforeEach` clearing this file's own `external_id` is the whole cleanup
+    // needed. A foreign identity row left behind for `shift.email` cannot make
+    // this case pass falsely either — its `external_id` is somebody else's, so
+    // it selects none of the messages seeded below, and the block is empty for
+    // the same reason it would be with no row at all.
     await seedMessages(shift.shiftStartMs, 10);
 
     const calls = await runTurn({ clock, steps: 1 });

@@ -28,6 +28,7 @@ export {
   type TrustedContextRefusal,
 } from "./context";
 export {
+  ENGINEER_VOICE_FREEZE_GRACE_MS,
   ENGINEER_VOICE_MAX_COUNT,
   ENGINEER_VOICE_MAX_TOTAL_CHARS,
   ENGINEER_VOICE_MIN_USABLE,

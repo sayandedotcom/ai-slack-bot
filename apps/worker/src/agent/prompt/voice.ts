@@ -14,18 +14,38 @@ import { onDuty, ROTATION_EPOCH_MS, SHIFT_MS } from "../../identity/rotation";
  * reuses a prefix only while it is byte-identical, so a block that changed
  * whenever a new Slack message arrived would invalidate the cache at an
  * arbitrary moment and make every request for the rest of the shift re-pay for
- * the entire prefix. The freeze is one SQL bound — `received_at < shiftStartMs`
- * — and it is the reason this file exists as its own module with its own tests
- * rather than as three lines inside the assembler.
+ * the entire prefix. The freeze is one bound — `< shiftStartMs - GRACE` — applied
+ * to BOTH reads this module makes, and it is the reason this file exists as its
+ * own module with its own tests rather than as three lines inside the assembler.
  *
  * So the block changes exactly once every three days, at a shift boundary, at
  * the same instant the engineer it is imitating changes. Between boundaries it
  * is a constant, and it carries its own cache breakpoint on that basis.
  *
+ * THE BOUND IS NOT `shiftStartMs`, AND THE GRACE WINDOW IS NOT PADDING. A row's
+ * `received_at` is the QUEUE ENVELOPE's timestamp (`ingest/consumer.ts:29,45`),
+ * not the moment the row appeared in D1. A message received at 23:59:58 on a
+ * boundary but processed after it — ordinary queue lag, or a Slack retry with
+ * backoff — lands in D1 during the NEW shift while still satisfying
+ * `received_at < shiftStartMs`, and being the newest it takes position 1. A warm
+ * isolate keeps the old bytes, a cold isolate spawned after that write renders
+ * new ones, and the shift runs with two competing prefixes and no error
+ * anywhere. Holding the bound `ENGINEER_VOICE_FREEZE_GRACE_MS` behind the
+ * boundary means a row must have been in flight for longer than that window to
+ * cause it.
+ *
+ * Stated honestly: this shrinks the window, it does not close it. Lag exceeding
+ * the grace can still split the prefix. The alternative considered and rejected
+ * was bounding on the PREVIOUS boundary, which closes it completely at the cost
+ * of every block being up to three days stale — a certain, always-on loss for a
+ * feature whose whole point is sounding like the engineer's recent writing,
+ * traded against an exceptional one.
+ *
  * A CONSEQUENCE THAT LOOKS LIKE A BUG AND IS NOT: an engineer who connects Slack
- * mid-shift keeps the empty block until the next boundary. That is the freeze
- * working. Re-resolving on connect would break the prefix mid-shift for a
- * cosmetic gain.
+ * mid-shift gets the EMPTY block for the remainder of that shift, on every
+ * isolate, warm or cold — see the identity gate in `resolveEngineerVoice`. That
+ * is the freeze working, and the empty render is byte-stable in its own right.
+ * Re-resolving on connect would break the prefix mid-shift for a cosmetic gain.
  *
  * AUTHORITY. Everything here is host-written framing plus quoted sample text.
  * The samples are DATA — JSON-stringified exactly as `renderVoiceExamples` does
@@ -40,6 +60,15 @@ export const ENGINEER_VOICE_MAX_COUNT = 20;
 export const ENGINEER_VOICE_SAMPLE_MAX_CHARS = 300;
 /** The hard ceiling on the whole block, whatever the count works out to. */
 export const ENGINEER_VOICE_MAX_TOTAL_CHARS = 6_000;
+/**
+ * How far BEHIND the shift boundary the freeze bound sits.
+ *
+ * Not padding, and not a fudge factor: it is the assumed worst-case lag between
+ * a message's `received_at` (written from the queue envelope) and the moment its
+ * row is actually visible in D1. See the file comment — a row that crosses the
+ * boundary in flight is what splits one shift's prefix into two.
+ */
+export const ENGINEER_VOICE_FREEZE_GRACE_MS = 5 * 60_000;
 /**
  * Below this the block renders as the EMPTY STRING.
  *
@@ -77,6 +106,12 @@ export type EngineerVoice = {
  * a human's message from ours. Without the join every rotation would few-shot
  * the model on its own prior output, the drift would compound each shift, and
  * nothing anywhere would report an error.
+ *
+ * The tie-break on `event_id` is not decoration either. `received_at DESC` alone
+ * is not a TOTAL order: two messages sharing a millisecond leave their relative
+ * position to the query plan, so an index change could renumber the samples —
+ * different bytes, same data — or change WHICH rows survive `LIMIT 20`. The
+ * whole module is a bet on byte-stability, so the order has to be total.
  */
 const SAMPLE_SQL = `
 SELECT m.text, m.ts
@@ -87,8 +122,8 @@ SELECT m.text, m.ts
    AND m.customer_slug IS NOT NULL
    AND m.subtype IS NULL
    AND length(m.text) >= 40
-   AND m.received_at < ?             -- shiftStartMs: this bound IS the freeze
- ORDER BY m.received_at DESC
+   AND m.received_at < ?             -- the frozen bound: THIS is the freeze
+ ORDER BY m.received_at DESC, m.event_id DESC
  LIMIT ${ENGINEER_VOICE_MAX_COUNT}
 `;
 
@@ -113,19 +148,48 @@ export async function resolveEngineerVoice(
   if (cached !== undefined) return cached;
 
   const shift = onDuty(nowMs);
+
+  /** The one instant BOTH reads are frozen at. See the file comment. */
+  const frozenBound = shift.shiftStartMs - ENGINEER_VOICE_FREEZE_GRACE_MS;
+
+  // THE IDENTITY IS FROZEN TOO, and it has to be.
+  //
+  // `getIdentity` sits inside the memo but the memo is per isolate, so without
+  // this gate a COLD isolate started after a mid-shift connect would read the
+  // new row and render a full block while every warm isolate still rendered the
+  // empty one. Same split prefix as a late message, from a different direction.
+  //
+  // BOTH timestamps are checked. `connected_at` is the obvious one; `updated_at`
+  // is the one that bites, because `upsertIdentity` OVERWRITES `external_id` on
+  // reconnect (`db/identities.ts:80-81`) — so a re-consent mid-shift would
+  // silently swap whose messages are being sampled while `connected_at` stayed
+  // put.
+  //
+  // ONE RESIDUAL THIS CANNOT CLOSE: a row DELETED mid-shift simply vanishes, and
+  // there is no timestamp left to gate on. That path falls back to the empty
+  // block on a cold isolate while warm ones keep the full one.
   const identity = await getIdentity(db, shift.email, "slack");
-  const externalId = identity?.externalId ?? "";
+  const frozenIdentity =
+    identity !== null && identity.connectedAt < frozenBound && identity.updatedAt < frozenBound
+      ? identity
+      : null;
+  const externalId = frozenIdentity?.externalId ?? "";
 
   const samples: { text: string; ts: string }[] = [];
   if (externalId !== "") {
     const { results } = await db
       .prepare(SAMPLE_SQL)
-      .bind(externalId, shift.shiftStartMs)
+      .bind(externalId, frozenBound)
       .all<{ text: string; ts: string }>();
 
     let total = 0;
     for (const row of results ?? []) {
       const text = row.text.slice(0, ENGINEER_VOICE_SAMPLE_MAX_CHARS);
+      // DEFENCE-IN-DEPTH, AND DEAD TODAY: `LIMIT 20` x 300 chars is exactly
+      // 6,000, so under the current constants this can never fire and no test
+      // can honestly claim to prove it. It is kept so that raising
+      // MAX_COUNT or SAMPLE_MAX_CHARS without revisiting the total cannot
+      // quietly triple the size of a cached block.
       if (total + text.length > ENGINEER_VOICE_MAX_TOTAL_CHARS) break;
       total += text.length;
       samples.push({ text, ts: row.ts });
