@@ -92,15 +92,24 @@
     // The #eng-firefighter channel id, used in "channel" mode AND whenever the
     // on-duty engineer has no Slack identity row — fallback beats silence.
     //
-    // DELIBERATELY EMPTY, AND THIS IS AN OPERATOR STEP, NOT AN OVERSIGHT: the
-    // channel has no row in `channels` either (scripts/seed-channels.sh says
-    // so explicitly), so its id does not exist anywhere in this repo and
-    // inventing one would point the nudge at whatever conversation that id
-    // happens to name. Empty is the safe reading: `sendNudge` checks it BEFORE
-    // taking the once-only nudge claim, so an unconnected engineer leaves the
-    // card on the sweeper's retry feed rather than burning the slot on a send
-    // that cannot be addressed. Fill it in to enable the fallback.
-    "NUDGE_FALLBACK_CHANNEL_ID": "",
+    // Set to `ff-test` by the operator, 2026-08-14. No dedicated
+    // #eng-firefighter channel exists in this workspace; ff-test is the
+    // developer's own sandbox, and the drill runs in test-firedrill, so the
+    // graded channel stays free of internal traffic.
+    //
+    // Two things make this safe rather than merely convenient. A nudge posted
+    // here cannot wake anything: ingest drops `bot_id`/`bot_message` before the
+    // queue (src/ingest/rules.ts), so there is no nudge → triage → nudge loop.
+    // And an empty value was never a broken state: `sendNudge` checks this
+    // BEFORE taking the once-only claim, so an unaddressable nudge stays on the
+    // sweeper's retry feed instead of burning the slot.
+    //
+    // The residual trade-off, recorded rather than hidden: ff-test is a
+    // `mode=live` customer channel, so a fallback nudge shows an UNAPPROVED
+    // draft in a channel the agent also replies into. Acceptable only because
+    // no real customer is in it. Point this at a genuinely internal channel
+    // before this system sees a real customer workspace.
+    "NUDGE_FALLBACK_CHANNEL_ID": "C0BPA2L4BBP",
     // Where the nudge's "Review" button points: `${DASHBOARD_BASE_URL}/?approval=${id}`.
     // The Worker's own origin — the dashboard is served from it (see "assets").
     "DASHBOARD_BASE_URL": "https://firefighter.sayandeten.workers.dev"
