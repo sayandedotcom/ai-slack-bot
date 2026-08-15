@@ -169,10 +169,29 @@ RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable
 #   - Baking the FULL tree (495 MB) fixed that but its ~400 MB image layer would
 #     not push from a domestic uplink before the registry credential expired —
 #     the same wall phase 18 hit at 1.19 GB, closer but still lost.
-# So: everything, MINUS the two heavy public/ trees (348 MB of marketing PNGs,
-# demo webms and docs screenshots — every one URL-referenced, none statically
-# imported, verified by grep), PLUS a re-include of landing/public/fonts. 150 MB
-# tree, a layer that pushes, and no app that 500s on a missing asset.
+#   - Keeping only fonts back made the pages COMPILE but not RENDER. A live
+#     drill recording (2026-08-15) showed the landing page with a broken-image
+#     logo, no hero art, no decorations, and next dev's "2 Issues" badge lit by
+#     the 404s. The reasoning that lost those files is preserved here because it
+#     is the instructive part: an earlier version of this comment argued the
+#     PNGs were safe to drop since they were "every one URL-referenced, none
+#     statically imported, verified by grep". That grep proved the opposite of
+#     what it was read to prove. A statically imported asset is the one the
+#     bundler would have failed loudly on at build time; a URL-referenced one
+#     (`<img src="/logo.svg">`, `url(/hero-bg.png)`) resolves at RUNTIME from
+#     public/, so dropping it fails silently, in pixels, in a recording nobody
+#     diffs. "Not statically imported" was evidence of RISK, not of safety.
+# So: everything, MINUS the two heavy public/ trees, PLUS three re-includes —
+# landing/public/fonts (compile), landing/public/*.{svg,webp,ico} (0.4 MB: the
+# logo and every decoration), and hero-bg.png (1.6 MB, the one heavyweight the
+# homepage actually paints). ~2.4 MB buys back the visible page; the 176 MB of
+# PNGs behind it stays out, so the layer still pushes.
+#
+# KNOWN LIMIT, stated so the next recording is read correctly: this covers the
+# HOMEPAGE. Deeper marketing pages reference public/ SUBDIRECTORIES (icons/,
+# products/, logos/, use-cases/) that are still excluded, and will still record
+# with broken images. Widen the patterns here when a drill needs one of them —
+# do not conclude from a broken image that the sandbox is misconfigured.
 #
 # The credential exists ONLY in the mounted secret and a command-scoped
 # http.extraHeader — never in .git/config (the baked remote is the sentinel
@@ -187,7 +206,7 @@ RUN --mount=type=secret,id=monorepo_pat \
         https://github.com/Zellify/web2app-rebuild.git /workspace/web2app-rebuild; \
     cd /workspace/web2app-rebuild; \
     git sparse-checkout init --no-cone; \
-    printf '/*\n!/apps/landing/public/\n/apps/landing/public/fonts/\n!/apps/docs/public/\n' > .git/info/sparse-checkout; \
+    printf '/*\n!/apps/landing/public/\n/apps/landing/public/fonts/\n/apps/landing/public/*.svg\n/apps/landing/public/*.webp\n/apps/landing/public/*.ico\n/apps/landing/public/hero-bg.png\n!/apps/docs/public/\n' > .git/info/sparse-checkout; \
     git -c http.extraHeader="Authorization: Basic ${AUTH}" read-tree -mu HEAD; \
     git remote set-url origin https://git.firefighter.local/Zellify/web2app-rebuild.git; \
     git rev-parse HEAD
