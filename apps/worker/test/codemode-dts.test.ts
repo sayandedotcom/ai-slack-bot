@@ -14,10 +14,10 @@ describe("capability registry", () => {
   // Later phases APPEND. The order is the committed `.d.ts`'s identity, so an
   // insertion rewrites every block after it for nothing — which is why the
   // assertion is the whole list rather than a membership check.
-  it("exposes exactly the Phase 09 namespaces plus approval, sandbox and browser, in order", () => {
+  it("exposes exactly the Phase 09 namespaces plus approval, sandbox, browser and github, in order", () => {
     expect(registry().map((p) => p.name)).toEqual([
       "slack", "memory", "linear", "supabase", "langsmith", "betterstack", "files", "approval",
-      "sandbox", "browser",
+      "sandbox", "browser", "github",
     ]);
   });
 
@@ -167,7 +167,7 @@ describe("generated declarations", () => {
   it("renders one declaration block per namespace with no duplicate type alias", () => {
     const dts = renderCapabilityDeclarations(registry());
     for (const ns of ["slack", "memory", "linear", "supabase",
-                      "langsmith", "betterstack", "files", "sandbox", "browser"]) {
+                      "langsmith", "betterstack", "files", "sandbox", "browser", "github"]) {
       expect(dts).toContain(`declare const ${ns}: {`);
     }
     const aliases = [...dts.matchAll(/^type (\w+) =/gm)].map((m) => m[1]);

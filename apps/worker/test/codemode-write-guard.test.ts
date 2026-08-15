@@ -363,6 +363,10 @@ describe("every capability declares an effect", () => {
       "sandbox.writeFile": "sandbox_write",
       "sandbox.preview": "sandbox_write",
       "sandbox.diff": "sandbox_write",
+      // Phase 20. `openPR` writes to a real monorepo under a real identity;
+      // `checkPR` only reads status back.
+      "github.openPR": "external_write",
+      "github.checkPR": "read",
     });
   });
 

@@ -50,6 +50,7 @@ function unreachableDependencies(): CapabilityDependencies {
     files: gateway("files") as never,
     approval: gateway("approval") as never,
     sandbox: gateway("sandbox") as never,
+    github: gateway("github") as never,
     clock: () => 0,
   };
 }

@@ -385,10 +385,11 @@ describe("the fourth effect class", () => {
 /* --------------------------------------------------------- the namespace -- */
 
 describe("the sandbox namespace", () => {
-  // Phase 19 appends `browser` after this one, so `sandbox` is no longer the
-  // LAST namespace — it is the ninth, immediately before the tenth. The
-  // property this case actually guards (append-only, no reordering) is
-  // unchanged: sandbox's own position in the frozen order is still fixed.
+  // Phase 19 appends `browser` after this one and Phase 20 appends `github`
+  // after that, so `sandbox` is no longer the LAST namespace — it is the
+  // ninth, immediately before the tenth and eleventh. The property this case
+  // actually guards (append-only, no reordering) is unchanged: sandbox's own
+  // position in the frozen order is still fixed.
   it("is appended after approval, ninth in the frozen namespace order", () => {
     expect(PHASE_09_NAMESPACES.indexOf("sandbox")).toBe(PHASE_09_NAMESPACES.indexOf("approval") + 1);
     expect(PHASE_09_NAMESPACES).toEqual([
@@ -402,18 +403,20 @@ describe("the sandbox namespace", () => {
       "approval",
       "sandbox",
       "browser",
+      "github",
     ]);
   });
 
-  it("is the second-to-last provider the registry builds, right before browser", () => {
+  it("is the third-to-last provider the registry builds, right before browser and github", () => {
     const names = buildRegistry(
       slackScope,
       { ...fakeDeps(), db: env.DB },
       TEST_LIMITS,
       testExecution({ audit: fakeAuditSink() }),
     ).map((p) => p.name);
-    expect(names[names.length - 1]).toBe("browser");
-    expect(names[names.length - 2]).toBe("sandbox");
+    expect(names[names.length - 1]).toBe("github");
+    expect(names[names.length - 2]).toBe("browser");
+    expect(names[names.length - 3]).toBe("sandbox");
   });
 
   it("reports boot state without blocking on provisioning", async () => {

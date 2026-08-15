@@ -22,6 +22,7 @@ import { FILES_DECLARATIONS, makeFilesTools } from "./bindings/files";
 import { makeApprovalTools } from "./bindings/approval";
 import { makeSandboxTools } from "./bindings/sandbox";
 import { makeBrowserTools } from "./bindings/browser";
+import { makeGithubTools } from "./bindings/github";
 
 /**
  * The Phase 09 namespace order, frozen.
@@ -49,6 +50,12 @@ export const PHASE_09_NAMESPACES = [
   // are a distinct model-facing surface from a shell, even though both run on
   // the `sandbox` gateway's one container.
   "browser",
+  // Phase 20's eleventh and last: opening the pull request itself. Appended
+  // for the same reason every entry above it was — inserting it earlier would
+  // rewrite every later block of the committed `.d.ts` for no gain, and this
+  // namespace's job (compiling the monorepo's PR conventions) only makes
+  // sense once a diff, a proof recording and a linked issue already exist.
+  "github",
 ] as const;
 
 /**
@@ -292,6 +299,7 @@ export function buildRegistry(
     { name: "approval", tools: makeApprovalTools(ctx) },
     { name: "sandbox", tools: makeSandboxTools(ctx) },
     { name: "browser", tools: makeBrowserTools(ctx) },
+    { name: "github", tools: makeGithubTools(ctx) },
   ]);
 }
 

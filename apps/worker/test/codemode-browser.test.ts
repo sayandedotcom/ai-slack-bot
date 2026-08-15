@@ -61,8 +61,12 @@ const RUNNING: RecordingStatus = {
 /* ------------------------------------------------------------- the effect -- */
 
 describe("the browser namespace", () => {
-  it("is appended to the end of the frozen namespace order, after sandbox", () => {
-    expect(PHASE_09_NAMESPACES[PHASE_09_NAMESPACES.length - 1]).toBe("browser");
+  // Phase 20 appends `github` after this one, so `browser` is no longer the
+  // LAST namespace — it is the tenth, immediately before the eleventh. The
+  // property this case actually guards (append-only, no reordering) is
+  // unchanged: browser's own position in the frozen order is still fixed.
+  it("is appended after sandbox, tenth in the frozen namespace order", () => {
+    expect(PHASE_09_NAMESPACES.indexOf("browser")).toBe(PHASE_09_NAMESPACES.indexOf("sandbox") + 1);
     expect(PHASE_09_NAMESPACES).toEqual([
       "slack",
       "memory",
@@ -74,17 +78,19 @@ describe("the browser namespace", () => {
       "approval",
       "sandbox",
       "browser",
+      "github",
     ]);
   });
 
-  it("is the last provider the registry builds", () => {
+  it("is the second-to-last provider the registry builds, right before github", () => {
     const names = buildRegistry(
       slackScope,
       { ...fakeDeps(), db: undefined as never },
       TEST_LIMITS,
       testExecution({ audit: fakeAuditSink() }),
     ).map((p) => p.name);
-    expect(names[names.length - 1]).toBe("browser");
+    expect(names[names.length - 1]).toBe("github");
+    expect(names[names.length - 2]).toBe("browser");
   });
 
   it("classifies both methods as sandbox_write", () => {
