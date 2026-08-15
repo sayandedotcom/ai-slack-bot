@@ -157,8 +157,27 @@ function buildPreview(raw: string): { preview: string; truncated: boolean } {
  * Content-addressed, like every other object in this bucket: capturing the same
  * diff twice writes the same object and returns the same ref, so a retried
  * `diff()` cannot scatter near-identical patches for Phase 20 to choose between.
+ *
+ * `baseSha` is `git rev-parse HEAD` at the moment the diff was cut. Phase 20
+ * fetches each touched file from GitHub at that commit, applies the patch, and
+ * parents the new git commit on it — so the sha has to identify the exact tree
+ * the diff assumes, not merely accompany it loosely.
+ *
+ * CAVEAT: because the object is keyed by the patch bytes alone, two runs that
+ * produce byte-identical diffs from two different base shas collide on one
+ * object, and whichever `put` lands second overwrites the first one's
+ * `customMetadata` — the earlier run's ref now reads back the later run's
+ * `baseSha`. This is acceptable rather than a bug: identical bytes applying
+ * cleanly at either base is exactly what Phase 20's byte-exact context check
+ * verifies at apply time, so there is no base sha for which those bytes would
+ * silently mis-apply.
  */
-export async function captureDiff(env: Env, runId: string, raw: string): Promise<DiffResult> {
+export async function captureDiff(
+  env: Env,
+  runId: string,
+  raw: string,
+  baseSha: string,
+): Promise<DiffResult> {
   if (raw.trim().length === 0) {
     // Not an error, and deliberately not a ref to an empty object: Phase 20 must
     // be unable to open a pull request that changes nothing.
@@ -183,10 +202,12 @@ export async function captureDiff(env: Env, runId: string, raw: string): Promise
   const hash = await sha256Bytes(bytes);
   await env.ARTIFACTS.put(`${DIFF_KEY_PREFIX}${hash}.patch`, bytes as BufferSource, {
     httpMetadata: { contentType: "text/x-diff" },
-    // The run is metadata, not part of the key: the key is the content, and two
-    // runs producing identical bytes are the same object. This is here for the
-    // sweeper and for after-the-fact attribution, and is never served.
-    customMetadata: { runId, capturedAt: new Date().toISOString() },
+    // The run and the base sha are metadata, not part of the key: the key is
+    // the content, and two runs producing identical bytes are the same object
+    // (see the CAVEAT on `captureDiff` above for what that means for
+    // `baseSha` specifically). `runId` is here for the sweeper and for
+    // after-the-fact attribution; neither field is ever served directly.
+    customMetadata: { runId, baseSha, capturedAt: new Date().toISOString() },
   });
 
   const { preview, truncated } = buildPreview(raw);
@@ -207,4 +228,27 @@ export async function readDiff(env: Env, diffRef: string): Promise<string | null
 
   const object = await env.ARTIFACTS.get(key);
   return object === null ? null : await object.text();
+}
+
+/**
+ * Phase 20's other reader: the patch text alongside the base sha it was cut
+ * against, so the commit it builds can be parented on the exact tree the diff
+ * assumes. Validated through the same `internalDiffKey` path as `readDiff` —
+ * a ref is model-visible, so it stays validated-into-a-key here too, never
+ * pasted into one.
+ */
+export async function readDiffWithBase(
+  env: Env,
+  diffRef: string,
+): Promise<{ patch: string; baseSha: string } | null> {
+  const key = internalDiffKey(diffRef);
+  if (key === null) return null;
+
+  const object = await env.ARTIFACTS.get(key);
+  if (object === null) return null;
+
+  const baseSha = object.customMetadata?.baseSha;
+  if (baseSha === undefined) return null;
+
+  return { patch: await object.text(), baseSha };
 }

@@ -19,6 +19,7 @@ import {
 } from "../src/codemode/bindings/sandbox";
 import { makeSandboxGateway, MIN_REDACTABLE_LENGTH } from "../src/sandbox/gateway";
 import type { SandboxOpsHandle } from "../src/sandbox/gateway";
+import { readDiffWithBase } from "../src/sandbox/diff";
 import {
   fakeAuditSink,
   fakeDeps,
@@ -55,6 +56,9 @@ import {
  */
 
 const RUN_ID = "run_sandbox_ns";
+
+/** A stand-in `git rev-parse HEAD` value — 40 lowercase hex characters. */
+const FAKE_HEAD_SHA = "1111111111111111111111111111111111111111";
 
 /** Long enough to be redactable, and unmistakable in a JSON dump. */
 const SENTINEL = "sk_dev_sentinel_7f3c9a11b2e4d6f8";
@@ -96,6 +100,9 @@ type FakeOptions = {
   processStdout?: string;
   processStderr?: string;
   tunnelUrl?: string;
+  /** What `git rev-parse HEAD` reports, before `diff()`'s own diff command runs. */
+  headSha?: string;
+  headExitCode?: number;
 };
 
 type Fake = { handle: SandboxOpsHandle; calls: Recorded[] };
@@ -152,6 +159,17 @@ function makeFakeSandbox(options: FakeOptions = {}): Fake {
   const handle: SandboxOpsHandle = {
     async exec(command, execOptions) {
       calls.push({ method: "exec", args: [command, execOptions] });
+      // `diff()` runs `git rev-parse HEAD` as its own exec call, before the
+      // diff command, so the fake has to answer it separately rather than
+      // handing back whatever `options.stdout` was configured with for the
+      // diff itself — that string is a patch, not a sha.
+      if (command === "git rev-parse HEAD") {
+        return {
+          exitCode: options.headExitCode ?? 0,
+          stdout: options.headSha ?? FAKE_HEAD_SHA,
+          stderr: "",
+        };
+      }
       return {
         exitCode: options.exitCode ?? 0,
         stdout: options.stdout ?? "",
@@ -706,6 +724,58 @@ describe("diff by reference", () => {
     expect(result.diffRef).toMatch(/^diff_[0-9a-f]{64}$/);
     // Intent-to-add, so a from-scratch file survives to the pull request.
     expect(fake.calls.some((c) => String(c.args[0]).includes("git add -A -N"))).toBe(true);
+  });
+
+  // Pins the fix: `git add -A -N && git diff` (no `HEAD`) fully stages every
+  // deletion via `-A`, so the unstaged `git diff` has nothing left to compare
+  // and a deleted file never appears in the patch — a real fix that deletes a
+  // file would then open a pull request that silently keeps it. `git diff
+  // HEAD` compares the working tree to the last commit regardless of what got
+  // staged, so a `deleted file mode` header survives. This exact string is
+  // what a future edit must not be able to quietly regress back to.
+  it("diffs against HEAD, not the index, so a staged deletion still shows up", async () => {
+    const fake = makeFakeSandbox({ stdout: "diff --git a/x b/x\n" });
+    await call(sandboxTools(fake), "diff");
+
+    const diffCall = fake.calls.find(
+      (c) => c.method === "exec" && String(c.args[0]).startsWith("git add -A -N"),
+    );
+    expect(diffCall?.args[0]).toBe("git add -A -N && git diff HEAD");
+  });
+
+  // Its own exec call, run before the diff command — not concatenated into
+  // one combined stdout, which is how a sha ends up pasted inside the patch.
+  it("resolves HEAD as its own exec call, before the diff command runs", async () => {
+    const fake = makeFakeSandbox({ stdout: "diff --git a/x b/x\n" });
+    await call(sandboxTools(fake), "diff");
+
+    const execCalls = fake.calls.filter((c) => c.method === "exec");
+    const headIndex = execCalls.findIndex((c) => c.args[0] === "git rev-parse HEAD");
+    const diffIndex = execCalls.findIndex((c) => String(c.args[0]).startsWith("git add -A -N"));
+
+    expect(headIndex).toBeGreaterThanOrEqual(0);
+    expect(diffIndex).toBeGreaterThan(headIndex);
+  });
+
+  it("records the resolved HEAD sha as the diff's base sha", async () => {
+    const raw = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n";
+    const fake = makeFakeSandbox({ stdout: raw, headSha: `${FAKE_HEAD_SHA}\n` });
+    const result = (await call(sandboxTools(fake), "diff")) as { diffRef: string | null };
+
+    expect(result.diffRef).not.toBeNull();
+    expect(await readDiffWithBase(env as unknown as Env, result.diffRef!)).toEqual({
+      patch: raw,
+      baseSha: FAKE_HEAD_SHA,
+    });
+  });
+
+  it("fails loudly, before diffing, when HEAD cannot be resolved", async () => {
+    const fake = makeFakeSandbox({ stdout: "diff --git a/a b/a\n", headExitCode: 128 });
+
+    await expect(call(sandboxTools(fake), "diff")).rejects.toThrow(CapabilityError);
+    // Refused before the diff command was ever run — no patch with no usable
+    // base sha is stored.
+    expect(fake.calls.some((c) => String(c.args[0]).startsWith("git add -A -N"))).toBe(false);
   });
 
   it("says so plainly when nothing changed", async () => {

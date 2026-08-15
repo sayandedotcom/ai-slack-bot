@@ -144,8 +144,19 @@ const marker = (keyName: string): string => `[redacted:${keyName}]`;
  * `git add -A -N` is intent-to-add: a from-scratch file appears in the diff
  * without staging its content, which is what makes a new file survive to
  * Phase 20's pull request instead of vanishing between the fix and the commit.
+ *
+ * Diffed against `HEAD`, not the index. `-A` fully stages every change,
+ * including a deletion — so an unstaged `git diff` (no `HEAD`) reports nothing
+ * for a deleted file: `git status --short` shows `D ` in the index column, but
+ * `git diff` has nothing left to compare the empty index entry against. `git
+ * diff HEAD` compares the working tree to the last commit regardless of what
+ * is staged, so both a `new file mode` and a `deleted file mode` header come
+ * out — which is exactly what Phase 20's applier parses. It is also the
+ * commit `captureDiff`'s `baseSha` records, so the diff and the sha it is
+ * captured against can no longer disagree just because something was already
+ * staged before this command ran.
  */
-const DIFF_COMMAND = "git add -A -N && git diff";
+const DIFF_COMMAND = "git add -A -N && git diff HEAD";
 
 /** Long enough for a diff of a real fix; far short of an execution's budget. */
 const DIFF_TIMEOUT_MS = 15_000;
@@ -437,6 +448,29 @@ export function makeSandboxGateway(
 
     async diff(): Promise<DiffResult> {
       await assertReady();
+
+      // Its own exec call, run BEFORE the diff and never concatenated into
+      // `DIFF_COMMAND`: one command, one stdout. Mixing the sha into the same
+      // stdout as the patch is how a sha ends up pasted inside the patch text
+      // itself, which is exactly the byte-exactness this module exists to
+      // protect.
+      const head = await sandbox().exec("git rev-parse HEAD", {
+        timeout: DIFF_TIMEOUT_MS,
+        cwd: repoPath,
+      });
+      const baseSha = head.stdout.trim();
+      // Fail loudly here rather than store a patch with no sha anyone can ever
+      // apply it against. A non-zero exit or a value that is not a sha means a
+      // detached or otherwise broken checkout — Phase 20 could not resolve a
+      // base tree for it anyway, so refusing at capture time surfaces the
+      // problem at the run that caused it instead of at PR time.
+      if (head.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(baseSha)) {
+        throw new CapabilityError(
+          "upstream_unavailable",
+          `could not resolve the checkout's HEAD commit (exit ${head.exitCode}). ${redact(head.stderr).slice(0, 400)}`,
+        );
+      }
+
       const result = await sandbox().exec(DIFF_COMMAND, {
         timeout: DIFF_TIMEOUT_MS,
         cwd: repoPath,
@@ -454,7 +488,7 @@ export function makeSandboxGateway(
       // says in its own truncation marker that it must not be reconstructed
       // from. A dev-env value that reached a source file is a bug the diff has
       // to carry faithfully and the transcript must not repeat.
-      const captured = await captureDiff(env, runId, result.stdout);
+      const captured = await captureDiff(env, runId, result.stdout, baseSha);
       return { ...captured, preview: redact(captured.preview) };
     },
 

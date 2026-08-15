@@ -9,6 +9,7 @@ import {
   isInternalKey,
   MAX_DIFF_BYTES,
   readDiff,
+  readDiffWithBase,
 } from "../src/sandbox/diff";
 import { isArtifactKey } from "../src/api/artifacts";
 import { makeArtifactPublisher } from "../src/files/r2";
@@ -27,6 +28,10 @@ import { makeArtifactPublisher } from "../src/files/r2";
 const worker = env as unknown as Env;
 
 const run = () => `run_${crypto.randomUUID()}`;
+
+/** A stand-in `git rev-parse HEAD` value — 40 lowercase hex characters. */
+const BASE_SHA = "abc123def456abc123def456abc123def456abc";
+const OTHER_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
 /** How many objects currently sit under the internal namespace. */
 async function internalObjectCount(): Promise<number> {
@@ -101,7 +106,7 @@ ${body}
 
 describe("captureDiff stores the full text and previews it", () => {
   it("writes the whole diff to R2 and hands back a ref, not the bytes", async () => {
-    const result = await captureDiff(worker, run(), REALISTIC_DIFF);
+    const result = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
 
     expect(result.diffRef).not.toBeNull();
     expect(await readDiff(worker, result.diffRef!)).toBe(REALISTIC_DIFF);
@@ -114,7 +119,7 @@ describe("captureDiff stores the full text and previews it", () => {
     const raw = longDiff(4000);
     expect(raw.length).toBeGreaterThan(24_000);
 
-    const result = await captureDiff(worker, run(), raw);
+    const result = await captureDiff(worker, run(), raw, BASE_SHA);
 
     expect(result.truncated).toBe(true);
     // Well inside `PRODUCTION_LIMITS.maxResultChars`, because the preview is
@@ -130,9 +135,9 @@ describe("captureDiff stores the full text and previews it", () => {
   });
 
   it("keys by content, so re-capturing the same diff writes one object", async () => {
-    const first = await captureDiff(worker, run(), REALISTIC_DIFF);
+    const first = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
     const before = await internalObjectCount();
-    const second = await captureDiff(worker, run(), REALISTIC_DIFF);
+    const second = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
 
     expect(second.diffRef).toBe(first.diffRef);
     expect(await internalObjectCount()).toBe(before);
@@ -141,7 +146,7 @@ describe("captureDiff stores the full text and previews it", () => {
 
 describe("the stats are parsed from the diff itself", () => {
   it("counts files, insertions and deletions across added, modified and deleted files", async () => {
-    const result = await captureDiff(worker, run(), REALISTIC_DIFF);
+    const result = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
 
     expect(result.filesChanged).toBe(4);
     // 3 (modified) + 3 (added) + 0 (deleted) + 3 (toml, incl. the `++++` line)
@@ -159,7 +164,7 @@ index 1111111..2222222 100644
 -old
 +new
 `;
-    const result = await captureDiff(worker, run(), oneLine);
+    const result = await captureDiff(worker, run(), oneLine, BASE_SHA);
     expect(result).toMatchObject({ filesChanged: 1, insertions: 1, deletions: 1 });
   });
 });
@@ -167,7 +172,7 @@ index 1111111..2222222 100644
 describe("an empty diff is a fact, not an error", () => {
   it("returns no ref, says plainly that nothing changed, and writes nothing", async () => {
     const before = await internalObjectCount();
-    const result = await captureDiff(worker, run(), "");
+    const result = await captureDiff(worker, run(), "", BASE_SHA);
 
     expect(result.diffRef).toBeNull();
     expect(result.truncated).toBe(false);
@@ -179,7 +184,7 @@ describe("an empty diff is a fact, not an error", () => {
   });
 
   it("treats a whitespace-only diff the same way", async () => {
-    const result = await captureDiff(worker, run(), "\n \n");
+    const result = await captureDiff(worker, run(), "\n \n", BASE_SHA);
     expect(result.diffRef).toBeNull();
     expect(result.preview.toLowerCase()).toContain("no changes");
   });
@@ -192,15 +197,15 @@ describe("an oversized diff is refused, never truncated", () => {
     const raw = huge();
     expect(new TextEncoder().encode(raw).byteLength).toBeGreaterThan(MAX_DIFF_BYTES);
 
-    await expect(captureDiff(worker, run(), raw)).rejects.toThrow(
+    await expect(captureDiff(worker, run(), raw, BASE_SHA)).rejects.toThrow(
       new RegExp(`${MAX_DIFF_BYTES}`),
     );
-    await expect(captureDiff(worker, run(), raw)).rejects.toThrow(/output_too_large/);
+    await expect(captureDiff(worker, run(), raw, BASE_SHA)).rejects.toThrow(/output_too_large/);
   });
 
   it("stores nothing rather than half a patch", async () => {
     const before = await internalObjectCount();
-    await expect(captureDiff(worker, run(), huge())).rejects.toThrow();
+    await expect(captureDiff(worker, run(), huge(), BASE_SHA)).rejects.toThrow();
     // A truncated patch is a broken patch. Silently keeping the first megabyte
     // would fail at PR time in Phase 20, where the failure is expensive and
     // confusing.
@@ -221,7 +226,7 @@ index 1111111..2222222 100644
 
 
 `;
-    const result = await captureDiff(worker, run(), raw);
+    const result = await captureDiff(worker, run(), raw, BASE_SHA);
     const readBack = await readDiff(worker, result.diffRef!);
 
     expect(readBack).toBe(raw);
@@ -244,7 +249,7 @@ describe("the internal namespace is not reachable from the public artifacts rout
   const fetchKey = (path: string) => SELF.fetch(`https://firefighter.example/api/artifacts/${path}`);
 
   it("404s the key that actually holds a captured diff", async () => {
-    const result = await captureDiff(worker, run(), REALISTIC_DIFF);
+    const result = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
     const key = internalDiffKey(result.diffRef!);
     expect(key).not.toBeNull();
 
@@ -300,5 +305,65 @@ describe("the internal namespace is not reachable from the public artifacts rout
     // characters and a dot, so `_` cannot be its first character.
     expect(isArtifactKey(`${INTERNAL_KEY_PREFIX}diff/${hex}.patch`)).toBe(false);
     expect(INTERNAL_KEY_PREFIX.startsWith("_")).toBe(true);
+  });
+});
+
+/**
+ * THE BASE SHA TRAVELS WITH THE DIFF.
+ *
+ * Phase 20 fetches each touched file from GitHub at the base commit, applies
+ * the patch, and parents the resulting git commit on that same sha. If the sha
+ * and the patch could drift apart, a stale patch would apply cleanly against
+ * the wrong tree — or fail in a way that looks like corruption rather than
+ * staleness. Keeping them in one write is what makes a context mismatch always
+ * mean "this patch is stale" rather than "something is broken."
+ */
+describe("the base sha travels with the diff", () => {
+  it("keeps the model-visible DiffResult shape unchanged", async () => {
+    const result = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
+
+    // Exact key set: a new field here would be `.d.ts` churn for Phase 20's
+    // model-facing schema, which the brief says must not happen.
+    expect(Object.keys(result).sort()).toEqual(
+      ["deletions", "diffRef", "filesChanged", "insertions", "preview", "truncated"].sort(),
+    );
+  });
+
+  it("readDiffWithBase returns the patch and the base sha it was cut against", async () => {
+    const result = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
+
+    expect(await readDiffWithBase(worker, result.diffRef!)).toEqual({
+      patch: REALISTIC_DIFF,
+      baseSha: BASE_SHA,
+    });
+  });
+
+  it("readDiff still returns text only, for a caller that wants no metadata", async () => {
+    const result = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
+
+    expect(await readDiff(worker, result.diffRef!)).toBe(REALISTIC_DIFF);
+  });
+
+  it("returns null from readDiffWithBase for an unknown or malformed ref, same as readDiff", async () => {
+    expect(await readDiffWithBase(worker, `diff_${"a".repeat(64)}`)).toBeNull();
+    expect(await readDiffWithBase(worker, "../../etc/passwd")).toBeNull();
+    expect(await readDiffWithBase(worker, `${"a".repeat(64)}.csv`)).toBeNull();
+    expect(await readDiffWithBase(worker, "")).toBeNull();
+  });
+
+  it("is content-addressed by patch bytes alone: identical bytes from a different base share one object, and the later write's metadata wins", async () => {
+    const first = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
+    const second = await captureDiff(worker, run(), REALISTIC_DIFF, OTHER_SHA);
+
+    // Same bytes, so the same content-addressed key.
+    expect(second.diffRef).toBe(first.diffRef);
+    // The second write's customMetadata replaced the first's; this is
+    // documented behavior, not a bug — identical bytes applying cleanly at
+    // either base sha is exactly what the applier's byte-exact context check
+    // verifies at apply time in Phase 20.
+    expect(await readDiffWithBase(worker, second.diffRef!)).toEqual({
+      patch: REALISTIC_DIFF,
+      baseSha: OTHER_SHA,
+    });
   });
 });
