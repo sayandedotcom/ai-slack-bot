@@ -116,6 +116,17 @@ trailing COPY layer** — every other layer reported CACHED and the build took
 under a second. That is the layer ordering in the Dockerfile doing its job, and
 it is why the harness could be edited late without paying for the image twice.
 
+
+## Live drill — 2026-08-15, `#test-firedrill`
+
+| Run | Message | Outcome | What it taught |
+|---|---|---|---|
+| `506ef822` | "record a quick browser session showing what the funnel editor's empty state looks like" | triage `wake=1`; status reply in the thread at ~37 s; container `44fbbba9` running on the new image at **`sin22`** 14 s later; then **`note: "clone"` from 12.9 s to 438 s** — seven minutes on a step that took 28 s in the phase-18 proof — and the run died at its step ceiling. Nothing this phase built was reached: no `mkdir`, no `record`, no Chromium. | **A stalled clone was undetectable and unbounded.** The credential was valid (200 on the repo, the branch and the git smart-HTTP endpoint from here) and the sentinel-swap code was byte-identical to the fast run — so the transfer itself stalled, from a different location than the fast one, and git's defaults let a stalled transfer hang forever. Measured from here: the shallow clone is **401 MB**, 94 s on a domestic uplink; 28 s from Delhi means Cloudflare normally moves it at ~14 MB/s. The step ceiling (24 polls × ~14 s) can never close over a 7-minute clone, and it fired before the 10-minute provisioning deadline could name the step. |
+
+Fix (`ef67140`): `GIT_TERMINAL_PROMPT=0` so a 401 can never sit at a prompt; `http.lowSpeedLimit=10240`/`lowSpeedTime=60` so under 10 KB/s for a minute aborts; `timeout 300` per attempt; three attempts; `--progress` so the container log shows movement. A stall is now a named `FAILED clone` in about a minute, retried twice, instead of a silent seven. `STEP_NOTES` gained the clone, retry, set-remote and browser steps, so the note the model reads describes the work rather than echoing a bare step name.
+
+Two things this drill did NOT answer, still open for the next run: whether `mkdir` on the ops handle works against a real container, and whether Chromium launches on Cloudflare's runtime. Both sit downstream of the clone.
+
 ### The recording-URL decision, grounded
 
 - The Phase 09 artifact pipeline cannot serve recordings, four independent
