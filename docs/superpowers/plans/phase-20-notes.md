@@ -368,7 +368,10 @@ drill if push access lands.
 **Default branch is `staging`** — confirmed via the API, consistent with
 `AGENTS.md` §3.
 
-## Untested, and only testable with a real PR
+## The `FIR-` question — mostly settled by reading the settings
+
+*(The paragraph immediately below is the original framing, kept because the
+status note after it corrects a specific claim in it.)*
 
 Whether Linear's GitHub integration matches **`FIR-`** identifiers or only
 **`ZEL-`**. The integration is confirmed live for `ZEL-` against
@@ -382,26 +385,50 @@ Cheapest check once push access exists: open a throwaway draft PR with
 `Fixes FIR-2` as the first body line and see whether the issue picks up the
 attachment. Until then, treat auto-close as unproven for `FIR-` issues.
 
-**Status 2026-08-15: still unproven, but no longer blocked.** Push access landed,
-so the throwaway-draft-PR probe above is now runnable and is the fastest way to
-settle it. Asked directly, Ronit answered "check linear settings — adding
-`Fixes <issue id>` should link it as such". That confirms the *mechanism*, which
-was already documented above; it does not answer whether the
-`fire-fighter-testing` team is inside the GitHub integration's scope, which is
-the actual open question. Linear scopes GitHub sync per team.
+**Status 2026-08-15: the per-team worry was mistaken. Read the settings.**
 
-Two ways to settle it, in order of cost:
+Linear → Settings → Integrations → GitHub, read directly. The integration is
+enabled org-wide on `Zellify` (by `ronit@zellify.app`, 2026-07-15). The **only**
+per-team binding on that page is under **GitHub Issues** — `Development (ZEL)` ↔
+`Zellify/web2app`, two-way — and that feature imports GitHub *issues* into a
+Linear team. It is not PR linking, and the fire-fighter does not use it.
 
-1. **Linear → Settings → Integrations → GitHub** — read off which teams are
-   enabled. Free, and answers it definitively.
-2. **The draft-PR probe.** Also proves the end-to-end path, so it is worth doing
-   regardless once (1) says yes.
+PR↔issue linking is org-level: any repo in a connected org can link to any
+identifier that resolves in the workspace. So `FIR-<n>` is expected to work, and
+the earlier note here — "Linear scopes GitHub sync per team" — was wrong. The
+draft-PR probe is still the only thing that turns "expected" into "proven", and
+it is now runnable, but it is confirmation rather than a live risk.
 
-If `fire-fighter-testing` turns out to be outside the integration's scope, the
-options are to enable it (a workspace setting, needs an admin) or to file the
-drill's issues on a team that is already in scope. Do not discover this during
-the drill: an unmatched identifier fails **silently** — the PR opens, the body
-looks right, and nothing links.
+### The real trap: commit-message magic words are DISABLED
+
+**`Link commits to issues with magic words` is toggled OFF** in the workspace.
+That setting governs *commit messages* only. With it off, `Fixes FIR-2` written
+into a commit links nothing at all.
+
+`Fixes` in the **PR body** is unaffected and works — PR #1491 is the proof:
+`ZEL-1883` and `ZEL-1981` appear only in the body, never in the branch name
+(`feat/slash-commands-zel-1785`), and the bot linked all three.
+
+**Rule for the ship loop: the `Fixes` line lives in the PR body. A
+commit-message-only `Fixes` is silently inert.** This is the single easiest way
+for the assignment's "closes on merge" requirement to fail while every artefact
+looks correct.
+
+### Other settings read at the same time, and why they matter
+
+- **`Automatically link Linear issues`: OFF.** Leave it off. On, it links a
+  matching issue *or generates one on merge when none is linked* — so every
+  agent PR that missed its link would mint a phantom Linear issue.
+- **Linkbacks → Private repositories: ON**, descriptions included. This is what
+  produces the `linear-code` bot comment the ship loop reads back as its
+  verification. Confirmed enabled, not assumed.
+- **Branch format: `username/identifier-title`.** This is Linear's *Copy git
+  branch name* suggestion, workspace-wide. It is not the repo's convention and
+  not a constraint on the agent — see the branch section above, and the recorded
+  correction about not inferring the convention from `gitBranchName`.
+- **GitHub Issues sync targets `Zellify/web2app`**, the older repo — not
+  `web2app-rebuild`. Nothing the fire-fighter touches, noted only so it is not
+  mistaken later for evidence about which repo is in scope for PR linking.
 
 ## Still open
 
