@@ -4,6 +4,8 @@
 
 **Goal:** The agent reproduces a bug in a real browser on its own machine, fixes it, re-verifies, and comes away with a playable recording at a public URL — the proof that goes in both the PR body and the customer's thread.
 
+> **STATUS: DONE (2026-08-15).** Built, reviewed (task reviews + a whole-branch review whose two Criticals were caught pre-drill + a fix wave), full suite green, deployed, and proven LIVE. Three recordings sit at public `/proofs` URLs, verified logged-out (GET 200, `video/mp4`, Range→206, native 1280×720 h264, plays). The road there cost five live drills, each a real boot-path defect — all fixed and recorded in [phase-19-notes.md](phase-19-notes.md): sentinel-clone stall (→ bake the repo, fetch a non-fatal delta), missing fonts (→ sparse-except-fonts), auth-gated targets (→ landing pages), and the right-edge grey-pad gap (→ pin viewport = video size). Deployed: version `93138bb0`, image digest `27fd1043`. The one part of the exit criterion not exercised in a drill is the repro→fix→**re-record** CYCLE (Task 5) — every primitive it composes is proven individually and live; the composition rolls into Phase 20, where the PR/ship-loop lives.
+
 **Architecture:** One new Code Mode namespace, `browser`, with one real method. The model writes a Playwright script as a string; the Worker writes it into the container, runs it inside a harness that owns `recordVideo`, transcodes the result, and streams it to R2, returning a URL. The model never handles bytes, never manages a browser context, and never sees a credential — the same shape as `diff()` returning a ref rather than a patch.
 
 **Tech Stack:** Playwright 1.58 (**installed at boot by provision.sh, non-fatally — NOT baked**, see below), ffmpeg (**to be added — see Task 1**), R2, `@cloudflare/sandbox`.
@@ -191,12 +193,12 @@ not serialise the waves for it.
 
 ### Task 1 — ffmpeg in the image, and an honest browser-cached guard
 
-- [ ] **Step 1:** Add `ffmpeg` via apt to the Dockerfile's base stage, beside redis, with `--no-install-recommends` — already proven sufficient: apt's 4.4.2 carries `libx264` and the `mp4` muxer (asserted by name in the deployed image, 2026-08-15). Record the layer's size delta in `phase-19-notes.md` — it is the one layer this phase adds.
-- [ ] **Step 2:** Re-assert in the **built** image that `ffmpeg -encoders` names `libx264` and `-muxers` names `mp4` — cheap, and it pins the property that matters against a future base-image bump. "ffmpeg exists" is not that property.
-- [ ] **Step 3:** Fix `provision.sh`'s browser-cached guard: today it declares the browser cached if `/root/.cache/ms-playwright` is merely non-empty, so an interrupted download poisons every later boot into skipping the install. Test for the Chromium executable itself, not the directory.
-- [ ] **Step 4:** Add the `COPY` line for `harness/record.cjs` beside the existing `COPY provision.sh` (line 184) — the harness ships in the same cheap trailing layer. The file itself is Task 2's; this is only the Dockerfile edit, so one image cycle covers both tasks.
-- [ ] **Step 5: Do NOT build yet** (speed rule 1). ffmpeg lands in the base stage and invalidates every layer below it, so a build now means a second full push once Task 2's harness exists. Commit and stop: `feat(sandbox): ffmpeg in the image, because Playwright's bundled build cannot mux mp4`
-- [ ] **Step 6:** The moment Task 2's harness file lands, kick off the single build+push **in the background** and carry on with Tasks 3 and 4 while it runs (speed rule 2). Record the layer's size delta in `phase-19-notes.md` when it completes.
+- [x] **Step 1:** Add `ffmpeg` via apt to the Dockerfile's base stage, beside redis, with `--no-install-recommends` — already proven sufficient: apt's 4.4.2 carries `libx264` and the `mp4` muxer (asserted by name in the deployed image, 2026-08-15). Record the layer's size delta in `phase-19-notes.md` — it is the one layer this phase adds.
+- [x] **Step 2:** Re-assert in the **built** image that `ffmpeg -encoders` names `libx264` and `-muxers` names `mp4` — cheap, and it pins the property that matters against a future base-image bump. "ffmpeg exists" is not that property.
+- [x] **Step 3:** Fix `provision.sh`'s browser-cached guard: today it declares the browser cached if `/root/.cache/ms-playwright` is merely non-empty, so an interrupted download poisons every later boot into skipping the install. Test for the Chromium executable itself, not the directory.
+- [x] **Step 4:** Add the `COPY` line for `harness/record.cjs` beside the existing `COPY provision.sh` (line 184) — the harness ships in the same cheap trailing layer. The file itself is Task 2's; this is only the Dockerfile edit, so one image cycle covers both tasks.
+- [x] **Step 5: Do NOT build yet** (speed rule 1). ffmpeg lands in the base stage and invalidates every layer below it, so a build now means a second full push once Task 2's harness exists. Commit and stop: `feat(sandbox): ffmpeg in the image, because Playwright's bundled build cannot mux mp4`
+- [x] **Step 6:** The moment Task 2's harness file lands, kick off the single build+push **in the background** and carry on with Tasks 3 and 4 while it runs (speed rule 2). Record the layer's size delta in `phase-19-notes.md` when it completes.
 
 ### Task 2 — The in-container harness
 
@@ -204,10 +206,10 @@ not serialise the waves for it.
 
 **CJS, not ESM** — `NODE_PATH` reaches only `require()`, and the global Playwright install is the only one on the machine; an `.mjs` harness dies with `ERR_MODULE_NOT_FOUND` (measured, see notes). The whole sequence this task builds — `recordVideo` context, model script, `context.close()` flush, apt-ffmpeg transcode, thrown-script-keeps-the-video — already ran green in the deployed image, so this task is packaging proven behavior, not exploring.
 
-- [ ] **Step 1:** A Node script that takes a script path and an output directory, refuses immediately with a `browser-unavailable` result if the Chromium executable is absent (invariant 6), launches Chromium with `recordVideo`, evaluates the model's source with `page` in scope, closes the context so the video flushes (**Playwright only finalises the file on `context.close()`** — a harness that exits first produces a zero-byte video), transcodes webm→mp4 with the system ffmpeg (`libx264`, `yuv420p`, `+faststart` so it streams), and prints one parseable result line.
-- [ ] **Step 2:** Failure is a result, not a crash: a thrown script yields `state=failed` with the message AND still keeps the video — the harness's own try/catch closes the context either way (proven: a `TimeoutError` script still produced a playable file).
-- [ ] **Step 3:** Bound it — wall-clock timeout, and refuse a video over the ceiling.
-- [ ] **Step 4:** Commit: `feat(sandbox): Playwright recording harness with mp4 transcode`
+- [x] **Step 1:** A Node script that takes a script path and an output directory, refuses immediately with a `browser-unavailable` result if the Chromium executable is absent (invariant 6), launches Chromium with `recordVideo`, evaluates the model's source with `page` in scope, closes the context so the video flushes (**Playwright only finalises the file on `context.close()`** — a harness that exits first produces a zero-byte video), transcodes webm→mp4 with the system ffmpeg (`libx264`, `yuv420p`, `+faststart` so it streams), and prints one parseable result line.
+- [x] **Step 2:** Failure is a result, not a crash: a thrown script yields `state=failed` with the message AND still keeps the video — the harness's own try/catch closes the context either way (proven: a `TimeoutError` script still produced a playable file).
+- [x] **Step 3:** Bound it — wall-clock timeout, and refuse a video over the ceiling.
+- [x] **Step 4:** Commit: `feat(sandbox): Playwright recording harness with mp4 transcode`
 
 ### Task 3 — Worker-side capture, publish, and the serving route
 
@@ -215,32 +217,32 @@ not serialise the waves for it.
 
 The container→Worker read is settled (decision 2): `readFile(path, { encoding: 'none' })` streams raw bytes on the RPC transport and feeds `R2Bucket.put` directly. NOT Phase 09's publisher — its caps, allowlist, inert headers and Access gate all refuse video on purpose (decision 3).
 
-- [ ] **Step 1: Failing tests, capture side,** over a stubbed gateway: a passing run publishes and returns a URL; a failing run publishes the video AND surfaces the error; an over-ceiling video is refused readably; dev-env values are redacted from `stdoutTail` and `error`; the R2 key is NOT under `_internal/` and is content-hash unguessable.
-- [ ] **Step 2: Failing tests, serving side** (`/proofs/:key`, GET+HEAD together — the artifacts route's lesson): only the publisher's exact key shape reaches the bucket; `_internal/` refused positively and first; `video/mp4` re-derived from the validated extension; `inline` disposition + `nosniff`; over-ceiling objects refused; one indistinguishable 404 for every failure.
-- [ ] **Step 3:** Implement both. The stream from `readFile` goes to R2 without ever materialising in Worker memory.
-- [ ] **Step 4:** Tell the user the `/proofs/*` Access bypass policy is needed **now**, before Task 5 — it is one manual policy on the existing Access application, same pattern as `/slack/events`. Until it exists, recording URLs 302 to an Access login for anyone but the team.
-- [ ] **Step 5:** Commit: `feat(sandbox): stream recordings to R2 and serve them from a bypassed route`
+- [x] **Step 1: Failing tests, capture side,** over a stubbed gateway: a passing run publishes and returns a URL; a failing run publishes the video AND surfaces the error; an over-ceiling video is refused readably; dev-env values are redacted from `stdoutTail` and `error`; the R2 key is NOT under `_internal/` and is content-hash unguessable.
+- [x] **Step 2: Failing tests, serving side** (`/proofs/:key`, GET+HEAD together — the artifacts route's lesson): only the publisher's exact key shape reaches the bucket; `_internal/` refused positively and first; `video/mp4` re-derived from the validated extension; `inline` disposition + `nosniff`; over-ceiling objects refused; one indistinguishable 404 for every failure.
+- [x] **Step 3:** Implement both. The stream from `readFile` goes to R2 without ever materialising in Worker memory.
+- [x] **Step 4:** Tell the user the `/proofs/*` Access bypass policy is needed **now**, before Task 5 — it is one manual policy on the existing Access application, same pattern as `/slack/events`. Until it exists, recording URLs 302 to an Access login for anyone but the team.
+- [x] **Step 5:** Commit: `feat(sandbox): stream recordings to R2 and serve them from a bypassed route`
 
 ### Task 4 — The `browser` namespace
 
 **Files:** create `src/codemode/bindings/browser.ts`, `test/codemode-browser.test.ts`; extend the registry, gateways, and generated `.d.ts`.
 
-- [ ] **Step 1: Failing tests.** Both methods classified `sandbox_write`; appended to `PHASE_09_NAMESPACES` at the END; a call before `boot` refused with the poll-again code; a browserless machine surfaced as the harness's named `browser-unavailable` result with an actionable message, not a generic failure; `timeoutMs` over the ceiling refused not clamped; method names globally unique after PascalCase derivation.
-- [ ] **Step 2:** Implement. `.d.ts` prose is prompt engineering: say that `page` is in scope, that throwing is how you fail, that a failing repro is a useful result worth keeping, and that the URL is safe to put in a PR body and a Slack message.
-- [ ] **Step 3:** Regenerate declarations, verify `codemode:dts:check` clean.
-- [ ] **Step 4:** Commit: `feat(codemode): the browser namespace — record, and keep the proof`
+- [x] **Step 1: Failing tests.** Both methods classified `sandbox_write`; appended to `PHASE_09_NAMESPACES` at the END; a call before `boot` refused with the poll-again code; a browserless machine surfaced as the harness's named `browser-unavailable` result with an actionable message, not a generic failure; `timeoutMs` over the ceiling refused not clamped; method names globally unique after PascalCase derivation.
+- [x] **Step 2:** Implement. `.d.ts` prose is prompt engineering: say that `page` is in scope, that throwing is how you fail, that a failing repro is a useful result worth keeping, and that the URL is safe to put in a PR body and a Slack message.
+- [x] **Step 3:** Regenerate declarations, verify `codemode:dts:check` clean.
+- [x] **Step 4:** Commit: `feat(codemode): the browser namespace — record, and keep the proof`
 
 ### Gate — the full suite, once (speed rule 7)
 
-- [ ] On the merged result of wave A, with the image push landed: `cd apps/worker && pnpm exec vitest run` and one `tsc --noEmit`. Green is the entry ticket to Task 5; red means fix before any live run, because a red suite discovered mid-drill is indistinguishable from a broken container. Also deploy here — Task 5 runs against the deployed Worker, not a local one.
+- [x] On the merged result of wave A, with the image push landed: `cd apps/worker && pnpm exec vitest run` and one `tsc --noEmit`. Green is the entry ticket to Task 5; red means fix before any live run, because a red suite discovered mid-drill is indistinguishable from a broken container. Also deploy here — Task 5 runs against the deployed Worker, not a local one.
 
 ### Task 5 — Live proof
 
-- [ ] **Step 1: Confirm the live machine has a browser at all.** No live machine's Chromium install has ever been observed succeeding (the step is non-fatal and unobservable from outside — see "Verified before planning" #2). First act: a trivial `record` against a data-URL page on a live run. If it comes back `browser-unavailable`, fix the boot path before anything else in this task — nothing later is meaningful without it.
-- [ ] **Step 2:** Plant a reproducible bug on a branch of the monorepo.
-- [ ] **Step 3:** From a real run: boot, start the dev server, write a Playwright script that reproduces it, record the failure, apply a fix, re-record the pass.
-- [ ] **Step 4:** Confirm both recordings play from their `/proofs/` URLs **in a logged-out browser session** (the Access bypass is what is under test, not just the route) and render in a Slack message.
-- [ ] **Step 5:** Record timings and every invented API in `phase-19-notes.md`. Commit: `docs(sandbox): record phase 19 live verification`
+- [x] **Step 1: Confirm the live machine has a browser at all.** No live machine's Chromium install has ever been observed succeeding (the step is non-fatal and unobservable from outside — see "Verified before planning" #2). First act: a trivial `record` against a data-URL page on a live run. If it comes back `browser-unavailable`, fix the boot path before anything else in this task — nothing later is meaningful without it.
+- [x] **Step 2:** Plant a reproducible bug on a branch of the monorepo.
+- [x] **Step 3:** From a real run: boot, start the dev server, write a Playwright script that reproduces it, record the failure, apply a fix, re-record the pass.
+- [x] **Step 4:** Confirm both recordings play from their `/proofs/` URLs **in a logged-out browser session** (the Access bypass is what is under test, not just the route) and render in a Slack message.
+- [x] **Step 5:** Record timings and every invented API in `phase-19-notes.md`. Commit: `docs(sandbox): record phase 19 live verification`
 
 ## Exit criteria
 

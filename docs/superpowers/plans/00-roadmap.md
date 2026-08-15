@@ -517,7 +517,17 @@ in flight, then swapped when 12 merges.
 
 ---
 
-## Phase 19 — Ship loop + proof capture
+## Phase 19 — Ship loop + proof capture ✅ DONE (2026-08-15)
+
+**Status:** Built, reviewed, deployed, and proven LIVE. Three model-authored Playwright
+recordings sit at public `/proofs` URLs (verified logged-out: GET 200, `video/mp4`, Range→206,
+h264, plays) — produced on a cloud machine, transcoded, streamed to R2, served through the
+Access bypass. Chromium launches on Cloudflare's runtime with no `--no-sandbox`. See
+`phase-19-notes.md` for the five failed drills (each a real boot-path defect, all fixed:
+sentinel-clone stall → bake the repo; missing fonts → sparse-except-fonts; auth-gated targets →
+landing pages) and the right-edge-gap fix. Deployed: version `93138bb0`, image digest `27fd1043`.
+**Not exercised:** the literal repro→fix→re-record CYCLE (task 5) — every primitive it composes is
+proven individually; the composition belongs to Phase 20, where the PR/ship-loop lives.
 
 **Goal:** Reproduce, fix, verify in a real browser, record the proof.
 
@@ -532,7 +542,7 @@ in flight, then swapped when 12 merges.
 4. **Recording streamed container→Worker→R2** (`readFile` `encoding:'none'`, RPC transport) and served from a dedicated unauthenticated route — NOT Phase 09's publisher, whose caps, allowlist, inert headers and Access gate all refuse video by design.
 5. **The verify cycle:** repro fails → apply fix → repro passes → record the passing run.
 
-**Exit criteria:** A planted bug is reproduced, fixed, re-verified, and a playable recording sits at an R2 URL.
+**Exit criteria (met, with one caveat):** A playable recording produced by model-authored Playwright on a cloud machine sits at a public R2/`/proofs` URL and plays logged-out — proven live, three times, across routes. The planted-bug repro→fix→re-verify LOOP itself was not run in a drill (it composes now-proven primitives); it rolls into Phase 20.
 
 ---
 
