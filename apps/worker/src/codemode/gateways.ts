@@ -327,6 +327,51 @@ export interface SandboxGateway {
   checkRecording(recordingId: string): Promise<RecordingStatus>;
 }
 
+/**
+ * Phase 20. What `openPR`/`findPR` hand back — enough for the model to say
+ * where the work landed without ever seeing a token or a repo slug it did
+ * not itself provide via `branch`.
+ */
+export type PullRequestRef = {
+  number: number;
+  url: string;
+  headRef: string;
+  /** GET /user's login for the authoring token — the identity the PR opened under. */
+  author: string;
+  /** True when an existing branch/PR was updated rather than created. */
+  updated: boolean;
+};
+
+export type PullRequestStatus = {
+  state: "open" | "closed" | "merged";
+  url: string;
+  headRef: string;
+  baseRef: string;
+  /** The linear-code bot's linkback receipt: present, and which identifiers it names. */
+  linearLinkback: { commented: boolean; identifiers: string[] };
+};
+
+/**
+ * Phase 20's transport to GitHub: blobs → tree → commit → ref → PR, with
+ * ensure semantics throughout so a retried call reconciles instead of
+ * duplicating. Implemented in `src/git/commit.ts`; no body-rendering or PR
+ * convention lives here or there — `body` arrives fully rendered.
+ */
+export interface GithubGateway {
+  openPR(input: {
+    branch: string;
+    title: string;
+    commitMessage: string;
+    /** Fully rendered by the BINDING (conventions are policy); the gateway is transport. */
+    body: string;
+    diffRef: string;
+    idempotencyKey: string;
+  }): Promise<PullRequestRef>;
+  /** Reconcile: the open PR whose head is `branch`, or null. */
+  findPR(branch: string): Promise<PullRequestRef | null>;
+  checkPR(number: number): Promise<PullRequestStatus>;
+}
+
 export interface ArtifactPublisher {
   publish(input: {
     bytes: Uint8Array;
@@ -365,5 +410,11 @@ export type CapabilityDependencies = {
    * `src/codemode/`, which is the one thing this type exists to prevent.
    */
   sandbox: SandboxGateway;
+  /**
+   * Phase 20's seam for the same reason `sandbox` is one: `src/git/commit.ts`
+   * holds a PAT or an on-duty identity's decrypted token, so reaching it from
+   * a binding directly would put `Env` inside `src/codemode/` again.
+   */
+  github: GithubGateway;
   clock: () => number;
 };

@@ -158,7 +158,16 @@
     // container (Task 4). The SDK's default is 10 minutes, which is shorter
     // than a monorepo install plus a build, and a container that naps
     // mid-repro reads as a hang to the human watching the Slack thread.
-    "SANDBOX_SLEEP_AFTER": "45m"
+    "SANDBOX_SLEEP_AFTER": "45m",
+
+    // Phase 20's GitHub ship config (Task 3). Non-secret, same discipline as
+    // LINEAR_TEAM_ID above: the repo and base branch pin themselves
+    // server-side rather than trusting a caller. GITHUB_HEAD_REPO is
+    // deliberately unset -- it defaults to GITHUB_REPO, so head pushes and PR
+    // opens target the same repo until a fork is actually in play.
+    "GITHUB_REPO": "Zellify/web2app-rebuild",
+    "GITHUB_BASE": "staging",
+    "GITHUB_AUTHOR": "worker-pat"
   },
   "assets": {
     // The dashboard's Vite build output (Phase 14). It replaced ./public, which

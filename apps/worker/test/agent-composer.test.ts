@@ -154,7 +154,7 @@ describe("the model is given exactly one tool", () => {
 /* -------------------------------------------------- no Env for a capability -- */
 
 describe("a capability never receives Env", () => {
-  it("hands the capability layer exactly eleven narrow ports", async () => {
+  it("hands the capability layer exactly twelve narrow ports", async () => {
     const { state } = await seedLiveRun();
     const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:x");
     const deps = makeCapabilityDependencies(workerEnv(), scope, () => 0, fakeApprovalPort());
@@ -168,6 +168,11 @@ describe("a capability never receives Env", () => {
       "clock",
       "db",
       "files",
+      // Phase 20's transport to GitHub. It is the other port whose
+      // implementation closes over the whole `Env` — `src/git/commit.ts`
+      // holds a PAT or an on-duty identity's decrypted token — for the same
+      // reason `sandbox` does below.
+      "github",
       "langsmith",
       "linear",
       "memory",

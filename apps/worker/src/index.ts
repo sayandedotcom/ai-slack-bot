@@ -122,6 +122,19 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    * audit arg or a log can reach.
    */
   MONOREPO_PAT?: string;
+  /**
+   * Phase 20's GitHub ship config — non-secret `vars`, same discipline as
+   * `LINEAR_TEAM_ID` above: the destination pins itself server-side rather
+   * than trusting a caller. Defaults live in `src/git/commit.ts`'s
+   * `resolveGithubConfig`: `GITHUB_REPO` to `MONOREPO_SLUG`,
+   * `GITHUB_HEAD_REPO` to `GITHUB_REPO`, `GITHUB_BASE` to `"staging"`
+   * (never `"dev"` — refused at gateway construction), `GITHUB_AUTHOR` to
+   * `"worker-pat"`.
+   */
+  GITHUB_REPO?: string;
+  GITHUB_HEAD_REPO?: string;
+  GITHUB_BASE?: string;
+  GITHUB_AUTHOR?: string;
   /** Phase 18's dev-tier env for the monorepo's apps — a SECRET, JSON object of
    *  string to string. Read in exactly one place, `src/sandbox/env.ts`, which
    *  turns it into a per-process record; absence is a state the code can see

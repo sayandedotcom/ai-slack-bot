@@ -7,6 +7,7 @@ import { makeArtifactPublisher } from "../files/r2";
 import { makeLangSmithReader } from "../langsmith/client";
 import { makeUserTokenSource, type UserTokenSource } from "../identity/user-token";
 import { makeLinearGateway } from "../linear/client";
+import { makeGithubAuthSource, makeGithubGateway, resolveGithubConfig } from "../git/commit";
 import type { MemoryStore } from "../memory/store";
 import type { ProvenanceSink } from "../memory/episode";
 import { ZepMemory } from "../memory/zep";
@@ -312,6 +313,13 @@ export function makeCapabilityDependencies(
     // thread: the container is addressed as `run:{runId}` and the model has no
     // argument anywhere with which to name a different one.
     sandbox: makeSandboxGateway(env, scope.runId),
+    // Phase 20. The config resolves its own defaults (repo/head-repo/base/
+    // author) from `env`, and the gateway refuses at construction if `base`
+    // is ever configured to "dev" — see `resolveGithubConfig`/`makeGithubGateway`.
+    github: (() => {
+      const githubConfig = resolveGithubConfig(env);
+      return makeGithubGateway(env, githubConfig, makeGithubAuthSource(env, githubConfig), clock);
+    })(),
     clock,
   };
 }

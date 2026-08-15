@@ -223,6 +223,24 @@ export function fakeDeps(fixtures: FakeFixtures = {}): CapabilityDependencies {
     },
     approval: fixtures.approval ?? fakeApprovalPort(),
     sandbox: fakeSandboxGateway(),
+    // Phase 20's transport, faked the same way `linear` above is: empty,
+    // well-shaped results with no credential in reach. The real REST sequence
+    // is `test/github-gateway.test.ts`'s job.
+    github: {
+      async openPR() {
+        return { number: 1, url: "https://github.com/x/y/pull/1", headRef: "fix/x", author: "bot", updated: false };
+      },
+      async findPR() { return null; },
+      async checkPR() {
+        return {
+          state: "open",
+          url: "https://github.com/x/y/pull/1",
+          headRef: "fix/x",
+          baseRef: "staging",
+          linearLinkback: { commented: false, identifiers: [] },
+        };
+      },
+    },
     clock: () => 0,
   };
 }
