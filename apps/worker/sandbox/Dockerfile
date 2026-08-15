@@ -149,39 +149,42 @@ RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable
 
 
 # ---------------------------------------------------------------------------
-# Bake the monorepo. This is the reversal the node_modules comment below half
-# promised ("what stays baked is ... the repository itself") and the code never
-# delivered — now forced by measurement, not preference.
+# Bake the monorepo — the reversal the node_modules comment below half promised
+# ("what stays baked is ... the repository itself") and the code never delivered,
+# now forced by measurement.
 #
 # The boot-time clone goes through the SENTINEL: the container talks to
-# git.firefighter.local and the Worker's interceptHttps swaps in the real PAT
-# on egress. That proxy path cannot carry the monorepo from an APAC colo —
-# three live drills stalled on it, at 401 MB and at a sparse 83 MB alike, from
-# sin22 and hkg13, while the same transfer is 28 s from another colo. The bulk
-# must not cross the sentinel. Baked, it arrives over Cloudflare's own registry
-# instead, and boot does only a small, NON-FATAL fetch delta (see provision.sh).
+# git.firefighter.local and the Worker's interceptHttps swaps in the real PAT on
+# egress. That proxy path cannot carry the monorepo from an APAC colo — three
+# live drills stalled on it, at 401 MB and at a sparse 83 MB alike, from sin22
+# and hkg13, while the same transfer is 28 s from another colo. Baked, the tree
+# arrives over Cloudflare's own registry instead, and boot does only a small,
+# NON-FATAL fetch delta (see provision.sh).
 #
-# Sparse, exactly the patterns provision.sh's fallback uses: everything minus
-# the two heavy public/ trees (394 MB of marketing/docs PNGs the agent never
-# opens). ~230 MB baked.
+# FULL, not sparse. An earlier version excluded apps/landing/public and
+# apps/docs/public to shrink the transfer — but once the tree is baked and
+# delivered by the registry, transfer size no longer matters, and the exclusion
+# had broken a real app: apps/landing/public/fonts holds the woff2 files
+# layout.tsx imports with next/font/local, so a sparse tree without them makes
+# `next dev` 500 on every landing page. A live drill proved it — the dev server
+# came up and served 500 on /pricing for a missing Aspekta font. public/ in a
+# Next app is not all disposable marketing assets; it holds fonts the build
+# needs. Bake the whole thing; the ~250 MB it adds to the image is free over the
+# registry.
 #
 # The credential exists ONLY in the mounted secret and a command-scoped
 # http.extraHeader — never in .git/config (the baked remote is the sentinel
-# placeholder, token-free), never a build ARG, never a layer. build.sh greps
-# the assembled filesystem every build to prove it.
+# placeholder, token-free), never a build ARG, never a layer. build.sh greps the
+# assembled filesystem every build to prove it.
 ARG REPO_REF=staging
 RUN --mount=type=secret,id=monorepo_pat \
     set -eu; \
     AUTH=$(printf 'x-access-token:%s' "$(cat /run/secrets/monorepo_pat)" | base64 -w0); \
     git -c http.extraHeader="Authorization: Basic ${AUTH}" \
-        clone --depth 1 --branch "${REPO_REF}" --filter=blob:none --sparse \
+        clone --depth 1 --branch "${REPO_REF}" \
         https://github.com/Zellify/web2app-rebuild.git /workspace/web2app-rebuild; \
-    cd /workspace/web2app-rebuild; \
-    git sparse-checkout init --no-cone; \
-    printf '/*\n!/apps/landing/public/\n!/apps/docs/public/\n' > .git/info/sparse-checkout; \
-    git -c http.extraHeader="Authorization: Basic ${AUTH}" read-tree -mu HEAD; \
-    git remote set-url origin https://git.firefighter.local/Zellify/web2app-rebuild.git; \
-    git rev-parse HEAD
+    git -C /workspace/web2app-rebuild remote set-url origin https://git.firefighter.local/Zellify/web2app-rebuild.git; \
+    git -C /workspace/web2app-rebuild rev-parse HEAD
 
 
 # ---------------------------------------------------------------------------
