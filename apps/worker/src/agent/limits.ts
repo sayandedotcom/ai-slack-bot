@@ -137,12 +137,33 @@ export const OUTER_TOOL_TIMEOUT_MS = 30_000;
 export const NANO_USD_PER_USD = 1_000_000_000;
 
 /**
- * What one generation may spend: $2.00.
+ * What one generation may spend: $5.00.
  *
- * Enough for real drill work at Fable's prices — roughly 40 full-size steps —
- * and bounded far below the $500 the account is allowed to lose in a month.
+ * RAISED FROM $2.00 ON 2026-08-15, and the reason is the guard's arithmetic
+ * rather than the price of the work. `evaluateSpendGuard` does not compare the
+ * cap against what a step WILL cost; it refuses unless the cap can absorb a
+ * deliberately pessimistic RESERVATION:
+ *
+ *     promptBytes / 2  x  max(input, cacheWrite5m, cacheWrite1h)  x  attempts
+ *
+ * Every one of those three factors rounds against the run. At step 11 of the
+ * first live ship-loop drill that came to $1.96 reserved for a step that
+ * actually cost $0.13 — a ~15x over-reservation — because the estimate prices
+ * a 28k-token prompt at the $20/Mtok one-hour cache-WRITE rate while 89% of it
+ * was a $1/Mtok cache READ. The run died with $1.19 of its $2.00 unspent, one
+ * tool call short of opening its pull request, having already written the fix,
+ * formatted it, captured the diff and filed the issue.
+ *
+ * So the old value never bought the "roughly 40 full-size steps" its own
+ * docstring claimed: it refused at eleven. $5.00 restores the headroom that
+ * sentence always described. Real spend is unchanged (~$1 for a full drill) —
+ * this raises what may be RESERVED, not what is billed.
+ *
+ * The principled fix is to teach the reservation about cache reads, which is a
+ * change to a safety guard and wants its own review rather than a mid-drill
+ * edit. Until then the run cap below is the real bound, and it is untouched.
  */
-export const GENERATION_SPEND_CAP_NANO_USD = 2 * NANO_USD_PER_USD;
+export const GENERATION_SPEND_CAP_NANO_USD = 5 * NANO_USD_PER_USD;
 
 /**
  * What one run may spend across every generation: $10.00.

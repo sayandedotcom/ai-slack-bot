@@ -776,8 +776,11 @@ describe("pre-step spend guard", () => {
     const result = evaluateSpendGuard({
       ...base,
       promptBytes: 2_000,
-      // $1.90 of the $2.00 generation cap is gone; $0.10 remains.
-      generationSpentNanoUsd: 1_900_000_000,
+      // All but $0.10 of the generation cap is gone. Derived from the cap
+      // rather than written as a literal, so this pins the guard's BEHAVIOUR
+      // at a given remainder instead of silently re-pinning the cap's value —
+      // which is what made these three cases fail when the cap moved.
+      generationSpentNanoUsd: GENERATION_SPEND_CAP_NANO_USD - 100_000_000,
     });
     if (result.outcome !== "ok") throw new Error("expected ok");
     expect(result.remainingNanoUsd).toBe(100_000_000);
@@ -789,7 +792,11 @@ describe("pre-step spend guard", () => {
   });
 
   it("stops before the call when input alone does not fit", () => {
-    const result = evaluateSpendGuard({ ...base, generationSpentNanoUsd: 1_990_000_000 });
+    // $0.01 left: not even the input reservation fits.
+    const result = evaluateSpendGuard({
+      ...base,
+      generationSpentNanoUsd: GENERATION_SPEND_CAP_NANO_USD - 10_000_000,
+    });
     expect(result.outcome).toBe("cost_limit");
     if (result.outcome !== "cost_limit") return;
     expect(result.reason).toBe("input_reservation");
@@ -800,8 +807,8 @@ describe("pre-step spend guard", () => {
     const result = evaluateSpendGuard({
       ...base,
       promptBytes: 2_000,
-      // Leaves enough for the input reservation but only a few output tokens.
-      generationSpentNanoUsd: 1_955_000_000,
+      // $0.045 left: enough for the input reservation but only a few output tokens.
+      generationSpentNanoUsd: GENERATION_SPEND_CAP_NANO_USD - 45_000_000,
     });
     expect(result.outcome).toBe("cost_limit");
     if (result.outcome !== "cost_limit") return;
