@@ -288,6 +288,57 @@ human reviewer.
    total. **Fail:** any PR or Linear action gated on the dashboard; no PR; or a second PR from
    a retry — a retried run must *update* its PR, not open another.
 
+#### Recorded result — 2026-08-16, run `0782847d`
+
+**PASS, at zero clicks**, and it found something the drill author had missed.
+
+| | |
+|---|---|
+| Triage | `wake: 1` in 3.10 s for $0.001277 |
+| Run | `0782847d-a73b-4a4b-a068-463b4e671072`, terminal status **`idle`** |
+| Work | 30 model steps, **$2.0291** |
+| Effects | **4** — `slack.reply`, `linear.createIssue` (**FIR-5**), `github.openPR` (**#1508**), `slack.reply`. All `completed` |
+| Approvals | **0 rows → 0 clicks** |
+| Wall clock | 6 min 53 s |
+
+PR **#1508** against every check in §5:
+
+| Check | Result |
+|---|---|
+| Base | `staging` ✅ |
+| Branch / title | `fix/remove-careers-nav-link` / `fix: remove leftover Careers links from landing nav` — same type in both ✅ |
+| First line of body | `Fixes FIR-5` ✅ |
+| `linear-code[bot]` receipt | present on the PR ✅ |
+| AI attribution | none in the body; the single commit's trailers are clean ✅ |
+| Proof link | in the body, and it serves **200 / `video/mp4` / 1,246,429 bytes logged-out** ✅ |
+| Diff | 2 files, **+0 / −28** — `navbar.tsx` −27, `constants/footer-data.ts` −1 ✅ |
+
+**It out-investigated the spot check.** A manual grep of `navbar.tsx` found two Careers
+entries, desktop and mobile. The agent found **three** — desktop nav, mobile menu, and the
+footer, the last of which lives in a different file (`apps/landing/src/constants/footer-data.ts`)
+that a navbar-only grep never sees. The diff reflects that: two files, not one.
+
+**It refused the customer's premise instead of accepting it.** The report said the link "404s".
+The agent's closing reply:
+
+> One caveat, the /careers page itself still exists in the codebase and renders fine locally,
+> so I can't say from here why the URL 404s in production. Candidates who saved the direct URL
+> will still hit that until it's tracked down.
+
+That is the behaviour the scenario is really testing. `apps/landing/src/app/careers/page.tsx`
+does exist on `staging`; removing the links does **not** explain the reported 404, and the agent
+said so rather than declaring the ticket solved. It then offered a redirect as an alternative
+without escalating for permission to ask.
+
+**A memory-weight wobble it corrected itself.** The opening holding reply asserted the link "was
+meant to come out of the nav entirely in the redesign" — an inference from its own PR #1507,
+which was closed and never merged. Investigation corrected it: the final reply says "the removal
+never actually shipped", which is accurate. Worth watching in future drills, because the
+correction came from re-reading the repo, not from the memory being right.
+
+**Note for a repeat run:** #1508 reuses the branch name `fix/remove-careers-nav-link` from the
+deleted #1507 branch. Harmless here, but delete the branch in §6 before re-running this scenario.
+
 ### Scenario 3 — planted bug
 
 This one needs setup **before** you post, because the bug lives on a branch and the PR must

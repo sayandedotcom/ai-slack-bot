@@ -250,41 +250,44 @@ wins; these are the six places it did.
 
 ## Cost
 
-Everything here was queried out of production D1 on **2026-08-16** at `05185b1`. Anything
-that could not be measured says so; nothing here is an estimate wearing a measurement's
-clothes.
+Everything here was queried out of production D1 on **2026-08-16**, *after* the Phase 23 drill
+runs, so the figures include them rather than predating them. Anything that could not be
+measured says so; nothing here is an estimate wearing a measurement's clothes.
 
 ### Model spend — measured
 
 | Source | Model | Volume | Cost |
 |---|---|---|---|
-| `agent_model_calls` | `claude-fable-5` via AI Gateway | 381 calls across 23 runs | **$19.9516** |
-| `triage_decisions` | `claude-haiku-4-5` | 30 decisions, 26 of them `wake: true` | **$0.0338** |
-| | | **Total model spend** | **$19.99** |
+| `agent_model_calls` | `claude-fable-5` via AI Gateway | 426 calls across 25 runs | **$22.8935** |
+| `triage_decisions` | `claude-haiku-4-5` | 32 decisions, 28 of them `wake: true` | **$0.0364** |
+| | | **Total model spend** | **$22.93** |
 
-Window: first agent call 2026-08-13 13:30 UTC, last 2026-08-15 21:14 UTC. Triage averages
-2.8 s and about a tenth of a cent per decision. `agent_model_calls` stores integer
+Window: first agent call 2026-08-13 13:30 UTC, last 2026-08-16 during the drill. Triage averages
+under 3 s and about a tenth of a cent per decision. `agent_model_calls` stores integer
 `cost_nano_usd`, not floating dollars (invariant 29) — the dollar figures above are that
 integer divided out at the end, once.
 
-**Token split:** 6,861,437 input (6,303,218 cache read · 557,457 cache write · 762 uncached)
-and 133,450 output, of which 48,080 were reasoning tokens.
+**Token split:** 7,996,891 input (7,369,732 cache read · 626,307 cache write · 852 uncached)
+and 153,729 output.
 
-**Prompt caching is the reason this fits in a trial budget.** 91.9 % of all input tokens were
-served from cache, and 355 of 381 calls (93.2 %) had a cache read. Priced at the table in
+**Prompt caching is the reason this fits in a trial budget.** 92.2 % of all input tokens were
+served from cache, and 398 of 426 calls (93.4 %) had a cache read. Priced at the table in
 `src/agent/cost.ts` ($10 / Mtok input, $12.50 / Mtok 5-minute cache write, $1 / Mtok cache
-read, $50 / Mtok output), the identical traffic with no caching would have cost **$75.29**.
-Caching saved **$55.34 — 73.5 %**.
+read, $50 / Mtok output), the identical traffic with no caching would have cost **$87.66**.
+Caching saved **$64.76 — 73.9 %**.
 
-**Per run:** $0.87 across the 23 runs that made model calls; $0.77 across all 26 rows in
-`runs`. The distribution matters more than the mean — the most expensive run was $2.42 over 34
-steps, the cheapest $0.30 over 10.
+**Per run:** $0.92 across the 25 runs that made model calls. The distribution matters more than
+the mean — the most expensive run was $2.42 over 34 steps, the cheapest $0.30 over 10. The two
+Phase 23 drill runs sit at either end of the useful range: a how-to question answered in 15
+steps for **$0.91**, and a small feature request taken all the way to a merged-ready PR in 30
+steps for **$2.03**.
 
-**Per PR:** two PRs were opened on `Zellify/web2app-rebuild` — **#1506** (`fix/nav-cta-copy`)
-and **#1507** (`fix/remove-careers-nav-link`), both closed, nothing merged. Dividing all model
-spend by two gives **$10.00 per PR**, which flatters nothing: it charges every exploratory and
-failed run to those two. The two runs that actually shipped cost **$1.45** and **$2.42**. That
-second number is the honest cost of one PR.
+**Per PR:** three PRs have been opened on `Zellify/web2app-rebuild` — **#1506**
+(`fix/nav-cta-copy`), **#1507** (`fix/remove-careers-nav-link`), both closed with nothing merged,
+and **#1508** from the Phase 23 drill. Dividing all model spend by three gives **$7.64 per PR**,
+which flatters nothing: it charges every exploratory and failed run to those three. The three
+runs that actually shipped cost **$1.45**, **$2.42** and **$2.03**. Roughly **$2 is the honest
+marginal cost of one PR**, and the consistency across three independent runs is the useful part.
 
 ### Cloudflare — partly measured
 
@@ -313,7 +316,7 @@ Linear cost nothing beyond the workspace seats Zellify already has.
 
 ### Against the $500 ceiling
 
-Measured spend is **$19.99 of $500 — 4.0 %, leaving $480.01** — plus an unmeasured Cloudflare
+Measured spend is **$22.93 of $500 — 4.6 %, leaving $477.07** — plus an unmeasured Cloudflare
 component bounded by the plan base and the usage figures above, which are far inside every
 included allowance. There is no plausible arithmetic in which the unmeasured part moves this
 into the same order of magnitude as the ceiling.
