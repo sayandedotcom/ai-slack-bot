@@ -76,7 +76,20 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST -d '{}' \
 *reached the Worker*. **A `302` here means ingest is DEAD**: Access is swallowing the webhook
 route. Stop and fix the bypass before anything else.
 
-### 2.3 Channel policy is what this runbook assumes
+### 2.3 The proof bypass is intact
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://firefighter.sayandeten.workers.dev/proofs/nope.mp4
+curl -s -o /dev/null -w '%{http_code}\n' https://firefighter.sayandeten.workers.dev/api/artifacts
+```
+
+**Expected: `404` then `302`.** The 404 proves the request reached our code — `/proofs/*`
+bypasses Access on purpose, because a proof video has to play for someone with no login,
+from a PR body or a Slack unfurl. A **`302` on the first line means the bypass policy was
+lost** and every recording link in every PR is now a login redirect. The 302 on the second
+line is the login wall doing its job: every *other* artifact stays gated.
+
+### 2.4 Channel policy is what this runbook assumes
 
 ```bash
 cd apps/worker
@@ -88,7 +101,7 @@ env -u CF_API_TOKEN pnpm exec wrangler d1 execute firefighter --remote \
 If `test-firedrill` is not `live`, the agent cannot post there — `canPost()` fails closed —
 and every scenario stalls at the first reply.
 
-### 2.4 Ingest actually lands
+### 2.5 Ingest actually lands
 
 Post the literal text `preflight ping` in `#test-firedrill` (it will not wake the agent),
 then:
@@ -100,7 +113,7 @@ env -u CF_API_TOKEN pnpm exec wrangler d1 execute firefighter --remote \
 
 **Expected:** a count one higher than before the ping.
 
-### 2.5 The read-only GitHub drill
+### 2.6 The read-only GitHub drill
 
 This is the ship loop rehearsed against the real monorepo — the real diff applier on real
 `staging` content, the real compare guard against real history — stopping before any POST.
@@ -122,7 +135,7 @@ repository collaborator role are two independent gates, and both must be open.**
 settings page shows the ceiling; only `GET /repos/{owner}/{repo}` → `permissions.push` shows
 the intersection. Nothing downstream of a false probe means anything. Stop and get the grant.
 
-### 2.6 Recorded pre-flight output
+### 2.7 Recorded pre-flight output
 
 Run 2026-08-16, against the deployed Worker at `05185b1`. **All green.**
 
@@ -132,6 +145,11 @@ $ curl -s -o /dev/null -w '%{http_code}\n' .../api/counters
 
 $ curl -s -o /dev/null -w '%{http_code}\n' -X POST -d '{}' .../slack/events
 401
+
+$ curl -s -o /dev/null -w '%{http_code}\n' .../proofs/nope.mp4
+404
+$ curl -s -o /dev/null -w '%{http_code}\n' .../api/artifacts
+302
 
 $ ... --command "SELECT channel_id, name, customer_slug, mode FROM channels ORDER BY mode, name;"
 channel_id  | name                | customer_slug | mode
@@ -190,6 +208,13 @@ Approving is the click. The Worker then sends under the engineer's user token
 (`src/approval/sender.ts`). You may also get one Block Kit DM nudge per approval; that is
 delivery, not a second gate.
 
+**What "normal" looks like, measured rather than hoped.** The last eight production runs took
+**3–8 minutes** wall clock, and the one that went all the way to a review-ready PR took eight.
+Every run gets its own cold container (`run:{runId}`) — there is no warming trick. **Two of
+those eight ended `failed`**, so budget for a re-run rather than treating the first failure as
+a broken system. Nothing notifies you when a run dies; you find out by watching. That gap is
+the first item in the README's "what another week would buy".
+
 ### Scenario 1 — how-to question
 
 1. Post:
@@ -235,8 +260,10 @@ delivery, not a second gate.
 This one needs setup **before** you post, because the bug lives on a branch and the PR must
 diff against that branch, not `staging`.
 
-1. **Plant the bug** on a branch of `Zellify/web2app-rebuild`: something small and visibly
-   reproducible on an **auth-free landing page**.
+1. **Plant the bug** on a branch of `Zellify/web2app-rebuild`, **in `apps/landing`**. That is
+   the only app the live drills have ever booted and rendered in a container; `apps/web`, the
+   dashboard and the funnel need Supabase and auth and have never been exercised there, so a
+   planted bug in one of them is an unrehearsed gamble. Keep it small and visible without login.
 2. **Point the deployment at that branch — both halves, or the run refuses:**
    - `GITHUB_BASE` in `apps/worker/wrangler.jsonc` (`vars`) → the planted branch.
    - `REPO_REF` in `apps/worker/src/sandbox/lifecycle.ts` — a code constant, `"staging"` by
@@ -248,9 +275,8 @@ diff against that branch, not `staging`.
    on merge**. The compare guard now refuses the mismatch — correct behaviour, but it looks
    like an unexplained refusal if you forget the coupling. Write the override down; §6 restores it.
 3. Post a message describing the symptom you planted, in a customer's voice, e.g.:
-   > The pricing page is broken — the annual plan card shows no price at all, just a blank
-   > where the number should be. Chrome on desktop, every reload. Customers are asking if the
-   > plan is discontinued.
+   > The docs link in the footer points at the old domain — anyone clicking it lands on a
+   > parked page. Been like that a while and it's the link we put in onboarding emails.
 4. **Dashboard, in order:** run appears → sandbox boots → the agent writes a Playwright script
    and records the **failing** repro (the failing recording is a first-class result — it is the
    proof the bug was real) → applies the fix → re-runs the same script → keeps the **passing**
@@ -398,3 +424,5 @@ symptoms are what a stuck drill looks like.
 | CI red on the PR because of `navbar.tsx`, drowning the real diff | `biome ci --changed` judges the whole touched file, and that file carries 229 pre-existing diagnostics including a cognitive complexity of 43 with no automatic fix | Expected, not a drill failure. The agent declines the ~850-line reformat and says so in the PR. Making that file green is a repo decision. |
 | Re-posting the *identical* message after a failed run triages `wake: 0` | Memory carries the dead run's own optimistic "will post the video here" reply, so a fresh request reads as already in hand | Re-word the message rather than re-posting verbatim. The real fix is prompt-side and still open. |
 | Run burns its whole budget "looking for a way to log in" and never records | An auth-gated target; the sandbox has no seeded account, so the login hunt is bottomless | Drill only against pages that render without auth. |
+| Recording comes out with missing images *again*, after the image fix | The sparse-checkout pattern in `sandbox/Dockerfile` (which keeps the landing site's fonts, SVGs, webp and hero video) and the one in `sandbox/provision.sh` (which excludes all of `apps/landing/public`) **disagree**. The Dockerfile's pattern wins on the normal path because the repo is baked; `provision.sh` only clones as a fallback | A latent issue, not a regression: it means the run took the fallback clone. Note it and move on — do not debug it live. |
+| Dev server "isn't up" though the process is running | Three apps default to port 3000, and 3000 is also the container's own control server — `waitForPort(3000)` succeeds against a dev server that never started | The agent starts the landing app on **4100** for exactly this reason. If you see 3000 in the drawer, that is the bug, not the port being busy. |

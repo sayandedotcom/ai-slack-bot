@@ -1,14 +1,15 @@
 # Fire-Fighter Agent
 
 One agent that hears every message the team hears in Slack, wakes on the ones that matter,
-reproduces the bug on its own cloud machine, fixes it, and opens a PR under the on-duty
-engineer's name. Everything committal — every customer-facing word — waits behind one
-dashboard click. It is one Cloudflare Worker on one origin, with no server to keep alive
+reproduces the bug on its own cloud machine, fixes it, and opens a PR. Every write is
+gated by a mandatory effect class checked against the database at call time; on top of
+that, anything it *says* to a customer that commits us waits behind one dashboard click.
+Those are two different mechanisms, and the second one is about speech, not code. It is one Cloudflare Worker on one origin, with no server to keep alive
 and no orchestration framework underneath it.
 
 **The pipeline, end to end:** Slack → queue → D1 + Zep → triage (Haiku) → agent (Fable 5,
-Code Mode) → sandbox (no write credentials) → dashboard approval → PR under the on-duty
-engineer.
+Code Mode) → sandbox (no write credentials) → PR + Linear issue + proof video, with
+committal customer speech held for a dashboard click.
 
 - **Origin:** https://firefighter.sayandeten.workers.dev
 - **Stack:** Cloudflare Workers · Durable Objects · D1 · Queues · R2 · Workers Assets ·
@@ -177,7 +178,7 @@ AI-tool notes). Paths are relative to `apps/worker/`.
 | 9 | The sandbox container holds no write credential: it receives the sentinel host and a placeholder, and the PAT is substituted at Worker egress for one pinned repo | `src/sandbox/class.ts:40,109,137-155` | `test/sandbox-lifecycle.test.ts` (23). **Partial:** the container-side half is proven by test; the egress swap itself has no test — see the gaps below |
 | 10 | Dev-tier env is injected **per process**, only when model code sets `injectDevEnv`, and known values are redacted from every return path — stdout, stderr, process tails, file reads | `src/sandbox/env.ts:74-83,150-158`; `src/sandbox/gateway.ts:125-141,231-234` | `test/sandbox-env.test.ts` (22) · `test/codemode-sandbox.test.ts` (51) |
 | 11 | Approval needs a verified Access JWT plus roster membership (viewers read, fire-fighters `PATCH`), and a D1 CAS makes exactly one decision win; the loser gets 409 naming the winner | `src/api/approvals.ts:134-141,189,206,250`; `src/access/roster.ts:22-53`; `src/approval/repository.ts:167-201` | `test/approval-api.test.ts` (24) · `test/approval-repository.test.ts` (40) · `test/access-jwt.test.ts` (17) · `test/approval-e2e.test.ts` (11) |
-| 12 | Customer-facing sends go under the on-duty engineer's user token. A missing identity terminates as `blocked` — there is never a bot-token fallback, even though a working bot token is right there | `src/approval/sender.ts:56-73,98-126`; `src/identity/user-token.ts` | `test/slack-reply-identity.test.ts` (22) · `test/user-token-sender.test.ts` (11) · `test/codemode-slack.test.ts` (25) |
+| 12 | Customer-facing **Slack replies** go out under the on-duty engineer's user token. A missing identity terminates as `blocked` — there is never a bot-token fallback, even though a working bot token is right there | `src/approval/sender.ts:56-73,98-126`; `src/identity/user-token.ts` | `test/slack-reply-identity.test.ts` (22) · `test/user-token-sender.test.ts` (11) · `test/codemode-slack.test.ts` (25) |
 | 13 | Secrets never reach prompts, events, tool output, logs or memory (invariant 39). There is no single choke point — it is enforced at each surface and swept by a planted-canary test | `src/codemode/bindings/shared.ts:178-205`; `src/sandbox/gateway.ts:231-234`; `src/betterstack/client.ts:45-59`; `src/sandbox/env.ts:39-83`; `src/agent/ports.ts:47`; `src/memory/consumer.ts:425` | `test/agent-canaries.test.ts` (5) — sweeps the model call, events, turns, transcript, D1, memory and logs, with a control proving the probe works · `test/codemode-security.test.ts` (41) |
 | 14 | The Linear team and the GitHub repo/base are pinned server-side; the bindings take no destination argument, and base `dev` is refused by name | `src/agent/dependencies.ts:272`; `src/codemode/bindings/linear.ts:26`; `src/git/commit.ts:82-84,454,518,557` | `test/codemode-linear.test.ts` (63) · `test/github-gateway.test.ts` (49) |
 | 15 | Triage emits only `{wake, why, opening_prompt}` — the Zod schema is the enforcement, because no ticket-type field exists — and nothing downstream branches on a type | `src/triage/run.ts:12`; `src/triage/prompt.ts:12-20`; `src/agent/loop.ts:100`; `src/agent/prompt/policy.ts:51` | `test/triage-run.test.ts` (6) · `test/triage-prompt.test.ts` (3) · `test/run-api.test.ts` (35) |
@@ -236,6 +237,14 @@ wins; these are the six places it did.
    seven addresses and mentions the personal-email override only on the Access side. The build
    maps eight, with `sayandeten@gmail.com` in `FIREFIGHTERS`, tagged `G2-TEMP-OVERRIDE`. See
    *Access and the temporary override* below.
+7. **PR authorship — the deployed value is `worker-pat`, not the engineer.** `src/git/commit.ts:102`
+   resolves `GITHUB_AUTHOR` to one of `on-duty | worker-pat`, and `wrangler.jsonc` sets
+   **`worker-pat`**: PRs are authored by the ship credential's owner, not by the on-duty
+   engineer's OAuth identity. The `on-duty` path is built and reachable — it is one value away —
+   but it is not what is running, and the distinction matters because the **Slack reply** genuinely
+   does go out under the engineer's own user token. Only half of "under the on-duty engineer's
+   name" is true today, and it is the Slack half. Flipping the flag additionally requires a GitHub
+   OAuth identity row for that engineer.
 
 ---
 
@@ -802,24 +811,20 @@ A dev server is the exception that has to be stated rather than glossed. `apps/w
 `apps/dashboard` validate their environment with zod at startup and will not boot without
 real values, so while one runs, those values exist inside the container.
 
-**The container receives 28 environment variables, not the 115 the dev environment
-contains.** The excluded 87 are the ones that could do damage and that a dev server
-rendering a funnel page has no use for: both Stripe secret keys, every payment provider's
-credentials, the Discord webhooks, the Tinybird token, the analytics database URLs, the
-Meta/TikTok/Snapchat tokens, `ANTHROPIC_API_KEY`. What is included is every `NEXT_PUBLIC_*`
-(they ship in the client bundle and are public by construction), the Supabase pair,
-`REDIS_URL`, and the S3 trio.
+**The container receives 28 environment variables, and they are not all harmless.** That
+set includes `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_API_KEY`, `SUPABASE_DB_PASSWORD`
+and `S3_ACCESS_KEY` — because the apps validate their environment with zod at startup and
+will not boot without them. The honest framing is the one worth saying out loud: the
+container gets **the dev-tier env the app needs to boot, behind a flag, with the values
+redacted out of everything the model can read back.** That is a dev-tier blast radius,
+deliberately chosen — not zero.
 
-The selection is an allowlist with a deny-list on top, and it was **verified against the
-apps' own zod modules** — `apps/web/lib/env.{client,server}.ts` and
-`apps/dashboard/src/_lib/env.client.ts` — so every variable those modules require is
-present. It deliberately errs wide *within* the harmless set: a missing variable at drill
-time is a worse failure than a slightly larger payload.
-
-Cloudflare's 5.1 kB limit on a text binding is what surfaced this — the full 115-key blob is
-8.2 kB and was refused. **The limit is not the reason to keep the curation.** Least privilege
-is. Splitting the secret across two bindings would have satisfied the platform and left the
-container holding a payment credential it never needed.
+The curation is real but it is not verifiable from this repository. The 28 names live in the
+`MONOREPO_DEV_ENV` Worker secret; `src/sandbox/env.ts` only parses it. Any claim about how
+many variables were *excluded*, or that the excluded ones were "exactly the dangerous ones",
+is therefore an operator claim rather than a code claim, and this README does not make it.
+Cloudflare's 5.1 kB cap on a text binding is what forced the curation in the first place —
+but the cap is not the reason to keep it. Least privilege is.
 
 Two limits stated plainly rather than implied away:
 
