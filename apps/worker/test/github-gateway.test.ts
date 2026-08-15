@@ -31,7 +31,10 @@ function headersOf(init: RequestInit | undefined): Record<string, string> {
   return out;
 }
 
-type Route = { match: (url: string, method: string) => boolean; respond: (url: string, body: unknown) => { status: number; body: unknown } };
+type Route = {
+  match: (url: string, method: string) => boolean;
+  respond: (url: string, body: unknown) => { status: number; body: unknown; headers?: Record<string, string> };
+};
 
 /** Maps a URL (matched by inclusion) to a canned response, in order tried. */
 function stubGithub(routes: Route[]) {
@@ -43,8 +46,8 @@ function stubGithub(routes: Route[]) {
     calls.push({ url: target, method, body, headers: headersOf(init) });
     const route = routes.find((r) => r.match(target, method));
     if (!route) throw new Error(`no stub route for ${method} ${target}`);
-    const { status, body: respBody } = route.respond(target, body);
-    return new Response(JSON.stringify(respBody), { status });
+    const { status, body: respBody, headers } = route.respond(target, body);
+    return new Response(JSON.stringify(respBody), { status, headers });
   });
 }
 
@@ -165,6 +168,36 @@ index 1111111..2222222 100644
  line three
 `;
 
+/** One delete (no context lines -- the whole file is removed) and one create, executable. */
+const MULTI_CHANGE_PATCH = `diff --git a/src/old.ts b/src/old.ts
+deleted file mode 100644
+index 1111111..0000000
+--- a/src/old.ts
++++ /dev/null
+@@ -1,3 +0,0 @@
+-line one
+-line two
+-line three
+diff --git a/scripts/run.sh b/scripts/run.sh
+new file mode 100755
+index 0000000..2222222
+--- /dev/null
++++ b/scripts/run.sh
+@@ -0,0 +1,2 @@
++#!/bin/sh
++echo hi
+`;
+
+/** A patch whose touched path traverses out of the repo -- must be refused before any fetch. */
+const TRAVERSAL_PATCH = `diff --git a/../../etc/passwd b/../../etc/passwd
+index 1111111..2222222 100644
+--- a/../../etc/passwd
++++ b/../../etc/passwd
+@@ -1,1 +1,1 @@
+-root:x:0:0
++root:x:0:1
+`;
+
 function testEnvWithPat(overrides: Record<string, unknown> = {}): Env {
   return { ...worker, MONOREPO_PAT: TOKEN, ...overrides } as unknown as Env;
 }
@@ -267,6 +300,13 @@ describe("openPR — write path", () => {
       expect(call.headers["accept"]).toBe("application/vnd.github+json");
       expect(call.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
     }
+
+    // The read that decides file CONTENT must be pinned to the exact commit
+    // the diff assumes -- dropping `?ref=` silently reads the head repo's
+    // default branch instead of `baseSha`, producing a wrong commit with
+    // every other assertion in this test still green.
+    const contentsCall = calls.find((c) => c.method === "GET" && c.url.includes("/contents/"));
+    expect(contentsCall?.url).toContain(`?ref=${BASE_SHA}`);
 
     const blobCall = calls.find((c) => c.method === "POST" && c.url.endsWith("/git/blobs"));
     expect(blobCall?.body).toEqual({ content: "line one\nline two, fixed\nline three\n", encoding: "utf-8" });
@@ -490,6 +530,202 @@ describe("openPR — write path", () => {
       expect(message).toContain("redacted");
     }
   });
+
+  /* ---------------------------------------- Critical 1: branch/path traversal -- */
+
+  it("refuses a branch name containing .. before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({
+        branch: "x/../../../../../../evil/repo/git/refs/heads/main",
+        title: "t",
+        commitMessage: "m",
+        body: "b",
+        diffRef: "diff_" + "0".repeat(64),
+        idempotencyKey: "k",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("refuses a branch name containing a query-string character before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({
+        branch: "fix/foo?evil=1",
+        title: "t",
+        commitMessage: "m",
+        body: "b",
+        diffRef: "diff_" + "0".repeat(64),
+        idempotencyKey: "k",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("refuses a branch name with a leading slash before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({
+        branch: "/fix/foo",
+        title: "t",
+        commitMessage: "m",
+        body: "b",
+        diffRef: "diff_" + "0".repeat(64),
+        idempotencyKey: "k",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("refuses a diff path containing .. before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv, TRAVERSAL_PATCH, BASE_SHA);
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(0);
+  });
+
+  /* --------------------------------------------- Important 2: tree entries -- */
+
+  it("posts a tree with an explicit null sha for a delete and preserves the applier's 100755 mode for a create", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv, MULTI_CHANGE_PATCH, BASE_SHA);
+    const config = baseConfig();
+    stubGithub([
+      {
+        match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/src/old.ts`),
+        respond: () => ({ status: 200, body: { content: contentOf("line one\nline two\nline three\n"), encoding: "base64" } }),
+      },
+      {
+        match: (url: string, method: string) => method === "POST" && url === `${ORIGIN}/repos/${config.headRepo}/git/blobs`,
+        respond: () => ({ status: 201, body: { sha: "blobsha-script" } }),
+      },
+      {
+        match: (url: string, method: string) => method === "GET" && url === `${ORIGIN}/repos/${config.headRepo}/git/commits/${BASE_SHA}`,
+        respond: () => ({ status: 200, body: { sha: BASE_SHA, tree: { sha: "basetreesha" } } }),
+      },
+      {
+        match: (url: string, method: string) => method === "POST" && url === `${ORIGIN}/repos/${config.headRepo}/git/trees`,
+        respond: () => ({ status: 201, body: { sha: "newtreesha" } }),
+      },
+      {
+        match: (url: string, method: string) => method === "POST" && url === `${ORIGIN}/repos/${config.headRepo}/git/commits`,
+        respond: () => ({ status: 201, body: { sha: "newcommitsha" } }),
+      },
+      {
+        match: (url: string, method: string) => method === "POST" && url === `${ORIGIN}/repos/${config.headRepo}/git/refs`,
+        respond: () => ({ status: 201, body: { ref: "refs/heads/fix/multi" } }),
+      },
+      {
+        match: (url: string, method: string) => method === "GET" && url.startsWith(`${ORIGIN}/repos/${config.repo}/pulls?head=`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        match: (url: string, method: string) => method === "POST" && url === `${ORIGIN}/repos/${config.repo}/pulls`,
+        respond: () => ({ status: 201, body: { number: 99, html_url: `https://github.com/${config.repo}/pull/99` } }),
+      },
+      {
+        match: (url: string, method: string) => method === "GET" && url === `${ORIGIN}/user`,
+        respond: () => ({ status: 200, body: { login: "worker-pat-bot" } }),
+      },
+    ]);
+
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await gateway.openPR({
+      branch: "fix/multi",
+      title: "t",
+      commitMessage: "m",
+      body: "b",
+      diffRef,
+      idempotencyKey: "k",
+    });
+
+    const treeCall = calls.find((c) => c.method === "POST" && c.url.endsWith("/git/trees"));
+    const treeBody = treeCall?.body as { base_tree: string; tree: Array<Record<string, unknown>> };
+    expect(treeBody.base_tree).toBe("basetreesha");
+    expect(treeBody.tree).toHaveLength(2);
+
+    const deleteEntry = treeBody.tree.find((e) => e.path === "src/old.ts");
+    expect(deleteEntry).toMatchObject({ path: "src/old.ts", mode: "100644", type: "blob" });
+    // The dangerous regression: JSON.stringify DROPS an `undefined` key, so a
+    // `blobShas.get()` miss would serialize identically to an omitted `sha`
+    // -- which GitHub treats as "leave the file alone", not "delete it".
+    // `toEqual` cannot tell those apart; `hasOwnProperty` on the PARSED wire
+    // body can.
+    expect(Object.prototype.hasOwnProperty.call(deleteEntry, "sha")).toBe(true);
+    expect(deleteEntry?.sha).toBeNull();
+
+    const createEntry = treeBody.tree.find((e) => e.path === "scripts/run.sh");
+    expect(createEntry).toEqual({ path: "scripts/run.sh", mode: "100755", type: "blob", sha: "blobsha-script" });
+  });
+
+  /* ------------------------------------------ Important 3: 404-on-contents -- */
+
+  it("omits a 404 base file and lets the applier produce the staleness refusal, inventing no second message", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = baseConfig();
+    stubGithub([
+      {
+        match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
+        respond: () => ({ status: 404, body: { message: "Not Found" } }),
+      },
+    ]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" }),
+    ).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("modifies a file the fetched base tree does not have"),
+    });
+  });
+
+  /* -------------------------------- Important 4: post-write failure wording -- */
+
+  it("does not claim nothing was opened when the PR-ensure step fails after a successful ref push", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = baseConfig();
+    const routes = happyPathRoutes({ headRepo: config.headRepo, repo: config.repo, branch: "fix/foo", base: config.base });
+    routes.splice(
+      routes.findIndex((r) => r.match(`${ORIGIN}/repos/${config.repo}/pulls`, "POST")),
+      1,
+      {
+        match: (url: string, method: string) => method === "POST" && url === `${ORIGIN}/repos/${config.repo}/pulls`,
+        respond: () => ({ status: 404, body: { message: "Not Found" } }),
+      },
+    );
+    stubGithub(routes);
+
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    try {
+      await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+      throw new Error("expected to throw");
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("capability_unavailable");
+      const message = (err as Error).message;
+      expect(message).not.toContain("nothing was opened");
+      expect(message).toContain("fix/foo");
+      expect(message.toLowerCase()).toContain("pushed");
+    }
+
+    // Meaningful only if the branch really was pushed before the PR step failed.
+    expect(calls.some((c) => c.method === "POST" && c.url === `${ORIGIN}/repos/${config.headRepo}/git/refs`)).toBe(true);
+  });
 });
 
 /* ------------------------------------------------------------ Step 3: reads -- */
@@ -541,7 +777,7 @@ describe("checkPR", () => {
         respond: () => ({ status: 200, body: prBody }),
       },
       {
-        match: (url: string, method: string) => method === "GET" && url === `${ORIGIN}/repos/Zellify/web2app-rebuild/issues/42/comments`,
+        match: (url: string, method: string) => method === "GET" && url.startsWith(`${ORIGIN}/repos/Zellify/web2app-rebuild/issues/42/comments`),
         respond: () => ({ status: 200, body: comments }),
       },
     ]);
@@ -583,5 +819,36 @@ describe("checkPR", () => {
     const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
     const status = await gateway.checkPR(42);
     expect(status.state).toBe("merged");
+  });
+
+  it("paginates the linkback comment read past the first page via Link: rel=next", async () => {
+    const config = baseConfig();
+    const commentsBase = `${ORIGIN}/repos/${config.repo}/issues/42/comments`;
+    stubGithub([
+      {
+        match: (url: string, method: string) => method === "GET" && url === `${ORIGIN}/repos/${config.repo}/pulls/42`,
+        respond: () => ({ status: 200, body: openPr }),
+      },
+      {
+        // The FIRST page: no linkback yet, and a Link header pointing at page 2.
+        match: (url: string, method: string) => method === "GET" && url.startsWith(commentsBase) && !url.includes("page=2"),
+        respond: () => ({
+          status: 200,
+          body: [{ user: { login: "someone-else" }, body: "page one, not it" }],
+          headers: { Link: `<${commentsBase}?per_page=100&page=2>; rel="next"` },
+        }),
+      },
+      {
+        // The SECOND page: where the linkback actually lives -- a gateway
+        // that only reads page one reports `commented: false` here, which
+        // is a false negative the model would act on.
+        match: (url: string, method: string) => method === "GET" && url.includes("page=2"),
+        respond: () => ({ status: 200, body: [{ user: { login: "linear-code[bot]" }, body: "Linked FIR-999." }] }),
+      },
+    ]);
+    const testEnv = testEnvWithPat();
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    const status = await gateway.checkPR(42);
+    expect(status.linearLinkback).toEqual({ commented: true, identifiers: ["FIR-999"] });
   });
 });
