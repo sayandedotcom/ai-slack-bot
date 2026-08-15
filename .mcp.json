@@ -1,0 +1,19 @@
+{
+  "//": "Cloudflare MCP servers, mirroring the pattern in Zellify/web2app-rebuild's own .mcp.json. CF_API_TOKEN is read from the environment and is NEVER written here -- see the README security section: no secret values in the repo, ever.",
+  "mcpServers": {
+    "cloudflare-api": {
+      "type": "http",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CF_API_TOKEN}"
+      }
+    },
+    "cloudflare-graphql": {
+      "type": "http",
+      "url": "https://graphql.mcp.cloudflare.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CF_API_TOKEN}"
+      }
+    }
+  }
+}
