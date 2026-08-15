@@ -29,6 +29,21 @@ fail() { echo "FAILED $1"; exit 1; }
 
 [ -n "$GIT_REMOTE" ] || fail "missing-git-remote"
 
+# git must never be able to HANG. Two defaults make it able to:
+#
+#  - it prompts for credentials on a terminal when the server says 401, and a
+#    process with a pty will sit at that prompt forever. GIT_TERMINAL_PROMPT=0
+#    turns that into an immediate, named error;
+#  - it has no low-speed abort, so a transfer that connects and then stalls
+#    waits indefinitely. Phase 19's first live drill lost a run exactly this
+#    way: a 401 MB shallow clone that took 28 s from one location sat at
+#    "clone" for seven minutes from another, and the run died at its step
+#    ceiling with nothing named. lowSpeedLimit/lowSpeedTime abort a transfer
+#    that drops under 10 KB/s for a minute, so a stall becomes a fast failure
+#    with git's own reason in the log — and a failure can be retried.
+export GIT_TERMINAL_PROMPT=0
+GIT_NET=(-c http.lowSpeedLimit=10240 -c http.lowSpeedTime=60)
+
 # Clone or fetch, through the sentinel host either way.
 #
 # The image no longer bakes the repository — see the Dockerfile — so a cold
@@ -41,17 +56,31 @@ if [ -d "$REPO_PATH/.git" ]; then
   step "set-remote"
   git remote set-url origin "$GIT_REMOTE" || fail "set-remote"
   step "fetch"
-  git fetch --depth 1 origin "$REPO_REF" || fail "fetch"
+  git "${GIT_NET[@]}" fetch --depth 1 origin "$REPO_REF" || fail "fetch"
 else
   step "clone"
-  # A directory without .git is the residue of an interrupted clone; git
-  # refuses to clone into it, so a run would wedge on its predecessor's
-  # corpse. Remove it first — there is nothing in it worth keeping.
-  [ -d "$REPO_PATH" ] && rm -rf "$REPO_PATH"
   # --depth 1 because history is worthless here and costs minutes. Phase 20
   # builds its commit Worker-side from a diff, so the container never needs to
-  # push and never needs a full object graph.
-  git clone --depth 1 --branch "$REPO_REF" "$GIT_REMOTE" "$REPO_PATH" || fail "clone"
+  # push and never needs a full object graph. Even shallow it is ~400 MB, so
+  # it is the single largest transfer of a cold boot.
+  #
+  # Retried, and bounded per attempt: with the low-speed abort above a stalled
+  # attempt fails in about a minute rather than never, and the next attempt
+  # gets a fresh connection. `timeout` is the backstop for a stall the
+  # low-speed check cannot see (a hang before any byte moves).
+  #
+  # A directory without .git is the residue of an interrupted clone; git
+  # refuses to clone into it, so each attempt removes its predecessor's corpse
+  # first — there is nothing in it worth keeping.
+  CLONED=0
+  for attempt in 1 2 3; do
+    [ -d "$REPO_PATH" ] && rm -rf "$REPO_PATH"
+    if timeout 300 git "${GIT_NET[@]}" clone --progress --depth 1 --branch "$REPO_REF" "$GIT_REMOTE" "$REPO_PATH"; then
+      CLONED=1; break
+    fi
+    echo "STEP clone-retry-${attempt}"
+  done
+  [ "$CLONED" = "1" ] || fail "clone"
   cd "$REPO_PATH" || fail "repo-unreadable"
 fi
 

@@ -560,11 +560,18 @@ type Progress = {
  * does both), which is why the note table covers steps that are never announced.
  */
 const STEP_NOTES: Record<string, string> = {
+  clone: "cloning the monorepo (~400 MB even shallow; the largest transfer of a cold boot)",
+  "clone-retry-1": "first clone attempt failed or stalled; retrying",
+  "clone-retry-2": "second clone attempt failed or stalled; retrying",
+  "set-remote": "pointing the checkout at origin",
   fetch: `fetching origin/${REPO_REF}`,
   reset: "resetting the working tree",
   clean: "removing files a previous run left behind",
   install: "installing dependencies",
   "build-packages": "building the workspace packages",
+  browser: "installing the browser (Chromium; non-fatal if it fails)",
+  "browser-cached": "browser already installed",
+  "browser-unavailable": "browser install failed; recording is unavailable on this machine",
   ready: "ready",
 };
 
