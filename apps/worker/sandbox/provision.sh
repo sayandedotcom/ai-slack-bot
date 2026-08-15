@@ -55,8 +55,19 @@ if [ -d "$REPO_PATH/.git" ]; then
   cd "$REPO_PATH" || fail "repo-unreadable"
   step "set-remote"
   git remote set-url origin "$GIT_REMOTE" || fail "set-remote"
+  # The repo is baked (see the Dockerfile), so this fetch is a small delta, not
+  # the bulk transfer. It is NON-FATAL and time-bounded: the sentinel proxy path
+  # cannot be relied on from every colo (three drills proved it), so a stalled
+  # or failed fetch drops to the baked commit rather than killing the run. The
+  # baked snapshot is at most a build old, and the reset below targets
+  # origin/$REPO_REF either way — fetched HEAD if the fetch landed, the baked
+  # ref if it did not.
   step "fetch"
-  git "${GIT_NET[@]}" fetch --depth 1 origin "$REPO_REF" || fail "fetch"
+  if timeout 120 git "${GIT_NET[@]}" fetch --depth 1 origin "$REPO_REF"; then
+    :
+  else
+    echo "STEP fetch-skipped-baked"
+  fi
 else
   step "clone"
   # --depth 1 because history is worthless here and costs minutes. Phase 20

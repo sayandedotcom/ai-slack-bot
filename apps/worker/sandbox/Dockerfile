@@ -149,6 +149,42 @@ RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable
 
 
 # ---------------------------------------------------------------------------
+# Bake the monorepo. This is the reversal the node_modules comment below half
+# promised ("what stays baked is ... the repository itself") and the code never
+# delivered — now forced by measurement, not preference.
+#
+# The boot-time clone goes through the SENTINEL: the container talks to
+# git.firefighter.local and the Worker's interceptHttps swaps in the real PAT
+# on egress. That proxy path cannot carry the monorepo from an APAC colo —
+# three live drills stalled on it, at 401 MB and at a sparse 83 MB alike, from
+# sin22 and hkg13, while the same transfer is 28 s from another colo. The bulk
+# must not cross the sentinel. Baked, it arrives over Cloudflare's own registry
+# instead, and boot does only a small, NON-FATAL fetch delta (see provision.sh).
+#
+# Sparse, exactly the patterns provision.sh's fallback uses: everything minus
+# the two heavy public/ trees (394 MB of marketing/docs PNGs the agent never
+# opens). ~230 MB baked.
+#
+# The credential exists ONLY in the mounted secret and a command-scoped
+# http.extraHeader — never in .git/config (the baked remote is the sentinel
+# placeholder, token-free), never a build ARG, never a layer. build.sh greps
+# the assembled filesystem every build to prove it.
+ARG REPO_REF=staging
+RUN --mount=type=secret,id=monorepo_pat \
+    set -eu; \
+    AUTH=$(printf 'x-access-token:%s' "$(cat /run/secrets/monorepo_pat)" | base64 -w0); \
+    git -c http.extraHeader="Authorization: Basic ${AUTH}" \
+        clone --depth 1 --branch "${REPO_REF}" --filter=blob:none --sparse \
+        https://github.com/Zellify/web2app-rebuild.git /workspace/web2app-rebuild; \
+    cd /workspace/web2app-rebuild; \
+    git sparse-checkout init --no-cone; \
+    printf '/*\n!/apps/landing/public/\n!/apps/docs/public/\n' > .git/info/sparse-checkout; \
+    git -c http.extraHeader="Authorization: Basic ${AUTH}" read-tree -mu HEAD; \
+    git remote set-url origin https://git.firefighter.local/Zellify/web2app-rebuild.git; \
+    git rev-parse HEAD
+
+
+# ---------------------------------------------------------------------------
 # `node_modules` is deliberately NOT baked, and this is a reversal worth
 # explaining because the first version of this file did bake it.
 #

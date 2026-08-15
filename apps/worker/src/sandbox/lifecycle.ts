@@ -565,6 +565,7 @@ const STEP_NOTES: Record<string, string> = {
   "clone-retry-2": "second clone attempt failed or stalled; retrying",
   "set-remote": "pointing the checkout at origin",
   fetch: `fetching origin/${REPO_REF}`,
+  "fetch-skipped-baked": "the fetch stalled; using the baked snapshot instead",
   reset: "resetting the working tree",
   clean: "removing files a previous run left behind",
   install: "installing dependencies",
