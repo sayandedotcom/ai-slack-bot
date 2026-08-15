@@ -181,3 +181,27 @@ across the DO hop.
 - Host disk was back at 99 % before the check. `docker builder prune` freed
   3.4 GB; deleting superseded image *tags* freed ~0 (shared layers — the
   phase 18 lesson, reconfirmed).
+
+## The right-edge gap, and the clean 1280x720 proof (2026-08-15)
+
+The first successful recording had a grey strip down the right of the frame. Cause: the
+harness created the recordVideo context with no `viewport` and no `size`, so Playwright
+locked the video canvas from the default 1280x720 viewport (-> 800x450). The model's own
+script then set a 1280x800 (16:10) viewport, which does not match 800x450 (16:9), so
+Playwright scaled the mismatch in and PADDED the remainder grey.
+
+Fix, in two parts: (1) pin `viewport` AND `recordVideo.size` to the same 1280x720 in the
+harness so the page fills the frame with no scaling; (2) tell the model in the .d.ts that
+the viewport is fixed and not to call setViewportSize. Part (2) is Worker-side and took
+effect immediately -- the very next recording was gap-free even on the old harness image,
+because the model then used a 16:9 viewport that matched. Part (1) landed one container
+rollout later and made the file natively 1280x720.
+
+Verified at the pixel level (not by eye): the rightmost column of the 1280x720 recording
+is 720/720 rows of page content, 0 flat-grey-pad rows, pure white to the edge. GET 200,
+Range -> 206, plays logged out.
+
+Three clean recordings now sit at public /proofs URLs: /pricing (the first proof), the
+four /use-cases pages (agent honestly recorded a real 404 on the index route first), and
+/pricing with a nav hover. The recording pipeline is proven repeatable across routes and
+interactions, not a one-off.
