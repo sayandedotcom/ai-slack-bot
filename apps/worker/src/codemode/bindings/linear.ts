@@ -142,6 +142,11 @@ function normalizeLabels(labels: string[] | undefined): string[] {
 /**
  * The assessment travels in the issue body rather than as structured fields,
  * because the reader is a human triaging a queue, not a query.
+ *
+ * Rendered under `## Notes` rather than a bare `---` divider, because that is
+ * the monorepo's own `m-create-linear-task` convention: priority, estimate
+ * and tier belong in native fields, and everything else that doesn't fit one
+ * — which is exactly what this assessment is — goes under `## Notes`.
  */
 function renderDescription(
   body: string,
@@ -150,7 +155,8 @@ function renderDescription(
   return [
     body,
     "",
-    "---",
+    "## Notes",
+    "",
     `Platform value: ${a.platformValue}`,
     `Blocking: ${a.blocking}`,
     `Customer weight: ${a.customerWeight}`,

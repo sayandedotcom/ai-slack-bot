@@ -326,5 +326,54 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
       }
       return { id: updated.issue.id, url: updated.issue.url };
     },
+
+    /**
+     * Turns the issue UUIDs the agent holds into the `{id, identifier}` pairs
+     * a `Fixes FIR-123` line needs. That line, in the PR body, is the only
+     * thing that makes the linked issue close on merge — so a partially
+     * resolved result is worse than none: it renders some `Fixes` lines,
+     * closes some issues, and silently drops the rest. The whole call
+     * refuses the moment ANY id turns out foreign or unknown, before a
+     * partial list can reach the caller.
+     *
+     * Same shape as `requirePinnedIssue` — fetch, then check `team.id`
+     * against the pin — but this also needs the human-readable `identifier`
+     * that `requirePinnedIssue`'s callers never asked for, so it is its own
+     * query rather than a shared helper.
+     *
+     * One request per id (the caller caps the list at 5, per the brief), run
+     * in order so the result order matches the input order: the PR body
+     * renders one `Fixes` line per entry, and their order is visible output.
+     */
+    async resolveLinkTargets(
+      issueIds,
+    ): Promise<Array<{ id: string; identifier: string }>> {
+      if (issueIds.length === 0) return [];
+
+      const out: Array<{ id: string; identifier: string }> = [];
+      for (const issueId of issueIds) {
+        const result = await query<{
+          issue: { id: string; identifier: string; team: { id: string } } | null;
+        }>(
+          `query($id: String!) { issue(id: $id) { id identifier team { id } } }`,
+          { id: issueId },
+        );
+        const issue = result.data?.issue ?? null;
+        if (issue === null) {
+          throw new CapabilityError(
+            "invalid_input",
+            "that issue does not exist, or is not visible to this agent.",
+          );
+        }
+        if (issue.team.id !== config.teamId) {
+          throw new CapabilityError(
+            "linear_team_denied",
+            `that issue belongs to another team; this agent may only touch ${config.teamName}.`,
+          );
+        }
+        out.push({ id: issue.id, identifier: issue.identifier });
+      }
+      return out;
+    },
   };
 }

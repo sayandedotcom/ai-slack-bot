@@ -174,14 +174,35 @@ describe("linear.createIssue always uses the pinned team", () => {
     expect(sent[0].headers.get("authorization")).not.toMatch(/^Bearer /);
   });
 
-  it("renders the assessment into the issue body so it cannot be omitted", async () => {
+  // Phase 09 pinned a bare `---` divider before the assessment. The
+  // monorepo's own `m-create-linear-task` convention puts everything that
+  // doesn't fit a native field under a `## Notes` heading instead — priority,
+  // estimate and tier stay native, and the assessment is exactly the kind of
+  // thing that doesn't fit one. This is a re-housing: every field below must
+  // still be assertable line by line, in the same order, with the same
+  // labels — nothing dropped, nothing merged, nothing reworded.
+  it("renders the assessment under a `## Notes` heading so it cannot be omitted", async () => {
     const sent = mockTransport([created()]);
     await call(await linearTools(), "createIssue", validCreate);
     const description = String(sent[0].variables.description);
-    expect(description).toContain("Platform value: high");
-    expect(description).toContain("Blocking: medium");
-    expect(description).toContain("Customer weight: high");
-    expect(description).toContain("Three customers in two weeks.");
+    const lines = description.split("\n");
+
+    expect(lines).toContain("## Notes");
+    expect(lines).toContain("Platform value: high");
+    expect(lines).toContain("Blocking: medium");
+    expect(lines).toContain("Customer weight: high");
+    expect(lines).toContain("Evidence: Three customers in two weeks.");
+
+    // The old bare divider is gone, not merely joined by the new heading.
+    expect(lines).not.toContain("---");
+
+    // The heading introduces the fields — it must precede all of them.
+    const headingAt = lines.indexOf("## Notes");
+    expect(headingAt).toBeGreaterThan(-1);
+    expect(lines.indexOf("Platform value: high")).toBeGreaterThan(headingAt);
+    expect(lines.indexOf("Blocking: medium")).toBeGreaterThan(headingAt);
+    expect(lines.indexOf("Customer weight: high")).toBeGreaterThan(headingAt);
+    expect(lines.indexOf("Evidence: Three customers in two weeks.")).toBeGreaterThan(headingAt);
   });
 
   it("normalizes the response to identifiers only", async () => {
@@ -453,6 +474,57 @@ describe("linear upstream failures stay safe", () => {
     vi.stubGlobal("fetch", async () => { throw new TypeError("network error"); });
     await expect(call(await linearTools(), "createIssue", validCreate))
       .rejects.toThrow(/capability_unavailable/);
+  });
+});
+
+/**
+ * Task 5: turns the issue UUIDs the agent holds into `{id, identifier}` pairs
+ * for the `Fixes FIR-123` lines a later task renders into the PR body. That
+ * line is the only thing that makes the linked issue close on merge, so a
+ * partial result is worse than none — the whole call refuses if any single id
+ * is foreign or unknown, rather than rendering some `Fixes` lines and quietly
+ * dropping others.
+ */
+describe("linear.resolveLinkTargets", () => {
+  const issueReply = (id: string, identifier: string, teamId = TEAM_ID) => ({
+    data: { issue: { id, identifier, team: { id: teamId } } },
+  });
+
+  it("returns an empty array and sends no requests for empty input", async () => {
+    const sent = mockTransport([]);
+    const out = await makeLinearGateway(config).resolveLinkTargets([]);
+    expect(out).toEqual([]);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("resolves ids to {id, identifier}, preserving input order", async () => {
+    // Replies are queued in the order the ids are looked up, not the order
+    // the ids happen to sort in — this is what proves the RESULT order is the
+    // input order, not an incidental match.
+    mockTransport([issueReply("i2", "FIR-2"), issueReply("i1", "FIR-1")]);
+    const out = await makeLinearGateway(config).resolveLinkTargets(["i2", "i1"]);
+    expect(out).toEqual([
+      { id: "i2", identifier: "FIR-2" },
+      { id: "i1", identifier: "FIR-1" },
+    ]);
+  });
+
+  it("refuses the whole call when any single id belongs to another team", async () => {
+    mockTransport([issueReply("i1", "FIR-1"), issueReply("i2", "FIR-2", OTHER_TEAM)]);
+    await expect(makeLinearGateway(config).resolveLinkTargets(["i1", "i2"]))
+      .rejects.toThrow(/linear_team_denied/);
+  });
+
+  it("names the pinned team when refusing a foreign issue", async () => {
+    mockTransport([issueReply("i1", "FIR-1", OTHER_TEAM)]);
+    await expect(makeLinearGateway(config).resolveLinkTargets(["i1"]))
+      .rejects.toThrow(/fire-fighter-testing/);
+  });
+
+  it("refuses the whole call when any single id is unknown", async () => {
+    mockTransport([issueReply("i1", "FIR-1"), { data: { issue: null } }]);
+    await expect(makeLinearGateway(config).resolveLinkTargets(["i1", "nope"]))
+      .rejects.toThrow(/invalid_input/);
   });
 });
 

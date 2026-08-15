@@ -176,6 +176,7 @@ export interface LinearGateway {
     description?: string;
     state?: string;
   }): Promise<{ id: string; url: string }>;
+  resolveLinkTargets(issueIds: string[]): Promise<Array<{ id: string; identifier: string }>>;
 }
 
 export interface SupabaseReader {
