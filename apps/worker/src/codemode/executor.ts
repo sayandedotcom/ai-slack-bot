@@ -215,7 +215,16 @@ export function makeGuardedExecutor(
               reject(
                 new CapabilityError(
                   "execution_timeout",
-                  `the program exceeded its ${limits.wallTimeMs}ms budget and was abandoned.`,
+                  // "Abandoned" alone is the wrong inference and it cost a
+                  // customer two identical messages, twice, in live drills. The
+                  // PROGRAM is abandoned; the writes it already made are not,
+                  // and cannot be — an external write has left the building the
+                  // moment it returns. A model reading only the first clause
+                  // concludes nothing happened, redoes the work, and the second
+                  // attempt is a genuinely different effect (a reworded message
+                  // hashes differently), so the ledger correctly declines to
+                  // dedupe it. Naming what survived is what stops the retry.
+                  `the program exceeded its ${limits.wallTimeMs}ms budget and was abandoned. IMPORTANT: any capability call that already returned inside it HAS TAKEN EFFECT — a reply was sent, an issue was filed, a pull request was opened. Do not assume the work was lost and redo it. Read back what exists (the thread, the issue, the pull request) and continue from there, and if you retry anything, retry it with the SAME arguments so the effect ledger can recognise it rather than treating a rewrite as a second, new action.`,
                 ),
               ),
             limits.wallTimeMs,

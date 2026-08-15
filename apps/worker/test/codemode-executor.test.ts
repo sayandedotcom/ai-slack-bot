@@ -27,6 +27,33 @@ describe("wall-clock bounding", () => {
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
+  /**
+   * The timeout message must say that completed writes SURVIVED, not merely
+   * that the program was abandoned.
+   *
+   * This is a regression test for a defect that reached customers twice in live
+   * drills: a `run_code` block sent a Slack reply, ran past the wall, and was
+   * abandoned. The reply had already posted, but the model read "abandoned",
+   * concluded the send failed, reworded it and sent it again — and a reworded
+   * message is different text, so it is a genuinely different effect and the
+   * ledger correctly declined to dedupe it. The customer was told the same
+   * thing twice, 28 seconds apart.
+   *
+   * The fix is this sentence, so the test is on the sentence. Asserting the
+   * error CODE alone would have passed throughout the entire bug.
+   */
+  it("tells the model that writes already made survived the timeout", async () => {
+    const out = await executor({ wallTimeMs: 300 }).execute(
+      "async () => { await new Promise(r => setTimeout(r, 5000)); return 'late'; }", [],
+    );
+    expect(out.error).toMatch(/execution_timeout/);
+    // The load-bearing half: what happened to effects that already returned.
+    expect(out.error).toMatch(/HAS TAKEN EFFECT/);
+    expect(out.error).toMatch(/Do not assume the work was lost/i);
+    // And the instruction that keeps a retry dedupable rather than additive.
+    expect(out.error).toMatch(/SAME arguments/);
+  });
+
   it("times out when a host capability never resolves", async () => {
     const out = await executor({ wallTimeMs: 300 }).execute(
       "async () => { await slack.thread({}); return 'never'; }",

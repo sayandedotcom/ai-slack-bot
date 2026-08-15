@@ -52,7 +52,7 @@ declare const slack: {
 	searchMessages: (input: SearchMessagesInput) => Promise<SearchMessagesOutput>;
 
 	/**
-	 * Post a reply into the conversation this run belongs to. The destination is fixed by the run and cannot be chosen here.
+	 * Post a reply into the conversation this run belongs to. The destination is fixed by the run and cannot be chosen here. IF THIS CALL TIMES OUT OR ITS CODE BLOCK IS CUT SHORT, THE MESSAGE HAS PROBABLY ALREADY BEEN SENT — the send happens before the block finishes, so a timeout tells you the block ran long, not that the customer missed the reply. Do not send it again, and do not send a reworded version: a rewrite is different text and will post a second message rather than replacing the first. Read the thread to check what landed, and if you genuinely need to add something, send only the NEW part.
 	 */
 	reply: (input: ReplyInput) => Promise<ReplyOutput>;
 }

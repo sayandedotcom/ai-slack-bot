@@ -98,8 +98,26 @@ export function makeSlackTools(ctx: BindingContext): ToolDescriptors {
       effect: "external_write",
       // No destination argument, deliberately. Where a reply lands is a
       // property of the run, decided by the host before this code ever ran.
+      //
+      // THE SECOND HALF OF THIS DESCRIPTION IS A BUG FIX, NOT ADVICE.
+      //
+      // A `run_code` block is capped at `wallTimeMs` (20s). A block that sends
+      // a reply and then runs long is ABORTED — but the send already left the
+      // building, and an external write cannot be rolled back. So model code
+      // sees a timeout for a message the customer has already received, infers
+      // the send failed, rewrites it, and sends it again.
+      //
+      // The effect ledger cannot catch that second send: `text` is the key, and
+      // the rewrite is by definition different text, so it hashes to a genuinely
+      // different effect. That is the right rule for two deliberately different
+      // messages, which makes this the wrong layer to fix it at — keying on the
+      // turn instead would silently swallow a legitimate follow-up.
+      //
+      // Observed twice in live drills, both times as the customer being told the
+      // same thing twice 28 seconds apart. The model was reasoning correctly
+      // from bad information; this sentence is the information.
       description:
-        "Post a reply into the conversation this run belongs to. The destination is fixed by the run and cannot be chosen here.",
+        "Post a reply into the conversation this run belongs to. The destination is fixed by the run and cannot be chosen here. IF THIS CALL TIMES OUT OR ITS CODE BLOCK IS CUT SHORT, THE MESSAGE HAS PROBABLY ALREADY BEEN SENT — the send happens before the block finishes, so a timeout tells you the block ran long, not that the customer missed the reply. Do not send it again, and do not send a reworded version: a rewrite is different text and will post a second message rather than replacing the first. Read the thread to check what landed, and if you genuinely need to add something, send only the NEW part.",
       input: z.strictObject({ text: z.string().min(1).max(4000) }),
       output: z.strictObject({
         ts: z.string(),
