@@ -61,8 +61,23 @@ else
   step "clone"
   # --depth 1 because history is worthless here and costs minutes. Phase 20
   # builds its commit Worker-side from a diff, so the container never needs to
-  # push and never needs a full object graph. Even shallow it is ~400 MB, so
-  # it is the single largest transfer of a cold boot.
+  # push and never needs a full object graph.
+  #
+  # SPARSE, because even shallow the full tree is 401 MB and 394 MB of that is
+  # three `public/` directories of marketing and docs PNGs the agent will never
+  # open. Phase 19's live drills lost two runs to that transfer: 28 s from one
+  # Cloudflare location, over five minutes and still going from two others.
+  # `--filter=blob:none --sparse` fetches trees only; a checkout then pulls
+  # exactly the blobs the sparse patterns include, and the excluded paths are
+  # NEVER fetched. Measured: 83 MB and 35 s on a domestic uplink, against 401 MB
+  # and 94 s — a fifth of the bytes.
+  #
+  # The patterns are non-cone (gitignore style): everything, minus the two
+  # heavy asset trees. `apps/dashboard/public` (46 MB) deliberately stays — the
+  # agent may serve the dashboard. Every workspace member's package.json is
+  # still present, so `pnpm install --frozen-lockfile` sees the whole
+  # workspace, and `build-packages` filters to ./packages/* and never reads
+  # apps/*/public. Verified before shipping, not assumed.
   #
   # Retried, and bounded per attempt: with the low-speed abort above a stalled
   # attempt fails in about a minute rather than never, and the next attempt
@@ -75,7 +90,11 @@ else
   CLONED=0
   for attempt in 1 2 3; do
     [ -d "$REPO_PATH" ] && rm -rf "$REPO_PATH"
-    if timeout 300 git "${GIT_NET[@]}" clone --progress --depth 1 --branch "$REPO_REF" "$GIT_REMOTE" "$REPO_PATH"; then
+    if timeout 300 git "${GIT_NET[@]}" clone --progress --depth 1 --branch "$REPO_REF" \
+         --filter=blob:none --sparse "$GIT_REMOTE" "$REPO_PATH" \
+       && git -C "$REPO_PATH" sparse-checkout init --no-cone \
+       && printf '/*\n!/apps/landing/public/\n!/apps/docs/public/\n' > "$REPO_PATH/.git/info/sparse-checkout" \
+       && timeout 300 git -C "$REPO_PATH" "${GIT_NET[@]}" read-tree -mu HEAD; then
       CLONED=1; break
     fi
     echo "STEP clone-retry-${attempt}"
@@ -88,7 +107,7 @@ fi
 # in /usr/local/bin: a reset that deleted the running script would be a
 # genuinely baffling failure.
 step "reset"
-git reset --hard "origin/${REPO_REF}" || fail "reset"
+git "${GIT_NET[@]}" reset --hard "origin/${REPO_REF}" || fail "reset"
 git clean -fd -e node_modules -e .turbo || fail "clean"
 
 # The install. On a cold container this is a full 3217-package install, because
