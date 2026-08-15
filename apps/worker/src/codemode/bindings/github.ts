@@ -72,6 +72,24 @@ const ATTRIBUTION_PATTERNS: RegExp[] = [
 const REPO_ATTRIBUTION_RULE =
   "this repository forbids AI attribution in PRs and their commits";
 
+const REPO_HEADING_RULE =
+  "this repository's PR skill forbids boilerplate sections like \u2018## Summary\u2019 or \u2018## Test plan\u2019, and this renderer's only fixed headings are Description/Acceptance Criteria/Screenshots/Notes for reviewers";
+
+/**
+ * Any Markdown ATX heading (`#` through `######`, at the start of a line,
+ * followed by a space) — which is exactly the shape of `## Test plan`,
+ * `## Summary`, or any other section the monorepo's skill forbids by name.
+ * Anchored per-line (`m`) so a heading buried mid-paragraph is still caught,
+ * not just one that opens the field.
+ *
+ * The renderer (`renderPrBody`) only ever writes the headings IT chooses —
+ * `## Description`, `## Acceptance Criteria`, and the two optional ones — but
+ * that guarantee is worthless if a free-text field can inject an extra one of
+ * its own. This is what makes "no forbidden section" true of the rendered
+ * body, not just true of the fixed skeleton around the free text.
+ */
+const HEADING_PATTERN = /^\s*#{1,6}\s/m;
+
 /** Verbatim from the task brief — the monorepo's real branch/title/body contract. */
 const inputSchema = z.strictObject({
   branch: z
@@ -172,6 +190,25 @@ function assertNoAttribution(field: string, value: string): void {
 }
 
 /**
+ * Refuses free text that opens a Markdown heading, for the same refuse-not-
+ * strip reason `assertNoAttribution` does: silently deleting a `##` line (or
+ * escaping it) would hide from the model exactly what it did wrong, and a
+ * stripped heading is one edit away from being un-stripped by the next call.
+ *
+ * `field` may name a single acceptance-criterion item (`` `acceptanceCriteria[i]` ``)
+ * so a refusal on item 3 doesn't read as if item 0 were the problem.
+ */
+function assertNoHeadings(field: string, value: string): void {
+  if (HEADING_PATTERN.test(value)) {
+    throw new CapabilityError(
+      "invalid_input",
+      `${field} contains a Markdown heading and was refused: ${REPO_HEADING_RULE}. ` +
+        `Rewrite ${field} as plain text with no line starting "#" — nothing is stripped or rewritten for you, because that would hide the rule rather than teach it.`,
+    );
+  }
+}
+
+/**
  * `z.string().url().max(500)` already bounds length and general URL shape;
  * this is the one rule zod cannot express — the scheme. An `http://` proof
  * link is not a security issue here, but it is a broken one: the monorepo's
@@ -193,15 +230,35 @@ export function makeGithubTools(ctx: BindingContext): ToolDescriptors {
     openPR: auditedCapability(ctx, "github", "openPR", {
       effect: "external_write",
       description:
-        "Open a pull request on the monorepo from this run's diffRef, or update the one already open on `branch` — call this again after improving the fix rather than leaving stale content up; a second call on the same branch updates it, it does not open a second PR. `branch` must follow the convention `<type>/<2-4 kebab-case words>` (e.g. `fix/checkout-timeout`) and `title` must be `<type>: <imperative>`, using the same conventional type in both. The `Fixes <identifier>` line is GENERATED from `fixesIssueIds` — never type the word \"Fixes\" into `description`, `notesForReviewers`, or especially `commitMessage`: this Linear setup has commit-message magic words disabled, so a `Fixes` line inside a commit message links nothing, silently, and only the rendered PR body closes the issue on merge. Use `partOfIssueIds` for an umbrella or epic issue instead — it renders `Part of`, which links WITHOUT closing, so a fix that only covers part of the epic cannot close the whole thing. Put the proof recording's URL in `proofUrl` (it lands under `## Screenshots`) and ALSO repeat it in your Slack reply — the reviewer reads the PR, the customer reads Slack, and each needs their own copy of the same link. `commitMessage`, `description` and `notesForReviewers` are REFUSED, not silently rewritten, if they contain co-authored-by, \"generated with\", the robot emoji, or the word \"claude\" in any case — this repository forbids AI attribution in PRs and their commits, and a silent strip would hide that rule rather than teach it. After this returns, poll `checkPR` on a later turn until `linearLinkback.commented` is true — that confirms the Fixes/Part of lines actually took; if it never turns true after a few polls, say so instead of assuming the link worked.",
+        "Open a pull request on the monorepo from this run's diffRef, or update the one already open on `branch` — call this again after improving the fix rather than leaving stale content up; a second call on the same branch updates it, it does not open a second PR. `branch` must follow the convention `<type>/<2-4 kebab-case words>` (e.g. `fix/checkout-timeout`) and `title` must be `<type>: <imperative>`, using the same conventional type in both. The `Fixes <identifier>` line is GENERATED from `fixesIssueIds` — never type the word \"Fixes\" into `description`, `notesForReviewers`, or especially `commitMessage`: this Linear setup has commit-message magic words disabled, so a `Fixes` line inside a commit message links nothing, silently, and only the rendered PR body closes the issue on merge. Use `partOfIssueIds` for an umbrella or epic issue instead — it renders `Part of`, which links WITHOUT closing, so a fix that only covers part of the epic cannot close the whole thing. Put the proof recording's URL in `proofUrl` (it lands under `## Screenshots`) and ALSO repeat it in your Slack reply — the reviewer reads the PR, the customer reads Slack, and each needs their own copy of the same link. `title`, `commitMessage`, `description` and `notesForReviewers` are REFUSED, not silently rewritten, if they contain co-authored-by, \"generated with\", the robot emoji, or the word \"claude\" in any case — this repository forbids AI attribution in PRs and their commits, and a silent strip would hide that rule rather than teach it. `description`, `notesForReviewers` and each `acceptanceCriteria` entry are likewise REFUSED if they contain a Markdown heading (a line starting with `#`) — the only headings this PR body ever has are the ones this tool itself renders (Description, Acceptance Criteria, Screenshots, Notes for reviewers), never one smuggled in through free text. After this returns, poll `checkPR` on a later turn until `linearLinkback.commented` is true — that confirms the Fixes/Part of lines actually took; if it never turns true after a few polls, say so instead of assuming the link worked.",
       input: inputSchema,
       output: pullRequestRefOutput,
       run: async (input: OpenPRInput) => {
+        // Attribution: every free-text field that ends up in the PR or its
+        // commit, INCLUDING `title` — the most visible string in the whole
+        // artifact, and the one field the first pass of this file missed.
+        // `branch` needs no screen: its regex is lowercase-kebab-only and no
+        // attribution trailer's shape survives it.
+        assertNoAttribution("title", input.title);
         assertNoAttribution("commitMessage", input.commitMessage);
         assertNoAttribution("description", input.description);
         if (input.notesForReviewers !== undefined) {
           assertNoAttribution("notesForReviewers", input.notesForReviewers);
         }
+
+        // Headings: every free-text field the RENDERER interpolates into the
+        // body verbatim, so that "no forbidden section" is true of what
+        // actually ships rather than only of the skeleton `renderPrBody`
+        // itself writes. `title` and `commitMessage` are exempt — neither is
+        // interpolated into the body, so neither can inject a heading there.
+        assertNoHeadings("description", input.description);
+        if (input.notesForReviewers !== undefined) {
+          assertNoHeadings("notesForReviewers", input.notesForReviewers);
+        }
+        input.acceptanceCriteria.forEach((criterion, i) => {
+          assertNoHeadings(`acceptanceCriteria[${i}]`, criterion);
+        });
+
         assertProofUrl(input.proofUrl);
 
         // One combined call, not two. `resolveLinkTargets` refuses the WHOLE

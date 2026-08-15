@@ -134,7 +134,16 @@ describe("renderPrBody", () => {
     expect(lines.slice(start, start + 3)).toEqual(["- [ ] a", "- [ ] b", "- [ ] c"]);
   });
 
-  it("structurally cannot emit a Summary, a Test plan, a footer, or attribution", () => {
+  // `renderPrBody` is a pure function with NO guard of its own — the
+  // attribution and heading refusals live in the binding
+  // (`assertNoAttribution`/`assertNoHeadings`), one layer up, because a
+  // refusal has to stop the call before anything is rendered or sent. This
+  // case only proves the renderer adds nothing extra on CLEAN input; it must
+  // not be read as proof against injection — that proof lives in the
+  // `openPR`-level "heading/attribution refusals" describes below, which
+  // feed tainted text through the real call path and assert it never
+  // reaches the gateway.
+  it("adds no heading or attribution beyond its own fixed skeleton, given clean input", () => {
     const body = renderPrBody({
       fixes: [{ identifier: "FIR-1" }],
       partOf: [],
@@ -172,6 +181,17 @@ describe("attribution refusals — refused, not stripped", () => {
     expect(err.message).toMatch(/forbids AI attribution/);
   });
 
+  it.each(tainted)("refuses %s in title — the most visible string in the artifact", async (_label, text) => {
+    const { tools } = await githubTools();
+    const err = (await call(tools, "openPR", { ...validInput, title: `fix: ${text}` }).catch(
+      (e: unknown) => e,
+    )) as CapabilityError;
+    expect(err).toBeInstanceOf(CapabilityError);
+    expect(err.code).toBe("invalid_input");
+    expect(err.message).toMatch(/title/);
+    expect(err.message).toMatch(/forbids AI attribution/);
+  });
+
   it.each(tainted)("refuses %s in description", async (_label, text) => {
     const { tools } = await githubTools();
     const err = (await call(tools, "openPR", { ...validInput, description: text }).catch(
@@ -204,6 +224,87 @@ describe("attribution refusals — refused, not stripped", () => {
       () => {},
     );
     expect(called).toBe(false);
+  });
+});
+
+/**
+ * Important finding 1 from the Task 4 review: the headline guarantee — "no
+ * forbidden section can appear" — was only true of the renderer's own fixed
+ * skeleton, not of free text interpolated into it. A `description` (or
+ * `notesForReviewers`, or any `acceptanceCriteria` item) containing a line
+ * like `## Test plan` rendered a REAL heading into the body, because nothing
+ * screened those fields before they reached `renderPrBody`. These tests feed
+ * exactly that shape through the real `openPR` call path — not through
+ * `renderPrBody` directly, which has no guard of its own — so a regression
+ * (the guard removed, or narrowed to miss a field) fails loudly here.
+ */
+describe("heading refusals — refused, not stripped", () => {
+  const injected = "watched the retry path\n\n## Test plan\n\n- ran it";
+
+  it("refuses a heading injected into description", async () => {
+    const { tools } = await githubTools();
+    const err = (await call(tools, "openPR", { ...validInput, description: injected }).catch(
+      (e: unknown) => e,
+    )) as CapabilityError;
+    expect(err).toBeInstanceOf(CapabilityError);
+    expect(err.code).toBe("invalid_input");
+    expect(err.message).toMatch(/description/);
+    expect(err.message).toMatch(/heading/i);
+  });
+
+  it("refuses a heading injected into notesForReviewers", async () => {
+    const { tools } = await githubTools();
+    const err = (await call(tools, "openPR", { ...validInput, notesForReviewers: injected }).catch(
+      (e: unknown) => e,
+    )) as CapabilityError;
+    expect(err).toBeInstanceOf(CapabilityError);
+    expect(err.message).toMatch(/notesForReviewers/);
+    expect(err.message).toMatch(/heading/i);
+  });
+
+  it("refuses a heading injected into a single acceptanceCriteria entry, naming its index", async () => {
+    const { tools } = await githubTools();
+    const err = (await call(tools, "openPR", {
+      ...validInput,
+      acceptanceCriteria: ["a clean first criterion", "## Summary\n\nnot a real criterion"],
+    }).catch((e: unknown) => e)) as CapabilityError;
+    expect(err).toBeInstanceOf(CapabilityError);
+    expect(err.message).toMatch(/acceptanceCriteria\[1\]/);
+    expect(err.message).toMatch(/heading/i);
+  });
+
+  it("catches a heading buried mid-field, not just one that opens it", async () => {
+    const { tools } = await githubTools();
+    await expect(
+      call(tools, "openPR", {
+        ...validInput,
+        description: "some real prose first\n## Summary\nmore text",
+      }),
+    ).rejects.toThrow(/invalid_input/);
+  });
+
+  it("never reaches the gateway when a heading is injected — nothing is silently stripped and sent", async () => {
+    let called = false;
+    const { tools } = await githubTools({
+      github: {
+        openPR: async () => {
+          called = true;
+          throw new Error("must not be called");
+        },
+      },
+    });
+    await call(tools, "openPR", { ...validInput, description: injected }).catch(() => {});
+    expect(called).toBe(false);
+  });
+
+  it("does not refuse a '#' that is not a line-start heading, e.g. an inline issue reference", async () => {
+    const { tools } = await githubTools();
+    await expect(
+      call(tools, "openPR", {
+        ...validInput,
+        description: "Fixes the regression reported in #482, unrelated to any heading.",
+      }),
+    ).resolves.toBeDefined();
   });
 });
 
@@ -442,6 +543,65 @@ describe("openPR's effect key", () => {
     const b = await call(tools, "openPR", validInput);
     expect(calls).toBe(1);
     expect(b).toEqual(a);
+  });
+});
+
+/**
+ * Important finding 3 from the Task 4 review: every `openPR` stub above
+ * ignores `input.body`, so nothing asserted the fixes/partOf SPLIT
+ * (`resolved.slice(0, fixesIssueIds.length)` / `resolved.slice(fixesIssueIds.length)`)
+ * was correct — swapping those two slices would still pass all of them,
+ * silently turning every umbrella `partOfIssueIds` link into a closing
+ * `Fixes`. This captures the real `body` the gateway receives and checks its
+ * first lines directly, with fixes and partOf of DIFFERENT lengths so a
+ * swap is structurally visible rather than accidentally symmetric.
+ */
+describe("openPR's fixes/partOf split reaches the gateway correctly", () => {
+  it("renders Fixes for fixesIssueIds and Part of for partOfIssueIds, not swapped", async () => {
+    let seenBody = "";
+    const { tools } = await githubTools({
+      linear: {
+        resolveLinkTargets: async (ids) =>
+          ids.map((id) => ({ id, identifier: id === "issue-a" ? "FIR-A" : "FIR-B" })),
+      },
+      github: {
+        openPR: async (input) => {
+          seenBody = input.body;
+          return { number: 1, url: "https://x/1", headRef: input.branch, author: "bot", updated: false };
+        },
+      },
+    });
+    await call(tools, "openPR", {
+      ...validInput,
+      fixesIssueIds: ["issue-a"],
+      partOfIssueIds: ["issue-b"],
+    });
+    expect(seenBody.split("\n").slice(0, 2)).toEqual(["Fixes FIR-A", "Part of FIR-B"]);
+  });
+
+  it("keeps the split correct with multiple ids on each side", async () => {
+    let seenBody = "";
+    const { tools } = await githubTools({
+      linear: {
+        resolveLinkTargets: async (ids) =>
+          ids.map((id, i) => ({ id, identifier: `FIR-${id}-${i}` })),
+      },
+      github: {
+        openPR: async (input) => {
+          seenBody = input.body;
+          return { number: 1, url: "https://x/1", headRef: input.branch, author: "bot", updated: false };
+        },
+      },
+    });
+    await call(tools, "openPR", {
+      ...validInput,
+      fixesIssueIds: ["a", "b"],
+      partOfIssueIds: ["c"],
+    });
+    const lines = seenBody.split("\n").slice(0, 3);
+    expect(lines[0]).toBe("Fixes FIR-a-0");
+    expect(lines[1]).toBe("Fixes FIR-b-1");
+    expect(lines[2]).toBe("Part of FIR-c-2");
   });
 });
 
