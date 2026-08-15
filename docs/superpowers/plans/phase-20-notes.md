@@ -285,9 +285,39 @@ Three things the sandbox has to respect:
 cherry-picks onto a branch off `prod`. The fire-fighter never touches this; it
 only ever opens `→ staging`.
 
-## BLOCKER — STILL OPEN. The token grant was not the missing piece.
+## ~~BLOCKER~~ — CLEARED 2026-08-15. It took TWO grants, not one.
 
-**Measured 2026-08-15, after the org approved the re-scoped token:**
+**Final state, measured three ways:**
+
+```
+GET /repos/Zellify/web2app-rebuild        -> permissions.push: TRUE
+GET .../collaborators   (push-gated)      -> HTTP 200
+GET .../collaborators/sayandedotcom/...   -> permission: "write"
+```
+
+The lesson worth keeping, because it cost half a day: **a fine-grained PAT and a
+repository role are two independent gates, and both must be open.** The token
+grant raises a ceiling; the collaborator role supplies the access. Approving the
+token alone left `push: false`, and the token's own settings page still displayed
+"Read and Write access to code and pull requests" the entire time — the dashboard
+shows the ceiling, the API shows the intersection. Trust the API.
+
+The diagnostic that settles it in one call, and which belongs in any future
+pre-flight: `GET /repos/{owner}/{repo}` and read `permissions.push`. A second,
+independent confirmation is `GET .../collaborators`, which is itself push-gated —
+403 means no push regardless of what any settings page claims.
+
+**Still not readable:** `GET .../branches/staging/protection` returns *"Resource
+not accessible by personal access token"* — branch protection needs
+`Administration: read`, a token permission requiring another org approval round.
+Not pursued: protection does not block opening a PR into `staging`, and any
+required status checks become visible on the PR itself once it opens. Revisit
+only if a check turns out to gate the drill.
+
+### The original measurement, and why one grant was not enough
+
+**Measured 2026-08-15, after the org approved the re-scoped token but before the
+collaborator role was changed:**
 
 ```
 GET /repos/Zellify/web2app-rebuild   (auth: MONOREPO_PAT, post-approval)
@@ -301,22 +331,24 @@ not change the user's role on the repository. `sayandedotcom` is still
 read-only on `web2app-rebuild`, so `Contents: read & write` on the token buys
 nothing.
 
-The fix is a different setting, and only an org/repo admin can do it: **add the
+The fix was a different setting that only an org/repo admin can do: **add the
 trial account as a collaborator with `write`** (repo → Settings → Collaborators
-and teams), or put it in a team that has write. Asked 2026-08-15.
+and teams). Asked and granted the same day — that grant is what flipped
+`push` to true above.
 
-**This does not block building Phase 20.** The code is identical either way —
-Tasks 1–5 are correct regardless of who holds the grant. It blocks only Task 6's
-live drill, which is the exit criterion. Verify with the probe above before
-spending a container boot, never during the drill.
+**It never blocked building Phase 20.** The code is identical either way —
+Tasks 1–5 are correct regardless of who holds the grant, because every one of
+their tests runs against a stubbed `fetch`. Only Task 6's live drill was gated.
+Verify with the probe before spending a container boot, never during the drill.
 
 A second correction while here: an earlier version of this section reasoned that
 push would traverse the sentinel git proxy in `src/sandbox/class.ts`. It does
 not. Roadmap Task 1 builds the PR **entirely Worker-side** — blobs → tree →
 commit → ref → PR over REST, authored with the on-duty engineer's token, and the
 sandbox never holds the diff. The credential that decides whether shipping works
-is therefore the engineer's own grant, not the sandbox's clone PAT. Both
-currently point at the same account, and that account cannot push.
+is therefore the engineer's own grant, not the sandbox's clone PAT. Both point
+at the same account — which is why the collaborator grant, not the token
+approval, was the thing that mattered.
 
 ### What the approval DID accomplish (kept — it is still needed)
 
@@ -335,10 +367,10 @@ Three consequences worth having written down:
 - **The token is no longer the limiting factor.** Whatever grant the account
   eventually receives, the token is already scoped to exercise it. When the
   collaborator grant lands, nothing else needs changing.
-- **The fork workaround (option 2) is NOT dead** — it stays on the table until
-  the collaborator grant arrives, which is why Phase 20 must keep the target
-  repo and head ref as configuration rather than assumptions. That decision is
-  now load-bearing, not hygiene.
+- **The fork workaround (option 2) is dead** — the collaborator grant landed, so
+  Phase 20 pushes a branch to the real repo under the real identity. Keeping the
+  target repo and head ref as configuration is still correct, but as hygiene
+  again rather than as a fallback.
 
 The measurement that established the blocker is kept below, because it is the
 evidence for *why* a plain classic PAT is not enough here and would otherwise be
