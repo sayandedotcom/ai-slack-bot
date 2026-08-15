@@ -166,6 +166,29 @@ function assertSafeRepoPath(path: string): void {
   }
 }
 
+/**
+ * `checkPR`'s `number` is typed `number` in `GithubGateway`, but that type is
+ * ERASED at runtime — model-authored code calling through the codemode
+ * boundary can hand this function anything JSON can carry, and TypeScript
+ * gives no protection at the call site. `number` is interpolated into TWO
+ * URL paths (the PR read here, and the comments read inside
+ * `fetchAllComments`), so a string like `"42/../../../../repos/other/private/pulls/1"`
+ * would normalize through `new URL` into an arbitrary authenticated GET —
+ * the same shape `assertValidBranch` closes for `openPR`/`findPR`, applied
+ * here to the one remaining untrusted interpolation site. Checked as a
+ * runtime value, not trusted from its type: `typeof` first, then integer,
+ * positive, and finite/safe so it cannot smuggle `Infinity`, `NaN`, or a
+ * float that would still print as a URL-breaking string.
+ */
+function assertValidPrNumber(value: number): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new CapabilityError(
+      "invalid_input",
+      `${JSON.stringify(value)} is not a valid pull request number; refused before any request was made.`,
+    );
+  }
+}
+
 function githubHeaders(token: string, hasBody: boolean): HeadersInit {
   const headers: Record<string, string> = {
     "User-Agent": USER_AGENT,
@@ -378,7 +401,13 @@ export function makeGithubGateway(
       const res: Response = await githubFetch(token, "GET", url);
       if (!res.ok) throw await upstreamError(res, redact);
       out.push(...((await res.json()) as Comment[]));
-      url = nextPageUrl(res.headers.get("Link"));
+      // `Link` is a RESPONSE header -- following it unchecked would mean a
+      // credentialed request going wherever api.github.com's reply points,
+      // the same "an origin that can be supplied is an origin that can be
+      // redirected" shape `GITHUB_ORIGIN` being a fixed constant exists to
+      // prevent. Stop paginating rather than leave the pinned origin.
+      const next = nextPageUrl(res.headers.get("Link"));
+      url = next !== null && next.startsWith(`${GITHUB_ORIGIN}/`) ? next : null;
     }
     return out;
   }
@@ -557,6 +586,7 @@ export function makeGithubGateway(
     },
 
     async checkPR(number): Promise<PullRequestStatus> {
+      assertValidPrNumber(number);
       const { token } = await requireToken();
 
       const prRes = await githubFetch(token, "GET", `${GITHUB_ORIGIN}/repos/${config.repo}/pulls/${number}`);

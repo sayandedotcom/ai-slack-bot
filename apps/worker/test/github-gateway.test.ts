@@ -851,4 +851,62 @@ describe("checkPR", () => {
     const status = await gateway.checkPR(42);
     expect(status.linearLinkback).toEqual({ commented: true, identifiers: ["FIR-999"] });
   });
+
+  it("refuses a traversal-shaped pull request number before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    // `number` is erased at runtime -- the codemode boundary can hand this
+    // whatever JSON carries, so the attack is exercised past the type system
+    // with an explicit cast, the same way a real malicious call would arrive.
+    const traversal = "42/../../../../repos/other/private/pulls/1" as unknown as number;
+    await expect(gateway.checkPR(traversal)).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("refuses a non-integer pull request number before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(gateway.checkPR(1.5)).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("refuses a non-positive pull request number before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(gateway.checkPR(0)).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(gateway.checkPR(-42)).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("stops paginating rather than follow a Link header off GITHUB_ORIGIN", async () => {
+    const config = baseConfig();
+    const commentsBase = `${ORIGIN}/repos/${config.repo}/issues/42/comments`;
+    stubGithub([
+      {
+        match: (url: string, method: string) => method === "GET" && url === `${ORIGIN}/repos/${config.repo}/pulls/42`,
+        respond: () => ({ status: 200, body: openPr }),
+      },
+      {
+        match: (url: string, method: string) => method === "GET" && url.startsWith(commentsBase),
+        respond: () => ({
+          status: 200,
+          body: [{ user: { login: "someone-else" }, body: "page one" }],
+          // A response-supplied Link pointing OFF the pinned origin -- must
+          // not be followed with a credentialed request.
+          headers: { Link: `<https://evil.example.com/steal?token=1>; rel="next"` },
+        }),
+      },
+    ]);
+    const testEnv = testEnvWithPat();
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    const status = await gateway.checkPR(42);
+    expect(status.linearLinkback).toEqual({ commented: false, identifiers: [] });
+    expect(calls.every((c) => c.url.startsWith(ORIGIN))).toBe(true);
+  });
 });
