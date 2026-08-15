@@ -84,6 +84,55 @@ Phases 11 (approvals API), 12 (rotation + OAuth), 14 (`Panel`, `usePoll`, `api.t
 
 ---
 
+## Execution speed rules — READ BEFORE DISPATCHING ANY TASK
+
+Same regime as Phases 11–20; overrides per-step commands wherever they conflict. Nothing here builds an image, boots a container, or touches the network — the whole surface is Worker TypeScript and React — so the waves are wide and the wall-clock ceiling is review, not build.
+
+1. **Wave A is six writers wide** — Tasks 1, 4, 5, 6 (worker-side reads) ∥ Tasks 2, 3 (dashboard defects). File sets are disjoint except two deliberate two-writer files, called out in the table. Do not serialise for a pinned signature.
+2. **Wave B does not wait on Wave A's merge.** Tasks 7–12 code against the response shapes pinned verbatim in Tasks 1, 4, 5 and 6's **Interfaces** blocks. Those blocks are the contract; a Wave-B subagent that "checks what the worker really returns" and edits to match has broken the seam, not verified it.
+3. **`dev-stubs.ts` is updated ONCE, serially, between the waves** — see Pre-flight. Tasks 7 and 9 both need it and neither owns it. A subagent that edits `dev-stubs.ts` is out of scope; the file is already correct when Wave B starts.
+4. **Focused tests by exact path.** Worker: `cd apps/worker && pnpm exec vitest run test/<exact-file>.test.ts`. Dashboard: `cd apps/dashboard && pnpm exec vitest run test/<exact-file>.test.ts`. Never a pattern, never the whole suite mid-wave.
+5. **One `pnpm exec tsc --noEmit -p tsconfig.json` per task**, at the end of that task, in that task's own app.
+6. **The full suites run exactly once**, at the Gate, on the merged tree — both apps plus the root `pnpm build`.
+7. **Review depth:** **deep** for Task 4 (a wrong join silently drops approvals out of the queue — a customer reply that never gets sent) and Task 6 (it parses model-produced JSON out of a ledger and puts the result on screen as fact); **light** everywhere else. Tasks 2, 3, 8, 11 are mechanical.
+8. **Dispatch = the task's own text + Global Constraints + Non-negotiable invariants + the four break-the-app tests below + these rules.** No wider exploration. Wave B subagents additionally get the pinned Interfaces blocks they consume.
+9. **No new dependencies except `@fontsource-variable/inter`** (Task 2). No icon library adoption, no chart library, no router. `lucide-react` is already installed; using it is not a new dependency, but a half-converted icon set is worse than none.
+10. **Commit after every task**, conventional prefixes, this repo's trailer.
+
+### The four that break a working app — required tests, not notes
+
+Every one of these is a test that must exist and pass, named in its task:
+
+- **T4 — the join is a LEFT JOIN.** Write the case where `channels` has **no row** for the approval's `channel_id` and assert **the approval is still returned** by `listOpen`, with `channelName: null`. An INNER JOIN here silently drops a pending approval out of the queue: the agent waits forever, the customer gets nothing, and no error is raised anywhere. This is the single most dangerous line in the phase.
+- **T6 — `safe_result_json` is parsed defensively.** A malformed or non-conforming payload yields **no chip**, and `GET /api/runs` still answers **200** with the rest of the list intact. Test the malformed row explicitly. And it is **one batched query for the page** — assert the query count, or at minimum never call `listRunOutcomes` inside a row loop.
+- **T5 — `rotation.ts` gains functions and changes nothing.** `onDuty`, `ROTATION`, and `ROTATION_EPOCH_MS` are **untouched**. They decide who is on duty for a live drill happening this weekend and whose Slack token sends a customer reply. The existing rotation tests must pass unmodified; if a subagent needs to edit one, it has changed behaviour and must stop.
+- **T2 — the font is self-hosted from assets.** No external `<link>`, no `@import` from a font CDN, no `fonts.googleapis.com`. The bundle carries the woff2 and Workers Assets serves it same-origin, because the page sits behind Cloudflare Access and a cross-origin font request is both a privacy leak and a load-order gamble.
+
+### The drift every dashboard subagent will feel
+
+The reference prototype tags each run `Bug` / `Question` / `Feature · small`. **Do not build type chips.** Triage emits `{wake, why, opening_prompt}` and nothing else (Global Constraints; Phase 07). Outcome chips — what a run *did*: `PR #1414`, `ZEL-2041`, `sandbox` — are the whole point of Task 6 and are wanted. Classification chips — what a run *is* — are the banned pipeline returning through the UI. A subagent matching the mockup pixel-for-pixel will reach for them; the dispatch must say so out loud.
+
+### Parallel wave schedule
+
+| Wave | Tasks (concurrent) | Why safe |
+|---|---|---|
+| **A** | **1** ∥ **2** ∥ **3** ∥ **4** ∥ **5** ∥ **6** | 1 owns `dashboard/src/lib/api.ts` (the `Counters` type only) + `counters-panel.tsx` + `worker/test/counters.test.ts`; 4 owns `approval/repository.ts` + `api/approvals.ts`; 5 owns `identity/rotation.ts` + `api/identity.ts`; 6 owns `run/repository.ts` + `api/runs.ts`. **Two deliberate two-writer files:** `dashboard/src/runs/run-list.tsx` (Task 2 rewrites colour class strings; Task 3 adds the `onRuns` prop and its effect — disjoint regions, textual merge) and `dashboard/src/components/connect-panel.tsx` (Task 2 changes one `text-green-500`; nobody else in this wave). Task 3 is sole owner of `app.tsx` in Wave A |
+| **Pre-B** | **`dev-stubs.ts`, serial, one commit** | Tasks 7 and 9 both read it and neither owns it (rule 3) |
+| **B** | **7** ∥ **8** ∥ **9** ∥ **10** ∥ **11** ∥ **12** | 7 owns `on-duty-card.tsx` + `rotation-strip.tsx` + `app.tsx` + the `Roster`/`ShiftWindow`/`ConnectStatus` types in `lib/api.ts`; 8 owns `counters-panel.tsx`; 9 owns `approvals/*`; 10 owns `runs/api.ts` + `run-list.tsx`; 11 owns `connect-panel.tsx`; 12 owns `chat/*`. Disjoint. `lib/api.ts` has one writer in each wave (Task 1 then Task 7) — never two at once |
+| **C** | **13** | serial, last: it edits `app.tsx` after Task 7 has settled it, and appends the roadmap entry |
+| **Gate** | full suites + `pnpm build`, once | **no deploy** — see below |
+
+### Deploy gate — held
+
+**Do not deploy.** Phase 20's live drill runs against the currently deployed build; a Phase 24 deploy would swap the Worker under an in-flight drill. This phase merges to `main` green and stops there. The deploy happens after Phase 20's drill has run and is recorded in `phase-20-notes.md` — **which this phase does not touch**, in any file, for any reason.
+
+### Pre-flight — before dispatching Wave A
+
+- [ ] Confirm the worktree is on `phase-24` off current `main`, and that `git status` shows nothing from `docs/superpowers/plans/phase-20-*`.
+- [ ] Read `apps/dashboard/src/approvals/use-approvals.ts` and record the exact shape it exposes to `ApprovalsPanel`. Task 7's `approvalCount` and Task 9's `willSendAs` both thread through it, and the plan says "adapt to whatever shape it actually exposes" rather than guessing. Five minutes now, or two subagents guessing differently later.
+
+---
+
 ### Task 1: The counters contract
 
 The worker returns `{heard, ingested, triaged, escalated}` (`src/db/counters.ts:38`). The dashboard reads `{seen, triaged, woken, escalated}` (`src/lib/api.ts:91`, `src/components/counters-panel.tsx:15`). Two tiles render blank today, and the all-zero empty state can never fire because `undefined === 0` is false.
