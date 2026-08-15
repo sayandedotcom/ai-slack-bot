@@ -112,6 +112,108 @@ describe("handleTriageBatch", () => {
     expect(seen[0].recall).toEqual([]);
   });
 
+  /**
+   * Observed live, twice. The agent replies "Looking at it now", its run dies,
+   * and triage then reads that promise as evidence the work is in hand — so
+   * every follow-up is reasoned into silence and the thread is dead for good.
+   * The model is not wrong about the conversation; it cannot see that the run
+   * behind the promise is gone.
+   */
+  describe("a thread whose run died is not 'already handled'", () => {
+    const declineOutcome: TriageOutcome = {
+      wake: false,
+      why: "already being handled in-thread",
+      opening_prompt: "",
+      model: "claude-haiku-4-5",
+      cost_usd: 0.0001,
+      latency_ms: 200,
+    };
+
+    // Scoped to this block rather than added to the file's global teardown:
+    // `runs` is referenced by other tables and shared with the other test
+    // files, so only the rows these cases create get removed.
+    beforeEach(async () => {
+      await env.DB.prepare("DELETE FROM runs WHERE channel_id = 'C1'").run();
+    });
+
+    const seedRun = async (id: string, status: string, threadTs: string, createdAt: number) =>
+      env.DB.prepare(
+        `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, summary, created_at, updated_at)
+         VALUES (?, ?, 'slack', 'C1', ?, ?, NULL, ?, ?)`,
+      )
+        .bind(id, `slack:C1:${threadTs}:${id}`, threadTs, status, createdAt, createdAt)
+        .run();
+
+    it("wakes anyway when the thread's last run failed", async () => {
+      await seedMessage("Ev1", { ts: "2.0", thread_ts: "1.0", text: "any luck?" });
+      await seedRun("r-dead", "failed", "1.0", 1000);
+      const woke: unknown[] = [];
+
+      await handleTriageBatch(batchOf(["Ev1"]).batch, env, {
+        triage: async () => declineOutcome,
+        memory: new FakeMemoryStore(),
+        wakeRun: async (m) => void woke.push(m),
+      });
+
+      const row = await env.DB.prepare("SELECT wake, why, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'")
+        .first<{ wake: number; why: string; opening_prompt: string }>();
+      expect(row?.wake).toBe(1);
+      expect(row?.why).toContain("abandoned-thread override");
+      // A declining decision has no reason to carry a usable prompt, so the
+      // override must supply one rather than wake the agent with "".
+      expect(row?.opening_prompt).toContain("any luck?");
+      expect(woke).toHaveLength(1);
+    });
+
+    it("leaves an idle run's thread to the model's judgement", async () => {
+      await seedMessage("Ev1", { ts: "2.0", thread_ts: "1.0" });
+      await seedRun("r-idle", "idle", "1.0", 1000);
+
+      await handleTriageBatch(batchOf(["Ev1"]).batch, env, {
+        triage: async () => declineOutcome,
+        memory: new FakeMemoryStore(),
+      });
+
+      // `idle` means waiting on the customer -- healthy, and exactly the case
+      // triage exists to judge. Overriding it would wake a run per follow-up.
+      const row = await env.DB.prepare("SELECT wake FROM triage_decisions WHERE event_id = 'Ev1'")
+        .first<{ wake: number }>();
+      expect(row?.wake).toBe(0);
+    });
+
+    it("stops overriding once a later run succeeds", async () => {
+      await seedMessage("Ev1", { ts: "3.0", thread_ts: "1.0" });
+      await seedRun("r-dead", "failed", "1.0", 1000);
+      await seedRun("r-ok", "idle", "1.0", 2000);
+
+      await handleTriageBatch(batchOf(["Ev1"]).batch, env, {
+        triage: async () => declineOutcome,
+        memory: new FakeMemoryStore(),
+      });
+
+      // Newest run only. A thread that failed once and then recovered must not
+      // be forced awake for the rest of its life.
+      const row = await env.DB.prepare("SELECT wake FROM triage_decisions WHERE event_id = 'Ev1'")
+        .first<{ wake: number }>();
+      expect(row?.wake).toBe(0);
+    });
+
+    it("does not touch a decision the model already wanted to wake", async () => {
+      await seedMessage("Ev1", { ts: "2.0", thread_ts: "1.0" });
+      await seedRun("r-dead", "failed", "1.0", 1000);
+
+      await handleTriageBatch(batchOf(["Ev1"]).batch, env, {
+        triage: async () => wakeOutcome,
+        memory: new FakeMemoryStore(),
+      });
+
+      const row = await env.DB.prepare("SELECT why, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'")
+        .first<{ why: string; opening_prompt: string }>();
+      expect(row?.why).toBe("direct question");
+      expect(row?.opening_prompt).toBe("Customer asks about language variants.");
+    });
+  });
+
   it("retries on model failure without failing the batch", async () => {
     await seedMessage("Ev1");
     await seedMessage("Ev2", { ts: "3.0" });

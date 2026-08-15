@@ -159,6 +159,37 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
 
   const outcome = await deps.triage(input);
 
+  // THE ABANDONED-THREAD OVERRIDE.
+  //
+  // Observed live, twice. The agent replies "Looking at it now", its run then
+  // dies, and every follow-up the customer sends is reasoned into silence:
+  // triage reads the promise sitting in the thread, correctly concludes the
+  // work is already in hand, and returns wake=0. Nothing notifies anyone, so
+  // the thread is dead permanently — and it gets MORE certain the more
+  // naturally the customer refers to the existing investigation.
+  //
+  // The model is not wrong. It is reasoning from the conversation, which is
+  // all it can see, and the conversation genuinely says someone is on it. The
+  // missing fact is infrastructure state, so the correction is structural
+  // rather than another prompt line: a thread whose run died is not being
+  // handled, whatever the transcript implies.
+  //
+  // `routeToOwnedRun` has already run and released the terminal run, which is
+  // why control reaches here at all.
+  const abandoned = await threadRunFailed(env, row.channel_id, threadTs);
+  const wake = outcome.wake || abandoned;
+  const why =
+    abandoned && !outcome.wake
+      ? `[abandoned-thread override: the run that owned this thread failed, so nothing is handling it] ${outcome.why}`
+      : outcome.why;
+  // A wake=0 decision has no reason to carry a usable opening prompt, so the
+  // override cannot assume one. Falling back to the customer's own words is
+  // both honest and enough for the agent to start from.
+  const openingPrompt =
+    outcome.opening_prompt.trim().length > 0
+      ? outcome.opening_prompt
+      : `${policy.customer_slug} wrote in ${policy.name}: ${row.text}\n\nA previous attempt on this thread failed before it finished. Pick it up.`;
+
   await env.DB.prepare(
     `INSERT OR IGNORE INTO triage_decisions
        (event_id, wake, why, opening_prompt, model, cost_usd, latency_ms, created_at)
@@ -166,9 +197,9 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
   )
     .bind(
       eventId,
-      outcome.wake ? 1 : 0,
-      outcome.why,
-      outcome.opening_prompt,
+      wake ? 1 : 0,
+      why,
+      openingPrompt,
       outcome.model,
       outcome.cost_usd,
       outcome.latency_ms,
@@ -176,7 +207,7 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
     )
     .run();
 
-  if (!outcome.wake) return;
+  if (!wake) return;
 
   // Throw on failure so the queue retries. Acknowledging a wake decision whose
   // wake has not been durably delivered would strand an actionable message
@@ -185,6 +216,33 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
     eventId,
     channelId: row.channel_id,
     threadTs,
-    openingPrompt: outcome.opening_prompt,
+    openingPrompt,
   });
+}
+
+/**
+ * Did the run that last owned this thread die?
+ *
+ * Only `failed` counts. `idle` and `done` are healthy terminal states — an
+ * idle run is waiting on the customer, which is exactly the case the model's
+ * own judgement should decide — so treating them as abandoned would wake a run
+ * for every follow-up and undo the point of triage.
+ *
+ * Newest row only. A thread that failed once, was picked up by this override
+ * and then settled must not be forced awake forever after.
+ */
+async function threadRunFailed(
+  env: Env,
+  channelId: string,
+  threadTs: string,
+): Promise<boolean> {
+  const run = await env.DB.prepare(
+    `SELECT status FROM runs
+      WHERE origin = 'slack' AND channel_id = ? AND thread_ts = ?
+      ORDER BY created_at DESC
+      LIMIT 1`,
+  )
+    .bind(channelId, threadTs)
+    .first<{ status: string }>();
+  return run?.status === "failed";
 }
