@@ -187,11 +187,30 @@ RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable
 # homepage actually paints). ~2.4 MB buys back the visible page; the 176 MB of
 # PNGs behind it stays out, so the layer still pushes.
 #
+#   - Root-level patterns alone still left next dev showing "2 Issues". The
+#     hero's right-hand visual is not an image at all: hero-section.tsx renders
+#     <LazyVideo src={heroData.backgroundImage}>, and home-data.tsx sets that to
+#     `/webm/hero.webm` — a SUBDIRECTORY, so the root-level globs above never
+#     matched it. The poster (/hero-poster.webp) is root-level and did land,
+#     which is why the area looked nearly right and the miss was easy to read as
+#     cosmetic. webm/ is 13.3 MB for 32 files (hero.webm itself is 240 KB), so
+#     the whole directory comes in rather than that one file: the deeper home
+#     sections play funnel-builder-*.webm from the same place, and cherry-picking
+#     one name would just move this discovery to the next drill.
+# So: everything, MINUS the two heavy public/ trees, PLUS four re-includes —
+# landing/public/fonts (compile), landing/public/*.{svg,webp,ico} (0.4 MB: the
+# logo and every decoration), hero-bg.png (1.6 MB), and landing/public/webm/
+# (13.3 MB, every video the marketing pages autoplay). ~16 MB buys back the
+# visible page; the 176 MB of PNGs behind it stays out, so the layer still
+# pushes.
+#
 # KNOWN LIMIT, stated so the next recording is read correctly: this covers the
-# HOMEPAGE. Deeper marketing pages reference public/ SUBDIRECTORIES (icons/,
-# products/, logos/, use-cases/) that are still excluded, and will still record
-# with broken images. Widen the patterns here when a drill needs one of them —
-# do not conclude from a broken image that the sandbox is misconfigured.
+# HOMEPAGE. Deeper marketing pages reference other public/ SUBDIRECTORIES
+# (icons/, products/, logos/, use-cases/) that are still excluded, and will
+# still record with broken images. Widen the patterns here when a drill needs
+# one of them — do not conclude from a broken image that the sandbox is
+# misconfigured. And check the RENDERER before assuming an asset is an image:
+# this one was a video behind a lazy-loading wrapper.
 #
 # The credential exists ONLY in the mounted secret and a command-scoped
 # http.extraHeader — never in .git/config (the baked remote is the sentinel
@@ -206,7 +225,7 @@ RUN --mount=type=secret,id=monorepo_pat \
         https://github.com/Zellify/web2app-rebuild.git /workspace/web2app-rebuild; \
     cd /workspace/web2app-rebuild; \
     git sparse-checkout init --no-cone; \
-    printf '/*\n!/apps/landing/public/\n/apps/landing/public/fonts/\n/apps/landing/public/*.svg\n/apps/landing/public/*.webp\n/apps/landing/public/*.ico\n/apps/landing/public/hero-bg.png\n!/apps/docs/public/\n' > .git/info/sparse-checkout; \
+    printf '/*\n!/apps/landing/public/\n/apps/landing/public/fonts/\n/apps/landing/public/*.svg\n/apps/landing/public/*.webp\n/apps/landing/public/*.ico\n/apps/landing/public/hero-bg.png\n/apps/landing/public/webm/\n!/apps/docs/public/\n' > .git/info/sparse-checkout; \
     git -c http.extraHeader="Authorization: Basic ${AUTH}" read-tree -mu HEAD; \
     git remote set-url origin https://git.firefighter.local/Zellify/web2app-rebuild.git; \
     git rev-parse HEAD
