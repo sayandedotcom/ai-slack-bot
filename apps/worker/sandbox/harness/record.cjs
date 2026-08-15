@@ -91,9 +91,52 @@ const FFMPEG_MAX_BUFFER = 4 * 1024 * 1024;
 // what makes the wall clock safe to arm at all.
 let emitted = false;
 
+/**
+ * Browser-side diagnostics, at MODULE scope on purpose.
+ *
+ * Every exit path — the wall-clock timer, the top-level catch, the normal
+ * finish — has to be able to report these, and those handlers do not share a
+ * scope with the block that creates the page. Hoisting the array is what lets
+ * a timed-out run still say WHY the page was unhappy, which is the case that
+ * needs it most.
+ */
+const pageDiagnosticsLog = [];
+const PAGE_DIAGNOSTIC_CAP = 25;
+const PAGE_DIAGNOSTIC_CHARS = 300;
+
+function notePageDiagnostic(kind, text) {
+  if (pageDiagnosticsLog.length >= PAGE_DIAGNOSTIC_CAP) return;
+  const flat = String(text).replace(/\s+/g, ' ').trim().slice(0, PAGE_DIAGNOSTIC_CHARS);
+  if (flat.length > 0) pageDiagnosticsLog.push(kind + ': ' + flat);
+}
+
+/** A copy, so a late listener firing during shutdown cannot mutate what was reported. */
+function pageDiagnostics() {
+  return pageDiagnosticsLog.slice();
+}
+
 function emit(result) {
   if (emitted) return;
   emitted = true;
+  // Browser diagnostics go to STDOUT, not into the RESULT line.
+  //
+  // `RecordingStatus` is pinned at five fields and the model already reads
+  // `stdoutTail`, so widening the wire contract to carry these would be churn
+  // for something the existing surface can hold. Printed HERE, immediately
+  // before the RESULT line, for one specific reason: `stdoutTail` is a TAIL, so
+  // whatever is last is what survives the cap. A dev server that logged for
+  // three minutes cannot push these out of view.
+  //
+  // They are also, deliberately, printed on every path including failure — a
+  // script that threw is exactly when knowing the page 404'd its assets is
+  // worth most.
+  const diagnostics = pageDiagnostics();
+  if (diagnostics.length > 0) {
+    process.stdout.write(
+      'PAGE DIAGNOSTICS (' + diagnostics.length + ', browser-side; the recording cannot show these):\n',
+    );
+    for (const line of diagnostics) process.stdout.write('  ' + line + '\n');
+  }
   process.stdout.write('RESULT ' + JSON.stringify(result) + '\n');
   process.exitCode = 0;
   // Setting exitCode (not calling process.exit()) lets Node flush stdout
@@ -287,6 +330,40 @@ async function main() {
     });
     const page = await context.newPage();
 
+    // BROWSER-SIDE DIAGNOSTICS, because nothing else in this system can see
+    // them.
+    //
+    // A live drill spent three rounds on next dev's "2 Issues" badge with no
+    // way to read what the two issues WERE. The reason is that the logs live in
+    // three different machines and only one of them was ever collected: the
+    // Worker's own logs are a different isolate entirely, the dev server's
+    // stdout is server-side Next.js and reachable through checkProcess, and the
+    // BROWSER console — which is what that badge counts — was captured nowhere.
+    // A recording could show a broken page while every log we held stayed clean.
+    //
+    // Three listeners, because they fire for different failures and a missing
+    // asset only shows up in the third: `console` carries the page's own
+    // console.error, `pageerror` carries an uncaught exception that console
+    // never sees, and `requestfailed` carries a 404 that neither of the others
+    // reports. Bounded hard — this rides back inside the RESULT line, which is
+    // parsed as a single line of stdout, so an unbounded log would break the
+    // protocol rather than merely bloat it.
+    page.on('console', (message) => {
+      // Warnings are noise in dev (Next.js prints several every boot); errors
+      // are the thing the badge counts.
+      if (message.type() === 'error') notePageDiagnostic('console.error', message.text());
+    });
+    page.on('pageerror', (err) => {
+      notePageDiagnostic('pageerror', (err && err.message) || err);
+    });
+    page.on('requestfailed', (request) => {
+      const failure = request.failure();
+      notePageDiagnostic(
+        'requestfailed',
+        request.url() + ' — ' + ((failure && failure.errorText) || 'unknown'),
+      );
+    });
+
     // The model's script source, wrapped as an async function body with
     // `page` as its only bound name — the exact shape the controller pinned
     // for the harness/Worker contract. `new Function` doesn't close over
@@ -448,6 +525,12 @@ async function main() {
   // shortening anything, but leaving an armed timer around a finished run is
   // how a "no-op" fires one day.
   clearTimeout(wallClock);
+  // `diagnostics` rides alongside the verdict rather than inside `error`,
+  // because it is NOT a failure: a run can pass its assertions while the page
+  // quietly 404s an asset, and that is exactly the case a recording alone
+  // cannot show. Always an array — an empty one is a real, useful answer
+  // ("the page was clean"), and a caller that has to distinguish absent from
+  // empty has been handed a puzzle instead of a result.
   emit({ state, error, video, bytes, durationMs });
 }
 
