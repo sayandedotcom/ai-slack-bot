@@ -118,6 +118,16 @@ type CreateIssueOutput = {
     identifier: string;
     url: string;
 }
+type FindIssueInput = {
+    identifier: string;
+}
+type FindIssueOutput = {
+    id: string;
+    identifier: string;
+    url: string;
+    title: string;
+    state: string;
+} | null
 type UpdateIssueInput = {
     issueId: string;
     title?: string;
@@ -134,6 +144,11 @@ declare const linear: {
 	 * File an issue. Where it is filed is fixed by configuration and cannot be chosen here.
 	 */
 	createIssue: (input: CreateIssueInput) => Promise<CreateIssueOutput>;
+
+	/**
+	 * Look up an issue by its human identifier (e.g. `FIR-3`) — this is how you pick up an issue you did not create yourself in THIS run, before passing its id to openPR's fixesIssueIds/partOfIssueIds. Returns null, not an error, when there is no such issue or it is out of reach.
+	 */
+	findIssue: (input: FindIssueInput) => Promise<FindIssueOutput>;
 
 	/**
 	 * Update an issue this run already created or read. Fields left out are unchanged.
@@ -489,7 +504,7 @@ type CheckPROutput = {
 
 declare const github: {
 	/**
-	 * Open a pull request on the monorepo from this run's diffRef, or update the one already open on `branch` — call this again after improving the fix rather than leaving stale content up; a second call on the same branch updates it, it does not open a second PR. `branch` must follow the convention `<type>/<2-4 kebab-case words>` (e.g. `fix/checkout-timeout`) and `title` must be `<type>: <imperative>`, using the same conventional type in both. The `Fixes <identifier>` line is GENERATED from `fixesIssueIds`, which takes the issue **ids** `linear.createIssue` returns in its `id` field (not the `FIR-123` identifier a human would type — that is resolved for you) — never type the word "Fixes" into `description`, `notesForReviewers`, or especially `commitMessage`: this Linear setup has commit-message magic words disabled, so a `Fixes` line inside a commit message links nothing, silently, and only the rendered PR body closes the issue on merge. Use `partOfIssueIds` for an umbrella or epic issue instead — it renders `Part of`, which links WITHOUT closing, so a fix that only covers part of the epic cannot close the whole thing. Put the proof recording's URL in `proofUrl` (it lands under `## Screenshots`) and ALSO repeat it in your Slack reply — the reviewer reads the PR, the customer reads Slack, and each needs their own copy of the same link. `title`, `commitMessage`, `description` and `notesForReviewers` are REFUSED, not silently rewritten, if they contain co-authored-by, "generated with", the robot emoji, or the word "claude" in any case — this repository forbids AI attribution in PRs and their commits, and a silent strip would hide that rule rather than teach it. `description`, `notesForReviewers` and each `acceptanceCriteria` entry are likewise REFUSED if they contain a Markdown heading (a line starting with `#`) — the only headings this PR body ever has are the ones this tool itself renders (Description, Acceptance Criteria, Screenshots, Notes for reviewers), never one smuggled in through free text. After this returns, poll `checkPR` on a later turn until `linearLinkback.commented` is true — that confirms the Fixes/Part of lines actually took; if it never turns true after a few polls, say so instead of assuming the link worked.
+	 * Open a pull request on the monorepo from this run's diffRef, or update the one already open on `branch` — call this again after improving the fix rather than leaving stale content up; a second call on the same branch updates it, it does not open a second PR. `branch` must follow the convention `<type>/<2-4 kebab-case words>` (e.g. `fix/checkout-timeout`) and `title` must be `<type>: <imperative>`, using the same conventional type in both. The `Fixes <identifier>` line is GENERATED from `fixesIssueIds`, which accepts EITHER the id `linear.createIssue` returns OR a human identifier like `FIR-3` typed straight in — if the issue was filed by an EARLIER run and you have no id for it, call `linear.findIssue({ identifier })` first to confirm it exists and is in reach, then pass that identifier through directly — never type the word "Fixes" into `description`, `notesForReviewers`, or especially `commitMessage`: this Linear setup has commit-message magic words disabled, so a `Fixes` line inside a commit message links nothing, silently, and only the rendered PR body closes the issue on merge. Use `partOfIssueIds` for an umbrella or epic issue instead — same id/identifier shapes, but it renders `Part of`, which links WITHOUT closing, so a fix that only covers part of the epic cannot close the whole thing. Put the proof recording's URL in `proofUrl` (it lands under `## Screenshots`) and ALSO repeat it in your Slack reply — the reviewer reads the PR, the customer reads Slack, and each needs their own copy of the same link. `title`, `commitMessage`, `description` and `notesForReviewers` are REFUSED, not silently rewritten, if they contain co-authored-by, "generated with", the robot emoji, or the word "claude" in any case — this repository forbids AI attribution in PRs and their commits, and a silent strip would hide that rule rather than teach it. `description`, `notesForReviewers` and each `acceptanceCriteria` entry are likewise REFUSED if they contain a Markdown heading (a line starting with `#`) — the only headings this PR body ever has are the ones this tool itself renders (Description, Acceptance Criteria, Screenshots, Notes for reviewers), never one smuggled in through free text. After this returns, poll `checkPR` on a later turn until `linearLinkback.commented` is true — that confirms the Fixes/Part of lines actually took; if it never turns true after a few polls, say so instead of assuming the link worked.
 	 */
 	openPR: (input: OpenPRInput) => Promise<OpenPROutput>;
 

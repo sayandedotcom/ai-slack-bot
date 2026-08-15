@@ -139,37 +139,71 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
   }
 
   /**
-   * Fetch an issue and prove it belongs to the pinned team before touching
-   * it. Returns `identifier` too, even though `updateIssue` (this function's
-   * original caller) never reads it: `resolveLinkTargets` needs exactly the
-   * same fetch-then-check-team-pin logic PLUS `identifier`, and duplicating
-   * the two refusal checks — including their exact message strings — for the
-   * sake of one field would leave the pinned-team and invalid-id error text
-   * living in two places that could silently drift apart. One extra scalar
-   * in the selection set is free; a second copy of this validation is not.
+   * The one shape both `requirePinnedIssue` and `lookupIssue` need — the
+   * union of what a `Fixes` line requires (`id`, `identifier`) and what a
+   * model deciding whether to link an issue wants to see (`url`, `title`,
+   * `state`) — fetched by a single GraphQL document so there is exactly one
+   * query string to keep in sync with the schema, not two drifting copies
+   * that happen to overlap on `id`/`identifier`/`team`.
    */
-  async function requirePinnedIssue(
-    issueId: string,
-  ): Promise<{ id: string; identifier: string }> {
+  async function fetchIssue(issueId: string): Promise<{
+    id: string;
+    identifier: string;
+    url: string;
+    title: string;
+    state: { name: string };
+    team: { id: string };
+  } | null> {
     const result = await query<{
-      issue: { id: string; identifier: string; team: { id: string } } | null;
+      issue: {
+        id: string;
+        identifier: string;
+        url: string;
+        title: string;
+        state: { name: string };
+        team: { id: string };
+      } | null;
     }>(
-      `query($id: String!) { issue(id: $id) { id identifier team { id } } }`,
+      `query($id: String!) { issue(id: $id) { id identifier url title state { name } team { id } } }`,
       { id: issueId },
     );
-    const issue = result.data?.issue ?? null;
-    if (issue === null) {
-      throw new CapabilityError(
-        "invalid_input",
-        "that issue does not exist, or is not visible to this agent.",
-      );
-    }
+    return result.data?.issue ?? null;
+  }
+
+  /**
+   * The team-pin refusal, in exactly one place. Both `requirePinnedIssue`
+   * (existing issue mutators) and `lookupIssue` (Phase 20's read) call this
+   * rather than each carrying their own copy of the message — a duplicated
+   * string is exactly the kind of thing a later edit updates in one place
+   * and not the other.
+   */
+  function assertPinnedTeam(issue: { team: { id: string } }): void {
     if (issue.team.id !== config.teamId) {
       throw new CapabilityError(
         "linear_team_denied",
         `that issue belongs to another team; this agent may only touch ${config.teamName}.`,
       );
     }
+  }
+
+  /**
+   * Fetch an issue and prove it belongs to the pinned team before touching
+   * it. Unlike `lookupIssue`, absence is a hard refusal here rather than an
+   * honest `null`: every existing caller (`updateIssue`, `resolveLinkTargets`)
+   * already holds an id it expects to resolve, so a miss means the id was
+   * wrong, not that "no such issue" is a legitimate answer to act on.
+   */
+  async function requirePinnedIssue(
+    issueId: string,
+  ): Promise<{ id: string; identifier: string }> {
+    const issue = await fetchIssue(issueId);
+    if (issue === null) {
+      throw new CapabilityError(
+        "invalid_input",
+        "that issue does not exist, or is not visible to this agent.",
+      );
+    }
+    assertPinnedTeam(issue);
     return { id: issue.id, identifier: issue.identifier };
   }
 
@@ -370,6 +404,27 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
         out.push(await requirePinnedIssue(issueId));
       }
       return out;
+    },
+
+    /**
+     * The read that makes "link an issue this run did not create" possible
+     * without the model guessing. `identifier` is passed straight through as
+     * `issue(id: $id)`'s argument — Linear's API accepts a human identifier
+     * (`FIR-3`) there just as readily as a UUID, verified live 2026-08-15,
+     * which is what lets this share `fetchIssue` with `requirePinnedIssue`
+     * rather than needing a second lookup mutation.
+     */
+    async lookupIssue(identifier) {
+      const issue = await fetchIssue(identifier);
+      if (issue === null) return null;
+      assertPinnedTeam(issue);
+      return {
+        id: issue.id,
+        identifier: issue.identifier,
+        url: issue.url,
+        title: issue.title,
+        state: issue.state.name,
+      };
     },
   };
 }

@@ -177,6 +177,28 @@ export interface LinearGateway {
     state?: string;
   }): Promise<{ id: string; url: string }>;
   resolveLinkTargets(issueIds: string[]): Promise<Array<{ id: string; identifier: string }>>;
+  /**
+   * Phase 20's answer to "I did not create this issue, but I need to link
+   * it": a READ, not a mutation, so it is classified `read` in the binding
+   * and never touches the effect ledger. Named `lookupIssue` rather than
+   * `findIssue` because that name is already taken on this interface, above,
+   * for a different question (did MY create for this idempotency key land?)
+   * — the model-facing capability is still called `linear.findIssue`; only
+   * this gateway seam needed the different name.
+   *
+   * Not found returns `null` rather than throwing — an honest answer, since
+   * "no such issue" is routine input for a model deciding whether to link
+   * something a prior run may have created. Belonging to another team still
+   * throws `linear_team_denied`, sharing `requirePinnedIssue`'s exact
+   * refusal text rather than a second hand-copied string.
+   */
+  lookupIssue(identifier: string): Promise<{
+    id: string;
+    identifier: string;
+    url: string;
+    title: string;
+    state: string;
+  } | null>;
 }
 
 export interface SupabaseReader {

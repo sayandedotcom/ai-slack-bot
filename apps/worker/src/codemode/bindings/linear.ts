@@ -77,6 +77,44 @@ export function makeLinearTools(ctx: BindingContext): ToolDescriptors {
       },
     }),
 
+    /**
+     * Phase 20's gap-closer. A run only ever gets an issue's UUID back from
+     * its OWN `createIssue` call — an issue an earlier run filed (FIR-3,
+     * say) never lands in this run's hands that way, so there was no
+     * documented path to reach for it before linking. This is that path: it
+     * takes the human identifier the model can read off a Slack thread or a
+     * PR description, and hands back enough to decide whether to link it.
+     *
+     * `read`, not `external_write` — it observes, it does not touch the
+     * effect ledger, and it takes no `idempotencyKey`. Absence of the issue
+     * is `null`, not a thrown error: "no such issue" is exactly the kind of
+     * answer a model deciding whether to link something should get back
+     * cleanly, not have to catch.
+     */
+    findIssue: auditedCapability(ctx, "linear", "findIssue", {
+      effect: "read",
+      description:
+        "Look up an issue by its human identifier (e.g. `FIR-3`) — this is how you pick up an issue you did not create yourself in THIS run, before passing its id to openPR's fixesIssueIds/partOfIssueIds. Returns null, not an error, when there is no such issue or it is out of reach.",
+      input: z.strictObject({
+        // Deliberately narrow: `FIR-3` shape only, so this cannot be used to
+        // probe the workspace with an arbitrary UUID. The team pin inside
+        // the gateway is the real guard; this is defence in depth on top of
+        // it, cheap because the model never has a legitimate reason to type
+        // anything else here.
+        identifier: z.string().regex(/^[A-Z][A-Z0-9]*-\d+$/).max(40),
+      }),
+      output: z
+        .strictObject({
+          id: z.string(),
+          identifier: z.string(),
+          url: z.string(),
+          title: z.string(),
+          state: z.string(),
+        })
+        .nullable(),
+      run: (input) => ctx.deps.linear.lookupIssue(input.identifier),
+    }),
+
     updateIssue: auditedCapability(ctx, "linear", "updateIssue", {
       effect: "external_write",
       description:

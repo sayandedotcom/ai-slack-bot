@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildRegistry } from "../src/codemode/registry";
+import { buildRegistry, capabilityEffectOf } from "../src/codemode/registry";
 import { issueIdFromEffectKey, makeLinearGateway } from "../src/linear/client";
 import type { CodeModeScope } from "../src/codemode/contracts";
 import { fakeAuditSink, fakeDeps, seedPermittedScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
@@ -529,11 +529,110 @@ describe("linear.resolveLinkTargets", () => {
 });
 
 describe("linear carries no approval annotation", () => {
-  it("declares createIssue and updateIssue with no approval flag", async () => {
+  it("declares createIssue, findIssue and updateIssue with no approval flag", async () => {
     const tools = await linearTools();
-    expect(Object.keys(tools).sort()).toEqual(["createIssue", "updateIssue"]);
+    expect(Object.keys(tools).sort()).toEqual(["createIssue", "findIssue", "updateIssue"]);
     for (const tool of Object.values(tools)) {
       expect(tool).not.toHaveProperty("needsApproval");
     }
+  });
+});
+
+/**
+ * Phase 20's gap-closer: the model could not link FIR-3 because `openPR`'s
+ * `fixesIssueIds` was documented as taking UUIDs "from createIssue", and an
+ * issue filed by an EARLIER run has no such UUID in this run's hands. The
+ * plumbing already accepted a human identifier by luck (Linear's `issue(id:)`
+ * takes either shape) — this namespace turns that luck into a contract, with
+ * a discoverable read the model can call before linking.
+ */
+describe("linear.findIssue", () => {
+  const found = (overrides: Partial<{ team: { id: string } }> = {}) => ({
+    data: {
+      issue: {
+        id: "iss-3",
+        identifier: "FIR-3",
+        url: "https://linear.app/z/issue/FIR-3",
+        title: "Some bug",
+        state: { name: "Todo" },
+        team: { id: TEAM_ID },
+        ...overrides,
+      },
+    },
+  });
+
+  it("resolves a HUMAN IDENTIFIER (not a uuid) to its full record", async () => {
+    const sent = mockTransport([found()]);
+    const out = await call(await linearTools(), "findIssue", { identifier: "FIR-3" });
+    expect(out).toEqual({
+      id: "iss-3",
+      identifier: "FIR-3",
+      url: "https://linear.app/z/issue/FIR-3",
+      title: "Some bug",
+      state: "Todo",
+    });
+    // Sent straight through as the human identifier — no UUID mangling.
+    expect(sent[0].variables.id).toBe("FIR-3");
+  });
+
+  it("returns null, not an error, when no such issue exists", async () => {
+    mockTransport([{ data: { issue: null } }]);
+    const out = await call(await linearTools(), "findIssue", { identifier: "FIR-999" });
+    expect(out).toBeNull();
+  });
+
+  it("refuses a foreign-team identifier with linear_team_denied", async () => {
+    mockTransport([found({ team: { id: OTHER_TEAM } })]);
+    await expect(call(await linearTools(), "findIssue", { identifier: "ZEL-1761" }))
+      .rejects.toThrow(/linear_team_denied/);
+  });
+
+  // Same wording as resolveLinkTargets's refusal, proving the two share one
+  // source of truth rather than two hand-copied strings.
+  it("uses the exact same refusal text resolveLinkTargets uses", async () => {
+    mockTransport([found({ team: { id: OTHER_TEAM } })]);
+    await expect(call(await linearTools(), "findIssue", { identifier: "ZEL-1761" }))
+      .rejects.toThrow(/that issue belongs to another team; this agent may only touch fire-fighter-testing\./);
+  });
+
+  it("is classified as a read, not a write, and never touches the effect ledger", async () => {
+    const scope = await freshScope();
+    const tools = await linearTools(makeLinearGateway(config), scope);
+    expect(capabilityEffectOf(tools.findIssue)).toBe("read");
+  });
+
+  it.each([
+    ["a lowercase identifier", "fir-3"],
+    ["an identifier with no dash", "FIR3"],
+    ["a bare uuid", "2b1ebcc2-9442-4123-bbde-9faa095ec3d1"],
+    ["an oversized identifier", "FIR-" + "1".repeat(40)],
+  ])("rejects %s as the identifier shape", async (_label, identifier) => {
+    await expect(call(await linearTools(), "findIssue", { identifier }))
+      .rejects.toThrow(/invalid_input/);
+  });
+});
+
+/**
+ * Pins the behaviour a prior review flagged as "works with identifiers too,
+ * by luck, not design": `requirePinnedIssue` (and therefore
+ * `resolveLinkTargets`) passes the string straight to `issue(id:)`, and
+ * Linear accepts a human identifier there just as readily as a UUID.
+ */
+describe("linear.resolveLinkTargets accepts human identifiers", () => {
+  const issueReply = (id: string, identifier: string, teamId = TEAM_ID) => ({
+    data: { issue: { id, identifier, team: { id: teamId } } },
+  });
+
+  it("resolves FIR-3 (a human identifier) to {id, identifier}", async () => {
+    const sent = mockTransport([issueReply("2b1ebcc2-9442-4123-bbde-9faa095ec3d1", "FIR-3")]);
+    const out = await makeLinearGateway(config).resolveLinkTargets(["FIR-3"]);
+    expect(out).toEqual([{ id: "2b1ebcc2-9442-4123-bbde-9faa095ec3d1", identifier: "FIR-3" }]);
+    expect(sent[0].variables.id).toBe("FIR-3");
+  });
+
+  it("still refuses a foreign-team human identifier", async () => {
+    mockTransport([issueReply("z1", "ZEL-1761", OTHER_TEAM)]);
+    await expect(makeLinearGateway(config).resolveLinkTargets(["ZEL-1761"]))
+      .rejects.toThrow(/linear_team_denied/);
   });
 });

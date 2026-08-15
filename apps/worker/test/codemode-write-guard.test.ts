@@ -338,6 +338,7 @@ describe("every capability declares an effect", () => {
       "memory.recall": "read",
       "memory.cite": "read",
       "linear.createIssue": "external_write",
+      "linear.findIssue": "read",
       "linear.updateIssue": "external_write",
       "supabase.schema": "read",
       "supabase.select": "read",

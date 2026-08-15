@@ -203,6 +203,9 @@ export function fakeDeps(fixtures: FakeFixtures = {}): CapabilityDependencies {
       async resolveLinkTargets(issueIds) {
         return issueIds.map((id) => ({ id, identifier: "FF-1" }));
       },
+      async lookupIssue(identifier) {
+        return { id: "iss_1", identifier, url: "https://x", title: "t", state: "Todo" };
+      },
     },
     supabase: {
       async describe() { return []; },
