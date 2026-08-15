@@ -125,6 +125,8 @@ it is why the harness could be edited late without paying for the image twice.
 
 Fix (`ef67140`): `GIT_TERMINAL_PROMPT=0` so a 401 can never sit at a prompt; `http.lowSpeedLimit=10240`/`lowSpeedTime=60` so under 10 KB/s for a minute aborts; `timeout 300` per attempt; three attempts; `--progress` so the container log shows movement. A stall is now a named `FAILED clone` in about a minute, retried twice, instead of a silent seven. `STEP_NOTES` gained the clone, retry, set-remote and browser steps, so the note the model reads describes the work rather than echoing a bare step name.
 
+**A second finding from the re-post.** The identical message, posted fresh 25 minutes after the failed run, was triaged `wake=0`: *"a duplicate or continuation of an existing known request that's already being tracked in memory."* Memory carried the agent's own "Will post the video here in a few minutes" from the dead run, so a genuinely new request read as one already in hand. This is the phase-18 swallowed-thread finding widened: a failed run's optimistic reply now suppresses not just its thread but the next same-shaped request too. Same root cause, same fix — triage needs the run's terminal status as a fact (Phase 21 prompt work), and a `failed` run's promises should carry no weight. Recorded here because it cost a drill cycle; worked around by re-posting with different wording.
+
 Two things this drill did NOT answer, still open for the next run: whether `mkdir` on the ops handle works against a real container, and whether Chromium launches on Cloudflare's runtime. Both sit downstream of the clone.
 
 ### The recording-URL decision, grounded
