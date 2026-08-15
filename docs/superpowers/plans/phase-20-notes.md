@@ -586,3 +586,157 @@ fire a drill message. The runbook is the plan's Task 6, unchanged. Two things to
 - **If you point `GITHUB_BASE` at a planted branch, check out that same branch in the sandbox.**
   The new compare guard refuses the mismatch rather than silently shipping a wrong diff — which is
   the intended behaviour, but it will look like an unexplained refusal if the coupling is forgotten.
+
+---
+
+# The live drills — Phase 20's real record (2026-08-15)
+
+Five drills against the real monorepo. The build passed 2133 tests and a whole-branch review before
+the first one, and **every drill still found a defect**. That is the finding worth keeping: each bug
+was a property of the live economics — what a run costs, how many turns it takes, what the model
+believes it can do, what is actually on disk — and none of them is expressible as a unit test
+against code that is, in isolation, correct.
+
+## What shipped
+
+**PR #1507**, `fix/remove-careers-nav-link` → `staging`, opened autonomously from a Slack message.
+
+```
+title    fix: remove Careers link from site navigation
+author   sayandedotcom
+diff     1 file, +0 −27          (both Careers <Link> blocks, nothing else)
+body     Fixes FIR-4             <- first line
+         ## Description / ## Acceptance Criteria / ## Screenshots / ## Notes for reviewers
+comment  linear-code[bot]: FIR-4 -> linear.app/zellify/issue/FIR-4
+commit   "fix: remove Careers link from site navigation"   NO Co-Authored-By, no footer
+```
+
+Closed and its branch deleted afterwards. Nothing landed on `staging`.
+
+The `linear-code` comment is the part that matters: it is the workspace's own receipt that the
+`Fixes` line resolved, and therefore the only real evidence behind "the issue closes on merge".
+
+## Drill 1 — `generation_cost_limit` at step 11, with $1.19 unspent
+
+Died one tool call before `openPR`, having already written the fix, formatted it, captured the diff
+and filed FIR-3.
+
+`evaluateSpendGuard` does not compare the cap against what a step will cost. It refuses unless the
+cap absorbs a reservation of `promptBytes/2 × max(input, cacheWrite5m, cacheWrite1h) × attempts`.
+All three factors round against the run, so a 28k-token prompt reserved **$1.96 for a step that
+actually cost $0.13** — priced at the $20/Mtok one-hour cache-WRITE rate while 89% of it was a
+$1/Mtok cache READ.
+
+The cap's own docstring claimed $2.00 bought "roughly 40 full-size steps". It refused at eleven.
+
+**Fix:** cap to $5.00. Real spend is unchanged (~$1–2 a drill); this raises what may be RESERVED.
+
+## Drill 2 — `step_limit` at exactly 24
+
+Cost was fine ($1.63 of $5.00). It ran out of turns.
+
+```
+c03a93bf  22 steps  $1.45  succeeded, opened PR #1506   <- two to spare
+5e012530  24 steps  $1.63  FAILED at the ceiling
+854fd8a3  24 steps  $1.01  finished exactly at the wall
+```
+
+The only run that had ever completed the loop did so with a two-step margin. The failing run
+differed by resolving one pre-existing Linear issue and deleting a slightly larger block.
+
+The old ceiling's own arithmetic still held for its era — ~13 boot poll steps plus "a realistic 5–8
+steps of actual work" — but that second term was written when the work WAS exec-and-diff. The ship
+loop's tail is edit, format, diff, findIssue, record, poll, openPR, checkPR, reply: twelve to
+fourteen. The model summed to 27, past the number it justified.
+
+**Fix:** 40. At the ~$0.068/step these runs bill that is ~$2.70, under the $5 cap — the first time
+the two ceilings have agreed. Previously a run could not reach the cap's stated intent because it
+ran out of turns first.
+
+## Drill 3 — the `Fixes` line the model believed it could not write
+
+PR #1506 came out correct in every respect except the one that mattered: **no `Fixes` line**, no
+linkback. The agent said so honestly in its own PR body — *"this run can only link issue ids it
+created itself and FIR-3 already exists, so please connect FIR-3 manually."*
+
+The plumbing was never broken. Verified against the live API:
+
+```
+issue(id: "FIR-3")    -> 2b1ebcc2-…, team fire-fighter-testing
+issue(id: "ZEL-1761") -> team Development    (the team pin correctly refuses it)
+```
+
+`resolveLinkTargets(["FIR-3"])` would have worked. The model had been told `fixesIssueIds` takes
+"UUIDs (from createIssue)", read that literally, and correctly concluded it had no id for an issue
+filed by an earlier run. **A prose defect produced a functional failure**, and the code was innocent.
+
+**Fix:** an explicit `linear.findIssue({identifier})` read capability, corrected prose on
+`fixesIssueIds`, and a test pinning identifier resolution — which a prior review had flagged as
+working "by luck, not design". Drill 5 confirmed it: `Fixes FIR-4` plus the linkback.
+
+## Drill 4 — a sandbox with no images
+
+The recording showed a broken-image logo, no hero art, no decorations, and next dev's "2 Issues".
+
+The sparse checkout excluded `apps/landing/public/` except fonts. The comment justifying that said
+the PNGs were safe to drop because they were *"every one URL-referenced, none statically imported,
+verified by grep"*. **That grep proved the opposite of what it was read to prove.** A statically
+imported asset is the one the bundler fails loudly on at build time; a URL-referenced one resolves
+at RUNTIME from `public/`, so dropping it fails silently, in pixels, in a recording nobody diffs.
+
+Then the fix was incomplete, and the second miss is more instructive than the first: root-level
+globs brought back the logo and decorations, but the hero's right-hand visual is **not an image**.
+`hero-section.tsx` renders `<LazyVideo src={heroData.backgroundImage}>` and `home-data.tsx` sets
+that to `/webm/hero.webm` — a subdirectory the globs never matched, whose root-level poster DID
+land, which is exactly why the miss read as cosmetic. **Check the renderer before assuming an asset
+is an image.**
+
+**Fix:** `*.svg`, `*.webp`, `*.ico`, `hero-bg.png` and the whole `webm/` tree — ~16 MB against the
+176 MB of PNGs that stay out, so the layer still pushes. Homepage only; deeper pages reference other
+excluded subdirectories and will still record with broken images. Stated so the next broken image is
+not misdiagnosed as a broken sandbox.
+
+## Drill 5 — the customer told the same thing twice
+
+```
+20:30:53  "Done, PR is up: …"
+20:31:21  "PR is up: …"          <- 28 seconds later, same content
+```
+
+A `run_code` block is capped at 20s. A block that sends a reply and then runs long is **aborted —
+but the send already left the building**, and an external write cannot be rolled back. The model saw
+a timeout for a message the customer had already received, inferred failure, rewrote it, and sent it
+again. The effect ledger could not dedupe that: `text` is the key, and a rewrite is by definition
+different text.
+
+The executor's message said the program "was abandoned", which reads as *nothing happened*. That
+was the whole bug. It now names what survived and tells the model to read back what exists and to
+retry with identical arguments. **The regression test asserts the sentence, not the error code** — a
+code assertion passed happily throughout.
+
+The same event is why the dashboard left those calls spinning: an aborted call never receives a
+terminal state, so the UI has nothing to transition it to.
+
+Confirmed fixed on the next drill: exactly one acknowledgement and one final message.
+
+## Left open, deliberately
+
+**CI is red on `navbar.tsx`, and no agent behaviour can fix it.** `biome ci --changed` judges the
+whole file touched. That file carries 229 pre-Ultracite diagnostics including a cognitive complexity
+of 43, which has **no automatic fix** — and neither do the two a11y rules (confirmed upstream). Any
+human editing it hits the same wall. Formatting it rewrites ~850 lines, which buries a 27-line
+deletion.
+
+The agent now carries the repo's own sanctioned recipe from `zellify-biome-conventions`
+(`biome check --write`, then `--unsafe`, then `biome-ignore-all` at the very top of the file), plus
+the judgement that matters more: when a format would rewrite far more than the change, decline it
+and **say so in the PR**, naming the file and the scale. That is what the agent did by instinct on
+#1507; it is now written down. Making the file green is a repo decision, not an agent one.
+
+**Browser diagnostics were invisible, and now are not.** The "2 Issues" badge counts BROWSER-side
+errors, and the logs live on three machines: the Worker's (a different isolate), the dev server's
+stdout (server-side), and Chromium's console — **which was captured nowhere**. Three rounds were
+spent reading logs that structurally could not contain the answer. The harness now listens on
+`console`, `pageerror` and `requestfailed` (a 404 appears only in the third) and prints them to
+stdout immediately before the RESULT line, so a `stdoutTail` keeps them. Deployed but **not yet
+exercised by a drill** — the next run is what turns the badge from a count into named causes.

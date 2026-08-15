@@ -546,7 +546,23 @@ proven individually; the composition belongs to Phase 20, where the PR/ship-loop
 
 ---
 
-## Phase 20 — PR and ship-loop Linear updates
+## Phase 20 — PR and ship-loop Linear updates ✅ DONE (2026-08-15)
+
+**Status:** Built, reviewed, deployed, and proven LIVE on the real monorepo. **PR #1507** on
+`Zellify/web2app-rebuild` was opened autonomously from a Slack message: branch
+`fix/remove-careers-nav-link` → `staging`, title `fix: remove Careers link from site navigation`,
+**`Fixes FIR-4` as the first line of the body**, the `linear-code` bot's linkback comment confirming
+the issue closes on merge, the proof recording under `## Screenshots`, a byte-clean `−27 +0`
+deletion in one file, authored as `sayandedotcom`, and **zero AI attribution anywhere** — the
+invariant the whole body-renderer exists to enforce. Closed and its branch deleted after review;
+nothing landed on `staging`.
+
+Getting there took **five live drills**, and every one found a real defect that the 2133-test suite
+could not: a spend guard that refused a $0.13 step with $1.19 left (its reservation prices a cached
+prompt at the uncached rate), a step ceiling two turns above what the loop actually needs, a
+`Fixes` line the model believed it could not write, a sandbox with no images, and a customer told
+the same thing twice because an aborted `run_code` block does not roll back the writes it already
+made. All fixed and re-proven. See [phase-20-notes.md](phase-20-notes.md).
 
 **Goal:** Worker-side writes under the fire-fighter's own identity.
 
@@ -561,7 +577,19 @@ proven individually; the composition belongs to Phase 20, where the PR/ship-loop
 4. **Preserve Phase 09's large-feature-request issue shape:** value, blocking, and customer-weight assessment remain structured fields.
 5. **Idempotency** — a retried run updates its PR rather than opening a second one.
 
-**Exit criteria:** A PR appears under the on-duty engineer's GitHub identity with the recording attached and its Linear issue linked.
+**Exit criteria (met):** A PR appeared under the on-duty engineer's GitHub identity (#1507,
+`sayandedotcom`) with the recording attached and its Linear issue linked — the linkback bot
+confirmed FIR-4, which is what "closes on merge" actually means. Also closed Phase 19's carried-over
+caveat: the repro → fix → **re-record** cycle ran live, twice, including a second recording made
+against the PR branch after the change.
+
+**One item deliberately not solved here, because it is not the agent's to solve:** CI's
+`biome ci --changed` judges the whole file touched, and `navbar.tsx` carries 229 pre-Ultracite
+diagnostics including a cognitive complexity of 43 that has no automatic fix. Any human editing
+that file hits the identical wall. The agent now carries the repo's own recipe
+(`biome-ignore-all` at the top of the file) plus the judgement that a format rewriting ~850 lines
+buries a 27-line diff and should be declined and explained instead. Making that file green is a
+repo decision.
 
 ---
 
