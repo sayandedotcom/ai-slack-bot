@@ -93,17 +93,35 @@ export const PROJECTION_LEASE_MS = 30_000;
  * observed live (run 317111cd) dying at the ceiling mid-install with a healthy
  * machine underneath.
  *
- * Twenty-four is not a loosened belt, it is the same judgement under new
- * arithmetic: boot now long-polls ~14s per call (sandbox/gateway.ts), so a
- * 3-minute cold boot costs ~13 poll steps, plus a realistic 5–8 steps of
- * actual work. A generation that has not converged in twenty-four turns under
- * THOSE economics is looping. The marginal cost of a poll step is small —
- * prompt caching makes the context resend a cached read, and the step's output
- * is one tool call — and the spend caps below remain the true cost authority
- * (invariant 28): a cheap loop and an expensive one both stop here, an
- * expensive one stops sooner.
+ * Forty is not a loosened belt, it is the same judgement re-run against what a
+ * generation now DOES. The arithmetic behind the old twenty-four still holds
+ * for its own era: boot long-polls ~14s per call (sandbox/gateway.ts), so a
+ * 3-minute cold boot costs ~13 poll steps, plus "a realistic 5–8 steps of
+ * actual work". That second term was written when the work WAS exec-and-diff.
+ *
+ * Phase 20 made it a ship loop, and the tail is now edit, format, diff,
+ * findIssue, record, poll the recording, openPR, checkPR, reply — twelve to
+ * fourteen, not five to eight. The old model's own sum therefore lands at
+ * 13 + 14 = 27, past the number it justified. Measured, not guessed:
+ *
+ *     c03a93bf  22 steps  $1.45  succeeded, opened PR #1506   <- two to spare
+ *     5e012530  24 steps  $1.63  FAILED at the ceiling        <- one extra call
+ *     854fd8a3  24 steps  $1.01  finished exactly at the wall
+ *
+ * A two-step margin on the one run that has ever completed the loop is not a
+ * margin. The run that failed differed only by resolving one pre-existing
+ * Linear issue and deleting a slightly larger block.
+ *
+ * Forty also makes the two ceilings agree for the first time. At the ~$0.068
+ * per step these runs actually bill, forty steps is ~$2.70 — comfortably under
+ * the $5.00 generation cap below, whose own docstring has always claimed to buy
+ * "roughly 40 full-size steps". The step ceiling and the spend cap were never
+ * aligned; a generation could not reach the cap's stated intent because it ran
+ * out of turns first. Now the spend caps are genuinely the binding authority
+ * (invariant 28) rather than a number the step ceiling made unreachable, and a
+ * loop still stops — an expensive one sooner.
  */
-export const MAX_STEPS_PER_GENERATION = 24;
+export const MAX_STEPS_PER_GENERATION = 40;
 
 /**
  * Output tokens one step may produce, before the pre-step spend guard clamps
