@@ -285,9 +285,42 @@ Three things the sandbox has to respect:
 cherry-picks onto a branch off `prod`. The fire-fighter never touches this; it
 only ever opens `→ staging`.
 
-## ~~BLOCKER~~ — RESOLVED 2026-08-15: push access granted
+## BLOCKER — STILL OPEN. The token grant was not the missing piece.
 
-**Option 1 below happened.** The fine-grained PAT (renamed
+**Measured 2026-08-15, after the org approved the re-scoped token:**
+
+```
+GET /repos/Zellify/web2app-rebuild   (auth: MONOREPO_PAT, post-approval)
+permissions: {admin: false, maintain: false, push: FALSE, triage: false, pull: true}
+default_branch: staging
+```
+
+**A fine-grained PAT cannot grant access the account does not already have.**
+Org approval authorises a token to *exercise* the user's permissions; it does
+not change the user's role on the repository. `sayandedotcom` is still
+read-only on `web2app-rebuild`, so `Contents: read & write` on the token buys
+nothing.
+
+The fix is a different setting, and only an org/repo admin can do it: **add the
+trial account as a collaborator with `write`** (repo → Settings → Collaborators
+and teams), or put it in a team that has write. Asked 2026-08-15.
+
+**This does not block building Phase 20.** The code is identical either way —
+Tasks 1–5 are correct regardless of who holds the grant. It blocks only Task 6's
+live drill, which is the exit criterion. Verify with the probe above before
+spending a container boot, never during the drill.
+
+A second correction while here: an earlier version of this section reasoned that
+push would traverse the sentinel git proxy in `src/sandbox/class.ts`. It does
+not. Roadmap Task 1 builds the PR **entirely Worker-side** — blobs → tree →
+commit → ref → PR over REST, authored with the on-duty engineer's token, and the
+sandbox never holds the diff. The credential that decides whether shipping works
+is therefore the engineer's own grant, not the sandbox's clone PAT. Both
+currently point at the same account, and that account cannot push.
+
+### What the approval DID accomplish (kept — it is still needed)
+
+The fine-grained PAT (renamed
 `zillify-monorepo-read-write-pull-request`) was re-scoped from read-only to
 **Contents: read & write** + **Pull requests: read & write**, still limited to
 `Zellify/web2app-rebuild` alone, and approved by the org.
@@ -295,16 +328,17 @@ only ever opens `→ staging`.
 Three consequences worth having written down:
 
 - **No secret to reinstall.** GitHub's *Request update* re-scopes a fine-grained
-  token in place; it does not regenerate it. The value already inside
-  `MONOREPO_DEV_ENV` is byte-identical and simply carries write now. (*Regenerate
-  token* would have invalidated the deployed copy — do not touch it.)
-- **No code change for the push.** The sandbox reaches GitHub through the
-  sentinel proxy in `src/sandbox/class.ts`, which authorises on the repository
-  slug rather than the git service, so `git-receive-pack` traverses the same path
-  already proven for `git-upload-pack`.
-- **The fork workaround (option 2) is dead.** Phase 20 can push a branch to the
-  real repo under the real identity. Keeping the target repo and head ref as
-  configuration is still worth doing, but as hygiene rather than as a fallback.
+  token in place; it does not regenerate it. The value is byte-identical to the
+  one already deployed. (*Regenerate token* would have invalidated it — do not
+  touch it.) `MONOREPO_PAT` now also sits in `apps/worker/.dev.vars` so the
+  push probe can run locally.
+- **The token is no longer the limiting factor.** Whatever grant the account
+  eventually receives, the token is already scoped to exercise it. When the
+  collaborator grant lands, nothing else needs changing.
+- **The fork workaround (option 2) is NOT dead** — it stays on the table until
+  the collaborator grant arrives, which is why Phase 20 must keep the target
+  repo and head ref as configuration rather than assumptions. That decision is
+  now load-bearing, not hygiene.
 
 The measurement that established the blocker is kept below, because it is the
 evidence for *why* a plain classic PAT is not enough here and would otherwise be
