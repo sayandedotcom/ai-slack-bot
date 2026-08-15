@@ -232,6 +232,39 @@ the first item in the README's "what another week would buy".
    **Fail:** no answer; an answer that reads machine-written; or more than one approval card
    for one answer.
 
+#### Recorded result — 2026-08-16, run `0acfb5dd`
+
+**PASS, at zero clicks.** The first scenario-1 evidence this project has.
+
+| | |
+|---|---|
+| Triage | `wake: 1` in 2.27 s for $0.001249 (`claude-haiku-4-5`) |
+| Run | `0acfb5dd-18c0-4395-8557-efa8e2a1edaa`, `#test-firedrill`, `shadow=0`, terminal status **`idle`** |
+| Work | 15 model steps, **$0.9129** |
+| Effects | **1** — `slack.reply`, `completed`. No sandbox, no PR, no Linear issue |
+| Approvals | **0 rows → 0 clicks** |
+| Wall clock | 3 min 44 s, question posted to reply delivered |
+
+Two things worth keeping from this run.
+
+**Triage recalled the customer without being asked.** The `opening_prompt` ended: *"This
+customer has previously asked about currency configuration per variant and reported a blank
+funnel editor issue."* Neither fact was in the message. That is the Zep recall path feeding
+triage, visible in a stored decision rather than argued for.
+
+**The reply answers in its first four words.** It opens *"Both sides, but the DNS part is
+theirs,"* then names the concrete mechanism — subdomain-only with root domains rejected, two
+required CNAMEs, the `_acme-challenge` record, the optional TXT that only speeds verification,
+the cert issued and renewed from our side — and closes on the two trip-ups rather than a
+summary. No preamble, no "Great question!", no closing paragraph restating the answer. It
+reads as though the on-duty engineer typed it, which is the bar.
+
+**What this run does *not* prove:** whether the answer is factually right about Zellify's
+custom-domain flow. Nobody on this side of the drill can confirm that — it needs someone who
+knows the product to read it. Scenario 1's pass criterion is "correct **and** direct with no
+AI tells"; the direct-and-no-tells half is evidenced above, the correct half is owed to a
+human reviewer.
+
 ### Scenario 2 — small feature request
 
 1. Post:
