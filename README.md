@@ -870,7 +870,7 @@ Narrower loops: `pnpm exec vitest run test/agent-loop.test.ts`, add `-t "steer"`
 `pnpm test:watch`.
 
 **Local dev:** `pnpm dev` runs wrangler on `:8787`. The dashboard's own `pnpm dev` proxies
-`/api` and `/ws` to it, with `dev-stubs.ts` faking the Access-gated identity, roster and
+`/api` and `/ws` to it, with `apps/dashboard/dev-stubs.ts` faking the Access-gated identity, roster and
 approval routes so the SPA renders without a Zero Trust session.
 
 **Deploy:**
