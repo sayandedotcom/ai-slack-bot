@@ -138,12 +138,23 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
     }
   }
 
-  /** Fetch an issue and prove it belongs to the pinned team before touching it. */
-  async function requirePinnedIssue(issueId: string): Promise<{ id: string }> {
+  /**
+   * Fetch an issue and prove it belongs to the pinned team before touching
+   * it. Returns `identifier` too, even though `updateIssue` (this function's
+   * original caller) never reads it: `resolveLinkTargets` needs exactly the
+   * same fetch-then-check-team-pin logic PLUS `identifier`, and duplicating
+   * the two refusal checks — including their exact message strings — for the
+   * sake of one field would leave the pinned-team and invalid-id error text
+   * living in two places that could silently drift apart. One extra scalar
+   * in the selection set is free; a second copy of this validation is not.
+   */
+  async function requirePinnedIssue(
+    issueId: string,
+  ): Promise<{ id: string; identifier: string }> {
     const result = await query<{
-      issue: { id: string; team: { id: string } } | null;
+      issue: { id: string; identifier: string; team: { id: string } } | null;
     }>(
-      `query($id: String!) { issue(id: $id) { id team { id } } }`,
+      `query($id: String!) { issue(id: $id) { id identifier team { id } } }`,
       { id: issueId },
     );
     const issue = result.data?.issue ?? null;
@@ -159,7 +170,7 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
         `that issue belongs to another team; this agent may only touch ${config.teamName}.`,
       );
     }
-    return { id: issue.id };
+    return { id: issue.id, identifier: issue.identifier };
   }
 
   /**
@@ -336,10 +347,14 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
      * refuses the moment ANY id turns out foreign or unknown, before a
      * partial list can reach the caller.
      *
-     * Same shape as `requirePinnedIssue` — fetch, then check `team.id`
-     * against the pin — but this also needs the human-readable `identifier`
-     * that `requirePinnedIssue`'s callers never asked for, so it is its own
-     * query rather than a shared helper.
+     * `requirePinnedIssue` does the fetch-then-check-team-pin work and
+     * throws the two refusal codes; this just loops it in input order and
+     * only returns once every id has cleared it, so a throw at any index
+     * unwinds before `out` is ever handed back.
+     *
+     * Empty input makes zero requests: there is nothing to resolve, and a
+     * capability that touches the network for a no-op list would burn a
+     * sub-request against the caller's budget for nothing.
      *
      * One request per id (the caller caps the list at 5, per the brief), run
      * in order so the result order matches the input order: the PR body
@@ -352,26 +367,7 @@ export function makeLinearGateway(config: LinearConfig): LinearGateway {
 
       const out: Array<{ id: string; identifier: string }> = [];
       for (const issueId of issueIds) {
-        const result = await query<{
-          issue: { id: string; identifier: string; team: { id: string } } | null;
-        }>(
-          `query($id: String!) { issue(id: $id) { id identifier team { id } } }`,
-          { id: issueId },
-        );
-        const issue = result.data?.issue ?? null;
-        if (issue === null) {
-          throw new CapabilityError(
-            "invalid_input",
-            "that issue does not exist, or is not visible to this agent.",
-          );
-        }
-        if (issue.team.id !== config.teamId) {
-          throw new CapabilityError(
-            "linear_team_denied",
-            `that issue belongs to another team; this agent may only touch ${config.teamName}.`,
-          );
-        }
-        out.push({ id: issue.id, identifier: issue.identifier });
+        out.push(await requirePinnedIssue(issueId));
       }
       return out;
     },
