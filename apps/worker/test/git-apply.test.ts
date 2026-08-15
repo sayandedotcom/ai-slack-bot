@@ -398,3 +398,184 @@ copy to copy.ts
     }
   });
 });
+
+/* --------------------------------------------------- file modes (Phase 20) -- */
+
+/**
+ * MODES THE APPLIER DOES NOT MODEL ARE REFUSED, NOT DOWNGRADED.
+ *
+ * Every fixture below is real `git diff` output, captured with the same
+ * `git add -A -N && git diff` the sandbox runs (git 2.34.1), because the whole
+ * failure this covers lives in header shapes a hand-typed patch would get
+ * wrong: a modified symlink carries its `120000` on the `index` line and
+ * NOWHERE else, and a `chmod +x` alongside a content change carries its mode
+ * on an `old mode`/`new mode` pair with an `index` line that has no mode at
+ * all. Guessing either one wrong turns a symlink into a regular file holding
+ * its own link target, on a real repository, with no human in between.
+ */
+
+/** `ln -s t.txt link` committed, then re-pointed at `other/target`. */
+const SYMLINK_MODIFY_PATCH = `diff --git a/link b/link
+index 3eddab3..c9fc5aa 120000
+--- a/link
++++ b/link
+@@ -1 +1 @@
+-t.txt
+\\ No newline at end of file
++other/target
+\\ No newline at end of file
+`;
+
+/** `ln -s /etc/passwd newlink` on a fresh path. */
+const SYMLINK_CREATE_PATCH = `diff --git a/newlink b/newlink
+new file mode 120000
+index 0000000..3594e94
+--- /dev/null
++++ b/newlink
+@@ -0,0 +1 @@
++/etc/passwd
+\\ No newline at end of file
+`;
+
+/** The delete half of a symlink→regular-file typechange. */
+const SYMLINK_DELETE_PATCH = `diff --git a/link b/link
+deleted file mode 120000
+index 3eddab3..0000000
+--- a/link
++++ /dev/null
+@@ -1 +0,0 @@
+-t.txt
+\\ No newline at end of file
+`;
+
+/** `git submodule add` — a gitlink, castable straight through a `new file mode` header. */
+const SUBMODULE_PATCH = `diff --git a/vendor/sub b/vendor/sub
+new file mode 160000
+index 0000000..b5a00a0
+--- /dev/null
++++ b/vendor/sub
+@@ -0,0 +1 @@
++Subproject commit b5a00a01ef30d3691317a2cc1089561dc4a9d21a
+`;
+
+/** `chmod +x f.sh` together with a content edit: mode lives on the pair, and the `index` line carries none. */
+const CHMOD_WITH_CONTENT_PATCH = `diff --git a/f.sh b/f.sh
+old mode 100644
+new mode 100755
+index de98044..7be73ce
+--- a/f.sh
++++ b/f.sh
+@@ -1,3 +1,3 @@
+ a
+-b
++B
+ c
+`;
+
+/** `chmod +x only.sh` and nothing else: no `index` line, no hunks at all. */
+const CHMOD_ONLY_PATCH = `diff --git a/only.sh b/only.sh
+old mode 100644
+new mode 100755
+`;
+
+/** `chmod -x` — the same shape in the other direction. */
+const UNCHMOD_ONLY_PATCH = `diff --git a/only.sh b/only.sh
+old mode 100755
+new mode 100644
+`;
+
+describe("applyUnifiedDiff — file modes", () => {
+  it("refuses a modified symlink, naming the file and the mode, rather than writing the link target as a regular file", () => {
+    try {
+      applyUnifiedDiff(SYMLINK_MODIFY_PATCH, new Map([["link", "t.txt"]]));
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CapabilityError);
+      const capErr = err as CapabilityError;
+      expect(capErr.code).toBe("invalid_input");
+      expect(capErr.message).toContain("link");
+      expect(capErr.message).toContain("120000");
+    }
+  });
+
+  it("refuses a created symlink", () => {
+    try {
+      applyUnifiedDiff(SYMLINK_CREATE_PATCH, new Map());
+      throw new Error("expected throw");
+    } catch (err) {
+      expect((err as CapabilityError).code).toBe("invalid_input");
+      expect((err as CapabilityError).message).toContain("newlink");
+      expect((err as CapabilityError).message).toContain("120000");
+    }
+  });
+
+  it("refuses a deleted symlink", () => {
+    try {
+      applyUnifiedDiff(SYMLINK_DELETE_PATCH, new Map([["link", "t.txt"]]));
+      throw new Error("expected throw");
+    } catch (err) {
+      expect((err as CapabilityError).code).toBe("invalid_input");
+      expect((err as CapabilityError).message).toContain("link");
+      expect((err as CapabilityError).message).toContain("120000");
+    }
+  });
+
+  it("refuses a submodule/gitlink entry", () => {
+    try {
+      applyUnifiedDiff(SUBMODULE_PATCH, new Map());
+      throw new Error("expected throw");
+    } catch (err) {
+      expect((err as CapabilityError).code).toBe("invalid_input");
+      expect((err as CapabilityError).message).toContain("vendor/sub");
+      expect((err as CapabilityError).message).toContain("160000");
+    }
+  });
+
+  it("refuses a symlink even when basePaths is the only thing asked for", () => {
+    expect(() => basePaths(SYMLINK_MODIFY_PATCH)).toThrow(CapabilityError);
+  });
+
+  it("carries a chmod +x that accompanies a content change onto the resulting change", () => {
+    const changes = applyUnifiedDiff(CHMOD_WITH_CONTENT_PATCH, new Map([["f.sh", "a\nb\nc\n"]]));
+    expect(changes).toEqual([
+      { kind: "modify", path: "f.sh", content: "a\nB\nc\n", mode: "100755" },
+    ]);
+  });
+
+  it("carries a chmod-only change (no hunks) with the content left byte-identical", () => {
+    const changes = applyUnifiedDiff(CHMOD_ONLY_PATCH, new Map([["only.sh", "a\nb\n"]]));
+    expect(changes).toEqual([
+      { kind: "modify", path: "only.sh", content: "a\nb\n", mode: "100755" },
+    ]);
+    // The base file has to be FETCHED for a chmod-only change, or the blob
+    // written alongside the new mode would be empty.
+    expect(basePaths(CHMOD_ONLY_PATCH)).toEqual(["only.sh"]);
+  });
+
+  it("carries a chmod -x the same way, in the other direction", () => {
+    const changes = applyUnifiedDiff(UNCHMOD_ONLY_PATCH, new Map([["only.sh", "a\nb\n"]]));
+    expect(changes).toEqual([
+      { kind: "modify", path: "only.sh", content: "a\nb\n", mode: "100644" },
+    ]);
+  });
+
+  it("refuses an old/new mode pair naming a mode outside the whitelist", () => {
+    const patch = `diff --git a/link b/link
+old mode 120000
+new mode 100644
+index 3eddab3..2a79fdf
+--- a/link
++++ b/link
+@@ -1 +1 @@
+-t.txt
++now a real file
+`;
+    try {
+      applyUnifiedDiff(patch, new Map([["link", "t.txt"]]));
+      throw new Error("expected throw");
+    } catch (err) {
+      expect((err as CapabilityError).code).toBe("invalid_input");
+      expect((err as CapabilityError).message).toContain("120000");
+    }
+  });
+});

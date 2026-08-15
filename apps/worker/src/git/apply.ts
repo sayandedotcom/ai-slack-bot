@@ -44,6 +44,26 @@ function invalidInput(reason: string): never {
   throw new CapabilityError("invalid_input", reason);
 }
 
+/**
+ * The only two git file modes this applier can write, checked EVERY time a
+ * mode is read rather than once at the end.
+ *
+ * A mode is not decoration — it is the tree entry's type. `120000` is a
+ * symlink whose "content" is its target path, `160000` is a gitlink holding
+ * another repository's commit sha, and both are cast-shaped enough to slide
+ * through a `Mode` annotation and come out the other side as a regular file
+ * on a real monorepo: a modified symlink would be committed as a text file
+ * containing its own link target, silently, with no human in between. Same
+ * rule as the rename and binary refusals above — this applier does the narrow
+ * thing it can do byte-exactly, and names the file when it will not.
+ */
+function assertSupportedMode(raw: string, displayPath: string): Mode {
+  if (raw === "100644" || raw === "100755") return raw;
+  invalidInput(
+    `"${displayPath}" has git file mode ${raw}; this applier only writes regular files (100644 and 100755). A symlink (120000), a submodule/gitlink (160000) or any other special entry needs a human PR.`,
+  );
+}
+
 function staleContext(path: string, detail: string): never {
   invalidInput(
     `the diff for "${path}" ${detail} — the base file has moved since the diff was taken. The diff is stale; re-run diff and try again.`,
@@ -96,14 +116,34 @@ function parseFileBlock(block: string[]): ParsedFile {
 
     if (line.startsWith("new file mode ")) {
       kind = "create";
-      mode = line.slice("new file mode ".length).trim() as Mode;
+      mode = assertSupportedMode(line.slice("new file mode ".length).trim(), displayPath);
       modeSeen = true;
       i += 1;
       continue;
     }
     if (line.startsWith("deleted file mode ")) {
       kind = "delete";
-      mode = line.slice("deleted file mode ".length).trim() as Mode;
+      mode = assertSupportedMode(line.slice("deleted file mode ".length).trim(), oldPath);
+      modeSeen = true;
+      i += 1;
+      continue;
+    }
+    // `old mode` / `new mode`, git's shape for a chmod. It appears WITH a
+    // content change (in which case the `index` line below carries no mode at
+    // all) and alone (in which case there is no `index` line and no hunk
+    // either). The new mode is carried onto the change rather than dropped:
+    // the tree entry this produces states the file's mode outright, so
+    // ignoring the pair does not leave the mode alone — it posts the applier's
+    // 100644 default over whatever the file really is, quietly un-executing a
+    // script. Whitelisted on both sides, so a typechange (`old mode 120000`)
+    // is refused rather than flattened.
+    if (line.startsWith("old mode ")) {
+      assertSupportedMode(line.slice("old mode ".length).trim(), displayPath);
+      i += 1;
+      continue;
+    }
+    if (line.startsWith("new mode ")) {
+      mode = assertSupportedMode(line.slice("new mode ".length).trim(), displayPath);
       modeSeen = true;
       i += 1;
       continue;
@@ -125,11 +165,13 @@ function parseFileBlock(block: string[]): ParsedFile {
     }
     if (line.startsWith("index ") && !modeSeen) {
       // "index <old>..<new> <mode>" — mode is present for every non-mode-only
-      // change in this dialect (default `git diff`, never `--unified=0`).
+      // change in this dialect (default `git diff`, never `--unified=0`), and
+      // it is the ONLY place a modified symlink's `120000` appears: there is
+      // no `new file mode` line on a modify. So an unrecognised value here is
+      // refused, never quietly left at the 100644 default.
       const parts = line.split(" ");
-      if (parts.length >= 3) {
-        const candidate = parts[2] as Mode;
-        if (candidate === "100644" || candidate === "100755") mode = candidate;
+      if (parts.length >= 3 && parts[2].length > 0) {
+        mode = assertSupportedMode(parts[2], displayPath);
       }
       i += 1;
       continue;
@@ -158,8 +200,8 @@ function parseFileBlock(block: string[]): ParsedFile {
       i += 1;
       continue;
     }
-    // "---", "+++", "old mode", "new mode", "similarity index" and blank
-    // trailer lines carry nothing this applier needs.
+    // "---", "+++", "similarity index" and blank trailer lines carry nothing
+    // this applier needs. (`old mode`/`new mode` DO — they are handled above.)
     i += 1;
   }
 
