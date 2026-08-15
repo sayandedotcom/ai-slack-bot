@@ -96,6 +96,21 @@ what auto-moves the issue to Done on merge.** The branch-name suffix is a
 secondary helper and does not trigger sync. This is the concrete answer to the
 assignment's "so the issue closes on merge".
 
+Two refinements confirmed against a live PR (#1491, `feat: slash commands, true
+steer, chime and chat fixes`, branch `feat/slash-commands-zel-1785` → `staging`):
+
+- **More than one `Fixes` line is allowed.** #1491 opens with `Fixes ZEL-1883`
+  and `Fixes ZEL-1981` on consecutive lines. Both closed on merge.
+- **`Part of ZEL-<n>` links without closing.** #1491 uses it for the umbrella
+  issue ZEL-1785, which the PR advances but does not complete. The agent needs
+  this verb: writing `Fixes` against a parent issue closes an epic on a partial
+  fix, and nothing warns you.
+
+The `linear-code` bot confirms the result in-thread — it comments on the PR with
+each linked issue's title, so a wrong or unmatched identifier is visible from the
+PR page without opening Linear. Phase 20's ship loop should read that comment
+back as its verification that linking worked, rather than assuming it.
+
 ### FORBIDDEN in PR bodies and commits — this one is load-bearing
 
 The skill's §6 is explicit, and it overrides everything upstream of it:
@@ -270,7 +285,32 @@ Three things the sandbox has to respect:
 cherry-picks onto a branch off `prod`. The fire-fighter never touches this; it
 only ever opens `→ staging`.
 
-## BLOCKER — no push access to the monorepo
+## ~~BLOCKER~~ — RESOLVED 2026-08-15: push access granted
+
+**Option 1 below happened.** The fine-grained PAT (renamed
+`zillify-monorepo-read-write-pull-request`) was re-scoped from read-only to
+**Contents: read & write** + **Pull requests: read & write**, still limited to
+`Zellify/web2app-rebuild` alone, and approved by the org.
+
+Three consequences worth having written down:
+
+- **No secret to reinstall.** GitHub's *Request update* re-scopes a fine-grained
+  token in place; it does not regenerate it. The value already inside
+  `MONOREPO_DEV_ENV` is byte-identical and simply carries write now. (*Regenerate
+  token* would have invalidated the deployed copy — do not touch it.)
+- **No code change for the push.** The sandbox reaches GitHub through the
+  sentinel proxy in `src/sandbox/class.ts`, which authorises on the repository
+  slug rather than the git service, so `git-receive-pack` traverses the same path
+  already proven for `git-upload-pack`.
+- **The fork workaround (option 2) is dead.** Phase 20 can push a branch to the
+  real repo under the real identity. Keeping the target repo and head ref as
+  configuration is still worth doing, but as hygiene rather than as a fallback.
+
+The measurement that established the blocker is kept below, because it is the
+evidence for *why* a plain classic PAT is not enough here and would otherwise be
+rediscovered the hard way.
+
+### The original measurement
 
 Measured 2026-08-15 with a classic PAT carrying full `repo` scope, org membership
 `active`, role `member`.
@@ -316,6 +356,9 @@ Option 2 is the only one that does not depend on someone else acting, so Phase 2
 should be written so the target repo and the head ref are configuration, not
 assumptions — cheap now, and it makes 1 and 2 the same code path.
 
+*(Outcome: option 1 landed the same day. The configuration advice stands on its
+own merits; the fork path is no longer needed.)*
+
 **`staging` is a protected branch** (`"protected": true`); the rules are not
 readable at this permission level. Protection does not block opening a PR into
 it, and "merged after human review" is what the assignment asks for anyway, so
@@ -338,6 +381,27 @@ requirement fails silently.
 Cheapest check once push access exists: open a throwaway draft PR with
 `Fixes FIR-2` as the first body line and see whether the issue picks up the
 attachment. Until then, treat auto-close as unproven for `FIR-` issues.
+
+**Status 2026-08-15: still unproven, but no longer blocked.** Push access landed,
+so the throwaway-draft-PR probe above is now runnable and is the fastest way to
+settle it. Asked directly, Ronit answered "check linear settings — adding
+`Fixes <issue id>` should link it as such". That confirms the *mechanism*, which
+was already documented above; it does not answer whether the
+`fire-fighter-testing` team is inside the GitHub integration's scope, which is
+the actual open question. Linear scopes GitHub sync per team.
+
+Two ways to settle it, in order of cost:
+
+1. **Linear → Settings → Integrations → GitHub** — read off which teams are
+   enabled. Free, and answers it definitively.
+2. **The draft-PR probe.** Also proves the end-to-end path, so it is worth doing
+   regardless once (1) says yes.
+
+If `fire-fighter-testing` turns out to be outside the integration's scope, the
+options are to enable it (a workspace setting, needs an admin) or to file the
+drill's issues on a team that is already in scope. Do not discover this during
+the drill: an unmatched identifier fails **silently** — the PR opens, the body
+looks right, and nothing links.
 
 ## Still open
 
