@@ -510,3 +510,79 @@ looks correct.
 Both "still open" items from the first draft of this file are now closed: the
 repo is `web2app-rebuild`, and the conventions above are read from the repo's own
 skills rather than inferred.
+
+## Build outcome — Tasks 1–5 shipped and deployed 2026-08-15
+
+Written after the build, so this file carries what is true at the end as well as what was true
+before it. Task 6 (the live drill) is NOT done; everything below is about the code.
+
+**Deployed:** version `924e1cb3`, container image unchanged at `27fd1043` (this phase adds no
+container work). `GITHUB_REPO=Zellify/web2app-rebuild`, `GITHUB_BASE=staging`,
+`GITHUB_AUTHOR=worker-pat` are live vars; `GITHUB_HEAD_REPO` is deliberately unset so it defaults
+to `GITHUB_REPO`.
+
+**Suite:** 104 files, 2120 passed, 2 skipped. `tsc --noEmit` clean. `codemode:dts:check` clean.
+
+**What the reviews caught that the tests did not.** Recorded because the pattern is the lesson,
+not the individual bugs:
+
+1. **A model-supplied branch name force-updated an arbitrary repository.** `POST /git/refs` 422s on
+   an invalid ref name — which was exactly the branch that triggered the force-`PATCH` — and
+   `new URL(base + "x/../../../../../../evil/repo/git/refs/heads/main")` normalises to
+   `https://api.github.com/repos/evil/repo/git/refs/heads/main`. `encodeURIComponent` does not
+   encode `.`. Verified in node before acting on it. Now: ref-name validation before any fetch at
+   every entry point (`openPR`, `findPR`, `checkPR`, patch paths, and the paginated `Link`
+   follower), each with a test asserting `calls.length === 0`.
+2. **"Structurally impossible" was merely absent.** The PR-body renderer interpolated `description`
+   verbatim, so `"fixed it\n\n## Test plan\n\n- ran it"` rendered a heading this repo's §6 forbids
+   — and the test claiming to cover it fed benign input and asserted absence, a tautology that
+   would still pass with the injection wide open. Now `HEADING_PATTERN = /^\s*#{1,6}\s/m` screens
+   description, notes, **and every acceptance criterion by index** before any render. The criterion
+   screen is necessary, not merely consistent: `- [ ] ` neutralises a *leading* `##`, but
+   `"covers the retry path\n## Test plan"` still renders a real column-0 heading.
+3. **Non-UTF-8 base files were silently rewritten.** Git only calls a file binary on a NUL in the
+   first 8 KB, so a latin-1 **text** file passes the applier's binary refusal, and
+   `TextDecoder("utf-8")` turns every invalid byte into U+FFFD in the committed blob — corrupting
+   lines the fix never touched. The byte-exact context check cannot catch it, because the patch
+   arrives through the container's stdout mangled the same way and both sides agree. Now the decode
+   must round-trip byte-for-byte or the file is refused by name.
+4. **A modified symlink became a regular file.** `index a..b 120000` was not modelled, so the mode
+   fell back to `100644` and the tree entry replaced the link with its target as file content.
+   Modes are now whitelisted at all five entry points; `as Mode` casts are gone.
+5. **`git add -A -N && git diff` never showed deletions** — `-A` stages them, so the unstaged diff
+   misses them entirely and a fix that deleted a file would have opened a PR that silently did not.
+   Now `git diff HEAD`, which also makes the capture agree with the recorded `baseSha`.
+6. **Two uncoupled base-branch notions.** `lifecycle.ts`'s `REPO_REF` (what the container checks
+   out, hence what `baseSha` points at) and `GITHUB_BASE` (what the PR opens against) agreed only
+   by coincidence of defaults — and Task 6 Step 2 deliberately breaks that. Sandbox on a planted
+   branch with `GITHUB_BASE` still `staging` would have shipped the planted bug **into** staging on
+   merge. Now `GET /compare/{base}...{baseSha}` must return `identical` or `behind` or the PR is
+   refused. Semantics verified against the live API, twice, independently.
+
+**Known residuals, none able to corrupt a commit or open a PR against the wrong base:**
+
+- `config.base` reaches a URL path for the first time (via the compare call) and is validated only
+  against the literal `"dev"`. Deploy-time var, not model-reachable, GET only — but inconsistent
+  with the doctrine that produced `assertValidSha`.
+- The non-base64 refusal says "over 1 MB" for any non-base64 encoding; other encodings are
+  effectively unreachable because symlinks and submodules refuse earlier.
+- A compare-call failure classifies as in-doubt though nothing was written, so `findPR` reconciles
+  a branch that was never pushed and returns null. Fails closed.
+- `findPR`'s `updated: true` is an unsettled contract question, deliberately left open: as the
+  `reconcile` result it reads as "this PR already existed", which is true of the branch/PR
+  disjunction the doc states.
+- `test/sandbox-diff.test.ts` still holds a 39-character `BASE_SHA` fixture. Harmless —
+  `captureDiff` validates nothing by design and `openPR` is now the gate — but that suite has never
+  seen a real sha shape. (The `github-gateway` fixture had the same 39-char bug and is fixed.)
+
+## Task 6 — the live drill, not yet run
+
+Everything it needs is deployed and push access is confirmed (`permissions.push: true`,
+`/collaborators` → 200). It is human-in-the-loop by design: it needs someone to plant a bug and to
+fire a drill message. The runbook is the plan's Task 6, unchanged. Two things to carry into it:
+
+- **Re-assert the probe first** (`GET /repos/{owner}/{repo}` → `permissions.push`). It is 30
+  seconds and it is the one check that invalidates the whole drill.
+- **If you point `GITHUB_BASE` at a planted branch, check out that same branch in the sandbox.**
+  The new compare guard refuses the mismatch rather than silently shipping a wrong diff — which is
+  the intended behaviour, but it will look like an unexplained refusal if the coupling is forgotten.
