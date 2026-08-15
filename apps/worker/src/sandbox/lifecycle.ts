@@ -151,7 +151,20 @@ const PROVISION_DEADLINE_MS = 600_000;
 
 const DEFAULT_REPO_PATH = "/workspace/web2app-rebuild";
 
-/** Product PRs target `staging`, so that is what the working tree tracks. */
+/**
+ * Product PRs target `staging`, so that is what the working tree tracks.
+ *
+ * COUPLED TO `GITHUB_BASE`, which is configuration and defaults to the same
+ * branch. This constant decides what the container checks out and therefore
+ * what `baseSha` points at; `GITHUB_BASE` decides what the pull request opens
+ * against. They agree today only by a coincidence of defaults, and the two are
+ * changed by different people for different reasons — so if this value ever
+ * moves, `GITHUB_BASE` has to move with it. The dangerous mismatch (tree cut
+ * from a branch that is NOT contained in the PR base) would otherwise ship
+ * that branch's commits into the base on merge; `assertBaseContains` in
+ * `src/git/commit.ts` refuses it with a `GET /compare` before anything is
+ * written, and carries the full reasoning.
+ */
 const REPO_REF = "staging";
 
 /** Writing one line of git config; anything slower than this is a sick container. */

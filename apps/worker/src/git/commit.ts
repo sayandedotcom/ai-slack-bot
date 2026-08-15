@@ -82,10 +82,31 @@ export function resolveGithubConfig(env: Env): GithubShipConfig {
   const repo = env.GITHUB_REPO?.trim() || MONOREPO_SLUG;
   const headRepo = env.GITHUB_HEAD_REPO?.trim() || repo;
   const base = env.GITHUB_BASE?.trim() || "staging";
-  const author = (env.GITHUB_AUTHOR?.trim() === "on-duty" ? "on-duty" : "worker-pat") as
-    | "on-duty"
-    | "worker-pat";
-  return { repo, headRepo, base, author };
+  return { repo, headRepo, base, author: resolveAuthor(env.GITHUB_AUTHOR) };
+}
+
+/**
+ * ABSENT defaults; UNRECOGNISED refuses.
+ *
+ * The two are different facts and must not share an outcome. The documented
+ * handover for the live drill is "flip one var to `on-duty`" — and a value
+ * that merely FAILS to be `on-duty` (`onduty`, `On-Duty`, a stray character)
+ * used to coerce silently back to the worker PAT, with no signal at deploy
+ * time at all: the first observation would be a pull request already open on
+ * the monorepo under the wrong identity. Refused by name at construction, the
+ * same way `GITHUB_BASE === "dev"` is refused in `makeGithubGateway` below.
+ *
+ * Absence still defaults to `worker-pat`, because that IS the documented
+ * default and `wrangler.jsonc` may legitimately omit the var.
+ */
+function resolveAuthor(raw: string | undefined): "on-duty" | "worker-pat" {
+  const value = raw?.trim();
+  if (value === undefined || value === "") return "worker-pat";
+  if (value === "on-duty" || value === "worker-pat") return value;
+  throw new Error(
+    `GITHUB_AUTHOR must be "on-duty" or "worker-pat"; got ${JSON.stringify(raw)}. ` +
+      "Refused rather than defaulted: a typo here would open pull requests on the monorepo under the worker PAT with no other signal that the handover did not take.",
+  );
 }
 
 /**
@@ -143,6 +164,36 @@ function assertValidBranch(branch: string): void {
     throw new CapabilityError(
       "invalid_input",
       `"${branch}" is not a valid branch name; refused before any request was made.`,
+    );
+  }
+}
+
+/**
+ * The same discipline as `assertValidBranch`, for the other value this module
+ * interpolates into GitHub URLs — `baseSha` reaches a query string (`?ref=`)
+ * and a URL PATH (`/git/commits/${baseSha}`, `/compare/${base}...${baseSha}`).
+ *
+ * It arrives from R2 `customMetadata` via `readDiffWithBase`, which does no
+ * shape check of its own, and the only validation that exists today lives one
+ * module away in `src/sandbox/gateway.ts`'s `diff()` — in the CALLER of an
+ * exported `captureDiff(env, runId, raw, baseSha)` that validates nothing. So
+ * the check that has to hold is this one, for exactly the reason the
+ * `assertValidBranch` note above gives: this file is the last thing before a
+ * write to a real company repository and must not lean on a caller's
+ * validation. Not exploitable today; one future `captureDiff` caller reopens
+ * it, and that caller will not think to look here.
+ *
+ * 40 lowercase hex, matching `git rev-parse HEAD`'s own output exactly — an
+ * abbreviated sha is refused too, because the commit this parents on must be
+ * the exact tree the diff was cut against.
+ */
+const VALID_SHA = /^[0-9a-f]{40}$/;
+
+function assertValidSha(sha: string): void {
+  if (!VALID_SHA.test(sha)) {
+    throw new CapabilityError(
+      "invalid_input",
+      `the stored diff names a base commit that is not a 40-character sha; refused before any request was made. Capture a fresh diff and try again.`,
     );
   }
 }
@@ -243,10 +294,12 @@ async function readErrorMessage(response: Response): Promise<string> {
 }
 
 /**
- * What to say when a failure happens AFTER the branch has already been
- * pushed. Threaded through from the point the ref-ensure step actually
- * succeeds, so a PR-ensure failure past that point cannot claim "nothing was
- * opened" about a commit that is sitting on the company repo.
+ * What to say — and how to CLASSIFY — when a failure happens AFTER the branch
+ * has already been pushed. Threaded through from the point the ref-ensure step
+ * actually succeeds, so a PR-ensure failure past that point cannot claim
+ * "nothing was opened" about a commit that is sitting on the company repo, and
+ * cannot record it in the effects ledger as if nothing had been sent. See
+ * `upstreamError` below for the classification half.
  */
 type WrittenContext = { branch: string; headRepo: string };
 
@@ -258,15 +311,26 @@ function reconcileHint(ctx: WrittenContext): string {
  * Maps an upstream failure to something safe, split the same way
  * `src/linear/client.ts`'s `upstreamError` is: by whether the server could
  * have processed the request. 401/403/404 never file or write anything, so
- * they are `capability_unavailable` — UNLESS `written` says the branch push
- * already succeeded, in which case saying "nothing was opened" would be a
- * lie about a real commit; see the `WrittenContext` note above. 422 means
- * GitHub understood the request and refused its content — that refusal is
- * worth surfacing, but GitHub quotes back what was sent, so the message is
- * redacted of dev-env values and bounded before it becomes model-facing.
- * Everything else (network failure, 5xx) is in-doubt: the write may or may
- * not have landed, and `findPR` is the reconciliation, because the branch
- * name decides it.
+ * they are `capability_unavailable`; 422 means GitHub understood the request
+ * and refused its content, which is `invalid_input` — that refusal is worth
+ * surfacing, but GitHub quotes back what was sent, so the message is redacted
+ * of dev-env values and bounded before it becomes model-facing. Everything
+ * else (network failure, 5xx) is in-doubt: the write may or may not have
+ * landed, and `findPR` is the reconciliation, because the branch name decides
+ * it.
+ *
+ * `written` overrides the CODE, not just the wording. Both
+ * `capability_unavailable` and `invalid_input` are members of
+ * `PROVEN_PRE_UPSTREAM` in `src/codemode/effects.ts` — the set documented as
+ * "codes that prove the call was refused BEFORE anything left this Worker" —
+ * so `performClaimed` writes the ledger row `failed`, whose stated meaning is
+ * that a retry is safe because nothing was sent. That is a lie once the branch
+ * is pushed: the commit is on the company repo, and a human reading that row
+ * is told the opposite of what happened. `upstream_unavailable` is outside
+ * that set on purpose (the file's own asymmetry note: an unproven send costs a
+ * human a look, a mis-proved one costs a customer), so the row becomes
+ * `in_doubt` and the binding's `reconcile` — `findPR(branch)` — resolves it.
+ * The improved wording from `reconcileHint` is kept as-is on top.
  */
 async function upstreamError(
   response: Response,
@@ -275,7 +339,7 @@ async function upstreamError(
 ): Promise<CapabilityError> {
   if (response.status === 401 || response.status === 403 || response.status === 404) {
     return new CapabilityError(
-      "capability_unavailable",
+      written ? "upstream_unavailable" : "capability_unavailable",
       written
         ? `GitHub is not authorised, or the pull request endpoint was not found. ${reconcileHint(written)}`
         : "GitHub is not authorised, or the repository was not found — nothing was opened.",
@@ -285,7 +349,7 @@ async function upstreamError(
     const raw = await readErrorMessage(response);
     const bounded = redact(raw).slice(0, MAX_ERROR_MESSAGE_CHARS).trim();
     return new CapabilityError(
-      "invalid_input",
+      written ? "upstream_unavailable" : "invalid_input",
       written
         ? `GitHub rejected the request. ${reconcileHint(written)} GitHub said: ${bounded}`
         : `GitHub rejected the request: ${bounded}`,
@@ -300,11 +364,51 @@ async function upstreamError(
 }
 
 /** `atob` decodes to a binary string; re-encode as bytes before UTF-8 decoding. */
-function decodeBase64Utf8(base64: string): string {
+function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64.replace(/\n/g, ""));
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder("utf-8").decode(bytes);
+  return bytes;
+}
+
+/**
+ * Decode a fetched base file, or refuse it — never approximate it.
+ *
+ * `new TextDecoder("utf-8")` is NON-FATAL: every byte it cannot interpret
+ * becomes U+FFFD and the decode "succeeds". Git only calls a file binary if it
+ * finds a NUL in the first 8 KB, so a latin-1 (or otherwise non-UTF-8) TEXT
+ * file diffs as text, sails past the applier's binary refusal, and every
+ * invalid byte in it would be committed as U+FFFD — corrupting lines the fix
+ * never touched, on a real monorepo, with no human in between.
+ *
+ * The applier's byte-exact context check cannot catch it: the patch text
+ * arrives through the container's stdout mangled exactly the same way, so both
+ * sides agree on the wrong bytes. The only thing that can catch it is asking
+ * whether the decode is REVERSIBLE — re-encode the decoded string and compare
+ * against the bytes that were fetched. Per invariant 6, refusing is correct
+ * here and approximating is not.
+ *
+ * `ignoreBOM: true` keeps a leading U+FEFF as content rather than silently
+ * eating it, which is the same corruption in miniature: a stripped BOM would
+ * round-trip short, and a file that legitimately starts with one must ship
+ * byte-identical.
+ */
+function decodeBase64Utf8(base64: string, path: string): string {
+  const bytes = base64ToBytes(base64);
+  // `fatal: false` is stated rather than inherited: the round trip below is
+  // what decides, and a throwing decoder would report the same fact as an
+  // untyped `TypeError` instead of a named refusal.
+  const text = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(bytes);
+  const reencoded = new TextEncoder().encode(text);
+  const identical =
+    reencoded.length === bytes.length && reencoded.every((byte, i) => byte === bytes[i]);
+  if (!identical) {
+    throw new CapabilityError(
+      "invalid_input",
+      `"${path}" is not valid UTF-8, so it cannot be modified byte-exactly through this path — an automated apply would rewrite every undecodable byte in the file, including on lines this change never touches. It needs a human pull request.`,
+    );
+  }
+  return text;
 }
 
 /** Each path segment is encoded on its own, so a legitimate `/` in the path survives. */
@@ -363,11 +467,56 @@ export function makeGithubGateway(
     );
   }
 
-  async function currentLogin(token: string, written?: WrittenContext): Promise<string> {
+  /**
+   * No `written` parameter, unlike `findOpenPull` below: both call sites now
+   * read `/user` BEFORE anything is written, so there is no post-write failure
+   * for this call to describe.
+   */
+  async function currentLogin(token: string): Promise<string> {
     const res = await githubFetch(token, "GET", `${GITHUB_ORIGIN}/user`);
-    if (!res.ok) throw await upstreamError(res, redact, written);
+    if (!res.ok) throw await upstreamError(res, redact);
     const body = (await res.json()) as { login: string };
     return body.login;
+  }
+
+  /**
+   * THE COUPLING NOTHING ELSE ENFORCES: what the sandbox checked out vs. what
+   * the pull request opens against.
+   *
+   * `src/sandbox/lifecycle.ts`'s `REPO_REF` decides the working tree — and
+   * therefore `baseSha`, the commit this whole method builds on. `GITHUB_BASE`
+   * decides the PR's base. Those are two independent knobs that agree today
+   * only by a coincidence of defaults (both `staging`), and Task 6 of the
+   * phase plan deliberately breaks the agreement to plant a bug for the live
+   * drill.
+   *
+   * One direction of the mismatch is merely wasteful. The other ships a bug:
+   * with the sandbox on a planted branch and `GITHUB_BASE` still `staging`,
+   * the PR's three-dot diff contains the planted commits, and MERGING IT LANDS
+   * THEM ON STAGING. Nothing downstream notices — the only signal is a
+   * reviewer thinking the diff looks suspiciously large.
+   *
+   * So it is answered by a request rather than by a comment, because a comment
+   * cannot stop a merge and one extra read can. `GET /compare/{base}...{head}`
+   * reports `status` from the HEAD's point of view: `identical` (same commit),
+   * `behind` (head is an ancestor of base — contained), `ahead` (head carries
+   * commits base does not have), `diverged` (both). Containment is therefore
+   * exactly `identical` or `behind`; the other two are refused by name.
+   *
+   * Normal operation is `behind`/`identical` and passes. The drill's
+   * deliberate override — sandbox AND `GITHUB_BASE` both on the planted branch
+   * — is `identical` and passes. Only the dangerous direction is refused.
+   */
+  async function assertBaseContains(token: string, baseSha: string): Promise<void> {
+    const url = `${GITHUB_ORIGIN}/repos/${config.repo}/compare/${encodeBranchPath(config.base)}...${baseSha}`;
+    const res = await githubFetch(token, "GET", url);
+    if (!res.ok) throw await upstreamError(res, redact);
+    const body = (await res.json()) as { status?: string };
+    if (body.status === "identical" || body.status === "behind") return;
+    throw new CapabilityError(
+      "invalid_input",
+      `the working tree was cut from commit ${baseSha}, which is not contained in "${config.base}" on ${config.repo} (GitHub compares them as "${body.status ?? "unknown"}"). A pull request from it would carry every commit that is on ${baseSha} and not on "${config.base}", so merging it would land them there. Nothing was pushed. Either point the sandbox at "${config.base}", or set GITHUB_BASE to the branch the sandbox actually checks out.`,
+    );
   }
 
   /** `GET pulls?head=<headOwner>:<branch>&state=open` — shared by `openPR`'s ensure step and `findPR`. */
@@ -414,6 +563,14 @@ export function makeGithubGateway(
 
   return {
     async openPR(input): Promise<PullRequestRef> {
+      // `input.idempotencyKey` is required by the pinned `GithubGateway`
+      // interface, accepted, and deliberately unused: GitHub's REST API has no
+      // idempotency token on any endpoint this method calls. What makes a
+      // repeated open safe is the ensure semantics below (create-or-force the
+      // ref, then reconcile the PR by head ref), not a header. The parameter
+      // stays because the ledger in `src/codemode/effects.ts` hands the same
+      // key to every capability and the interface is pinned across namespaces.
+      //
       // Validated before any request — including before the diff is even
       // read out of R2. `input.branch` is the one value in this whole method
       // an attacker-controlled model can put arbitrary bytes into, and it
@@ -431,6 +588,16 @@ export function makeGithubGateway(
         );
       }
       const { patch, baseSha } = diff;
+      // As early as the value exists — it comes out of R2 metadata unchecked,
+      // and everything below interpolates it into a URL. See `assertValidSha`.
+      assertValidSha(baseSha);
+
+      // Path validation first, for the whole patch, so a traversal-shaped path
+      // is refused before ANY request is made rather than after a few of them.
+      const paths = basePaths(patch);
+      for (const path of paths) assertSafeRepoPath(path);
+
+      await assertBaseContains(token, baseSha);
 
       // Fetch every path the patch reads from, at the exact base commit the
       // diff was cut against. A 404 here means the base tree lacks a file the
@@ -438,8 +605,7 @@ export function makeGithubGateway(
       // below produces the staleness refusal; inventing a second message for
       // the same fact would just be two ways to say one thing.
       const baseMap = new Map<string, string>();
-      for (const path of basePaths(patch)) {
-        assertSafeRepoPath(path);
+      for (const path of paths) {
         const res = await githubFetch(
           token,
           "GET",
@@ -447,13 +613,31 @@ export function makeGithubGateway(
         );
         if (res.status === 404) continue;
         if (!res.ok) throw await upstreamError(res, redact);
-        const body = (await res.json()) as { content?: string };
-        if (typeof body.content !== "string") continue;
-        baseMap.set(path, decodeBase64Utf8(body.content));
+        const body = (await res.json()) as { content?: string; encoding?: string };
+        // A 200 that is not a base64 payload is a REFUSAL, never a skip. The
+        // case that matters is a file between 1 MB and 100 MB: the contents
+        // API answers those with `encoding: "none"` and `content: ""`, and
+        // accepting that empty string hands the applier a file it believes is
+        // empty — which then reports "the diff is stale; re-run diff and try
+        // again" for a file that is merely too large. That is a road with no
+        // end: every re-run produces the same patch and the same message.
+        if (body.encoding !== "base64" || typeof body.content !== "string") {
+          throw new CapabilityError(
+            "invalid_input",
+            `"${path}" could not be read as base64 through GitHub's contents API (encoding: ${JSON.stringify(body.encoding ?? null)}) — a file over 1 MB is not served that way. This change needs a human pull request; capturing the diff again will not help.`,
+          );
+        }
+        baseMap.set(path, decodeBase64Utf8(body.content, path));
       }
 
       // Pure, byte-exact, throws its own readable `invalid_input` on staleness.
       const changes = applyUnifiedDiff(patch, baseMap);
+
+      // Resolved BEFORE the first write, not after the last one. It is only
+      // used to fill in `author` on the way out, and reading it afterwards
+      // meant a transient `/user` failure discarded a pull request that
+      // definitively exists.
+      const login = await currentLogin(token);
 
       // Blobs, create/modify only — a delete needs no blob, just a tree entry
       // with `sha: null`.
@@ -523,6 +707,11 @@ export function makeGithubGateway(
       // fail passes `written` through, so a later failure's message reflects
       // reality: the branch is on the repo, only the PR step is unresolved.
       let written: WrittenContext | undefined;
+      // Whether the BRANCH already existed. `PullRequestRef.updated` is
+      // documented as "an existing branch/PR was updated rather than created",
+      // and a human reads that field: a force-update of an existing branch is
+      // not a creation, even when the pull request itself is new.
+      let refExisted = false;
       const createRefRes = await githubFetch(token, "POST", `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/refs`, {
         ref: `refs/heads/${input.branch}`,
         sha: newCommit.sha,
@@ -530,6 +719,7 @@ export function makeGithubGateway(
       if (createRefRes.ok) {
         written = { branch: input.branch, headRepo: config.headRepo };
       } else if (createRefRes.status === 422) {
+        refExisted = true;
         const patchRefRes = await githubFetch(
           token,
           "PATCH",
@@ -568,10 +758,8 @@ export function makeGithubGateway(
         });
         if (!postRes.ok) throw await upstreamError(postRes, redact, written);
         pull = (await postRes.json()) as { number: number; html_url: string };
-        updated = false;
+        updated = refExisted;
       }
-
-      const login = await currentLogin(token, written);
 
       return { number: pull.number, url: pull.html_url, headRef: input.branch, author: login, updated };
     },

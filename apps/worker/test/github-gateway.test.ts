@@ -142,6 +142,26 @@ describe("auth + config", () => {
     expect(() => makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW)).toThrow(/dev/);
   });
 
+  it("refuses an unrecognised GITHUB_AUTHOR by name, at config time", () => {
+    // The documented handover is "flip one var to on-duty". A typo that
+    // coerces to `worker-pat` opens PRs under the wrong identity with no
+    // signal at deploy time — observable only after a PR already exists.
+    for (const bad of ["onduty", "On-Duty", "on-duty!", "worker_pat", "nobody"]) {
+      const testEnv = { ...worker, GITHUB_AUTHOR: bad } as unknown as Env;
+      expect(() => resolveGithubConfig(testEnv)).toThrow(/GITHUB_AUTHOR/);
+    }
+  });
+
+  it("accepts both documented GITHUB_AUTHOR values, and treats absent/empty as the documented default", () => {
+    expect(resolveGithubConfig({ ...worker, GITHUB_AUTHOR: "on-duty" } as unknown as Env).author).toBe("on-duty");
+    expect(resolveGithubConfig({ ...worker, GITHUB_AUTHOR: "worker-pat" } as unknown as Env).author).toBe("worker-pat");
+    // wrangler.jsonc may legitimately omit the var entirely.
+    expect(resolveGithubConfig({ ...worker, GITHUB_AUTHOR: undefined } as unknown as Env).author).toBe("worker-pat");
+    expect(resolveGithubConfig({ ...worker, GITHUB_AUTHOR: "   " } as unknown as Env).author).toBe("worker-pat");
+    // Surrounding whitespace is trimmed, exactly as before — that is not junk.
+    expect(resolveGithubConfig({ ...worker, GITHUB_AUTHOR: " on-duty " } as unknown as Env).author).toBe("on-duty");
+  });
+
   it("defaults the repo slug to MONOREPO_SLUG when GITHUB_REPO is absent", () => {
     const testEnv = { ...worker, GITHUB_REPO: undefined, GITHUB_HEAD_REPO: undefined, GITHUB_BASE: undefined, GITHUB_AUTHOR: undefined } as unknown as Env;
     const config = resolveGithubConfig(testEnv);
@@ -154,7 +174,11 @@ describe("auth + config", () => {
 
 /* ----------------------------------------------------- Step 2: write path -- */
 
-const BASE_SHA = "abc123def456abc123def456abc123def456abc";
+// A REAL sha shape: 40 lowercase hex. `openPR` interpolates this value into
+// a query string and a URL path, and now refuses anything that is not this
+// shape, so the fixture has to be the real thing rather than 39 characters
+// that merely look like it.
+const BASE_SHA = "abc123def456abc123def456abc123def456abcd";
 const TOKEN = "ghp_test_token";
 
 const SIMPLE_PATCH = `diff --git a/src/app.ts b/src/app.ts
@@ -212,6 +236,14 @@ function contentOf(text: string): string {
   return btoa(unescape(encodeURIComponent(text)));
 }
 
+/** Finding 4's guard is a READ that runs before every write, so every route table needs it. */
+function compareRoute(repo: string, status = "behind"): Route {
+  return {
+    match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${repo}/compare/`),
+    respond: () => ({ status: 200, body: { status, ahead_by: status === "behind" ? 0 : 2, behind_by: 3 } }),
+  };
+}
+
 /** A route table covering the whole openPR sequence for the happy path. */
 function happyPathRoutes(opts: {
   headRepo: string;
@@ -222,6 +254,11 @@ function happyPathRoutes(opts: {
 }): Route[] {
   const { headRepo, repo, branch, base, existingPr = null } = opts;
   return [
+    {
+      // Finding 4's containment guard: `compare/<base>...<baseSha>`.
+      match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${repo}/compare/`),
+      respond: () => ({ status: 200, body: { status: "behind", ahead_by: 0, behind_by: 4 } }),
+    },
     {
       match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${headRepo}/contents/`),
       respond: () => ({ status: 200, body: { content: contentOf("line one\nline two\nline three\n"), encoding: "base64" } }),
@@ -349,7 +386,7 @@ describe("openPR — write path", () => {
     stubGithub(routes);
 
     const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
-    await gateway.openPR({
+    const result = await gateway.openPR({
       branch: "fix/foo",
       title: "t",
       commitMessage: "m",
@@ -360,6 +397,11 @@ describe("openPR — write path", () => {
 
     const patchRefCall = calls.find((c) => c.method === "PATCH" && c.url.endsWith("/git/refs/heads/fix/foo"));
     expect(patchRefCall?.body).toEqual({ sha: "newcommitsha", force: true });
+    // `updated` is documented as "an existing branch/PR was updated rather
+    // than created". The branch existed and was force-updated here, so
+    // reporting `false` because the PR itself is new tells a human the wrong
+    // thing about the field they actually read.
+    expect(result.updated).toBe(true);
   });
 
   it("PATCHes an existing open PR instead of creating a new one (updated: true)", async () => {
@@ -445,6 +487,7 @@ describe("openPR — write path", () => {
     const diffRef = await seedDiff(testEnv);
     const config = baseConfig();
     stubGithub([
+      compareRoute(config.repo),
       {
         match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
         // Content that no longer matches the diff's context lines.
@@ -469,6 +512,7 @@ describe("openPR — write path", () => {
     const diffRef = await seedDiff(testEnv);
     const config = baseConfig();
     stubGithub([
+      compareRoute(config.repo),
       {
         match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
         respond: () => ({ status: 401, body: { message: "Bad credentials" } }),
@@ -485,6 +529,7 @@ describe("openPR — write path", () => {
     const diffRef = await seedDiff(testEnv);
     const config = baseConfig();
     stubGithub([
+      compareRoute(config.repo),
       {
         match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
         respond: () => ({ status: 502, body: { message: "bad gateway" } }),
@@ -606,6 +651,7 @@ describe("openPR — write path", () => {
     const diffRef = await seedDiff(testEnv, MULTI_CHANGE_PATCH, BASE_SHA);
     const config = baseConfig();
     stubGithub([
+      compareRoute(config.repo),
       {
         match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/src/old.ts`),
         respond: () => ({ status: 200, body: { content: contentOf("line one\nline two\nline three\n"), encoding: "base64" } }),
@@ -680,6 +726,7 @@ describe("openPR — write path", () => {
     const diffRef = await seedDiff(testEnv);
     const config = baseConfig();
     stubGithub([
+      compareRoute(config.repo),
       {
         match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
         respond: () => ({ status: 404, body: { message: "Not Found" } }),
@@ -716,7 +763,14 @@ describe("openPR — write path", () => {
       await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
       throw new Error("expected to throw");
     } catch (err) {
-      expect((err as { code?: string }).code).toBe("capability_unavailable");
+      // NOT `capability_unavailable`: that code is in `PROVEN_PRE_UPSTREAM`
+      // (`src/codemode/effects.ts`), the set whose documented meaning is "the
+      // call was refused BEFORE anything left this Worker". Recording a
+      // commit that is sitting on the company repo as `failed` tells a human
+      // reading the ledger the opposite of what happened, and tells a retry
+      // that pushing again is safe. `upstream_unavailable` is outside that
+      // set, so the row becomes `in_doubt` and `findPR` reconciles it.
+      expect((err as { code?: string }).code).toBe("upstream_unavailable");
       const message = (err as Error).message;
       expect(message).not.toContain("nothing was opened");
       expect(message).toContain("fix/foo");
@@ -725,6 +779,315 @@ describe("openPR — write path", () => {
 
     // Meaningful only if the branch really was pushed before the PR step failed.
     expect(calls.some((c) => c.method === "POST" && c.url === `${ORIGIN}/repos/${config.headRepo}/git/refs`)).toBe(true);
+  });
+
+  it("classifies a 422 on the PR step after a successful ref push as in-doubt, keeping GitHub's message", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = baseConfig();
+    const routes = happyPathRoutes({ headRepo: config.headRepo, repo: config.repo, branch: "fix/foo", base: config.base });
+    routes.splice(
+      routes.findIndex((r) => r.match(`${ORIGIN}/repos/${config.repo}/pulls`, "POST")),
+      1,
+      {
+        match: (url: string, method: string) => method === "POST" && url === `${ORIGIN}/repos/${config.repo}/pulls`,
+        respond: () => ({ status: 422, body: { message: "No commits between staging and fix/foo" } }),
+      },
+    );
+    stubGithub(routes);
+
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    try {
+      await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+      throw new Error("expected to throw");
+    } catch (err) {
+      // `invalid_input` is also in PROVEN_PRE_UPSTREAM — same lie, different
+      // code. The improved message survives the reclassification.
+      expect((err as { code?: string }).code).toBe("upstream_unavailable");
+      const message = (err as Error).message;
+      expect(message).toContain("findPR");
+      expect(message).toContain("No commits between");
+    }
+  });
+
+  it("still says nothing was opened when the failure happens BEFORE any ref write", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = baseConfig();
+    const routes = happyPathRoutes({ headRepo: config.headRepo, repo: config.repo, branch: "fix/foo", base: config.base });
+    routes.splice(
+      routes.findIndex((r) => r.match(`${ORIGIN}/repos/${config.headRepo}/git/refs`, "POST")),
+      1,
+      {
+        match: (url: string, method: string) => method === "POST" && url === `${ORIGIN}/repos/${config.headRepo}/git/refs`,
+        respond: () => ({ status: 403, body: { message: "Resource not accessible" } }),
+      },
+    );
+    stubGithub(routes);
+
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" }),
+    ).rejects.toMatchObject({
+      code: "capability_unavailable",
+      message: expect.stringContaining("nothing was opened"),
+    });
+  });
+});
+
+/* ------------------------------- Final review: seam findings 1, 3, 4 and 5 -- */
+
+/**
+ * REAL non-UTF-8 BYTES, not a mock that claims to be one.
+ *
+ * Captured from a real repository: `latin.txt` holds
+ * `line one\ncaf<0xE9> latin\nline three\n` — latin-1, no NUL anywhere, so git
+ * diffs it as TEXT and every binary refusal in the applier passes it through.
+ * The base64 below is that file's exact bytes, so the decode under test is the
+ * real one on real invalid UTF-8.
+ *
+ * The patch is what actually reaches the Worker: git wrote the raw 0xE9 to
+ * stdout, the container's stdout is read as UTF-8, and the byte became U+FFFD
+ * on the way in. That is precisely why the applier's byte-exact context check
+ * cannot catch this — the fetched base, decoded the same lossy way, agrees
+ * with the mangled patch, and the U+FFFD would be committed over a line the
+ * fix never touched.
+ */
+const LATIN1_BASE_B64 = "bGluZSBvbmUKY2Fm6SBsYXRpbgpsaW5lIHRocmVlCg==";
+const LATIN1_PATCH = `diff --git a/latin.txt b/latin.txt
+index 9059c04..0530b44 100644
+--- a/latin.txt
++++ b/latin.txt
+@@ -1,3 +1,3 @@
+-line one
++line one changed
+ caf� latin
+ line three
+`;
+
+/** The control: the same file, really UTF-8. Multibyte content must still ship. */
+const UTF8_BASE_B64 = "bGluZSBvbmUKY2Fmw6kgbGF0aW4KbGluZSB0aHJlZQo=";
+const UTF8_PATCH = `diff --git a/utf8.txt b/utf8.txt
+index e418bed..2623764 100644
+--- a/utf8.txt
++++ b/utf8.txt
+@@ -1,3 +1,3 @@
+-line one
++line one changed
+ café latin
+ line three
+`;
+
+describe("openPR — base content fidelity (finding 1)", () => {
+  it("refuses a base file that is not valid UTF-8, by name, instead of committing U+FFFD over untouched lines", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv, LATIN1_PATCH, BASE_SHA);
+    const config = baseConfig();
+    stubGithub([
+      compareRoute(config.repo),
+      {
+        match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
+        respond: () => ({ status: 200, body: { content: LATIN1_BASE_B64, encoding: "base64" } }),
+      },
+    ]);
+
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" }),
+    ).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("latin.txt"),
+    });
+
+    // Refused, per invariant 6 — and refused before anything was written.
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("says the file is not valid UTF-8 rather than that the diff is stale", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv, LATIN1_PATCH, BASE_SHA);
+    const config = baseConfig();
+    stubGithub([
+      compareRoute(config.repo),
+      {
+        match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
+        respond: () => ({ status: 200, body: { content: LATIN1_BASE_B64, encoding: "base64" } }),
+      },
+    ]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    try {
+      await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+      throw new Error("expected to throw");
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain("UTF-8");
+      expect(message.toLowerCase()).not.toContain("re-run diff");
+    }
+  });
+
+  it("still ships a base file whose multibyte UTF-8 round-trips, byte-exact", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv, UTF8_PATCH, BASE_SHA);
+    const config = baseConfig();
+    const routes = happyPathRoutes({ headRepo: config.headRepo, repo: config.repo, branch: "fix/foo", base: config.base });
+    routes.splice(
+      routes.findIndex((r) => r.match(`${ORIGIN}/repos/${config.headRepo}/contents/utf8.txt`, "GET")),
+      1,
+      {
+        match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
+        respond: () => ({ status: 200, body: { content: UTF8_BASE_B64, encoding: "base64" } }),
+      },
+    );
+    stubGithub(routes);
+
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+
+    const blobCall = calls.find((c) => c.method === "POST" && c.url.endsWith("/git/blobs"));
+    expect(blobCall?.body).toEqual({
+      content: "line one changed\ncafé latin\nline three\n",
+      encoding: "utf-8",
+    });
+  });
+
+  it("refuses a file GitHub will not base64 (over 1 MB, encoding \"none\") by name, not as a stale diff", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = baseConfig();
+    stubGithub([
+      compareRoute(config.repo),
+      {
+        match: (url: string, method: string) => method === "GET" && url.includes(`/repos/${config.headRepo}/contents/`),
+        // Exactly what the contents API answers for a 1–100 MB file.
+        respond: () => ({ status: 200, body: { content: "", encoding: "none", size: 4_000_000 } }),
+      },
+    ]);
+
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    try {
+      await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+      throw new Error("expected to throw");
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("invalid_input");
+      const message = (err as Error).message;
+      expect(message).toContain("src/app.ts");
+      expect(message).toContain("1 MB");
+      // The road with no end: "re-run diff" cannot help a file that is merely
+      // too big, and the model would keep walking it.
+      expect(message.toLowerCase()).not.toContain("re-run diff");
+    }
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+});
+
+describe("openPR — base sha validation (finding 3)", () => {
+  it("refuses a base sha that is not 40 lowercase hex, before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(
+      testEnv,
+      SIMPLE_PATCH,
+      "abc123../../../../repos/other/private/git/commits/deadbeef",
+    );
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("refuses a shortened sha and an uppercase one, before any request is made", async () => {
+    const testEnv = testEnvWithPat();
+    const config = baseConfig();
+    stubGithub([]);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+
+    for (const sha of ["abc123d", BASE_SHA.toUpperCase()]) {
+      const diffRef = await seedDiff(testEnv, SIMPLE_PATCH, sha);
+      await expect(
+        gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+    }
+    expect(calls.length).toBe(0);
+  });
+});
+
+describe("openPR — base branch containment (finding 4)", () => {
+  function stubCompare(status: string): GithubShipConfig {
+    const config = baseConfig();
+    const routes = happyPathRoutes({ headRepo: config.headRepo, repo: config.repo, branch: "fix/foo", base: config.base });
+    routes.splice(0, 1, compareRoute(config.repo, status));
+    stubGithub(routes);
+    return config;
+  }
+
+  it("compares the configured base against the diff's base commit before anything is written", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = stubCompare("behind");
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+
+    const compareCall = calls.find((c) => c.url.includes("/compare/"));
+    expect(compareCall?.method).toBe("GET");
+    expect(compareCall?.url).toBe(`${ORIGIN}/repos/${config.repo}/compare/staging...${BASE_SHA}`);
+    // It is the FIRST request: nothing is fetched or written before the
+    // containment question is answered.
+    expect(calls[0]?.url).toContain("/compare/");
+  });
+
+  it("accepts an identical base (the sandbox is exactly at the base branch tip)", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = stubCompare("identical");
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    const result = await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+    expect(result.number).toBe(42);
+  });
+
+  it("refuses when the working tree was cut from a commit AHEAD of the base branch — the direction that lands a planted bug on staging", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = stubCompare("ahead");
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    try {
+      await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+      throw new Error("expected to throw");
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("invalid_input");
+      const message = (err as Error).message;
+      // Both refs named: neither one alone tells a human what to change.
+      expect(message).toContain("staging");
+      expect(message).toContain(BASE_SHA);
+    }
+    // The whole point: no blob, no tree, no commit, no ref, no PR.
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+    expect(calls.length).toBe(1);
+  });
+
+  it("refuses a diverged base too", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = stubCompare("diverged");
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await expect(
+      gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(calls.length).toBe(1);
+  });
+
+  it("passes for the drill's deliberate override: sandbox and GITHUB_BASE both on the planted branch", async () => {
+    const testEnv = testEnvWithPat();
+    const diffRef = await seedDiff(testEnv);
+    const config = baseConfig({ base: "drill/planted-bug" });
+    const routes = happyPathRoutes({ headRepo: config.headRepo, repo: config.repo, branch: "fix/foo", base: config.base });
+    routes.splice(0, 1, compareRoute(config.repo, "identical"));
+    stubGithub(routes);
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+    await gateway.openPR({ branch: "fix/foo", title: "t", commitMessage: "m", body: "b", diffRef, idempotencyKey: "k" });
+    const compareCall = calls.find((c) => c.url.includes("/compare/"));
+    expect(compareCall?.url).toBe(`${ORIGIN}/repos/${config.repo}/compare/drill/planted-bug...${BASE_SHA}`);
   });
 });
 

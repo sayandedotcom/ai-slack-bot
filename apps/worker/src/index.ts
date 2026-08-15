@@ -129,7 +129,10 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    * `resolveGithubConfig`: `GITHUB_REPO` to `MONOREPO_SLUG`,
    * `GITHUB_HEAD_REPO` to `GITHUB_REPO`, `GITHUB_BASE` to `"staging"`
    * (never `"dev"` — refused at gateway construction), `GITHUB_AUTHOR` to
-   * `"worker-pat"`.
+   * `"worker-pat"` when ABSENT — an unrecognised `GITHUB_AUTHOR` is refused by
+   * name instead of coercing to that default, because the documented live-run
+   * handover is "flip one var to `on-duty`" and a typo would otherwise be
+   * invisible until a PR existed under the wrong identity.
    */
   GITHUB_REPO?: string;
   GITHUB_HEAD_REPO?: string;
