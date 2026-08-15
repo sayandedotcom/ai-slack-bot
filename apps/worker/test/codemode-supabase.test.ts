@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRegistry } from "../src/codemode/registry";
 import { makeSupabaseReader } from "../src/supabase/reader";
-import { PRODUCTION_ALLOWLIST, type SupabaseAllowlist } from "../src/supabase/allowlist";
+import type { SupabaseAllowlist } from "../src/supabase/allowlist";
 import type { CodeModeScope } from "../src/codemode/contracts";
 import { fakeAuditSink, fakeDeps, slackScope, TEST_LIMITS, testExecution } from "./helpers/codemode";
 
@@ -76,7 +76,7 @@ describe("supabase.schema", () => {
   });
 
   it("says plainly when nothing is configured", async () => {
-    await expect(call(supabaseTools(slackScope, PRODUCTION_ALLOWLIST), "schema", { resource: "invoices" }))
+    await expect(call(supabaseTools(slackScope, []), "schema", { resource: "invoices" }))
       .rejects.toThrow(/No product resources are configured/);
   });
 });
@@ -252,5 +252,26 @@ describe("supabase upstream failures stay safe", () => {
     vi.stubGlobal("fetch", async () => new Response('{"message":"nope"}', { status: 200 }));
     await expect(call(supabaseTools(), "select", { resource: "regions" }))
       .rejects.toThrow(/upstream_unavailable/);
+  });
+});
+
+describe("PRODUCTION_ALLOWLIST mirrors scripts/supabase-seed.sql", () => {
+  // The seed is what exists, the allowlist is what the model may see. A column
+  // named here that the seed does not create is a 400 at read time; keep them
+  // moving together.
+  it("names only tables and columns the seed creates, and scopes every one by customer_slug", async () => {
+    const { PRODUCTION_ALLOWLIST } = await import("../src/supabase/allowlist");
+    const sql = (await import("../scripts/supabase-seed.sql?raw")).default;
+    expect(PRODUCTION_ALLOWLIST.length).toBeGreaterThan(0);
+    for (const entry of PRODUCTION_ALLOWLIST) {
+      const table = sql.match(new RegExp(`create table public\\.${entry.resource} \\(([\\s\\S]*?)\\n\\);`));
+      expect(table, `seed creates ${entry.resource}`).not.toBeNull();
+      const body = table![1];
+      for (const column of entry.columns) {
+        expect(body, `${entry.resource}.${column.name} in seed`).toMatch(new RegExp(`^\\s+${column.name}\\s`, "m"));
+      }
+      expect(entry.tenantColumn).toBe("customer_slug");
+      expect(body).toMatch(/^\s+customer_slug\s+text not null/m);
+    }
   });
 });

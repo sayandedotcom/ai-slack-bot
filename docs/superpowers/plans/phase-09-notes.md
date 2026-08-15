@@ -652,3 +652,14 @@ proven; every other exit-criterion claim is verified locally.
 — the sandbox runs JavaScript, not TypeScript — but it means the row shape is
 communicated in the method description rather than the type. Not worth an
 override; recorded so nobody re-investigates it.
+
+## 2026-08-16 — the two empty readers now have stand-in data
+
+`supabase.*` and `langsmith.*` were "correct but answer nothing" above because
+the handed-over credentials reach empty resources (re-verified: `tweakleaf` last
+trace 2026-04-08 on 14-day retention; `public` schema still 404 on every table).
+`PRODUCTION_ALLOWLIST` is now filled with a web2app-shaped stand-in schema that
+`scripts/supabase-seed.sql` creates in a project we own, pinned together by a
+test; `scripts/langsmith-seed.mjs` seeds five traces into a project we own.
+Runbook: `stand-in-evidence.md`. The ask to Ronit for the real project ids
+stands.
