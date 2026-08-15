@@ -271,7 +271,20 @@ async function main() {
   const launchedAt = Date.now();
   try {
     browser = await chromium.launch();
-    context = await browser.newContext({ recordVideo: { dir: videoDir } });
+    // Pin the viewport AND the video size to the SAME dimensions. Playwright
+    // fixes recordVideo's canvas at newContext time; if the page later renders
+    // at a different size (a model script calling page.setViewportSize, which
+    // one did), Playwright scales the mismatch into the fixed canvas and PADS
+    // the remainder with grey — a dead strip down the right/bottom of the
+    // video. Matching them means the page fills the frame with no scaling and
+    // no pad. 1280x720 is a clean 16:9 that reads as an ordinary screen
+    // recording. The .d.ts tells the model this size is fixed; if a script
+    // resizes anyway, its own video will letterbox, but the default is exact.
+    const RECORD_VIEWPORT = { width: 1280, height: 720 };
+    context = await browser.newContext({
+      viewport: RECORD_VIEWPORT,
+      recordVideo: { dir: videoDir, size: RECORD_VIEWPORT },
+    });
     const page = await context.newPage();
 
     // The model's script source, wrapped as an async function body with
