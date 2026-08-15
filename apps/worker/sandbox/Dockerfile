@@ -155,22 +155,24 @@ RUN printf 'fetch-timeout=600000\nfetch-retries=6\nnetwork-concurrency=6\nenable
 #
 # The boot-time clone goes through the SENTINEL: the container talks to
 # git.firefighter.local and the Worker's interceptHttps swaps in the real PAT on
-# egress. That proxy path cannot carry the monorepo from an APAC colo — three
-# live drills stalled on it, at 401 MB and at a sparse 83 MB alike, from sin22
-# and hkg13, while the same transfer is 28 s from another colo. Baked, the tree
-# arrives over Cloudflare's own registry instead, and boot does only a small,
-# NON-FATAL fetch delta (see provision.sh).
+# egress. That proxy path cannot carry the monorepo from an APAC colo — live
+# drills stalled on it from sin22 and hkg13, while the same transfer is 28 s from
+# another colo. Baked, the tree arrives over Cloudflare's own registry instead,
+# and boot does only a small, NON-FATAL fetch delta (see provision.sh).
 #
-# FULL, not sparse. An earlier version excluded apps/landing/public and
-# apps/docs/public to shrink the transfer — but once the tree is baked and
-# delivered by the registry, transfer size no longer matters, and the exclusion
-# had broken a real app: apps/landing/public/fonts holds the woff2 files
-# layout.tsx imports with next/font/local, so a sparse tree without them makes
-# `next dev` 500 on every landing page. A live drill proved it — the dev server
-# came up and served 500 on /pricing for a missing Aspekta font. public/ in a
-# Next app is not all disposable marketing assets; it holds fonts the build
-# needs. Bake the whole thing; the ~250 MB it adds to the image is free over the
-# registry.
+# Sparse, and the pattern is load-bearing — it took three tries to get right:
+#   - Excluding all of apps/{landing,docs}/public dropped apps/landing/public/
+#     FONTS, the woff2 files layout.tsx pulls via next/font/local's `localFont`.
+#     A live drill proved the cost: `next dev` compiled 500 on every landing
+#     page ("Font file not found: .../Aspekta-400.woff2"), and the agent burned
+#     its budget debugging a break we planted. public/ is not all disposable.
+#   - Baking the FULL tree (495 MB) fixed that but its ~400 MB image layer would
+#     not push from a domestic uplink before the registry credential expired —
+#     the same wall phase 18 hit at 1.19 GB, closer but still lost.
+# So: everything, MINUS the two heavy public/ trees (348 MB of marketing PNGs,
+# demo webms and docs screenshots — every one URL-referenced, none statically
+# imported, verified by grep), PLUS a re-include of landing/public/fonts. 150 MB
+# tree, a layer that pushes, and no app that 500s on a missing asset.
 #
 # The credential exists ONLY in the mounted secret and a command-scoped
 # http.extraHeader — never in .git/config (the baked remote is the sentinel
@@ -181,10 +183,14 @@ RUN --mount=type=secret,id=monorepo_pat \
     set -eu; \
     AUTH=$(printf 'x-access-token:%s' "$(cat /run/secrets/monorepo_pat)" | base64 -w0); \
     git -c http.extraHeader="Authorization: Basic ${AUTH}" \
-        clone --depth 1 --branch "${REPO_REF}" \
+        clone --depth 1 --branch "${REPO_REF}" --filter=blob:none --sparse \
         https://github.com/Zellify/web2app-rebuild.git /workspace/web2app-rebuild; \
-    git -C /workspace/web2app-rebuild remote set-url origin https://git.firefighter.local/Zellify/web2app-rebuild.git; \
-    git -C /workspace/web2app-rebuild rev-parse HEAD
+    cd /workspace/web2app-rebuild; \
+    git sparse-checkout init --no-cone; \
+    printf '/*\n!/apps/landing/public/\n/apps/landing/public/fonts/\n!/apps/docs/public/\n' > .git/info/sparse-checkout; \
+    git -c http.extraHeader="Authorization: Basic ${AUTH}" read-tree -mu HEAD; \
+    git remote set-url origin https://git.firefighter.local/Zellify/web2app-rebuild.git; \
+    git rev-parse HEAD
 
 
 # ---------------------------------------------------------------------------
