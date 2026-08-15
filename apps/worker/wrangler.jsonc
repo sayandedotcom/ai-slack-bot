@@ -233,7 +233,12 @@
   "containers": [
     {
       "class_name": "Sandbox",
-      "image": "./sandbox/Dockerfile",
+      // Was "./sandbox/Dockerfile" (wrangler builds it). Now a PRE-BUILT image
+      // referenced by digest, because the Dockerfile bakes the monorepo behind a
+      // BuildKit --secret (the PAT) and `wrangler deploy` cannot pass a build
+      // secret. Built and pushed via sandbox/build.sh, which proves no
+      // credential reached a layer. Bump this digest when you rebuild the image.
+      "image": "registry.cloudflare.com/cdf27b547d94db5a7bb2f42b13c5319b/firefighter-sandbox@sha256:48a2d2e202a3e47bab89131ed0b67a19856bfb1ecb4fa57ae1d1ea90a0001e30",
       "instance_type": "standard-4",
       "max_instances": 3,
       // Operator SSH from the Cloudflare dashboard, for exactly one purpose:
