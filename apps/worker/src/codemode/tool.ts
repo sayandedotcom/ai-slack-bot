@@ -82,7 +82,7 @@ export type CodeModeOutput = {
   metrics: { durationMs: number; capabilityCalls: number };
 };
 
-const RULES = `You have one tool. Write JavaScript that calls the capabilities below.
+export const RULES = `You have one tool. Write JavaScript that calls the capabilities below.
 
 - Write ONE async arrow function. It is the whole program.
 - The program must be at most {{maxCodeChars}} characters. A longer one is

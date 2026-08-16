@@ -53,6 +53,12 @@ export { ContainerProxy, Sandbox } from "./sandbox/class";
 // outside its host DO.
 export { CodemodeRuntime } from "@cloudflare/codemode";
 
+// Phase 25. The run session on the Think chassis, live BESIDE `RunDO` behind
+// the `RUN_CHASSIS` var for the strangler window. `wrangler deploy` refuses a
+// `durable_objects.bindings` entry whose class is not exported here, so this
+// line is what makes the tree deployable again after Task 1 added the binding.
+export { RunAgent } from "./run/agent";
+
 /**
  * Wrangler-generated bindings, plus the two narrow refinements the application
  * genuinely needs.
@@ -88,6 +94,28 @@ export { CodemodeRuntime } from "@cloudflare/codemode";
 export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   MEMORY_QUEUE: Queue<MemoryJob>;
   TRIAGE_QUEUE: Queue<TriageJob>;
+  /**
+   * Phase 25's Think-chassis binding, RETYPED. `wrangler types` emits it as a
+   * bare `DurableObjectNamespace` (it cannot see a class it is not told about),
+   * and the generic is what gives every call site the agent's RPC surface —
+   * exactly as `RUNS` carries `RunDO`. A type-only import so this module and
+   * `src/run/agent.ts` never form a real cycle.
+   */
+  RUN_AGENTS: DurableObjectNamespace<import("./run/agent").RunAgent>;
+  /**
+   * Which chassis a wake resolves to — a non-secret `var` pinned in
+   * wrangler.jsonc, restated here to NAME its two legal values where every
+   * reader will look.
+   *
+   * Deliberately not narrowed to the bare literal union. `Env` is an
+   * intersection over `Cloudflare.Env`, which types this `string`, and dozens
+   * of existing tests hand the pool's raw `Cloudflare.Env` to functions taking
+   * `Env` — narrowing here makes that assignment illegal everywhere at once
+   * for no safety gained, because the value arrives from a config file at
+   * runtime either way. `src/run/chassis.ts` (Task 12) is the ONE place it is
+   * read, and that is where an unrecognised value is refused by name.
+   */
+  RUN_CHASSIS?: "think" | "legacy" | (string & {});
   AI_GATEWAY_ANTHROPIC_URL?: string;
   AI_GATEWAY_TOKEN?: string;
   AGENT_MODEL_DISABLED?: string;
