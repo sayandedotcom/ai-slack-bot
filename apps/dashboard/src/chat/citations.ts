@@ -38,6 +38,19 @@ export function channelFromPermalink(permalink: string): string | null {
   return match === null ? null : (match[1] as string);
 }
 
+/** Turn one entry into a chip, dropping anything already collected. */
+function pushChip(raw: CiteEntry, seen: Set<string>, chips: SourceChip[]): void {
+  if (seen.has(raw.permalink)) return;
+  seen.add(raw.permalink);
+  chips.push({
+    factId: raw.factId,
+    fact: raw.fact,
+    permalink: raw.permalink,
+    channelId: channelFromPermalink(raw.permalink),
+    ts: raw.ts,
+  });
+}
+
 /** Completed `memory.cite` outputs across the session, deduped by permalink, in call order. */
 export function extractSources(items: SessionItem[]): SourceChip[] {
   const seen = new Set<string>();
@@ -50,17 +63,51 @@ export function extractSources(items: SessionItem[]): SourceChip[] {
       // Malformed entries contribute nothing and throw nothing: a foreign or
       // truncated payload must never take the page down.
       if (!isCiteEntry(raw)) continue;
-      if (seen.has(raw.permalink)) continue;
-      seen.add(raw.permalink);
-      chips.push({
-        factId: raw.factId,
-        fact: raw.fact,
-        permalink: raw.permalink,
-        channelId: channelFromPermalink(raw.permalink),
-        ts: raw.ts,
-      });
+      pushChip(raw, seen, chips);
     }
   }
+  return chips;
+}
+
+/** Bounded so a self-referential or pathological payload cannot spin the tab. */
+const SCAN_DEPTH = 6;
+const SCAN_NODES = 5_000;
+
+/**
+ * The same chips, found the way the Think chassis leaves them.
+ *
+ * On this chassis the model has exactly ONE tool, `run_code`, and every
+ * capability call — `memory.cite` included — happens inside the isolate. So
+ * there is no `memory.cite` tool part to read: the cited facts come back nested
+ * somewhere inside whatever the model's own code chose to return. This walks
+ * that value looking for the `CiteEntry` shape rather than a fixed path,
+ * because the shape is the contract (`apps/worker/src/codemode/bindings/memory.ts`)
+ * and the path is the model's whim.
+ *
+ * Structural matching is safe here for one reason worth stating: the four
+ * required fields include a `permalink` this file already refuses to render
+ * unless it parses as a Slack archive URL, and the chip links to that stored
+ * permalink verbatim — nothing is ever assembled from parts.
+ */
+export function sourcesFromToolOutput(output: unknown): SourceChip[] {
+  const seen = new Set<string>();
+  const chips: SourceChip[] = [];
+  let budget = SCAN_NODES;
+
+  const walk = (value: unknown, depth: number): void => {
+    if (budget-- <= 0 || depth > SCAN_DEPTH || value === null || typeof value !== "object") return;
+    if (isCiteEntry(value)) {
+      pushChip(value, seen, chips);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) walk(entry, depth + 1);
+      return;
+    }
+    for (const entry of Object.values(value as Record<string, unknown>)) walk(entry, depth + 1);
+  };
+
+  walk(output, 0);
   return chips;
 }
 

@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ApprovalsPanel } from "./approvals/approvals-panel";
+import { RunApprovals } from "./approvals/run-approvals";
 import { useApprovals } from "./approvals/use-approvals";
+import type { CardState } from "./approvals/approval-card";
+import type { DecideAction } from "./approvals/api";
 import { ChatPage } from "./chat/chat-page";
 import { ConnectPanel } from "./components/connect-panel";
 import { CountersPanel } from "./components/counters-panel";
 import { Header, SignedOutPage, useIdentity } from "./components/header";
+import type { PanelState } from "./components/panel";
 import { RotationStrip } from "./components/rotation-strip";
-import { getRoster } from "./lib/api";
+import { getRoster, type Role } from "./lib/api";
+import { useChassis } from "./lib/chassis";
 import { usePoll } from "./lib/use-poll";
+import { AgentSession } from "./runs/agent-session";
 import { RunDrawer } from "./runs/run-drawer";
 import { RunList } from "./runs/run-list";
 import { SessionView } from "./runs/session-view";
@@ -67,18 +73,83 @@ function useHashRoute(): [Route, (route: Route) => void] {
 }
 
 /**
- * The drawer's body. It exists as its own component for one reason: hooks.
- * `useRunSession` opens a socket, so it must mount and unmount with the
- * selected run — calling it in `App` would hold a connection open for a run
- * nobody is looking at, and could not be conditional.
+ * The drawer's body on the LEGACY chassis. It exists as its own component for
+ * one reason: hooks. `useRunSession` opens a socket, so it must mount and
+ * unmount with the selected run — calling it in `App` would hold a connection
+ * open for a run nobody is looking at, and could not be conditional.
+ *
+ * Still mounted, unchanged, whenever `RUN_CHASSIS` is not `think`. The cutover
+ * (Task 14) is what deletes it, not this task.
  */
-function RunSession({ runId, onClose }: { runId: string; onClose: () => void }) {
+function LegacyRunSession({ runId }: { runId: string }) {
   const { session, connection, steer } = useRunSession(runId);
+  return <SessionView session={session} connection={connection} onSteer={steer} />;
+}
 
+/**
+ * The drawer's body on the THINK chassis: the same `AgentSession` the chat page
+ * mounts, plus this run's escalations pinned under the transcript.
+ *
+ * Separate component for the same hooks reason as above — `AgentSession` opens
+ * the agent socket — and the two are chosen between by `RunSessionDrawer`, never
+ * by a conditional hook.
+ */
+function AgentRunSession({
+  runId,
+  approvals,
+  role,
+  onDecide,
+}: {
+  runId: string;
+  approvals: PanelState<CardState[]>;
+  role: Role;
+  onDecide: (id: string, action: DecideAction) => void;
+}) {
+  return (
+    <AgentSession
+      runId={runId}
+      emptyHint="Nothing yet — this run's transcript fills in as the agent works."
+      renderFooter={() => (
+        <RunApprovals runId={runId} state={approvals} role={role} onDecide={onDecide} />
+      )}
+    />
+  );
+}
+
+function RunSessionDrawer({
+  runId,
+  chassis,
+  approvals,
+  role,
+  onDecide,
+  onClose,
+}: {
+  runId: string;
+  chassis: "think" | "legacy";
+  approvals: PanelState<CardState[]>;
+  role: Role;
+  onDecide: (id: string, action: DecideAction) => void;
+  onClose: () => void;
+}) {
   return (
     <RunDrawer runId={runId} onClose={onClose}>
-      <SessionView session={session} connection={connection} onSteer={steer} />
+      {chassis === "think" ? (
+        <AgentRunSession runId={runId} approvals={approvals} role={role} onDecide={onDecide} />
+      ) : (
+        <LegacyRunSession runId={runId} />
+      )}
     </RunDrawer>
+  );
+}
+
+/** One round trip stands between here and knowing which transcript to draw. */
+function ChassisPending() {
+  return (
+    <div role="status" className="space-y-2 p-6">
+      <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
+      <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+      <p className="pt-2 text-sm text-muted-foreground">Connecting to the agent…</p>
+    </div>
   );
 }
 
@@ -99,6 +170,11 @@ export function App() {
   const { identity, error: identityError } = useIdentity();
   const roster = usePoll(getRoster, 60_000);
   const approvals = useApprovals();
+  // Which session implementation this deployment runs. Asked once; until it
+  // answers, no session component is mounted at all — guessing would open a
+  // socket against the wrong chassis and show an empty transcript for a live
+  // incident, which is worse than a two-line "loading" for one round trip.
+  const chassis = useChassis();
   const [route, navigate] = useHashRoute();
   const selectedRun = route.page === "dashboard" ? route.runId : null;
   const selectRun = useCallback(
@@ -112,11 +188,24 @@ export function App() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Header identity={identity} page={route.page} />
+      {chassis.kind === "ready" && chassis.degraded ? (
+        <div
+          role="status"
+          className="mx-auto max-w-5xl px-6 pt-4 text-xs text-muted-foreground"
+        >
+          Could not read which run chassis is deployed — showing the legacy run view.
+        </div>
+      ) : null}
       {route.page === "chat" ? (
-        <ChatPage
-          runId={route.runId}
-          onSelectRun={(id) => navigate({ page: "chat", runId: id })}
-        />
+        chassis.kind === "loading" ? (
+          <ChassisPending />
+        ) : (
+          <ChatPage
+            runId={route.runId}
+            chassis={chassis.chassis}
+            onSelectRun={(id) => navigate({ page: "chat", runId: id })}
+          />
+        )
       ) : (
         <>
           <main className="mx-auto grid max-w-5xl grid-cols-1 gap-4 p-6 md:grid-cols-2">
@@ -145,12 +234,20 @@ export function App() {
               <ShadowPanel />
             </div>
           </main>
-          {selectedRun === null ? null : (
-            <RunSession
+          {selectedRun === null ? null : chassis.kind === "loading" ? (
+            <RunDrawer runId={selectedRun} onClose={closeDrawer}>
+              <ChassisPending />
+            </RunDrawer>
+          ) : (
+            <RunSessionDrawer
               // Keyed by run id so switching runs remounts the session rather than
               // feeding a second run's events into the first one's reducer.
               key={selectedRun}
               runId={selectedRun}
+              chassis={chassis.chassis}
+              approvals={approvals.state}
+              role={identity?.role ?? "viewer"}
+              onDecide={approvals.decideCard}
               onClose={closeDrawer}
             />
           )}

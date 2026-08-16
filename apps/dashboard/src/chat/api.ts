@@ -23,6 +23,24 @@ export async function createChat(firstMessage: string, requestId: string): Promi
   return body.run;
 }
 
+/**
+ * The Think-chassis half of the same door: mint the run and NOTHING else.
+ *
+ * `POST /api/runs` with a `firstMessage` appends that turn through the legacy
+ * coordinator, which is the wrong session on this chassis — the turn would land
+ * in `RunDO` while the browser watches `RunAgent`, and the first thing the
+ * human typed would silently never be answered. So the chat page creates an
+ * empty run here and sends the opening message through the agent socket, which
+ * is the only writer to the session tree the transcript is drawn from.
+ *
+ * No `requestId`: it only ever stabilized the id of the first turn, and there
+ * is no first turn on this path.
+ */
+export async function createEmptyChat(): Promise<RunDetail> {
+  const body = await postJson<{ run: RunDetail }>("/api/runs", {});
+  return body.run;
+}
+
 export async function fetchChatSessions(): Promise<RunSummary[]> {
   // 200 is RUN_LIST_MAX_LIMIT on the worker — the widest window the list
   // endpoint accepts. The endpoint has no `origin` filter, so this over-fetches

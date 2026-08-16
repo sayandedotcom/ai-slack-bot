@@ -17,6 +17,23 @@ import type { Connect, Plugin } from "vite";
  * and the `/ws/run/:id` socket — falls through to the real worker, so the run
  * list and the drawer are showing genuine D1 data, not a fiction.
  *
+ * PHASE 25 adds a fourth, and it is OPT-IN rather than always-on. `/api/chassis`
+ * and the agent transport under `/agents/*` are NOT Access-gated puzzles — a
+ * running `wrangler dev` answers both perfectly well — so faking them by
+ * default would replace real data with a fiction for no reason. They are
+ * claimed only when `FIREFIGHTER_CHASSIS` is set:
+ *
+ *   FIREFIGHTER_CHASSIS=think pnpm dev    # look at the useAgentChat view
+ *   FIREFIGHTER_CHASSIS=legacy pnpm dev   # look at the /ws view
+ *   pnpm dev                              # ask the worker, like production
+ *
+ * See `agentStubs` at the bottom for what `think` fabricates and, just as
+ * importantly, what it cannot: the agent WebSocket is a real upgrade that only
+ * a Worker can serve, so with no `wrangler dev` behind it the transcript renders
+ * from the canned `/get-messages` reply and the view sits in its reconnect
+ * banner. That banner is itself one of the states this task had to build, so
+ * being able to see it cold is a feature.
+ *
  * It CANNOT reach production: it is a `configureServer` hook, and that hook
  * exists only inside vite's dev server. `vite build` never calls it, so not one
  * line of this file is in the bundle. It is also not a security shortcut
@@ -93,6 +110,78 @@ function seedApprovals(now: number): StubApproval[] {
   ];
 }
 
+/**
+ * Phase 25's opt-in half. `undefined` means "do not claim these routes at all",
+ * which is the default and the only setting that shows real data.
+ */
+function devChassis(): "think" | "legacy" | undefined {
+  const configured = process.env.FIREFIGHTER_CHASSIS;
+  if (configured === "think" || configured === "legacy") return configured;
+  // Named, never echoed — same discipline as the worker's own chassis resolver.
+  if (configured !== undefined && configured !== "") {
+    console.warn("[dev-stubs] FIREFIGHTER_CHASSIS is not 'think' or 'legacy'; ignoring it");
+  }
+  return undefined;
+}
+
+/**
+ * A canned Think transcript: one human turn, one `run_code` call with a
+ * `memory.cite`-shaped result nested in its output, one answer.
+ *
+ * The nesting is the point. On this chassis the model has exactly ONE tool, so
+ * cited facts arrive buried inside whatever the model's own code returned —
+ * `sourcesFromToolOutput` finds them by shape, and this fixture is what proves
+ * the sources rail still fills in without a live agent to ask.
+ */
+function seedAgentMessages(): unknown[] {
+  return [
+    {
+      id: "msg-dev-1",
+      role: "user",
+      parts: [{ type: "text", text: "did PulseFit complain about checkout before, and what did we do?" }],
+    },
+    {
+      id: "msg-dev-2",
+      role: "assistant",
+      parts: [
+        { type: "step-start" },
+        {
+          type: "tool-run_code",
+          toolCallId: "call-dev-1",
+          state: "output-available",
+          input: {
+            code: [
+              "const hits = await memory.search({",
+              '  customer: "pulsefit",',
+              '  query: "checkout failure",',
+              "});",
+              "return { cited: await memory.cite({ factIds: hits.map((h) => h.factId) }) };",
+            ].join("\n"),
+          },
+          output: {
+            status: "completed",
+            executionId: "exec-dev-1",
+            result: {
+              cited: [
+                {
+                  factId: "fact-dev-1",
+                  fact: "PulseFit reported checkout 502s during the 14 Aug deploy window.",
+                  permalink: "https://zellify.slack.com/archives/C0ACME/p1786650000000100",
+                  ts: "1786650000.000100",
+                },
+              ],
+            },
+          },
+        },
+        {
+          type: "text",
+          text: "Yes — on 14 August, during the deploy window. We rolled the deploy back and the errors stopped inside four minutes.",
+        },
+      ],
+    },
+  ];
+}
+
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader("content-type", "application/json");
@@ -141,9 +230,28 @@ export function devAccessStubs(): Plugin {
       // Registered inside `configureServer` rather than in the function it can
       // return, so these land BEFORE vite's own proxy middleware and win the
       // paths they claim. Everything not claimed here falls through to it.
+      const chassis = devChassis();
+      if (chassis !== undefined) {
+        console.warn(`[dev-stubs] serving /api/chassis as "${chassis}" from memory`);
+      }
+
       server.middlewares.use((request, response, next) => {
         const url = request.url ?? "";
         const path = url.split("?")[0] ?? "";
+
+        // Unset: not claimed, so `wrangler dev` answers and the SPA sees the
+        // chassis this checkout would actually deploy.
+        if (chassis !== undefined && path === "/api/chassis") {
+          return send(response, 200, { chassis });
+        }
+
+        // Only the transcript read is faked, and only under `think`. The
+        // WebSocket upgrade is deliberately left to fall through: an upgrade
+        // needs a Worker, and pretending otherwise would hide the reconnect
+        // banner that is one of this view's real states.
+        if (chassis === "think" && path.startsWith("/agents/") && path.endsWith("/get-messages")) {
+          return send(response, 200, seedAgentMessages());
+        }
 
         if (path === "/api/identity") {
           // `firefighter` so the approval actions are live. Flip to "viewer" to

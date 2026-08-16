@@ -10,7 +10,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/react": "4.0.62",
+    "@cloudflare/think": "0.15.1",
     "@workspace/ui": "workspace:*",
+    "agents": "0.20.1",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },

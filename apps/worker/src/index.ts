@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { routeAgentRequest } from "agents";
 import { modelDisposition } from "./agent/ports";
 import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
@@ -12,8 +13,9 @@ import { evalApi } from "./api/eval";
 import { slackOAuth } from "./oauth/slack";
 import { githubOAuth } from "./oauth/github";
 import { routeSlackMessageToOwnedRun } from "./run/coordinator";
-import { wakeRun as wakeRunOnActiveChassis } from "./run/chassis";
-import { slackRunKey } from "./run/keys";
+import { resolveChassis, wakeRun as wakeRunOnActiveChassis } from "./run/chassis";
+import { assertRunKey, slackRunKey } from "./run/keys";
+import { getRunById } from "./run/repository";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
@@ -279,6 +281,112 @@ app.route("/", proofsApi);
 // Not JSON, so it is mounted outside /api — but still above the asset
 // catch-all, and still behind the same Access application as the dashboard.
 app.route("/ws", runsWs);
+
+/**
+ * Which session chassis is live, so the SPA can mount the matching view.
+ *
+ * The dashboard ships BOTH views for the length of the strangler window: the
+ * legacy `/ws` transcript and the `useAgentChat` one. Nothing in the bundle can
+ * know which chassis a given deployment runs — `RUN_CHASSIS` is a wrangler
+ * `var`, not a build input, and baking it into the SPA would mean a chassis
+ * flip needs a dashboard rebuild rather than a `wrangler deploy`. So the
+ * browser asks.
+ *
+ * D1-free, DO-free, and it names the variable rather than echoing an
+ * unrecognised value (invariant 39's rule applied uniformly). Under /api so it
+ * inherits the same Access application as everything else.
+ */
+app.get("/api/chassis", (c) => {
+  try {
+    return c.json({ chassis: resolveChassis(c.env) });
+  } catch {
+    return c.json(
+      { code: "invalid_chassis", message: "RUN_CHASSIS is not a recognised value" },
+      500,
+    );
+  }
+});
+
+/**
+ * Phase 25. The Agents SDK's own transport for `RunAgent` — the WebSocket the
+ * dashboard's `useAgentChat` speaks, plus the `/get-messages` HTTP read behind
+ * it.
+ *
+ * MOUNTED AT THE TOP LEVEL AND DELIBERATELY *NOT* BYPASSED. Read the comment
+ * on `/proofs/*` below: that route is the ONE path in this Worker that Cloudflare
+ * Access must let through unauthenticated, and it stays the only one. `/agents/*`
+ * is a new top-level path on the same origin, so the dashboard's Access
+ * application covers it by default — exactly like `/ws`, which is the socket
+ * this one replaces and which is likewise gated by the application and absent
+ * from its bypass policy. Adding a bypass for `/agents/*` would hand an
+ * anonymous caller a live steer channel into a customer-facing run.
+ *
+ * TWO things happen here before `routeAgentRequest` sees the request, and both
+ * are load-bearing:
+ *
+ *  1. **The chassis check.** `routeAgentRequest` would happily boot a `RunAgent`
+ *     for a run the legacy chassis owns, giving the operator an empty transcript
+ *     for a run that is very much alive in `RunDO`. Refused by name instead.
+ *
+ *  2. **The id→key resolution.** `routePartykitRequest` names the Durable Object
+ *     with `idFromName(<third path segment>)` — verbatim, undecoded. Letting the
+ *     browser put that segment there directly would make the public URL a DO
+ *     name, which is exactly what invariant 10 forbids: `runs.id` is a UUID and
+ *     the `slack:{channel}:{thread_ts}` key is resolved through D1, server-side,
+ *     never string-built from anything a client sent. So the browser addresses
+ *     `/agents/run-agents/{runs.id}`, D1 answers with the key, and the path is
+ *     rewritten before routing. A caller who guesses a raw key gets a 404 from
+ *     `getRunById`, because a key is not an id.
+ *
+ * `run-agents` is `camelCaseToKebabCase("RUN_AGENTS")` — partyserver derives the
+ * namespace segment from the BINDING name in wrangler.jsonc, not from the class.
+ */
+const AGENT_NAMESPACE = "run-agents";
+
+app.all("/agents/*", async (c) => {
+  let chassis: string;
+  try {
+    chassis = resolveChassis(c.env);
+  } catch {
+    return c.json(
+      { code: "invalid_chassis", message: "RUN_CHASSIS is not a recognised value" },
+      500,
+    );
+  }
+  if (chassis !== "think") {
+    return c.json(
+      { code: "chassis_not_active", message: "this deployment runs the legacy run chassis" },
+      404,
+    );
+  }
+
+  // ["agents", "<namespace>", "<runs.id>", ...rest]. `rest` is preserved
+  // verbatim: `useAgentChat` reads the transcript from `<room>/get-messages`.
+  const url = new URL(c.req.url);
+  const segments = url.pathname.split("/").filter(Boolean);
+  const namespace = segments[1];
+  const runId = segments[2];
+  if (namespace !== AGENT_NAMESPACE || runId === undefined || runId === "") {
+    return c.json({ code: "not_found", message: "no such agent route" }, 404);
+  }
+
+  const run = await getRunById(c.env.DB, decodeURIComponent(runId));
+  if (!run) return c.json({ code: "not_found", message: "no such run" }, 404);
+
+  let key: string;
+  try {
+    // Re-validated before it names an object, exactly as `runStubForKey` and
+    // `wakeRun` do — a corrupted `runs.key` must not conjure an anonymous agent.
+    key = assertRunKey(run.key);
+  } catch {
+    return c.json({ code: "invalid_run_key", message: "this run cannot be addressed" }, 500);
+  }
+
+  segments[2] = key;
+  url.pathname = `/${segments.join("/")}`;
+  const routed = await routeAgentRequest(new Request(url, c.req.raw), c.env);
+  return routed ?? c.json({ code: "not_found", message: "no such agent route" }, 404);
+});
 
 /**
  * An unmatched API or WebSocket path is a 404, and it stops HERE — it must

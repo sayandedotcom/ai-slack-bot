@@ -3,18 +3,28 @@ import type { KeyboardEvent, ReactNode } from "react";
 
 import { Button } from "@workspace/ui/components/button";
 
+import { getToolOutput } from "@cloudflare/think/react";
+
 import { CopyId } from "../components/copy-id";
+import { AgentSession, isToolPart, type ChatMessage } from "../runs/agent-session";
 import { SessionView } from "../runs/session-view";
 import { useRunSession } from "../runs/use-run-session";
-import { createChat } from "./api";
-import { extractSources, linkifySlackUrls } from "./citations";
+import type { Chassis } from "../lib/chassis";
+import { createChat, createEmptyChat } from "./api";
+import { extractSources, linkifySlackUrls, sourcesFromToolOutput, type SourceChip } from "./citations";
 import { SessionList } from "./session-list";
 import { SourcesRail } from "./sources-rail";
 
 /**
  * The second door into the one agent: a human types first. Left, past chat
- * runs; right, either the new-chat composer or an open session — which is
- * phase 15's SessionView over the same socket the dashboard drawer uses.
+ * runs; right, either the new-chat composer or an open session.
+ *
+ * Which session component that is depends on the chassis, and that is the whole
+ * of the difference: on `legacy` it is phase 15's `SessionView` over the `/ws`
+ * socket, on `think` it is `AgentSession` over `useAgentChat` — the SAME
+ * component the dashboard drawer mounts for a triage-woken run, which is
+ * requirement 2's "one session shape" made literal. Both stay mounted until the
+ * cutover deletes the legacy chassis.
  */
 
 const SUGGESTIONS = [
@@ -45,7 +55,14 @@ function renderLinkedContent(content: string): ReactNode {
   );
 }
 
-function NewChat({ onCreated }: { onCreated: (id: string) => void }): ReactNode {
+function NewChat({
+  chassis,
+  onCreated,
+}: {
+  chassis: Chassis;
+  /** `firstMessage` is non-null only on the Think chassis — see `createEmptyChat`. */
+  onCreated: (id: string, firstMessage: string | null) => void;
+}): ReactNode {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,15 +88,19 @@ function NewChat({ onCreated }: { onCreated: (id: string) => void }): ReactNode 
     setSending(true);
     setError(null);
     try {
-      const run = await createChat(firstMessage, requestId);
+      // On `think` the run is minted empty and the opening message is handed to
+      // the agent socket instead; on `legacy` the coordinator appends it, as it
+      // always has. Same button, and the difference never reaches this UI
+      // beyond which of the two calls it makes.
+      const run = chassis === "think" ? await createEmptyChat() : await createChat(firstMessage, requestId);
       requestIdRef.current = null;
-      onCreated(run.id);
+      onCreated(run.id, chassis === "think" ? firstMessage : null);
     } catch {
       setError("Couldn't start the chat — check the connection and try again.");
     } finally {
       setSending(false);
     }
-  }, [draft, sending, onCreated]);
+  }, [chassis, draft, sending, onCreated]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -133,6 +154,62 @@ function NewChat({ onCreated }: { onCreated: (id: string) => void }): ReactNode 
   );
 }
 
+/**
+ * The Think-chassis session's receipts.
+ *
+ * On this chassis the model has exactly ONE tool, so there is no `memory.cite`
+ * tool part to read the way `extractSources` does — the cited facts come back
+ * nested inside a `run_code` result. `sourcesFromToolOutput` finds them by
+ * shape; this only walks the parts and dedupes across them.
+ */
+function agentSources(messages: ChatMessage[]): SourceChip[] {
+  const seen = new Set<string>();
+  const chips: SourceChip[] = [];
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (!isToolPart(part)) continue;
+      const output = getToolOutput(part);
+      if (output === undefined) continue;
+      for (const chip of sourcesFromToolOutput(output)) {
+        if (seen.has(chip.permalink)) continue;
+        seen.add(chip.permalink);
+        chips.push(chip);
+      }
+    }
+  }
+  return chips;
+}
+
+/** The Think chassis's chat session — the drawer's component, chat's chrome. */
+function AgentChatSession({
+  runId,
+  firstMessage,
+  onFirstMessageSent,
+}: {
+  runId: string;
+  firstMessage: string | null;
+  onFirstMessageSent: () => void;
+}): ReactNode {
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+        <CopyId runId={runId} />
+      </div>
+      <div className="min-h-0 flex-1">
+        <AgentSession
+          runId={runId}
+          firstMessage={firstMessage}
+          onFirstMessageSent={onFirstMessageSent}
+          composerPlaceholder="Reply — Enter to send, Shift+Enter for a newline"
+          renderContent={renderLinkedContent}
+          emptyHint="Nothing yet — ask anything, and the answer will cite the Slack messages it came from."
+          renderFooter={(messages) => <SourcesRail sources={agentSources(messages)} />}
+        />
+      </div>
+    </div>
+  );
+}
+
 /** Own component so the socket hook mounts/unmounts with the selected run. */
 function ChatSession({ runId }: { runId: string }): ReactNode {
   const { session, connection, steer } = useRunSession(runId);
@@ -159,11 +236,21 @@ function ChatSession({ runId }: { runId: string }): ReactNode {
 
 export function ChatPage({
   runId,
+  chassis,
   onSelectRun,
 }: {
   runId: string | null;
+  chassis: Chassis;
   onSelectRun: (id: string | null) => void;
 }): ReactNode {
+  /**
+   * The opening message on the Think chassis, held here for exactly one hop:
+   * `NewChat` mints the run, this navigates to it, and the agent session sends
+   * the text as its first turn. Cleared the moment it has been handed over so a
+   * later reload of the same run cannot re-ask the question.
+   */
+  const [pendingFirst, setPendingFirst] = useState<string | null>(null);
+
   return (
     <main className="mx-auto grid h-[calc(100svh-57px)] max-w-6xl grid-cols-1 gap-4 p-6 md:grid-cols-[minmax(220px,1fr)_2fr]">
       <div className="min-h-0 overflow-y-auto">
@@ -176,12 +263,27 @@ export function ChatPage({
       </div>
       <div className="min-h-0 rounded-lg border bg-background">
         {runId === null ? (
-          <NewChat onCreated={onSelectRun} />
+          <NewChat
+            chassis={chassis}
+            onCreated={(id, firstMessage) => {
+              setPendingFirst(firstMessage);
+              onSelectRun(id);
+            }}
+          />
         ) : (
           // Keyed so switching sessions remounts the socket hook, exactly as
           // app.tsx does for the drawer.
           <div className="h-full p-3">
-            <ChatSession key={runId} runId={runId} />
+            {chassis === "think" ? (
+              <AgentChatSession
+                key={runId}
+                runId={runId}
+                firstMessage={pendingFirst}
+                onFirstMessageSent={() => setPendingFirst(null)}
+              />
+            ) : (
+              <ChatSession key={runId} runId={runId} />
+            )}
           </div>
         )}
       </div>
