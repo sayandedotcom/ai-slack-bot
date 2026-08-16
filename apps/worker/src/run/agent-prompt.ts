@@ -28,12 +28,15 @@ import {
   resolveTrustedContext,
   STABLE_PREFIX_CACHE_OPTIONS,
   type EngineerVoice,
+  type PendingApproval,
   type TrustedContext,
   type TrustedContextRefusal,
 } from "../agent/prompt";
 import { makeUserTokenSource } from "../identity/user-token";
 import type { RunAgent } from "./agent";
+import { pendingApprovals } from "./agent-approvals";
 import { assertRunKey, runOriginOf } from "./keys";
+import { getRunByKey } from "./repository";
 
 /**
  * The only two facts in the prompt that are not pure functions of this build.
@@ -310,13 +313,16 @@ export function firefighterSystemBlocks(agent: RunAgent): SystemModelMessage[] {
 /* ------------------------------------------------------------- resolution -- */
 
 /**
- * Re-read the two dynamic facts from D1, at most once concurrently.
+ * Re-read the run's dynamic facts, at most once concurrently.
  *
- * Neither read is allowed to fail the turn. `resolveTrustedContext` already
+ * No D1 read is allowed to fail the turn. `resolveTrustedContext` already
  * expresses "I could not name this run" as a refusal rather than a throw, and
  * that refusal is rendered honestly by `renderUnresolvedContext`; the engineer
  * voice degrades to no block at all, which is the layout that shipped before
- * engineer voice existed.
+ * engineer voice existed. The one read that is NOT softened is the agent's own
+ * open approval — it is local SQLite, so it cannot fail transiently, and the
+ * failure it would hide is the model being told a decided-nothing run is free
+ * to escalate again. See `openApproval`.
  */
 async function refreshFacts(agent: RunAgent): Promise<PromptFacts> {
   const inflight = REFRESHING.get(agent);
@@ -342,24 +348,38 @@ async function resolveFacts(agent: RunAgent): Promise<PromptFacts> {
   const rest = key.slice(origin.length + 1);
   const colon = rest.indexOf(":");
 
+  // Asked at one instant with the context below, so a shift boundary crossed
+  // mid-refresh cannot split the prompt across two shifts.
+  const voice = await resolveEngineerVoice(env.DB, Date.now()).catch(() => null);
+
+  // Through the run KEY — this object's name — because a Slack run's public
+  // `runs.id` is a separate UUID (invariant 10) and the resolver looks its row
+  // up BY id. Passing the key-derived string is what made every Slack run's
+  // prompt refuse with `run_not_found`.
+  const run = await getRunByKey(env.DB, key).catch(() => null);
+  if (run === null) {
+    // The same refusal `resolveTrustedContext` would have returned, reached
+    // without asking it a question whose answer is already known. There are no
+    // trusted facts for a run the index cannot confirm, and the unresolved
+    // block below says exactly that.
+    return { context: null, refusal: "run_not_found", voice };
+  }
+
   const resolved = await resolveTrustedContext(env.DB, {
     // TODO(Task 11): the Think turn's own id. Minted here so the prompt's
     // `generation:` line is at least unique per refresh rather than a constant
     // that would make two turns look like one.
     generationId: `gen:${crypto.randomUUID()}`,
-    // The RunAgent keeps its approvals in `agent-approvals.ts`'s own table, not
-    // in the legacy `approval_state` row this resolver reads, and reading a
-    // table that never existed on this Durable Object would throw out of a
-    // prompt hook. `null` is the composer-test path: `pendingApproval` stays
-    // null, which understates what is outstanding rather than inventing it.
-    // TODO(Task 9): surface the RunAgent's own open approval here.
+    // STILL NULL, and now deliberately so rather than for want of a source.
+    // This argument is the LEGACY `approval_state` row inside a RunDO's
+    // storage; the RunAgent keeps its approvals in `agent-approvals.ts`'s own
+    // table, and reading a table that never existed on this Durable Object
+    // would throw out of a prompt hook. The open approval is read from the
+    // table that does own it, below, and written over the resolver's answer.
     storage: null,
     run: {
-      // TODO(Task 12): the run's public `runs.id`. A Slack run's key is not its
-      // public id, so this lookup finds no row and the resolver REFUSES — the
-      // fail-closed direction, and the reason the unresolved block above is
-      // written to be safe rather than temporary.
-      runId: rest,
+      // The public `runs.id`, resolved through the key above.
+      runId: run.id,
       origin,
       channelId: origin === "slack" ? rest.slice(0, colon) : null,
       threadTs: origin === "slack" ? rest.slice(colon + 1) : null,
@@ -370,13 +390,42 @@ async function resolveFacts(agent: RunAgent): Promise<PromptFacts> {
     identity: makeUserTokenSource(env),
   });
 
-  // Asked at one instant for both, so a shift boundary crossed mid-refresh
-  // cannot split the prompt across two shifts.
-  const voice = await resolveEngineerVoice(env.DB, Date.now()).catch(() => null);
+  if (resolved.outcome !== "resolved") {
+    return { context: null, refusal: resolved.reason, voice };
+  }
 
-  return resolved.outcome === "resolved"
-    ? { context: resolved.context, refusal: null, voice }
-    : { context: null, refusal: resolved.reason, voice };
+  return {
+    context: { ...resolved.context, pendingApproval: await openApproval(agent) },
+    refusal: null,
+    voice,
+  };
+}
+
+/**
+ * The one reply this run is parked on, from the table that owns it.
+ *
+ * The model has to be told, and the reason is invariant-shaped rather than
+ * cosmetic: a run wakes on a new customer message with a decision still
+ * outstanding, and a model that is not told cannot tell "the reply I proposed
+ * is now moot, retract it" from "it still stands". It escalates a second one,
+ * or sends the draft itself. `renderTrustedContext` already has the paragraph
+ * for this; until now nothing ever gave it a value.
+ *
+ * `pendingApprovals` reads the agent's own SQLite — a local, synchronous read
+ * that cannot fail transiently — so a throw here is a broken table rather than
+ * a blip, and it is NOT caught: reporting "nothing is pending" while a card is
+ * open is the exact failure this closes.
+ *
+ * The oldest open one, and there is only ever one: `escalate` opens a single
+ * approval per run and the turn parks on it. Its own words are read back from
+ * the host's record, never from the transcript, and the renderer JSON-quotes
+ * them.
+ */
+async function openApproval(agent: RunAgent): Promise<PendingApproval | null> {
+  const [open] = await pendingApprovals(agent);
+  return open === undefined
+    ? null
+    : { approvalId: open.id, draft: open.draft, why: open.why };
 }
 
 /**

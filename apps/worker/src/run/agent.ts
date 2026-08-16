@@ -28,6 +28,8 @@ import type { CodemodeConnector } from "@cloudflare/codemode";
 import type { PrepareStepResult, Tool, ToolSet } from "ai";
 import type { Env } from "../index";
 import { makeCapabilityDependencies } from "../agent/dependencies";
+import { getChannelPolicy } from "../db/channels";
+import { makeUserTokenSource } from "../identity/user-token";
 import { newCodeExecution } from "../codemode/bindings/shared";
 import { buildConnectors } from "../codemode/connectors";
 import {
@@ -38,11 +40,13 @@ import {
   type CodeModeScope,
 } from "../codemode/contracts";
 import { renderCapabilityDeclarations } from "../codemode/dts";
+import { CapabilityError } from "../codemode/errors";
 import { makeGuardedExecutor } from "../codemode/executor";
 import { guardLoader } from "../codemode/guarded-loader";
 import { buildNamespaces } from "../codemode/registry";
 import { RULES } from "../codemode/rules";
 import type { ApprovalPort } from "../approval/contracts";
+import { getRunByKey } from "./repository";
 import {
   ensureApprovalSchema,
   escalate,
@@ -67,7 +71,7 @@ import {
   type UsageInput,
 } from "./agent-projection";
 import { drainSteers, ensureSteerSchema, queueSteer } from "./agent-steering";
-import { assertRunKey, runOriginOf } from "./keys";
+import { assertRunKey, runOriginOf, type RunOrigin } from "./keys";
 
 /**
  * What `run_code` hands back. Structurally the codemode runtime's
@@ -86,6 +90,102 @@ function discardingSink(): CapabilityAuditSink {
     async completed() {},
     async failed() {},
   };
+}
+
+/* ----------------------------------------------------------- run facts -- */
+
+/**
+ * The half of the trust envelope that only D1 can answer.
+ *
+ * Every field has exactly one source and none of them is the conversation,
+ * exactly as `src/agent/dependencies.ts` documents for the legacy chassis:
+ * the public run id and `shadow` come from the D1 `runs` row, `customerSlug`
+ * from the channel policy (invariant 35), the Slack coordinates from the run
+ * key, and `actor` from the on-duty rotation.
+ */
+type RunFacts = {
+  /** The public `runs.id` UUID. NEVER the Durable Object name. */
+  runId: string;
+  origin: RunOrigin;
+  shadow: boolean;
+  customerSlug: string | null;
+  slackThread: { channelId: string; threadTs: string } | null;
+  actor: { engineerEmail: string; slackUserId: string | null } | null;
+};
+
+/**
+ * Resolve this run against the run index, or REFUSE by returning null.
+ *
+ * Through the run KEY — this object's name, the only string `src/run/keys.ts`
+ * ever mints — because a Slack run's public `runs.id` is a separate UUID and
+ * string-building one from the key would name a row that does not exist
+ * (invariant 10).
+ *
+ * NULL IS A REFUSAL, NOT A DEFAULT, and every caller treats it as one. A run
+ * that cannot be confirmed has no provable customer and no provable shadow
+ * flag; guessing either is how one customer's thread reads another customer's
+ * data, so the scope is never built and no capability ever exists. This is the
+ * same fail-closed direction `resolveCodeModeScope` takes on the legacy
+ * chassis, and the same one `resolveTrustedContext` takes for the prompt.
+ */
+async function resolveRunFacts(env: Env, name: string): Promise<RunFacts | null> {
+  const key = assertRunKey(name);
+  const origin = runOriginOf(key);
+  const rest = key.slice(origin.length + 1);
+  const colon = rest.indexOf(":");
+  const slackThread =
+    origin === "slack"
+      ? { channelId: rest.slice(0, colon), threadTs: rest.slice(colon + 1) }
+      : null;
+
+  const run = await getRunByKey(env.DB, key);
+  if (run === null) return null;
+  // Two opinions about what kind of run this is, or about which thread it
+  // owns. One of them is wrong and picking between them would choose a
+  // customer scope on a coin flip, so neither is used.
+  if (run.origin !== origin) return null;
+  if (
+    slackThread !== null &&
+    (run.channelId !== slackThread.channelId || run.threadTs !== slackThread.threadTs)
+  ) {
+    return null;
+  }
+
+  // From the channel policy and from nothing else — never turn metadata, never
+  // a tool argument, never model prose. An unmapped channel yields `null`,
+  // which makes every customer-scoped capability refuse with
+  // `customer_scope_required` rather than silently widening; chat has no
+  // channel and therefore no ambient customer at all.
+  const policy = run.channelId === null ? null : await getChannelPolicy(env.DB, run.channelId);
+
+  // Asked ONLY of a run that could actually speak — a Slack run with a pinned
+  // thread that is not shadowed — for the blast-radius reason spelled out in
+  // `dependencies.ts`: one corrupt identity row must not take out chat runs,
+  // shadow runs and read-only investigations that were never going to reply.
+  // The token is discarded here; the scope carries FACTS about the human, and
+  // the credential is re-resolved at the last trusted moment inside the
+  // gateway (invariant 39).
+  const mayReply = slackThread !== null && !run.shadow;
+  const onDuty = mayReply ? await makeUserTokenSource(env).onDutyToken(Date.now()) : null;
+
+  return {
+    runId: run.id,
+    origin,
+    shadow: run.shadow,
+    customerSlug: policy?.customer_slug ?? null,
+    slackThread,
+    actor:
+      onDuty === null
+        ? null
+        : { engineerEmail: onDuty.email, slackUserId: onDuty.slackUserId },
+  };
+}
+
+function unconfirmedRun(): CapabilityError {
+  return new CapabilityError(
+    "invalid_context",
+    "this run could not be confirmed against the run index, so no work was started.",
+  );
 }
 
 export class RunAgent extends Think<Env> {
@@ -130,6 +230,30 @@ export class RunAgent extends Think<Env> {
   #openApprovalId: string | null = null;
 
   /**
+   * The trust envelope for this run — ONE object for the life of the instance.
+   *
+   * `undefined` means the run could not be confirmed against D1, and every
+   * reader of it refuses. It is deliberately not seeded with a pessimistic
+   * placeholder: a placeholder scope is a scope, and the point of the refusal
+   * is that no capability exists at all.
+   *
+   * ONE OBJECT, RE-STAMPED IN PLACE, and that is load-bearing rather than an
+   * optimisation. `makeCapabilityDependencies` and `buildNamespaces` capture
+   * this reference when the `run_code` tool is built — once per instance, see
+   * `#runCode` — and every consumer that matters (`write-guard.ts`,
+   * `effects.ts`, `bindings/shared.ts`, `bindings/slack.ts`) reads
+   * `ctx.scope.<field>` at CALL time. Re-stamping the same object is therefore
+   * how a later turn's `turnId`, and a re-read policy, reach a tool that was
+   * built during an earlier turn. Replacing the object would not: the captured
+   * reference would keep serving the first turn's facts forever.
+   *
+   * `runId` is the one field that may never move — `makeSandboxGateway` reads
+   * it EAGERLY at dependency-build time — so `#refreshScope` refuses rather
+   * than re-stamping if it ever resolves differently.
+   */
+  #scopeRef: CodeModeScope | undefined;
+
+  /**
    * Load the model composer before this object can be handed any work.
    *
    * `src/agent/model.ts` is reached through a dynamic import (see the long
@@ -144,11 +268,30 @@ export class RunAgent extends Think<Env> {
    * held until it settles. `onStart()` would cover the alarm and fetch paths
    * but is not a guarantee for a direct RPC, and a turn re-entered from an
    * approval arrives as exactly that.
+   *
+   * The run's own D1 facts are resolved in the same block, and for the same
+   * reason. `#scope()` has to answer SYNCHRONOUSLY — Think calls `getTools()`
+   * synchronously, and it calls it BEFORE `beforeTurn` (`think.js:2637` vs
+   * `:2670`), so a fact first read in a turn hook is a turn too late for the
+   * tool that turn is assembling. One indexed D1 read per Durable Object wake
+   * is the price of the scope being real rather than a placeholder.
+   *
+   * A failure here does NOT abort the object: a rejected
+   * `blockConcurrencyWhile` discards the Durable Object and takes every
+   * in-flight caller with it. It leaves `#scopeRef` undefined instead, which
+   * is the refusal — loud at the first `getTools()`, and silent for the RPCs
+   * (steering, approvals, projection) that never needed a capability.
    */
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       await primeModelModule();
+      try {
+        await this.#refreshScope();
+      } catch {
+        // Deliberately swallowed, deliberately not logged with the error's own
+        // text. `#scopeRef` stays undefined and `#scope()` refuses; see above.
+      }
     });
   }
 
@@ -157,6 +300,14 @@ export class RunAgent extends Think<Env> {
     // Idempotent by contract — this runs on every wake, not just the first.
     ensureApprovalSchema(this);
     ensureSteerSchema(this);
+    this.#ensureTurnIdentitySchema();
+    // A second chance for a run whose index row was written after this
+    // instance was constructed. Same swallow, same refusal if it fails.
+    try {
+      await this.#refreshScope();
+    } catch {
+      /* refusal is the stored state; see the constructor */
+    }
   }
 
   getModel(): ThinkModel {
@@ -178,7 +329,14 @@ export class RunAgent extends Think<Env> {
    * `src/agent/model.ts`'s `modelCallOptions` — AI Gateway owns transport
    * retries, the SDK owns none (invariant 27).
    */
-  override async beforeTurn(_ctx: TurnContext): Promise<TurnConfig> {
+  override async beforeTurn(ctx: TurnContext): Promise<TurnConfig> {
+    // Allocated BEFORE any provider I/O and before any capability can run —
+    // invariant 7 asks for exactly that, and this hook is the last point in a
+    // turn that is still true. It re-reads the run's D1 facts on the way
+    // through (invariant 37), and it REFUSES the turn if they have stopped
+    // resolving, which is the same answer the legacy chassis gives when its
+    // per-generation scope build cannot confirm the run.
+    await this.#refreshScope(await this.#turnIdFor(ctx));
     return firefighterTurnConfig(this);
   }
 
@@ -297,6 +455,13 @@ export class RunAgent extends Think<Env> {
       // one would claim a card was pulled that a human can still see, so this
       // reports the opposite — the decision path is authoritative and the
       // capability learns nothing was retracted.
+      //
+      // Not closable from here. A retraction is a CAS out of `pending` on the
+      // agent's own `approvals` table, plus the dashboard card and the nudge
+      // it already projected — all three of which `agent-approvals.ts` owns
+      // and none of which it exports a path to. Reaching around it from this
+      // class would give the approval state machine a second writer, which is
+      // the one property that makes its decide-exactly-once CAS mean anything.
       withdraw: async () => ({ withdrawn: false, decision: "rejected" as const }),
     };
   }
@@ -349,46 +514,155 @@ export class RunAgent extends Think<Env> {
   }
 
   /**
-   * The trust envelope for this run, derived from the Durable Object's name.
+   * The trust envelope for this run, or a REFUSAL.
    *
-   * `this.name` is the run key minted by `src/run/keys.ts` — the only place a
-   * run key is built — and it is re-validated here rather than trusted, so a
-   * corrupted name refuses before any capability exists.
+   * Synchronous because it has to be: `getTools()` is synchronous and runs
+   * before `beforeTurn`, so the D1 half of the envelope is resolved on the
+   * paths that CAN wait (the constructor, `onStart`, `beforeTurn`) and read
+   * back here.
+   *
+   * Throwing rather than composing a placeholder is the whole point. A scope
+   * with a null customer and a key-shaped run id is still a scope: it builds
+   * eleven capabilities, and every one of them then has to be trusted to
+   * notice. An unconfirmed run gets no capabilities at all.
    */
   #scope(): CodeModeScope {
-    const key = assertRunKey(this.name);
-    const origin = runOriginOf(key);
-    const rest = key.slice(origin.length + 1);
+    const scope = this.#scopeRef;
+    if (scope === undefined) throw unconfirmedRun();
+    return scope;
+  }
 
-    const slackThread =
-      origin === "slack"
-        ? { channelId: rest.slice(0, rest.indexOf(":")), threadTs: rest.slice(rest.indexOf(":") + 1) }
-        : null;
+  /**
+   * Re-read the run's D1 facts and stamp them into the one scope object.
+   *
+   * `turnId` is passed in rather than resolved here because its rules are
+   * about the TURN (invariants 7 and 8) while everything else here is about
+   * the RUN. Omitting it keeps whatever the current turn identity is.
+   */
+  async #refreshScope(turnId?: string): Promise<void> {
+    const facts = await resolveRunFacts(this.env, this.name);
+    if (facts === null) {
+      // Forget any envelope we may already be holding. A row that has stopped
+      // resolving is not a row we may keep acting on the memory of.
+      this.#scopeRef = undefined;
+      throw unconfirmedRun();
+    }
 
-    return validateScope({
-      // A chat run's key IS its public `runs.id`. A Slack run's is not — its
-      // public id is a separate UUID resolved through D1 — so this carries the
-      // key and the D1 lookups downstream find no row and REFUSE. That is the
-      // fail-closed direction, and Task 12's `wakeRun()` façade is where the
-      // real id is resolved and pinned.
-      // TODO(Task 12): resolve the Slack run's public UUID through D1.
-      runId: rest,
-      // TODO(Task 8): the turn's real id, from the Think session's turn record.
-      turnId: crypto.randomUUID(),
-      origin,
-      // A SNAPSHOT, and deliberately the pessimistic one. Nothing authorizes a
-      // write from this field — `write-guard.ts` re-reads the D1 `runs` row
-      // immediately before every external write, precisely so an operator
-      // flipping a run to shadow mid-run stops the NEXT write. Seeding it
-      // `true` means a reader that ignored that rule still fails closed.
-      // TODO(Task 12): carry the composed-at value from the D1 `runs` row.
-      shadow: true,
-      // TODO(Task 12): the channel policy's customer, never turn metadata.
-      customerSlug: null,
-      // TODO(Task 8): the on-duty engineer, via `makeUserTokenSource(env)`.
-      actor: null,
-      slackThread,
+    // `validateScope` rather than an object literal, for the reason
+    // `resolveCodeModeScope` gives: it is strict at every level, so a field
+    // this method forgets, mistypes or widens is a thrown `invalid_context`
+    // here rather than a surprise three layers down.
+    const next = validateScope({
+      runId: facts.runId,
+      turnId: turnId ?? this.#currentTurnId(),
+      origin: facts.origin,
+      // A SNAPSHOT, and never an authorization. `write-guard.ts` re-reads the
+      // D1 `runs` row immediately before every external write, precisely so an
+      // operator flipping a run to shadow mid-run stops the NEXT write.
+      shadow: facts.shadow,
+      customerSlug: facts.customerSlug,
+      slackThread: facts.slackThread,
+      actor: facts.actor,
     });
+
+    const current = this.#scopeRef;
+    if (current === undefined) {
+      this.#scopeRef = next;
+      return;
+    }
+    // The identity of the run cannot change under a tool that has already
+    // captured it — `makeSandboxGateway` copied `runId` out at build time, so
+    // a moved id would leave the sandbox pinned to the old run while every
+    // other capability moved. Refuse instead.
+    if (current.runId !== next.runId) {
+      this.#scopeRef = undefined;
+      throw unconfirmedRun();
+    }
+    Object.assign(current, next);
+  }
+
+  /* ----------------------------------------------------- turn identity -- */
+
+  /**
+   * The at-most-once key's turn half, durable across instances.
+   *
+   * One row, rewritten at each turn admission. It is in the agent's own SQLite
+   * rather than in a field because a field is lost at hibernation, and a
+   * continuation that came back with a NEW id would let `codemode_effects`
+   * replay an effect the previous instance had already performed.
+   */
+  #ensureTurnIdentitySchema(): void {
+    this.sql`
+      CREATE TABLE IF NOT EXISTS run_turn_identity (
+        id         INTEGER PRIMARY KEY CHECK (id = 1),
+        turn_id    TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `;
+  }
+
+  /** The turn identity in force, minting and persisting one if there is none. */
+  #currentTurnId(): string {
+    this.#ensureTurnIdentitySchema();
+    const [row] = this.sql<{ turn_id: string }>`
+      SELECT turn_id FROM run_turn_identity WHERE id = 1
+    `;
+    return row?.turn_id ?? this.#persistTurnId(`turn:${crypto.randomUUID()}`);
+  }
+
+  #persistTurnId(turnId: string): string {
+    this.#ensureTurnIdentitySchema();
+    this.sql`
+      INSERT INTO run_turn_identity (id, turn_id, updated_at)
+      VALUES (1, ${turnId}, ${Date.now()})
+      ON CONFLICT(id) DO UPDATE SET
+        turn_id    = excluded.turn_id,
+        updated_at = excluded.updated_at
+    `;
+    return turnId;
+  }
+
+  /**
+   * The turn identity for the turn that is about to start.
+   *
+   * INVARIANT 7 — one unsettled generation keeps one id. A continuation is the
+   * same settled input still being answered, so it reuses the stored id; and
+   * because the id is stored rather than held in a field, a continuation that
+   * arrives after hibernation reuses it too.
+   *
+   * INVARIANT 8 — a later settled input gets a new one, so deliberately
+   * repeating an action in a later turn is not deduplicated away.
+   *
+   * The id is the RUNNING SUBMISSION's, when there is exactly one. That is the
+   * only durable per-input identity Think exposes: `cf_think_submissions`
+   * keeps `request_id` on the row, so a submission that is re-executed after a
+   * crash comes back with the same id and the effect ledger recognises the
+   * retry rather than performing the write twice. `TurnContext` carries no id
+   * of its own (`think.js` mints the request id per call and never surfaces
+   * it), so a turn with no submission behind it — a `mode: "wait"` turn, a
+   * dashboard socket turn — falls back to a fresh uuid. That uuid is stored
+   * like any other, so continuations and hibernation are covered; what it
+   * cannot survive is that turn being RE-EXECUTED from the top, which arrives
+   * as a non-continuation and mints a new id, so an effect it had already
+   * performed would not be recognised as a replay. RESIDUAL, recorded rather
+   * than papered over: every production wake goes through `wakeRun()`'s
+   * `mode: "submit"`, which is the submission path.
+   *
+   * More than one running submission is not a shape Think produces (the drain
+   * takes one row at a time), and if it ever happened, guessing which one this
+   * turn belongs to could hand two different inputs the SAME key and drop a
+   * real effect as a duplicate. A fresh id risks a visible repeat instead of a
+   * silent loss, so that is the one it takes.
+   */
+  async #turnIdFor(ctx: TurnContext): Promise<string> {
+    if (ctx.continuation) return this.#currentTurnId();
+    const running = await this.listSubmissions({ status: "running", limit: 2 });
+    const submission = running.length === 1 ? running[0] : undefined;
+    const id =
+      submission === undefined
+        ? `turn:${crypto.randomUUID()}`
+        : `turn:${submission.requestId ?? submission.submissionId}`;
+    return this.#persistTurnId(id);
   }
 
   /**
@@ -398,8 +672,20 @@ export class RunAgent extends Think<Env> {
    * runtime binds its connectors when the tool is built, not when code runs —
    * so the call budget and the audit stream are per RUN here where the legacy
    * chassis scoped them per `run_code` call.
-   * TODO(Task 11): per-execution audit, so a capability event names the
-   * `run_code` call it happened under.
+   *
+   * THE AUDIT SINK STILL DISCARDS, and that is a missing destination rather
+   * than a missing wire. `auditSinkFactory` (src/agent/audit.ts) is real and
+   * ready, but it writes `ToolCallUpdateInput`s through a `ToolUpdateWriter`,
+   * and the only implementation of that is `appendAgentToolCallUpdate` in
+   * `src/run/session.ts` — RunDO's claim-fenced `tool_updates` stream, which
+   * this chassis does not have and must not reach into (Think owns the
+   * transcript here). Nested `cap:*` events therefore have nowhere to land
+   * until Task 11 gives the Think chassis its own replayable tool-update
+   * stream; inventing a private table for them here would put the audit trail
+   * somewhere no reader knows to look.
+   * TODO(Task 11): a Think-side tool-update stream, then a per-execution sink
+   * built on it so a capability event names the `run_code` call it happened
+   * under.
    */
   #connectors(): CodemodeConnector[] {
     const scope = this.#scope();
@@ -524,6 +810,19 @@ export class RunAgent extends Think<Env> {
       { toolCallId: `test_${crypto.randomUUID()}`, messages: [], context: undefined },
     );
     return output as RunCodeOutput;
+  }
+
+  /**
+   * The system blocks one step would carry, reachable without a live turn.
+   *
+   * Both hooks, in the order a turn runs them: `firefighterTurnConfig` is what
+   * `beforeTurn` refreshes the run's facts through, and `firefighterSystemBlocks`
+   * is what `beforeStep` renders from them. A test that called only the second
+   * would render the UNRESOLVED block every time and prove nothing.
+   */
+  async promptBlocksForTest(): Promise<string[]> {
+    await firefighterTurnConfig(this);
+    return firefighterSystemBlocks(this).map((block) => String(block.content));
   }
 
   /** Task 11's projection, reachable without a live turn. */
