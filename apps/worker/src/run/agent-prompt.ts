@@ -16,7 +16,6 @@
 import type { Session, TurnConfig } from "@cloudflare/think";
 import type { LanguageModel, SystemModelMessage } from "ai";
 import type { Env } from "../index";
-import { createProductionModelFactory, modelCallOptions } from "../agent/model";
 import { DEFAULT_AGENT_LIMITS, type AgentLimits } from "../agent/limits";
 import {
   ANTHROPIC_PROVIDER_OPTIONS,
@@ -78,6 +77,64 @@ function envOf(agent: RunAgent): Env {
   return (agent as unknown as { env: Env }).env;
 }
 
+/* ------------------------------------------------- the model module, lazily -- */
+
+/**
+ * `src/agent/model.ts` is loaded ON DEMAND, and this indirection is the only
+ * reason the file is not a static import at the top of this module.
+ *
+ * Two things pay for it, one in production and one in the test harness.
+ *
+ * PRODUCTION: `src/index.ts` exports `RunAgent`, so everything `run/agent.ts`
+ * imports statically — this module included — is evaluated on EVERY cold start
+ * of the single Worker, including the Slack webhook's, which has a 3-second
+ * budget it must answer inside. The webhook never composes a model. Neither
+ * does the legacy `RunDO` chassis, the cron, the ingest consumer or any
+ * `/api/*` route. Only a Think turn does, and only inside a `RunAgent`.
+ *
+ * TESTS: vitest-pool-workers evaluates the Worker entry's whole module graph
+ * during pool boot — before any test file's `vi.mock()` calls are registered —
+ * and does not re-evaluate those modules afterwards. Any module that lands in
+ * that graph therefore keeps the REAL copy of everything it imported, and a
+ * test that mocks one of its dependencies silently observes nothing. That is
+ * exactly what happened to `test/agent-gateway.test.ts`: adding a static
+ * `../agent/model` import here put `createAnthropic` beyond the reach of the
+ * spy that proves the `cf-aig-authorization` header is attached, and six
+ * assertions went quiet without a single line of `model.ts` changing.
+ *
+ * `primeModelModule()` is awaited from `RunAgent`'s constructor inside
+ * `blockConcurrencyWhile`, so by the time any turn, alarm or RPC reaches the
+ * object the namespace is here and `firefighterModel` stays synchronous —
+ * which it must be, because Think calls `getModel()` synchronously and BEFORE
+ * `beforeTurn` (`think.js`: `resolveModel()` precedes the `beforeTurn` hook).
+ */
+type ModelModule = typeof import("../agent/model");
+
+let MODEL_MODULE: ModelModule | null = null;
+
+/**
+ * Load `src/agent/model.ts` once per isolate. Idempotent and safe to await
+ * from several places; the module registry does the deduplication.
+ */
+export async function primeModelModule(): Promise<ModelModule> {
+  MODEL_MODULE ??= await import("../agent/model");
+  return MODEL_MODULE;
+}
+
+/**
+ * The primed namespace, or a refusal.
+ *
+ * Throwing rather than composing a fallback is the same rule `getModel()`
+ * follows: a run that cannot reach its own model composer must fail loudly,
+ * because every silent alternative answers a customer from the wrong model.
+ */
+function modelModule(): ModelModule {
+  if (MODEL_MODULE === null) {
+    throw new Error("model_module_not_loaded");
+  }
+  return MODEL_MODULE;
+}
+
 /* ------------------------------------------------------------------ model -- */
 
 /**
@@ -99,7 +156,7 @@ function envOf(agent: RunAgent): Env {
  */
 export function firefighterModel(agent: RunAgent): LanguageModel {
   const key = assertRunKey(agent.name);
-  const factory = createProductionModelFactory(envOf(agent));
+  const factory = modelModule().createProductionModelFactory(envOf(agent));
   return factory({
     runId: key,
     // TODO(Task 11): the Think turn's own id, once the projection carries one.
@@ -138,6 +195,7 @@ export async function firefighterTurnConfig(
   limits: AgentLimits = DEFAULT_AGENT_LIMITS,
   remainingSteps: number = limits.maxStepsPerGeneration,
 ): Promise<TurnConfig> {
+  const { modelCallOptions } = await primeModelModule();
   await refreshFacts(agent);
   return {
     maxSteps: limits.maxStepsPerGeneration,

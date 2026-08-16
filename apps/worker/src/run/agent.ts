@@ -57,6 +57,7 @@ import {
   firefighterModel,
   firefighterSystemBlocks,
   firefighterTurnConfig,
+  primeModelModule,
   withFirefighterContext,
 } from "./agent-prompt";
 import {
@@ -127,6 +128,29 @@ export class RunAgent extends Think<Env> {
    * decides whether a run parks must not wait on a database to answer it.
    */
   #openApprovalId: string | null = null;
+
+  /**
+   * Load the model composer before this object can be handed any work.
+   *
+   * `src/agent/model.ts` is reached through a dynamic import (see the long
+   * comment on `primeModelModule` in `agent-prompt.ts`) so that the Slack
+   * webhook's cold start — and every other path through this single Worker
+   * that never runs a Think turn — does not pay to evaluate it. `getModel()`
+   * is synchronous by Think's contract and runs BEFORE `beforeTurn`, so the
+   * load has to be finished before any turn starts.
+   *
+   * `blockConcurrencyWhile` in the constructor is the only place that is true
+   * for every entry path at once: RPC, `fetch`, WebSocket and alarm are all
+   * held until it settles. `onStart()` would cover the alarm and fetch paths
+   * but is not a guarantee for a direct RPC, and a turn re-entered from an
+   * approval arrives as exactly that.
+   */
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.blockConcurrencyWhile(async () => {
+      await primeModelModule();
+    });
+  }
 
   override async onStart(props?: Record<string, unknown>): Promise<void> {
     await super.onStart(props);
