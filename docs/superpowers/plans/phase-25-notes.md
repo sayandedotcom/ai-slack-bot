@@ -316,3 +316,34 @@ than an assumption.
 **If `requiresApproval` is ever set on a connector tool**, the pause/resume
 pass becomes reachable and this test should be upgraded to the pause/resume
 form the plan describes.
+
+## Pre-cutover gaps (Task 14 must close these)
+
+Recorded 2026-08-16 from Task 12 and Task 13 reports. Each fails closed or is
+worked around today, so none is urgent, but each is real.
+
+1. **`POST /api/runs { firstMessage }` is chassis-blind server-side.**
+   `src/api/runs.ts` -> `createChatRun` -> `RunDO`, unconditionally. On the Think
+   chassis the opening turn lands in the wrong session and is silently never
+   answered. Task 13 worked around it dashboard-side (under `think` the SPA mints
+   the run and sends the first message over the agent socket), but the Worker-side
+   hole is open for any other caller. Route it through `wakeRun()`.
+
+2. **The think wake path creates no D1 `runs` row and applies no shadow ratchet.**
+   `ensureSlackRunUnderPolicy` is not called on the think branch, so `#scope()`
+   seeds `shadow: true` and the write guard refuses. Safe, but it means a Slack
+   run on the think chassis cannot post until this is wired.
+
+3. **`agent.ts` `#scope()` TODOs**: `runId` is the key-derived id (a Slack run's D1
+   lookups therefore refuse until the public UUID is resolved), `customerSlug` and
+   `actor` are null, `turnId` is a fresh UUID per build, the audit sink discards,
+   and `ApprovalPort.withdraw()` reports `{ withdrawn: false }` rather than
+   claiming a retraction it did not perform.
+
+4. **`agent-prompt.ts` passes `storage: null` to `resolveTrustedContext`**, so
+   `pendingApproval` is always null in the prompt. It should read the approvals
+   table that `agent-approvals.ts` now owns.
+
+5. **`DurableObject.env` is `protected`**, so the hook modules read bindings
+   through narrow named casts (`envOf`, `runIndexDb`). If `env` is ever widened on
+   `RunAgent`, delete those helpers rather than leaving two ways in.
