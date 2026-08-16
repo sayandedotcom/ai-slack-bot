@@ -168,6 +168,18 @@ describe("input validation is ours, not inherited", () => {
   });
 });
 
+describe("individual capability descriptions carry their promised guidance", () => {
+  it("tells the model to warm the route before recording", () => {
+    const browser = registry().find((p) => p.name === "browser")!;
+    expect(browser.tools.record.description).toMatch(/warm the route/i);
+  });
+
+  it("points checkPR's description at searchPRs for finding a PR number", () => {
+    const github = registry().find((p) => p.name === "github")!;
+    expect(github.tools.checkPR.description).toContain("searchPRs");
+  });
+});
+
 describe("generated declarations", () => {
   it("renders one declaration block per namespace with no duplicate type alias", () => {
     const dts = renderCapabilityDeclarations(registry());

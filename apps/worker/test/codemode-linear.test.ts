@@ -528,6 +528,18 @@ describe("linear.resolveLinkTargets", () => {
   });
 });
 
+describe("linear.createIssue's labels guidance", () => {
+  it("names the five real label names and forbids a `!`-prefixed one", async () => {
+    const tools = await linearTools();
+    const description = (tools.createIssue.inputSchema as { shape?: Record<string, { description?: string }> })
+      .shape?.labels?.description ?? "";
+    for (const name of ["Bug", "Improvement", "Feature", "Customer Request", "Support thread"]) {
+      expect(description).toContain(name);
+    }
+    expect(description).toMatch(/never a name starting with .!./i);
+  });
+});
+
 describe("linear carries no approval annotation", () => {
   it("declares createIssue, findIssue and updateIssue with no approval flag", async () => {
     const tools = await linearTools();
