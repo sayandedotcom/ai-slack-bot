@@ -32,7 +32,18 @@ export function makeLinearTools(ctx: BindingContext): ToolDescriptors {
         title: z.string().min(1).max(255),
         description: z.string().min(1).max(20_000),
         assessment,
-        labels: z.array(z.string().min(1).max(60)).max(10).optional(),
+        // Described, because the model cannot see the workspace's label list
+        // and an unknown name is dropped silently (see resolveLabelIds): with
+        // no guidance it labelled some issues and left others bare. These are
+        // Linear-side metadata for the humans working the board — nothing in
+        // this system reads them back, and they are not the banned ticket type.
+        labels: z
+          .array(z.string().min(1).max(60))
+          .max(10)
+          .optional()
+          .describe(
+            "Always label. Linear label NAMES, matched case-insensitively — a name that does not exist is dropped without error, so use these exact ones: 'Bug' (something is broken), 'Improvement' (existing behaviour made better), 'Feature' (new behaviour); add 'Customer Request' when a customer asked for it, and 'Support thread' when it came out of a customer Slack channel. Never a name starting with '!' — those hand the issue to another team's automation.",
+          ),
       }),
       output: z.strictObject({
         id: z.string(),

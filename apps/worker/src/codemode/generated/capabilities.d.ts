@@ -111,6 +111,7 @@ type CreateIssueInput = {
         customerWeight: "low" | "medium" | "high";
         evidence: string;
     };
+    /** Always label. Linear label NAMES, matched case-insensitively — a name that does not exist is dropped without error, so use these exact ones: 'Bug' (something is broken), 'Improvement' (existing behaviour made better), 'Feature' (new behaviour); add 'Customer Request' when a customer asked for it, and 'Support thread' when it came out of a customer Slack channel. Never a name starting with '!' — those hand the issue to another team's automation. */
     labels?: string[];
 }
 type CreateIssueOutput = {
@@ -142,6 +143,7 @@ type UpdateIssueOutput = {
 declare const linear: {
 	/**
 	 * File an issue. Where it is filed is fixed by configuration and cannot be chosen here.
+	 * @param input.labels - Always label. Linear label NAMES, matched case-insensitively — a name that does not exist is dropped without error, so use these exact ones: 'Bug' (something is broken), 'Improvement' (existing behaviour made better), 'Feature' (new behaviour); add 'Customer Request' when a customer asked for it, and 'Support thread' when it came out of a customer Slack channel. Never a name starting with '!' — those hand the issue to another team's automation.
 	 */
 	createIssue: (input: CreateIssueInput) => Promise<CreateIssueOutput>;
 
