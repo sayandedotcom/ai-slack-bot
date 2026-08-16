@@ -4,7 +4,29 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // `enabled: true` alone already persists 100% of logs; the sub-objects are
+  // here to be explicit about the two things that are NOT the default.
+  //
+  // `invocation_logs` adds the per-request summary line (outcome, status, CPU
+  // and wall time). Cheap at this volume — roughly 150 customer messages a day
+  // plus a one-minute cron — and it is what makes "which invocation was slow"
+  // answerable without adding a single log statement.
+  //
+  // `traces` is off by default during the beta and is deliberately turned ON.
+  // One incident crosses six boundaries here — webhook, queue, ingest, triage,
+  // RunDO, the Worker Loader isolate, the sandbox container — and correlating
+  // them by hand across log lines is exactly the work a trace removes. Free
+  // during the beta. Sampling stays at the default 1: at this volume the cost
+  // of sampling is missing the one incident you needed.
+  //
+  // Neither setting changes what is logged. Invariant 39 (no secret in a log)
+  // and the rule that Gateway payload logging stays off are enforced in code,
+  // not by keeping observability dark.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": true },
+    "traces": { "enabled": true }
+  },
   // The memory-outbox recovery sweep (Phase 10 Task 9, Step 5).
   //
   // Every minute, `scheduled()` re-enqueues a BOUNDED page of due D1
