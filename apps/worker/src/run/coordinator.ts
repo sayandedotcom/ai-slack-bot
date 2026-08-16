@@ -80,10 +80,7 @@ async function ensureSlackRunUnderPolicy(
   env: Env,
   descriptor: RunDescriptor & { channelId: string },
 ): Promise<{ run: RunRecord; stub: RunStub }> {
-  const policy = await getChannelPolicy(env.DB, descriptor.channelId);
-  const run = await createOrGetRunUnderPolicy(env.DB, descriptor, {
-    mustShadow: !canPost(policy),
-  });
+  const run = await ensureSlackRunRowUnderPolicy(env, descriptor);
   const stub = runStubForKey(env.RUNS, run.key);
   await stub.initialize({
     runId: run.id,
@@ -93,6 +90,36 @@ async function ensureSlackRunUnderPolicy(
     threadTs: run.threadTs,
   });
   return { run, stub };
+}
+
+/**
+ * The chassis-independent half of the function above: resolve the channel's
+ * CURRENT policy and create-or-ratchet the D1 `runs` row, with no Durable
+ * Object touched.
+ *
+ * Split out for Phase 25. `ensureSlackRunUnderPolicy` ends in `RunDO`-shaped
+ * work — `runStubForKey(env.RUNS, …)` and `RunDO.initialize` — which the Think
+ * chassis has no equivalent of: a `RunAgent` derives its identity from its own
+ * name and there is nothing to initialize. But the POLICY work is identical on
+ * both chassis and must not be reimplemented per chassis, or the two drift and
+ * only one of them gets the next rule. `src/run/chassis.ts` calls this before
+ * it wakes a Think session; `ensureSlackRunUnderPolicy` calls it and then adds
+ * the legacy stub work.
+ *
+ * Everything the long comment above says about the ratchet applies here,
+ * because this IS that code: policy re-read on every call, `mustShadow`
+ * computed from `canPost`, and one-way only. It THROWS rather than returning a
+ * degraded row if D1 cannot answer, which is what lets a caller treat "policy
+ * unresolvable" as "refuse the wake" simply by doing this first.
+ */
+export async function ensureSlackRunRowUnderPolicy(
+  env: Env,
+  descriptor: RunDescriptor & { channelId: string },
+): Promise<RunRecord> {
+  const policy = await getChannelPolicy(env.DB, descriptor.channelId);
+  return createOrGetRunUnderPolicy(env.DB, descriptor, {
+    mustShadow: !canPost(policy),
+  });
 }
 
 /**

@@ -21,8 +21,9 @@ import { getAgentByName } from "agents";
 import type { RunTurnSubmit, SubmitMessagesResult } from "@cloudflare/think";
 import type { Env } from "../index";
 import type { RunAgent } from "./agent";
-import { wakeSlackRun } from "./coordinator";
-import { assertRunKey, runOriginOf } from "./keys";
+import { createChatRun, ensureSlackRunRowUnderPolicy, wakeSlackRun } from "./coordinator";
+import { assertRunKey, chatRunKey, runOriginOf } from "./keys";
+import { createOrGetRun, getRunByKey, type RunRecord } from "./repository";
 
 /** The two session implementations. Nothing else is a legal `RUN_CHASSIS`. */
 export type RunChassis = "think" | "legacy";
@@ -99,6 +100,26 @@ export async function wakeRun(
   const runKey = assertRunKey(key);
 
   if (resolveChassis(env) === "think") {
+    // THE D1 ROW AND THE RATCHET COME FIRST, BEFORE ANY TURN EXISTS.
+    //
+    // This is the same ordering the legacy branch gets for free by going
+    // through `wakeSlackRun`, and it is the enforcement point for invariant 37:
+    // by the time a generation exists, the `runs` row the shared write guard
+    // re-reads already says shadow, so every `external_write` the run attempts
+    // is denied. Doing it after the submit would leave a window in which a run
+    // on an `observe` channel has work scheduled and no row saying so.
+    //
+    // It is also what makes the run ADDRESSABLE at all on this chassis: the
+    // public `runs.id` is a separate UUID resolved through D1 (invariant 10),
+    // and `/agents/*`, the approval sweep and the run-index projection all
+    // start from that row. Without it a Think Slack run is invisible to every
+    // one of them.
+    //
+    // FAIL CLOSED: if the policy read or the row write throws, this throws, and
+    // the wake never happens. There is deliberately no catch that proceeds with
+    // a default — an unresolvable policy must not become a postable run.
+    await ensureRunRowUnderPolicy(env, runKey);
+
     const stub = await getAgentByName<Env, RunAgent>(env.RUN_AGENTS, runKey);
     const agent = stub as unknown as SubmitOnlyAgent;
     // `submit` is durable and idempotent: the submission row is keyed on
@@ -144,13 +165,102 @@ async function legacyWake(
     throw new RunChassisError("the legacy chassis wakes slack runs only");
   }
 
-  const rest = runKey.slice("slack:".length);
-  const separator = rest.indexOf(":");
+  const { channelId, threadTs } = slackPartsOf(runKey);
   await wakeSlackRun(env, {
     eventId: opts.idempotencyKey,
-    channelId: rest.slice(0, separator),
-    threadTs: rest.slice(separator + 1),
+    channelId,
+    threadTs,
     openingPrompt: input,
   });
   return { accepted: true };
+}
+
+/**
+ * Split an ALREADY-VALIDATED `slack:{channel}:{thread_ts}` key back into its
+ * two parts. Safe only after `assertRunKey`, which is why it takes the key by
+ * that name and is private to this file.
+ */
+function slackPartsOf(runKey: string): { channelId: string; threadTs: string } {
+  const rest = runKey.slice("slack:".length);
+  const separator = rest.indexOf(":");
+  return { channelId: rest.slice(0, separator), threadTs: rest.slice(separator + 1) };
+}
+
+/**
+ * Make sure the D1 `runs` row for `runKey` exists and carries the right shadow
+ * flag, whatever the run's origin.
+ *
+ * Slack runs go through `ensureSlackRunRowUnderPolicy` — the coordinator's own
+ * helper, not a copy of its rules — so the channel policy is re-read on every
+ * wake and the one-way ratchet applied. Chat runs have no channel and therefore
+ * no policy to read: `createOrGetRun` is `createOrGetRunUnderPolicy` with the
+ * ratchet bound off, which is exactly what the legacy chat path does.
+ *
+ * Idempotent, so a redelivered wake re-reads the policy (the point) and writes
+ * no row (`INSERT OR IGNORE`).
+ */
+async function ensureRunRowUnderPolicy(env: Env, runKey: string): Promise<RunRecord> {
+  if (runOriginOf(runKey) === "slack") {
+    const { channelId, threadTs } = slackPartsOf(runKey);
+    return ensureSlackRunRowUnderPolicy(env, {
+      key: runKey,
+      origin: "slack",
+      channelId,
+      threadTs,
+    });
+  }
+  return createOrGetRun(env.DB, {
+    key: runKey,
+    origin: "chat",
+    channelId: null,
+    threadTs: null,
+  });
+}
+
+/**
+ * Start a dashboard-initiated chat run on whichever chassis is configured, and
+ * deliver its opening message.
+ *
+ * `POST /api/runs` used to call `createChatRun` — i.e. `RunDO` — unconditionally.
+ * Under `RUN_CHASSIS=think` that put the run's first message into a session
+ * nothing was listening to: the row and the id came back, the dashboard opened
+ * the `RunAgent` socket the id resolves to, and the opening turn sat in the
+ * other object forever, unanswered and with no error anywhere. A silent wrong
+ * answer, which is the one failure mode this façade exists to prevent — so the
+ * route goes through here now, and neither branch is reachable by accident.
+ *
+ * The idempotency token is `steer:{requestId}`, the SAME string the legacy path
+ * uses as its turn id and the same one `POST /api/runs/:id/turns` and the run
+ * socket use. A client that retries a create it never saw the response to
+ * re-delivers the same token, and the Think submission row refuses it exactly
+ * as `RunDO.appendTurn` refuses the duplicate turn id.
+ *
+ * Returns the row as it stands AFTER the opening turn was admitted, for the
+ * same reason `createChatRun` re-reads it: this is the one moment the client's
+ * only view of the run is the row we are about to hand back.
+ */
+export async function createRunFromChat(
+  env: Env,
+  options: { firstMessage?: string; requestId?: string } = {},
+): Promise<RunRecord> {
+  if (resolveChassis(env) === "legacy") {
+    const { run } = await createChatRun(env, options);
+    return run;
+  }
+
+  // Both uuids are still minted here, and they are still different values:
+  // the public `runs.id` comes from the insert, the `chat:{uuid}` key is this
+  // one, and the key never leaves the Worker (invariant 10).
+  const key = chatRunKey(crypto.randomUUID());
+  const run = await ensureRunRowUnderPolicy(env, key);
+
+  const first = options.firstMessage?.trim();
+  if (!first) return run;
+
+  await wakeRun(env, key, first, { idempotencyKey: `steer:${options.requestId ?? run.id}` });
+
+  // `RunAgent` owns its own status; the D1 row is a projection of it. Re-read
+  // so a client that renders straight from this response sees whatever the
+  // wake committed rather than the pre-wake snapshot.
+  return (await getRunByKey(env.DB, key)) ?? run;
 }

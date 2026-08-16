@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { createChatRun } from "../run/coordinator";
+import { createRunFromChat } from "../run/chassis";
 import { runStubForKey } from "../run/keys";
 import { getRunById, listRuns, readRunUsage, RUN_LIST_MAX_LIMIT } from "../run/repository";
 import { decimalNanoUsd } from "../agent/cost";
@@ -75,7 +75,12 @@ runsApi.post("/runs", async (c) => {
   }
   const requestId = typeof body.requestId === "string" ? body.requestId : undefined;
 
-  const { run } = await createChatRun(c.env, { firstMessage, requestId });
+  // Through the chassis facade, NOT `createChatRun` directly. Under
+  // `RUN_CHASSIS=think` the direct call created the run in `RunDO` while the
+  // dashboard opened the `RunAgent` this id resolves to, so the opening message
+  // was silently never answered. The Access and roster checks on this route are
+  // unchanged; only the session the turn lands in is.
+  const run = await createRunFromChat(c.env, { firstMessage, requestId });
   return c.json({ run: publicRun(run) }, 201);
 });
 
