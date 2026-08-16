@@ -4,8 +4,11 @@ One agent that hears every message the team hears in Slack, wakes on the ones th
 reproduces the bug on its own cloud machine, fixes it, and opens a PR. Every write is
 gated by a mandatory effect class checked against the database at call time; on top of
 that, anything it *says* to a customer that commits us waits behind one dashboard click.
-Those are two different mechanisms, and the second one is about speech, not code. It is one Cloudflare Worker on one origin, with no server to keep alive
-and no orchestration framework underneath it.
+Those are two different mechanisms, and the second one is about speech, not code. It is one
+Cloudflare Worker on one origin, with no server to keep alive. The run session that is live
+today is hand-built on a Durable Object; a second chassis on Cloudflare's Agents SDK and
+Project Think is built, tested and deployed *beside* it behind a flag, and is **not yet
+active** — see *Two run chassis* below.
 
 **The pipeline, end to end:** Slack → queue → D1 + Zep → triage (Haiku) → agent (Fable 5,
 Code Mode) → sandbox (no write credentials) → PR + Linear issue + proof video, with
@@ -13,19 +16,22 @@ committal customer speech held for a dashboard click.
 
 - **Origin:** https://firefighter.sayandeten.workers.dev
 - **Stack:** Cloudflare Workers · Durable Objects · D1 · Queues · R2 · Workers Assets ·
-  Worker Loader · Cloudflare Sandbox · Hono · Vitest (`@cloudflare/vitest-pool-workers`)
+  Worker Loader · Cloudflare Sandbox · Hono · Vitest (`@cloudflare/vitest-pool-workers`) ·
+  Agents SDK (`agents`) + Project Think (`@cloudflare/think`) as the second, flag-gated chassis
 - **Spec:** `docs/superpowers/specs/2026-08-10-firefighter-agent-design.md` ·
   **Phase plans:** `docs/superpowers/plans/` · **Drill runbook:** `docs/drill.md`
 - **Gate:** `cd apps/worker && pnpm test && pnpm typecheck && pnpm codemode:dts:check` —
-  **104 test files / 2133 passed, 2 skipped; tsc clean; capability `.d.ts` in sync**
-  (measured 2026-08-16 at `05185b1`). There is no CI; those three commands are the gate.
+  **117 test files / 2228 passed, 14 expected-fail, 4 skipped; tsc clean; capability `.d.ts`
+  in sync**; dashboard **8 files / 74 passed** (measured 2026-08-17 at `b7d1c44`). The 14
+  expected failures are `it.fails` pins on the inactive Think chassis, each naming an open
+  defect — listed under *Two run chassis*. There is no CI; those three commands are the gate.
 
 ---
 
 ## Architecture
 
 One Worker (`apps/worker/src/index.ts`) with three entry points: a Hono `fetch` (Slack
-webhook, `/api/*`, `/ws/*`, OAuth, `/proofs/*`, asset fallthrough), one `queue()` handler
+webhook, `/api/*`, `/ws/*`, `/agents/*`, OAuth, `/proofs/*`, asset fallthrough), one `queue()` handler
 that switches on `batch.queue` across three queues, and a one-minute `scheduled()` cron
 running four independent repair sweeps — memory outbox, undelivered approvals, nudges,
 orphan sandboxes — through `Promise.allSettled`.
@@ -42,13 +48,13 @@ flowchart LR
   ING -->|"event_id, triage-eligible channels only"| TRIQ[["queue firefighter-triage"]]
   MEMQ -->|"episode text via D1 outbox"| ZEP["Zep V3 graphs<br/>customer + org"]
   TRIQ -->|"thread + recall context"| TRI["triage consumer<br/>claude-haiku-4-5"]
-  TRI -->|"wake + opening_prompt, shadow ratchet applied"| RUNDO["RunDO Durable Object<br/>binding RUNS, WebSocket hibernation"]
+  TRI -->|"wakeRun in src/run/chassis.ts: wake + opening_prompt, shadow ratchet applied"| RUNDO["run session Durable Object<br/>RunDO, binding RUNS — legacy, ACTIVE<br/>or RunAgent extends Think, binding RUN_AGENTS — RUN_CHASSIS=think"]
   RUNDO -->|"transcript + one tool run_code"| GW["AI Gateway<br/>claude-fable-5"]
   RUNDO -->|"model-authored TS, capabilities as RPC args"| ISO["Worker Loader isolate<br/>binding LOADER, globalOutbound null"]
   ISO -->|"sandbox.exec, writeFile, diff, browser.record"| BOX["Sandbox container DO<br/>binding SANDBOX, keyed run:runId"]
   BOX -->|"unified diff + proof recording mp4"| R2[("R2 binding ARTIFACTS<br/>bucket firefighter-artifacts")]
   RUNDO -->|"projection rows when projection_seq increases"| D1
-  DASH["dashboard SPA<br/>Workers Assets binding ASSETS, behind Access"] -->|"live stream events over /ws"| RUNDO
+  DASH["dashboard SPA<br/>Workers Assets binding ASSETS, behind Access"] -->|"live stream over /ws (legacy) or /agents/* useAgentChat (think), chosen via /api/chassis"| RUNDO
   DASH -->|"PATCH approvals, Access JWT + roster"| D1
 ```
 
@@ -62,7 +68,65 @@ session authority; its SQLite holds turns, stream events and approval state, D1 
 projection applied only when `projection_seq` increases, and dashboard WebSockets hibernate
 via `ctx.acceptWebSocket`.
 
+### Two run chassis
+
+Phase 25 (spec `docs/superpowers/specs/2026-08-16-think-chassis-migration-design.md`, log
+`docs/superpowers/plans/phase-25-notes.md`) ported the run session onto Cloudflare's Agents SDK
+and Project Think as a **strangler**: `RunAgent extends Think<Env>` (`src/run/agent.ts`, with
+`agent-approvals.ts`, `agent-projection.ts`, `agent-prompt.ts`, `agent-steering.ts`) lives
+beside `RunDO`, and `RUN_CHASSIS` in `wrangler.jsonc` decides which one a wake resolves to.
+
+- **One switch, one wake path.** `src/run/chassis.ts` is the only reader of `RUN_CHASSIS`
+  (`resolveChassis`, `:57`) and `wakeRun()` / `createRunFromChat()` are the only ways a run is
+  woken on either chassis. An unrecognised value **throws** rather than falling back — a typo
+  must not run an incident on a chassis nobody chose. Binding `RUN_AGENTS`, migration tag `v3`
+  (`RunAgent` *and* `CodemodeRuntime` — the durable code-mode runtime is a facet of the agent's
+  DO and must be declared a DO class, not merely exported; measured, see the AI-tool notes).
+- **What Think owns there:** turns (`runTurn({ mode: "submit", idempotencyKey })`), the
+  session SQLite, WebSocket transport and stream resumption (`/agents/run-agents/{runs.id}`,
+  behind Access; the Worker resolves the public id to the DO key through D1 and rewrites the
+  path, `src/index.ts:346-387`), and the hook points the loop moved into — `beforeTurn`
+  (policy re-read + shadow ratchet, `maxRetries: 0`, `disableParallelToolUse`), `beforeStep`
+  (cache breakpoints, spliced steers), `onStepFinish` (D1 projection, nano-USD usage rows).
+- **What did not move:** the model still holds exactly one tool. `run_code` comes from
+  `createExecuteRuntime(this, { executor, connectors, state: undefined, browser: undefined })`
+  (`src/run/agent.ts:496-506`), where `executor` is the same guarded loader + parent-side race
+  as the legacy chassis and the two `undefined`s are load-bearing — Think's default workspace
+  would otherwise hand the model a `state.*` filesystem the write guard never sees.
+  `workspaceBash`, `fetchTools` and `includeMcpTools` are off (`:205-207`), and the assertion
+  reads the *merged* tool map, not `getTools()` (`:775-781`). The 11 namespaces are the same
+  audited descriptors, wrapped as `FirefighterConnector`s (`src/codemode/connectors/`) with
+  their Zod converted to JSON Schema (`src/codemode/schema.ts`). Ingest, triage, channel policy,
+  the write guard, the effect ledger, Sandbox, Zep, approvals' D1 CAS: unchanged.
+- **Status, as deployed:** `RUN_CHASSIS` is `"legacy"` in `wrangler.jsonc` (`:204`) and on the
+  live Worker (`wrangler versions view` of the 2026-08-16 21:53 UTC deployment shows
+  `RUN_CHASSIS ("legacy")` with both `RUNS (RunDO)` and `RUN_AGENTS (RunAgent)` bound). **Every
+  drill run and every number in this README ran on the legacy chassis.** The Think chassis has
+  never been active in production. The dashboard ships both views and asks `/api/chassis` on
+  load (`apps/dashboard/src/lib/chassis.ts`); the legacy-only routes (`/ws`, run snapshot,
+  steer) and `/agents/*` each refuse by name when the other chassis is active.
+- **What still blocks the flip** — 14 `it.fails` pins in tracked tests, each a defect on the
+  Think chassis that the legacy chassis does not have: no generation spend cap
+  (`test/run-agent-loop.test.ts:488`); no `awaiting_approval` projection while a decision is
+  outstanding, and `approval.withdraw` is a stub (`test/run-agent-approvals.test.ts:335-419`);
+  a thread reply to an owned run does not reach the agent (`test/run-chassis.test.ts:387`);
+  the projection accepts an illegal status transition (`test/run-agent-core.test.ts:335`);
+  the agent socket sends the **private run key** to the browser on connect and a retried
+  steer steers twice (`test/agents-route.test.ts:538,339`); a steer to an idle run schedules
+  nothing and a steer bypasses an open approval (`test/run-agent-steering.test.ts:233,265`);
+  a superseded generation is not turned into a safe tool result, unsigned reasoning is
+  accepted, and Slack/Chat final turns carry no delivery label
+  (`test/run-agent-loop.test.ts:518-676`). Cutover means those green, `RUN_CHASSIS=think`
+  deployed, the drill re-run on it, then deleting `RunDO`/`session.ts`/`coordinator.ts`/
+  `loop.ts`/`ports.ts`/`/ws` (spec §8, step 6). Until then the honest architecture is the
+  legacy one, and the diagrams below draw it.
+
 ### One customer message becoming a PR
+
+The active (legacy) chassis. On the Think chassis participants `R` and `L` collapse into one
+`RunAgent`: step 6 is `runTurn({ mode: "submit", idempotencyKey: event_id })`, steps 7–13 are
+Think's loop with the hooks named above, and step 16 is a `schedule(0, "reenterAfterApproval")`
+callback rather than `appendTurn` — `runTurn` from inside a DO RPC method deadlocks.
 
 ```mermaid
 sequenceDiagram
@@ -120,7 +184,7 @@ This is the diagram worth studying. Credentials exist in exactly one of the thre
 ```mermaid
 flowchart TB
   subgraph WORKER["Trusted Worker — holds every credential"]
-    REG["capability registry src/codemode/registry.ts<br/>slack memory linear supabase langsmith betterstack files approval sandbox browser github"]
+    REG["capability registry src/codemode/registry.ts<br/>same descriptors wrapped as CodemodeConnectors, src/codemode/connectors/, on the Think chassis<br/>slack memory linear supabase langsmith betterstack files approval sandbox browser github"]
     GUARD["write guard src/codemode/write-guard.ts<br/>gates effect external_write only"]
     LEDGER["audit + budget + at-most-once ledger<br/>src/codemode/bindings/shared.ts, src/codemode/effects.ts"]
     SWAP["Sandbox.outboundByHost src/sandbox/class.ts<br/>rewrites sentinel host to github.com + MONOREPO_PAT"]
@@ -150,6 +214,11 @@ CPU/subrequest limits, so its only reach is the typed capabilities handed across
 re-reads channel policy and the run's `shadow` flag *from D1 at call time* for anything
 classified `external_write`; `read`, `control_write` and `sandbox_write` pass, which is why a
 shadow run can still investigate, escalate, and boot a container without being able to speak.
+On the Think chassis nothing in that chain is re-implemented: `FirefighterConnector.tools()`
+(`src/codemode/connectors/base.ts`) hands Think the *audited* `execute` of each descriptor, so
+a connector method cannot skip the guard, and `test/codemode-connectors.test.ts` sweeps all
+eleven namespaces to prove none sets `requiresApproval` — approval stays a model decision
+routed through `approval.escalate`, never a harness gate.
 
 The container holds no write credential. Its git remote points at `git.firefighter.local`,
 which resolves nowhere, and the static `Sandbox.outboundByHost` handler in
@@ -161,31 +230,38 @@ placeholder for `MONOREPO_PAT`, and refuses any path outside `Zellify/web2app-re
 ## Security model
 
 Every claim below is traceable to code and to a test. The counts are from a run of exactly
-these 30 files on 2026-08-16 at `05185b1`: **30 files, 598 passed, 1 skipped**
-(the skip is the CPU-burn case, which cannot be proven under the local pool — see the
-AI-tool notes). Paths are relative to `apps/worker/`.
+these 39 files on 2026-08-17 at `b7d1c44`: **39 files, 694 passed, 3 skipped** — where
+"passed" includes the 14 `it.fails` pins on the inactive Think chassis (vitest counts an
+expected failure as a pass; each is called out where it sits, because a pin is *not* a proof).
+The skips are the CPU-burn case, which cannot be proven under the local pool (see the AI-tool
+notes), the agent-socket ping and the edited-text sender seam. Paths are relative to
+`apps/worker/`. Rows 1–15 are the legacy chassis, which is the one running; rows 16–17 are what
+the Think chassis adds and what it still lacks.
 
 | # | Claim, as built | Enforcing code | Tests (passing) |
 |---|---|---|---|
 | 1 | Slack's `v0` HMAC is verified with a ±300 s replay window before any I/O; the handler then does one queue send and returns 200 | `src/slack/verify.ts:34,43-49` (constant-time compare `:7-14`); `src/slack/events.ts:16-22,41` | `test/verify.test.ts` (7) · `test/events.test.ts` (5) |
 | 2 | DMs and mpims are dropped unconditionally at ingest; so are all foreign bots. The app's **own** user-token posts are kept as `ingested_self` — stored and remembered, never re-triaged — which is the loop guard | `src/ingest/rules.ts:51,52,54-79` (unconfigured self fails safe to drop) | `test/rules.test.ts` (19) · `test/ingest.test.ts` (9) · `test/counters.test.ts` (8) |
 | 3 | Unmapped channels fail closed for triage and posting. They are still **ingested** — that is deliberate, not an oversight: requirement 1 is that everything is heard | `src/db/channels.ts:23-26,30-32,107-109` | `test/channels.test.ts` (11) · `test/ingest.test.ts` (9) · `test/codemode-write-guard.test.ts` (21) |
-| 4 | `canPost()` is enforced host-side inside the capability layer, never in a prompt — and one layer more general than the spec asked: it sits in the shared guard applied to *every* `external_write`, not only `slack.reply` | `src/codemode/write-guard.ts:117-123`; wired at `src/codemode/registry.ts:255`; declared at `src/codemode/bindings/slack.ts:97-98` | `test/codemode-write-guard.test.ts` (21) · `test/codemode-slack.test.ts` (25) · `test/codemode-security.test.ts` (41) · `test/slack-reply-identity.test.ts` (22) |
+| 4 | `canPost()` is enforced host-side inside the capability layer, never in a prompt — and one layer more general than the spec asked: it sits in the shared guard applied to *every* `external_write`, not only `slack.reply` | `src/codemode/write-guard.ts:117-123`; wired at `src/codemode/registry.ts:255`; declared at `src/codemode/bindings/slack.ts:97-98`; the Think chassis re-exposes the *same* audited `execute` through `src/codemode/connectors/base.ts` | `test/codemode-write-guard.test.ts` (21) · `test/codemode-slack.test.ts` (25) · `test/codemode-security.test.ts` (41) · `test/slack-reply-identity.test.ts` (22) · `test/codemode-connectors.test.ts` (10) |
 | 5 | Ingest is idempotent on `event_id`; Slack's retries converge on one run and one opening turn. "Never a second PR" is a *separate* mechanism — the effect ledger plus update-don't-create | `src/db/messages.ts:16`; `src/ingest/consumer.ts:25-33`; `src/triage/consumer.ts:88-101`; `src/codemode/effects.ts:285-290` | `test/ingest.test.ts` (9) · `test/triage-consumer.test.ts` (9) · `test/run-triage.test.ts` (11) · `test/github-gateway.test.ts` (49) |
-| 6 | The Tier 1 isolate runs with `globalOutbound: null` forced (a caller-supplied value is discarded), an env asserted empty, and clamped CPU/subrequests; a parent-side wall-clock race sits on top | `src/codemode/guarded-loader.ts:27-31,77-86`; `src/codemode/executor.ts:212-246` | `test/codemode-guarded-loader.test.ts` (14) · `test/codemode-security.test.ts` (41, +1 skipped) · `test/codemode-loader.test.ts` (3) · `test/codemode-isolation.test.ts` (12) |
+| 6 | The Tier 1 isolate runs with `globalOutbound: null` forced (a caller-supplied value is discarded), an env asserted empty, and clamped CPU/subrequests; a parent-side wall-clock race sits on top | `src/codemode/guarded-loader.ts:27-31,77-86`; `src/codemode/executor.ts:212-246`; handed to Think as `executor` at `src/run/agent.ts:481-494` | `test/codemode-guarded-loader.test.ts` (14) · `test/codemode-security.test.ts` (41, +1 skipped) · `test/codemode-loader.test.ts` (3) · `test/codemode-isolation.test.ts` (12) |
 | 7 | The write guard re-reads channel policy **and** the run's shadow flag from D1 at call time, not at composition time; a missing `runs` row refuses | `src/codemode/write-guard.ts:117,130-138,156-162` | `test/codemode-write-guard.test.ts` (21) — including a policy flipped to `observe` mid-run stopping the *next* write |
-| 8 | The effect ledger is at-most-once per (run, turn, namespace, method, args-hash), coordinated in D1, and survives a Worker restart | `src/codemode/effects.ts:285-293,400-405`; in-doubt refusal `:234` | `test/codemode-effects.test.ts` (21) · `test/codemode-security.test.ts` (41) |
+| 8 | The effect ledger is at-most-once per (run, turn, namespace, method, args-hash), coordinated in D1, and survives a Worker restart | `src/codemode/effects.ts:285-293,400-405`; in-doubt refusal `:234` | `test/codemode-effects.test.ts` (21) · `test/codemode-security.test.ts` (41) · `test/run-agent-replay.test.ts` (1 — two identical `linear.createIssue` calls in one Think turn make one vendor call and one ledger row) |
 | 9 | The sandbox container holds no write credential: it receives the sentinel host and a placeholder, and the PAT is substituted at Worker egress for one pinned repo | `src/sandbox/class.ts:40,109,137-155` | `test/sandbox-lifecycle.test.ts` (23). **Partial:** the container-side half is proven by test; the egress swap itself has no test — see the gaps below |
 | 10 | Dev-tier env is injected **per process**, only when model code sets `injectDevEnv`, and known values are redacted from every return path — stdout, stderr, process tails, file reads | `src/sandbox/env.ts:74-83,150-158`; `src/sandbox/gateway.ts:125-141,231-234` | `test/sandbox-env.test.ts` (22) · `test/codemode-sandbox.test.ts` (51) |
-| 11 | Approval needs a verified Access JWT plus roster membership (viewers read, fire-fighters `PATCH`), and a D1 CAS makes exactly one decision win; the loser gets 409 naming the winner | `src/api/approvals.ts:134-141,189,206,250`; `src/access/roster.ts:22-53`; `src/approval/repository.ts:167-201` | `test/approval-api.test.ts` (24) · `test/approval-repository.test.ts` (40) · `test/access-jwt.test.ts` (17) · `test/approval-e2e.test.ts` (11) |
+| 11 | Approval needs a verified Access JWT plus roster membership (viewers read, fire-fighters `PATCH`), and a D1 CAS makes exactly one decision win; the loser gets 409 naming the winner | `src/api/approvals.ts:148-155,203,220,264`; `src/access/roster.ts:22-53`; `src/approval/repository.ts:167-201`; on the Think chassis the local half is `src/run/agent-approvals.ts` behind the same route | `test/approval-api.test.ts` (24) · `test/approval-repository.test.ts` (40) · `test/access-jwt.test.ts` (17) · `test/approval-e2e.test.ts` (11) · `test/run-agent-approvals.test.ts` (24, of which **4 are `it.fails`** — `awaiting_approval` is not projected and `withdraw` is a stub there) |
 | 12 | Customer-facing **Slack replies** go out under the on-duty engineer's user token. A missing identity terminates as `blocked` — there is never a bot-token fallback, even though a working bot token is right there | `src/approval/sender.ts:56-73,98-126`; `src/identity/user-token.ts` | `test/slack-reply-identity.test.ts` (22) · `test/user-token-sender.test.ts` (11) · `test/codemode-slack.test.ts` (25) |
-| 13 | Secrets never reach prompts, events, tool output, logs or memory (invariant 39). There is no single choke point — it is enforced at each surface and swept by a planted-canary test | `src/codemode/bindings/shared.ts:178-205`; `src/sandbox/gateway.ts:231-234`; `src/betterstack/client.ts:45-59`; `src/sandbox/env.ts:39-83`; `src/agent/ports.ts:47`; `src/memory/consumer.ts:425` | `test/agent-canaries.test.ts` (5) — sweeps the model call, events, turns, transcript, D1, memory and logs, with a control proving the probe works · `test/codemode-security.test.ts` (41) |
-| 14 | The Linear team and the GitHub repo/base are pinned server-side; the bindings take no destination argument, and base `dev` is refused by name | `src/agent/dependencies.ts:272`; `src/codemode/bindings/linear.ts:26`; `src/git/commit.ts:82-84,454,518,557` | `test/codemode-linear.test.ts` (63) · `test/github-gateway.test.ts` (49) |
+| 13 | Secrets never reach prompts, events, tool output, logs or memory (invariant 39). There is no single choke point — it is enforced at each surface and swept by a planted-canary test | `src/codemode/bindings/shared.ts:178-205`; `src/sandbox/gateway.ts:231-234`; `src/betterstack/client.ts:45-59`; `src/sandbox/env.ts:39-83`; `src/agent/ports.ts:47`; `src/memory/consumer.ts:425` | `test/agent-canaries.test.ts` (5) — sweeps the model call, events, turns, transcript, D1, memory and logs, with a control proving the probe works · `test/codemode-security.test.ts` (41). **Not yet extended** to `RunAgent`'s session tables or the code-mode runtime's replay log — spec §5 requires that before cutover |
+| 14 | The Linear team and the GitHub repo/base are pinned server-side; the bindings take no destination argument, and base `dev` is refused by name | `src/agent/dependencies.ts:272`; `src/codemode/bindings/linear.ts:26`; `src/git/commit.ts:87-89,459,523,562` | `test/codemode-linear.test.ts` (63) · `test/github-gateway.test.ts` (49) |
 | 15 | Triage emits only `{wake, why, opening_prompt}` — the Zod schema is the enforcement, because no ticket-type field exists — and nothing downstream branches on a type | `src/triage/run.ts:12`; `src/triage/prompt.ts:12-20`; `src/agent/loop.ts:100`; `src/agent/prompt/policy.ts:51` | `test/triage-run.test.ts` (6) · `test/triage-prompt.test.ts` (3) · `test/run-api.test.ts` (35) |
+| 16 | **Think chassis, inactive.** The model still holds exactly one tool: `workspaceBash`/`fetchTools`/`includeMcpTools` off, the execute tool built with `state: undefined, browser: undefined`, and the assertion reads the *merged* tool map (incl. `session.tools()`), not `getTools()`. `RUN_CHASSIS` has one reader and an unrecognised value throws | `src/run/agent.ts:205-207,496-506,775-781`; `src/run/chassis.ts:57-65` | `test/run-agent-core.test.ts` (13, of which 1 `it.fails`: illegal status transitions are projected) · `test/run-chassis.test.ts` (15, of which 1 `it.fails`: an owned-thread reply does not reach the agent) · `test/codemode-connectors.test.ts` (10) · `test/codemode-connector-base.test.ts` (1) |
+| 17 | **Think chassis, inactive.** `/agents/*` sits behind Access, refuses by name while the legacy chassis is active, and resolves the public `runs.id` to the DO key through D1 — a guessed raw key is a 404. **Open:** the socket still sends the private run key to the browser on connect, and a retried steer steers twice | `src/index.ts:346-387` | `test/agents-route.test.ts` (11, of which **2 are `it.fails`** — the two open items — plus 1 skipped) · `test/run-agent-steering.test.ts` (6, of which 2 `it.fails`) · `test/run-agent-loop.test.ts` (13, of which 4 `it.fails`, incl. **no generation spend cap**) |
 
 ### Where the coverage stops
 
-Two claims are weaker than the rest, and saying so is the point of the table.
+Two legacy claims are weaker than the rest, and saying so is the point of the table; the Think
+chassis adds a third.
 
 - **The Worker-egress PAT swap has no test.** `Sandbox.outboundByHost`
   (`src/sandbox/class.ts:137-155`) — including the `forbidden_repo` refusal — runs on the
@@ -197,6 +273,12 @@ Two claims are weaker than the rest, and saying so is the point of the table.
   D1 write in the request path; nothing asserts the absence of a `fetch`. That property is
   currently held by the shape of `src/slack/events.ts`, which has no other call, not by a
   test.
+
+- **The Think chassis is pinned, not proven.** Rows 16–17 carry 14 `it.fails` cases: each one
+  is a real defect the legacy chassis does not have, written down as a failing test so it
+  cannot be forgotten, and the canary sweep (row 13) has not been pointed at Think's session
+  tables. That is why `RUN_CHASSIS` is `legacy` on the deployed Worker, and why every claim
+  in rows 1–15 is made about the legacy chassis only.
 
 One more caveat belongs here rather than in a footnote. Redaction of dev-tier values has a
 floor: values shorter than 16 characters are left alone (`MIN_REDACTABLE_LENGTH` in
@@ -231,13 +313,13 @@ wins; these are the six places it did.
    process while a dev server runs. See the caveat above.
 5. **§8.7, Access-bypassed paths — one more than the spec lists.** The spec names
    `/slack/events` and `/oauth/*`. `/proofs/:key` is also bypassed (`src/api/proofs.ts`,
-   `src/index.ts:224-227`) so that Slack's unfurler — and a customer clicking cold — can fetch
+   `src/index.ts:271-280`) so that Slack's unfurler — and a customer clicking cold — can fetch
    a proof recording. Protection there is unguessable R2 keys and uniform 404s, not Access.
 6. **§8.6, the roster — the override is realized in code, and the count differs.** The spec says
    seven addresses and mentions the personal-email override only on the Access side. The build
    maps eight, with `sayandeten@gmail.com` in `FIREFIGHTERS`, tagged `G2-TEMP-OVERRIDE`. See
    *Access and the temporary override* below.
-7. **PR authorship — the deployed value is `worker-pat`, not the engineer.** `src/git/commit.ts:102`
+7. **PR authorship — the deployed value is `worker-pat`, not the engineer.** `src/git/commit.ts:107`
    resolves `GITHUB_AUTHOR` to one of `on-duty | worker-pat`, and `wrangler.jsonc` sets
    **`worker-pat`**: PRs are authored by the ship credential's owner, not by the on-duty
    engineer's OAuth identity. The `on-duty` path is built and reachable — it is one value away —
@@ -250,44 +332,51 @@ wins; these are the six places it did.
 
 ## Cost
 
-Everything here was queried out of production D1 on **2026-08-16**, *after* the Phase 23 drill
-runs, so the figures include them rather than predating them. Anything that could not be
+Everything here was queried out of production D1 on **2026-08-17**, *after* the Phase 23 drill
+runs and the three follow-on live runs of 2026-08-16 evening (`docs/drill.md` §3.5), so the
+figures include them rather than predating them. Anything that could not be
 measured says so; nothing here is an estimate wearing a measurement's clothes.
 
 ### Model spend — measured
 
 | Source | Model | Volume | Cost |
 |---|---|---|---|
-| `agent_model_calls` | `claude-fable-5` via AI Gateway | 426 calls across 25 runs | **$22.8935** |
-| `triage_decisions` | `claude-haiku-4-5` | 32 decisions, 28 of them `wake: true` | **$0.0364** |
-| | | **Total model spend** | **$22.93** |
+| `agent_model_calls` | `claude-fable-5` via AI Gateway | 480 calls across 28 runs | **$27.4727** |
+| `triage_decisions` | `claude-haiku-4-5` | 37 decisions, 31 of them `wake: true` | **$0.0412** |
+| | | **Total model spend** | **$27.51** |
 
-Window: first agent call 2026-08-13 13:30 UTC, last 2026-08-16 during the drill. Triage averages
+Window: first agent call 2026-08-13 13:30 UTC, last 2026-08-16 21:18 UTC. Triage averages
 under 3 s and about a tenth of a cent per decision. `agent_model_calls` stores integer
 `cost_nano_usd`, not floating dollars (invariant 29) — the dollar figures above are that
 integer divided out at the end, once.
 
-**Token split:** 7,996,891 input (7,369,732 cache read · 626,307 cache write · 852 uncached)
-and 153,729 output.
+**Token split:** 9,670,088 input (8,923,042 cache read · 746,086 cache write · 960 uncached)
+and 184,279 output.
 
-**Prompt caching is the reason this fits in a trial budget.** 92.2 % of all input tokens were
-served from cache, and 398 of 426 calls (93.4 %) had a cache read. Priced at the table in
+**Prompt caching is the reason this fits in a trial budget.** 92.3 % of all input tokens were
+served from cache, and 449 of 480 calls (93.5 %) had a cache read. Priced at the table in
 `src/agent/cost.ts` ($10 / Mtok input, $12.50 / Mtok 5-minute cache write, $1 / Mtok cache
-read, $50 / Mtok output), the identical traffic with no caching would have cost **$87.66**.
-Caching saved **$64.76 — 73.9 %**.
+read, $50 / Mtok output), the identical traffic with no caching would have cost **$105.91**.
+Caching saved **$78.44 — 74.1 %**.
 
-**Per run:** $0.92 across the 25 runs that made model calls. The distribution matters more than
-the mean — the most expensive run was $2.42 over 34 steps, the cheapest $0.30 over 10. The two
-Phase 23 drill runs sit at either end of the useful range: a how-to question answered in 15
-steps for **$0.91**, and a small feature request taken all the way to a merged-ready PR in 30
-steps for **$2.03**.
+**Per run:** $0.98 across the 28 runs that made model calls. The distribution matters more than
+the mean — the cheapest run was $0.30 over 10 steps; the most expensive is now **$4.17 over 50
+steps**, and it is the scenario 2 drill run *after* a follow-up in its thread asked it to
+re-record and paste browser diagnostics: the first generation shipped the PR for $2.03, the
+second spent $2.14 and died on `generation_cost_limit` — the spend guard's worst-case input
+reservation, not the $5 cap itself, refuses the next step once a prompt is large enough. A
+long thread costs money *and* can end a run; see `docs/drill.md` §7. The other drill runs sit
+where the useful range is: a how-to question in 15 steps for **$0.91**, a small feature request
+taken to a review-ready PR in 30 steps for **$2.03**, and a second one in 17 steps for **$1.24**.
 
-**Per PR:** three PRs have been opened on `Zellify/web2app-rebuild` — **#1506**
-(`fix/nav-cta-copy`), **#1507** (`fix/remove-careers-nav-link`), both closed with nothing merged,
-and **#1508** from the Phase 23 drill. Dividing all model spend by three gives **$7.64 per PR**,
-which flatters nothing: it charges every exploratory and failed run to those three. The three
-runs that actually shipped cost **$1.45**, **$2.42** and **$2.03**. Roughly **$2 is the honest
-marginal cost of one PR**, and the consistency across three independent runs is the useful part.
+**Per PR:** four PRs have been opened on `Zellify/web2app-rebuild` — **#1506**
+(`fix/nav-cta-copy`), **#1507** (`fix/remove-careers-nav-link`), **#1508** from the Phase 23
+drill, all closed with nothing merged, and **#1534** (`fix/remove-pricing-navbar-link`), still
+open at the time of writing. Dividing all model spend by four gives **$6.87 per PR**, which
+flatters nothing: it charges every exploratory and failed run to those four. The four runs that
+actually shipped cost **$1.45**, **$2.42**, **$2.03** and **$1.24**. Roughly **$1.25–2.50 is
+the honest marginal cost of one PR**, and the consistency across four independent runs is the
+useful part.
 
 ### Cloudflare — partly measured
 
@@ -316,7 +405,7 @@ Linear cost nothing beyond the workspace seats Zellify already has.
 
 ### Against the $500 ceiling
 
-Measured spend is **$22.93 of $500 — 4.6 %, leaving $477.07** — plus an unmeasured Cloudflare
+Measured spend is **$27.51 of $500 — 5.5 %, leaving $472.49** — plus an unmeasured Cloudflare
 component bounded by the plan base and the usage figures above, which are far inside every
 included allowance. There is no plausible arithmetic in which the unmeasured part moves this
 into the same order of magnitude as the ceiling.
@@ -773,15 +862,30 @@ could not see.
 
 Ordered by value, and honest about which of these is code and which is a conversation.
 
-**1. A human is told when a run dies.** A run that reaches `status='failed'` notifies nobody. The
+**1. Finish the Think cutover — or decide not to.** The port is further along than "another
+week" usually means: `RunAgent` is written, deployed beside `RunDO`, and carries 117 test files
+of coverage including 14 `it.fails` pins that name exactly what is missing (README §Security
+model, rows 16–17). The remaining work is those fourteen — a generation spend cap on the Think
+loop, `awaiting_approval` projection and a real `withdraw`, owned-thread continuation, the
+agent socket not sending the private run key to the browser, idempotent steers — plus
+extending the canary sweep to Think's session tables, flipping `RUN_CHASSIS`, re-running the
+four drill scenarios on it, and deleting the legacy chassis (`RunDO`, `session.ts`,
+`coordinator.ts`, `loop.ts`, `ports.ts`, `/ws`; spec §8 step 6). Two to three days of code, most
+of it already specified by the failing tests. The honest alternative is also on the table:
+keep the legacy chassis, delete `RunAgent`, and lose nothing the trial graded — the Think port
+adds a ~10 MB eager module graph to every cold start (AI-tool notes) and, until cutover, two
+session implementations to keep truthful. Either is defensible; leaving both live behind a flag
+indefinitely is not.
+
+**2. A human is told when a run dies.** A run that reaches `status='failed'` notifies nobody. The
 one-minute cron sweeps exactly four things — memory outbox, undelivered approvals, nudges, orphan
-sandboxes (`apps/worker/src/index.ts:332-337`) — and `src/notify/nudge.ts` is approval-card
+sandboxes (`apps/worker/src/index.ts:498-501`) — and `src/notify/nudge.ts` is approval-card
 machinery only. The live record shows the cost: one run replied in 64 s, then failed, and *"runs
 die silently"* (`phase-19-notes.md`). The error is already persisted (`last_error_code` /
 `last_error_message`), so this is one more cron sweep over D1 `runs` reusing the nudge module's
 CAS-claim pattern. About a day, most of it tests.
 
-**2. Real LangSmith, Supabase and Better Stack sources behind the three read capabilities.** All
+**3. Real LangSmith, Supabase and Better Stack sources behind the three read capabilities.** All
 three bindings are built, keyed, and proven against their live APIs — and read nothing real. The
 LangSmith key reaches a workspace whose last trace is 2026-04-08; the Supabase key reaches a
 project with no tables in `public`; `BETTERSTACK_LOG_SOURCE_IDS` names this Worker's own log
@@ -789,21 +893,21 @@ source, not Zellify's app (`docs/superpowers/plans/stand-in-evidence.md`). Stand
 exist. The real fix is two config values per vendor once Zellify supplies the production project,
 schema and source names — a conversation, then a two-line diff each.
 
-**3. The voice gate, closed against real drafts.** Phase 21's exit criteria are explicitly unmet:
+**4. The voice gate, closed against real drafts.** Phase 21's exit criteria are explicitly unmet:
 the offline gate ran, but the live steps are deferred — no measured triage precision/recall with
 its `n` and window, no ten shadow drafts read side by side against the humans' actual replies, no
 prompt iteration where they diverge (`phase-21-notes.md`, "DEFERRED GATE"). The eval routes,
 tell-detector, shift-frozen voice block and side-by-side panel all exist. What is missing is real
 observe-mode traffic and roughly a day of human judgment.
 
-**4. The handoff summary (Phase 22), entirely unbuilt.** A trusted host-side aggregator enumerates
+**5. The handoff summary (Phase 22), entirely unbuilt.** A trusted host-side aggregator enumerates
 the last three days of D1 runs, queries each fixed customer graph plus the org graph, merges what
 was learned with open and rejected run state, renders it at rotation and posts to
 `#eng-firefighter` — deliberately without granting any Slack-origin model cross-customer graph
 access. Neither `apps/worker/src/handoff/` nor `apps/dashboard/src/handoff/` exists. Every
 primitive it rides on works.
 
-**5. A failed run's promises should carry no weight.** The same-thread half is fixed — triage
+**6. A failed run's promises should carry no weight.** The same-thread half is fixed — triage
 re-wakes a thread whose newest run is `failed` (`src/triage/consumer.ts:177-247`). The cross-thread
 half is open: in the live drills, a genuinely new request posted 25 minutes after a dead run was
 triaged `wake=0`, because memory carried the dead run's own *"Will post the video here in a few
@@ -811,19 +915,20 @@ minutes"* as if it were an active investigation (`phase-19-notes.md`). The fix i
 triage the run's terminal status as a fact, and discount a failed run's optimistic replies at
 memory-write or recall time.
 
-**6. A revoke path for "the agent speaks as me."** The agent sends customer-facing replies under
+**7. A revoke path for "the agent speaks as me."** The agent sends customer-facing replies under
 the on-duty engineer's OAuth token, and there is no way to withdraw that: no disconnect route, no
 consent column on `identities`. That is exactly why Phase 24 declined to render the prototype's
 "Agent may act as me" toggle — *"building the switch without the mechanism would be a lie on
 screen."* A consent column, a disconnect route, and the toggle becomes honest.
 
-**7. WebSocket reconnection, proven under real network loss.** The mechanism exists and is honest
+**8. WebSocket reconnection, proven under real network loss.** The mechanism exists and is honest
 about itself: `apps/dashboard/src/runs/socket.ts` reconnects with bounded 1 s→15 s backoff,
 re-reads the newest applied seq at every reconnect so replay resumes from a cursor, and the reducer
 dedupes replayed frames by seq. What has never happened is exercising it under an actual network
-drop rather than unit tests. A week buys that proof, not new code.
+drop rather than unit tests. A week buys that proof, not new code. (On the Think chassis this
+is `useAgentChat`'s own resumption over `/agents/*`, equally unproven under loss.)
 
-**8. A repo decision on `navbar.tsx`'s CI debt.** CI goes red on the monorepo because `biome ci
+**9. A repo decision on `navbar.tsx`'s CI debt.** CI goes red on the monorepo because `biome ci
 --changed` judges the whole touched file, and `navbar.tsx` carries 229 pre-Ultracite diagnostics
 including a cognitive complexity of 43 with no automatic fix — any human editing that file hits the
 same wall (`phase-20-notes.md`). The agent already carries the repo's sanctioned recipe and the
@@ -874,7 +979,7 @@ Access, which is the trade-off accepted here.
 GitHub and Slack, which also cannot authenticate to Access. It is protected by OAuth `state`.
 
 A third path is Access-bypassed and the spec does not list it: **`/proofs/:key`**
-(`src/api/proofs.ts`, `src/index.ts:224-227`). Slack's unfurler has no Access token, and a
+(`src/api/proofs.ts`, `src/index.ts:271-280`). Slack's unfurler has no Access token, and a
 customer clicks a proof link cold, so neither could ever play a recording behind the gate.
 Protection there is unguessable R2 keys and uniform 404s. Every other artifact route
 (`/api/artifacts`) stays gated.
@@ -970,7 +1075,8 @@ pnpm 10.33.4 + Turborepo, Node ≥ 20. Workspaces: `apps/worker` (the product), 
 (Vite/React SPA served by the Worker), `packages/ui|eslint-config|typescript-config`.
 
 ```bash
-pnpm install                      # once, at repo root
+pnpm install                      # once, at repo root — and again after pulling Phase 25:
+                                  # agents, @cloudflare/think, @ai-sdk/react are new, exact-pinned
 cd apps/dashboard && pnpm build   # dist/ is gitignored and is the Worker's ASSETS dir —
                                   # a fresh checkout must build it before dev/deploy/tests
 cd ../worker
@@ -990,8 +1096,18 @@ Narrower loops: `pnpm exec vitest run test/agent-loop.test.ts`, add `-t "steer"`
 `pnpm test:watch`.
 
 **Local dev:** `pnpm dev` runs wrangler on `:8787`. The dashboard's own `pnpm dev` proxies
-`/api` and `/ws` to it, with `apps/dashboard/dev-stubs.ts` faking the Access-gated identity, roster and
-approval routes so the SPA renders without a Zero Trust session.
+`/api`, `/ws` and `/agents` to it, with `apps/dashboard/dev-stubs.ts` faking the Access-gated
+identity, roster and approval routes so the SPA renders without a Zero Trust session. Setting
+`FIREFIGHTER_CHASSIS=think|legacy` additionally stubs `/api/chassis` and a canned agent
+transcript, to look at either chassis's view with no Worker behind it — opt-in, because a
+running `wrangler dev` answers both for real.
+
+**Which chassis is running.** `RUN_CHASSIS` in `wrangler.jsonc` `vars` is `"legacy"` and must
+stay so until the cutover conditions in *Two run chassis* are met. `GET /api/chassis` (behind
+Access) reports the resolved value; anything other than `"think"` or `"legacy"` makes the Worker
+refuse to wake a run at all. Both Durable Object classes are exported and bound on every deploy,
+so a flip is a one-line `wrangler.jsonc` change plus `pnpm run deploy` — which is exactly why the
+line has a comment on it saying not to.
 
 **Deploy:**
 
@@ -1002,8 +1118,13 @@ env -u CF_API_TOKEN pnpm run deploy   # builds the dashboard, then wrangler depl
 
 `env -u CF_API_TOKEN` is not optional — a `CF_API_TOKEN` in the environment breaks wrangler's
 OAuth on this account. Use `pnpm run deploy`, because bare `pnpm deploy` is a pnpm builtin.
-After any `wrangler.jsonc` binding change run `pnpm cf-typegen`; after any capability change
-run `pnpm codemode:dts`.
+After any `wrangler.jsonc` binding change run `pnpm cf-typegen` **with `.dev.vars` present** —
+without it the generated `Cloudflare.Env` silently loses every secret and `tsc` fails in twenty
+places; after any capability change run `pnpm codemode:dts` (the generator now reads the
+connectors, so it exercises the same JSON-Schema rendering the Think chassis ships). A sandbox
+image change (`apps/worker/sandbox/`) is a separate `wrangler containers push` and a digest bump
+in `wrangler.jsonc`; the current image carries the recording harness's lead-in trim and the
+`restore-tracked` provisioning step.
 
 **Secrets.** Set them with `wrangler secret bulk` — **never** bare `wrangler secret put` from a
 non-interactive shell, which uploads an empty string and reports success. The Worker needs, by
