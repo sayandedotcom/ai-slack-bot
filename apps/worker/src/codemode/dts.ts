@@ -1,10 +1,11 @@
 import {
   generateTypesFromJsonSchema,
   type CodemodeConnector,
+  type JsonSchemaToolDescriptors,
 } from "@cloudflare/codemode";
-import { generateTypes } from "@cloudflare/codemode/ai";
 import { FILES_DECLARATIONS } from "./bindings/files";
 import type { CapabilityRegistry } from "./registry";
+import { toJsonSchema } from "./schema";
 
 /**
  * Pinned so the generated artifact records which generator produced it. The
@@ -60,26 +61,62 @@ function joinBlocks(blocks: string[]): string {
 }
 
 /**
- * Render from the registry's Zod descriptors.
+ * Render one namespace exactly the way a connector's `describe()` presents it.
  *
- * Still the path that builds the `run_code` tool description at runtime
- * (`src/codemode/tool.ts`, `src/run/agent.ts`), where the caller holds a
- * registry and rendering must be synchronous. The committed artifact is
- * rendered by `renderDeclarationsFromConnectors` instead; the two are required
- * to produce identical bytes, which `pnpm codemode:dts:check` proves against
- * the committed file on every gate run.
+ * `FirefighterConnector.tools()` converts each Zod schema with `toJsonSchema`
+ * and the base class then passes those straight through into `descriptors`, so
+ * building the descriptors here from the same helper reproduces the connector
+ * path byte for byte — without needing a connector instance, and therefore
+ * without being async.
+ */
+function descriptorsFor(
+  provider: CapabilityRegistry[number],
+): JsonSchemaToolDescriptors {
+  const descriptors: JsonSchemaToolDescriptors = {};
+  for (const [method, tool] of Object.entries(provider.tools)) {
+    descriptors[method] = {
+      description: tool.description,
+      inputSchema: toJsonSchema(tool.inputSchema),
+      outputSchema: tool.outputSchema
+        ? toJsonSchema(tool.outputSchema)
+        : undefined,
+    };
+  }
+  return descriptors;
+}
+
+/**
+ * Render from the registry, synchronously. This is the path that builds the
+ * `run_code` tool description at runtime (`src/codemode/tool.ts`,
+ * `src/run/agent.ts`), where the caller holds a registry and cannot await.
+ *
+ * It goes through JSON Schema, NOT the AI SDK's Zod path, and that is
+ * load-bearing rather than incidental. `generateTypes` runs its tools through
+ * `asSchema`, whose `addAdditionalPropertiesToJsonSchema` unconditionally sets
+ * `additionalProperties = false` on every object node — overwriting the value
+ * schema of a `z.record(...)`. That is why `supabase.select` used to render as
+ * `Promise<{}[]>`: not a limitation of the model-facing types, a mutation on
+ * the way there.
+ *
+ * Keeping this in step with `renderDeclarationsFromConnectors` matters more
+ * than it looks. `pnpm codemode:dts:check` compares the CONNECTOR render
+ * against the committed artifact; it says nothing about what the runtime
+ * renders. If these two drifted, the committed `.d.ts` would be reviewed and
+ * correct while the model was quietly handed something else — the one kind of
+ * drift the check cannot see. `test/codemode-dts.test.ts` asserts the two
+ * render identical bytes.
  */
 export function renderCapabilityDeclarations(
   registry: CapabilityRegistry,
 ): string {
   return joinBlocks(
-    registry.map((provider) =>
-      (
-        DECLARATION_OVERRIDES[provider.name] ??
-        provider.types ??
-        generateTypes(provider.tools, provider.name)
-      ).trim(),
-    ),
+    registry.map((provider) => {
+      const override = DECLARATION_OVERRIDES[provider.name] ?? provider.types;
+      if (override !== undefined) return override.trim();
+      return generateTypesFromJsonSchema(descriptorsFor(provider))
+        .replace("declare const codemode", `declare const ${provider.name}`)
+        .trim();
+    }),
   );
 }
 

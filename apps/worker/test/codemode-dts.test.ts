@@ -3,7 +3,12 @@ import { resolveProvider } from "@cloudflare/codemode/ai";
 import { resolveProvider as bareResolveProvider } from "@cloudflare/codemode";
 import { describe, expect, it } from "vitest";
 import { buildRegistry } from "../src/codemode/registry";
-import { renderCapabilityDeclarations } from "../src/codemode/dts";
+import { env } from "cloudflare:test";
+import {
+  renderCapabilityDeclarations,
+  renderDeclarationsFromConnectors,
+} from "../src/codemode/dts";
+import { buildConnectors } from "../src/codemode/connectors";
 import { fakeDeps, slackScope, TEST_LIMITS, fakeAuditSink, testExecution } from "./helpers/codemode";
 
 const registry = () => buildRegistry(slackScope, fakeDeps(), TEST_LIMITS, testExecution({ audit: fakeAuditSink() }));
@@ -202,5 +207,39 @@ describe("generated declarations", () => {
         expect(dts, `${provider.name}.${method}`).toContain(`${method}: (input:`);
       }
     }
+  });
+});
+
+/**
+ * The two render paths must agree byte for byte.
+ *
+ * `pnpm codemode:dts:check` compares the CONNECTOR render against the
+ * committed artifact. It says nothing about the SYNC render, which is what
+ * actually builds the `run_code` tool description the model reads. Before this
+ * test existed the two really had drifted: `supabase.select` rendered as
+ * `Promise<{}[]>` at runtime while the reviewed, committed `.d.ts` showed the
+ * real indexed row type. That is the one drift the check cannot see, because
+ * the artifact a human reviews is correct and the model is handed something
+ * else.
+ */
+describe("the runtime and artifact renders are one path", () => {
+  it("renders identical bytes from the registry and from the connectors", async () => {
+    const deps = fakeDeps();
+
+    const fromRegistry = renderCapabilityDeclarations(
+      buildRegistry(slackScope, deps, TEST_LIMITS, testExecution({ audit: fakeAuditSink() })),
+    );
+    const fromConnectors = await renderDeclarationsFromConnectors(
+      buildConnectors(
+        { waitUntil() {} } as unknown as ExecutionContext,
+        slackScope,
+        deps,
+        TEST_LIMITS,
+        testExecution({ audit: fakeAuditSink() }),
+        env as never,
+      ),
+    );
+
+    expect(fromRegistry).toBe(fromConnectors);
   });
 });

@@ -12,6 +12,7 @@ import {
 } from "../approval/repository";
 import { DecisionInputError, outboundText, type ApprovalRow, type DecisionInput } from "../approval/contracts";
 import { makeRunDoResolutionNotifier } from "../approval/notifier";
+import { makeRunAgentResolutionNotifier } from "../run/agent-approvals";
 
 /**
  * One human decision on one proposed customer Slack reply, over HTTP. This is
@@ -99,7 +100,20 @@ function resolvePorts(env: Env): Partial<ApprovalApiPorts> & { verifier: AccessV
     };
   }
   if (GLOBAL_PORTS.notifier === undefined) {
-    GLOBAL_PORTS = { ...GLOBAL_PORTS, notifier: makeRunDoResolutionNotifier(env) };
+    // THE ONLY CHASSIS BRANCH IN THIS FILE, and it decides one thing: which
+    // object receives the decision. Everything above and below it — the Access
+    // JWT, the roster check, the D1 CAS, invariant 9's "the click is never
+    // lost" behaviour on a failed delivery — is identical on both chassis, and
+    // must stay that way. `RUN_CHASSIS` defaults to the legacy RunDO: a var
+    // that is missing, misspelled or half-deployed sends decisions to the
+    // object that is still serving runs today.
+    GLOBAL_PORTS = {
+      ...GLOBAL_PORTS,
+      notifier:
+        env.RUN_CHASSIS === "think"
+          ? makeRunAgentResolutionNotifier(env)
+          : makeRunDoResolutionNotifier(env),
+    };
   }
   return GLOBAL_PORTS as Partial<ApprovalApiPorts> & { verifier: AccessVerifier };
 }

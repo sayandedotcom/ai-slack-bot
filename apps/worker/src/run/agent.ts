@@ -20,6 +20,8 @@ import type {
   StepConfig,
   StepContext,
   ThinkModel,
+  TurnConfig,
+  TurnContext,
 } from "@cloudflare/think";
 import { createExecuteRuntime } from "@cloudflare/think/tools/execute";
 import type { CodemodeConnector } from "@cloudflare/codemode";
@@ -51,7 +53,12 @@ import {
   type ResolveInput,
   type ResolveResult,
 } from "./agent-approvals";
-import { firefighterSystemBlocks, withFirefighterContext } from "./agent-prompt";
+import {
+  firefighterModel,
+  firefighterSystemBlocks,
+  firefighterTurnConfig,
+  withFirefighterContext,
+} from "./agent-prompt";
 import {
   projectTurn,
   recordUsage,
@@ -129,11 +136,26 @@ export class RunAgent extends Think<Env> {
   }
 
   getModel(): ThinkModel {
-    // Task 8 replaces this with Fable 5 through AI Gateway. Throwing rather
-    // than defaulting to a Workers AI model is deliberate: a silent fallback
-    // provider would answer a customer in the wrong voice, from the wrong
-    // model, with no error anywhere.
-    throw new Error("model_not_configured");
+    // A LanguageModel, never a model-id string. A string would be resolved by
+    // Think's own resolver (workers-ai-provider / Gateway defaults); the
+    // mandatory-Gateway, no-direct-Anthropic rule has to stay enforced in our
+    // code. Composed per call rather than cached: Gateway metadata is fixed
+    // for the life of one provider object, so a cached model would stamp every
+    // turn with one generation id. See spec decision D11 and invariant 27.
+    return firefighterModel(this);
+  }
+
+  /**
+   * Per-turn assembly: the run's dynamic facts are refreshed from D1 here,
+   * once per turn rather than once per step, and this is where the channel
+   * policy and shadow ratchet are re-read (invariant 37).
+   *
+   * `maxRetries: 0`, the explicit timeouts and `stopWhen` all come from
+   * `src/agent/model.ts`'s `modelCallOptions` — AI Gateway owns transport
+   * retries, the SDK owns none (invariant 27).
+   */
+  override async beforeTurn(_ctx: TurnContext): Promise<TurnConfig> {
+    return firefighterTurnConfig(this);
   }
 
   getTools(): { run_code: Tool } {
@@ -398,9 +420,31 @@ export class RunAgent extends Think<Env> {
 
   /* -------------------------------------------------------- test surface -- */
 
-  /** The model's whole tool map, by name. Invariant 5 in one assertion. */
+  /**
+   * The model's whole tool map, by name. Invariant 5 in one assertion.
+   *
+   * `getTools()` alone is NOT that map, and the difference is a real hole
+   * rather than a technicality. Think assembles the turn's tools as
+   * `{...workspaceTools, ...fetchToolSet, ...getTools(), ...actionTools,
+   * ...extensionTools, ...session.tools(), ...skillTools, ...mcpTools,
+   * ...clientTools}` (`think.js:2636-2652`) — six of those sources land AFTER
+   * `getTools()`. The one that can fill itself in without anyone asking is
+   * `session.tools()`: a context block declared with no provider is auto-wired
+   * to a WRITABLE provider, which contributes a `set_context` tool. That tool
+   * would reach the model having never passed the write guard, the effect
+   * ledger, or the audit chokepoint — invariants 5 and 38 — and a check that
+   * reads `getTools()` would report everything fine.
+   *
+   * So this reads the sources that our configuration can still populate.
+   * `workspaceBash`/`fetchTools`/`includeMcpTools` are off as fields, and we
+   * register no extensions, skills or client tools.
+   */
   async toolNames(): Promise<string[]> {
-    return Object.keys(this.getTools());
+    return [
+      ...Object.keys(this.getTools()),
+      ...Object.keys(await this.session.tools()),
+      ...Object.keys(this.getActions?.() ?? {}),
+    ].sort();
   }
 
   /**
