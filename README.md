@@ -451,6 +451,123 @@ and even it hides the two worst traps, which live in the compiled `container.js`
   materialises every blob at HEAD), and cone-mode sparse checkout cannot express "a directory's
   manifest but not its assets" — non-cone patterns can.
 
+### Project Think (`@cloudflare/think`) and the Agents SDK (`agents`)
+
+The thinnest surface in the repo, and the one the model was most confidently wrong about.
+Everything below was read out of the published tarballs (`npm pack`, then `dist/*.js`, not
+just the `.d.ts`) before a line was written against it. Versions are exact-pinned —
+`@cloudflare/think@0.15.1`, `agents@0.20.1`, `@cloudflare/codemode@0.5.1` — because Code
+Mode is marked experimental and the surface really does move between minors.
+
+- **The blog posts are behind the packages.** `agents/codemode/ai` no longer exists; the
+  entrypoint throws *"This entrypoint has been removed. Use `createCodeTool()` from
+  `@cloudflare/codemode/ai` instead."* `AIChatAgent` has moved out of `agents` into
+  `@cloudflare/ai-chat`. Project Think shipped as a real package, and `Think extends Agent`,
+  so adopting Think adopts the Agents SDK by construction.
+
+- **`Think.workspace` defaults to a real filesystem, and that silently reaches the model.**
+  `createExecuteRuntime(agent, overrides)` merges `{...optionsFromAgent(agent), ...overrides}`,
+  and `optionsFromAgent` sets `state: createWorkspaceStateBackend(agent.workspace)` plus
+  `browser: env.BROWSER`. `workspace` is a **non-optional** property that defaults to a
+  DO-SQLite `Workspace`, so the one-liner `createExecuteTool(this)` hands the model a
+  `state.*` namespace the write guard never sees. `workspaceBash = false` does not prevent
+  it — that only drops the `bash` tool. This project passes `state: undefined,
+  browser: undefined` explicitly, and a test asserts the sandbox exposes neither.
+
+- **`getTools()` is not the model's tool map.** Think assembles a turn as
+  `{...workspaceTools, ...fetchToolSet, ...getTools(), ...actionTools, ...extensionTools,
+  ...session.tools(), ...skillTools, ...mcpTools, ...clientToolSet}` (`think.js:2636-2652`) —
+  six sources land *after* `getTools()`. The one that fills itself in unasked is
+  `session.tools()`: a context block declared without a provider is auto-wired to a
+  **writable** provider, which contributes a `set_context` tool. An "exactly one tool" check
+  that reads `getTools()` reports everything fine while the model holds two.
+
+- **`CodemodeRuntime` must be listed in a `new_sqlite_classes` migration, not merely
+  exported.** `createCodemodeRuntime` reaches its facet through
+  `ctx.facets.get(..., () => ({ class: ctx.exports.CodemodeRuntime }))`, and workerd only
+  hands back a `LoopbackDurableObjectNamespace` for exports it has been told are Durable
+  Object classes; a merely-exported class probes as a plain service stub and `facets.get`
+  rejects it with *"Incorrect type for the 'class' field on 'StartupOptions'"*. Neither the
+  docs nor Cloudflare's own vite plugin does more than export it. This applies to a deployed
+  Worker, not just the test pool.
+
+- **A lazy facet makes a naive smoke test pass against a broken class.** `getRuntime` runs
+  eagerly at tool construction but the facet instantiates on first use, so
+  `Object.keys(getTools())` succeeds even when the runtime cannot boot. The spike only found
+  the bug above after the test was changed to actually call into the runtime.
+
+- **`StepConfig` type-collapses to `{}`.** Think declares it as
+  `Omit<PrepareStepResult<TOOLS>, "model">`, and the AI SDK's `PrepareStepResult` is a union
+  ending in `| undefined`; `keyof` a union yields only its *common* keys, so the `Omit`
+  collapses and `system` / `instructions` are rejected as excess properties — even though
+  Think spreads the object straight into `streamText({ prepareStep })` and they work at
+  runtime. The fix is to build a checked `PrepareStepResult` literal and widen on return.
+
+- **`runTurn` is overloaded three ways and a DO RPC stub keeps only the last one**
+  (`RunTurnStream → Promise<void>`), so the obvious `mode: "submit"` call fails to compile
+  with *"'submit' is not assignable to 'stream'"*. Narrow the stub to a local typed
+  interface built from the package's own exported option types.
+
+- **Never call `runTurn` from inside a Durable Object RPC method.** It deadlocks: the
+  submission is admitted to the turn queue, the queue cannot drain until the current
+  operation returns, and the current operation is that call. It deadlocks *even unawaited*,
+  because a DO holds the RPC open until in-flight promises settle — so
+  `void runTurn(...).catch(...)` does not help. The post-approval re-entry is a
+  `schedule(0, "reenterAfterApproval")` callback instead, which is also the right shape:
+  the human clicking Approve gets an answer as soon as the decision is committed and the
+  message sent, and the re-entry survives eviction. Cost of learning this the hard way: one
+  test that hung for 55 minutes.
+
+- **`useAgentChat` suspends.** It reads the transcript through React's `use()`
+  (`agents/dist/chat/react.js:803`), so the component must sit inside `<Suspense>` and an
+  error boundary — a rejected promise thrown out of render blanks the dashboard.
+
+- **`@ai-sdk/react` is an optional peer that is not optional.** pnpm's `autoInstallPeers`
+  skips it, but `agents/chat/react.js` imports `useChat` from it at runtime and the Vite
+  build cannot resolve it. Pinned to `4.0.62` — the only 4.x whose `ai` dependency matches
+  the `7.0.59` already in the tree, so the bundle carries one copy of `ai` rather than two.
+
+- **`routePartykitRequest` names the Durable Object `idFromName(<third path segment>)`,
+  verbatim and undecoded.** Mounting `routeAgentRequest` naively makes the browser's URL the
+  DO name, which is exactly what "never string-build a DO name from a public id" forbids.
+  The browser therefore addresses `/agents/run-agents/{runs.id}`, the Worker resolves
+  `runs.key` from D1, re-validates it and rewrites the segment before routing; a caller who
+  guesses a raw `slack:C…:…` key gets a 404, because a key is not an id. (The namespace slug
+  is derived from the *binding* name `RUN_AGENTS`, giving `run-agents` — not the class name.)
+
+- **Anything in the Worker entry's eager module graph cannot be `vi.mock`ed.**
+  `vitest-pool-workers` evaluates that graph during pool boot, before any test file's
+  `vi.mock()` registers, and does not re-evaluate it. A static
+  `import { createProductionModelFactory } from "../agent/model"` in a hook module put
+  `model.ts` on the far side of the mock and silently disabled the six assertions that prove
+  the AI Gateway auth header is attached — the exact positive test written because deleting
+  that header once left every check green while production sent unauthenticated requests.
+  The control that proved the mechanism: mocking a module in the boot graph reached the
+  test's own import but not another `src/` module's import of the same file. The model
+  composer is now reached through `await import()`, primed in the constructor inside
+  `ctx.blockConcurrencyWhile(...)` — the only point that gates every entry path at once
+  (`onStart()` does not cover a direct RPC, and an approval re-entry arrives as one).
+  `getModel()` has to stay synchronous because Think calls `resolveModel()` before
+  `beforeTurn` (`think.js:2663` vs `:2670`).
+
+- **Cold start is the real cost of this chassis.** Bundling the entry with esbuild under
+  Workers conditions gives a ~10 MB eager graph — `just-bash` 1.79 MB, `zod` 734 KB,
+  `agents` 719 KB, Zep 668 KB, `ai` 615 KB, `@cloudflare/sandbox` 490 KB,
+  `@cloudflare/think` 466 KB, `@ai-sdk/anthropic` 297 KB — almost all of it pulled in by
+  `RunAgent extends Think` being exported from the Worker entry, since `think.js` statically
+  imports `agents`, `agents/chat`, `agents/skills`, `ai`, `@ai-sdk/openai`,
+  `@cloudflare/shell` and `workers-ai-provider`. The Slack webhook's 3-second budget is
+  genuinely exposed to that weight. Deferring it further is not possible while a Durable
+  Object class is exported from the entry; this is recorded as a known cost, not solved.
+
+- **Codemode replay is unreachable in this configuration, so the obvious test would prove
+  nothing.** `CodemodeRuntime.decide(...)` is the only writer of `status = 'paused'`, in a
+  single `if (requiresApproval)` branch, and that flag comes solely from the connector's
+  `describe()` annotations. Because approval here is a model-called capability rather than a
+  tool annotation, nothing ever sets it, so no pause and no resume pass occur — a
+  pause/resume test would assert against *"only a paused run can be approved."* The
+  at-most-once proof is written at the seam a replay pass would actually cross instead.
+
 ### Agents SDK, Durable Object hibernation, and the vitest workers pool
 
 Everything here compiles. Half of it fails only after hibernation, or only under `pnpm
