@@ -39,7 +39,7 @@ import { renderCapabilityDeclarations } from "../codemode/dts";
 import { makeGuardedExecutor } from "../codemode/executor";
 import { guardLoader } from "../codemode/guarded-loader";
 import { buildNamespaces } from "../codemode/registry";
-import { RULES } from "../codemode/tool";
+import { RULES } from "../codemode/rules";
 import type { ApprovalPort } from "../approval/contracts";
 import {
   ensureApprovalSchema,
