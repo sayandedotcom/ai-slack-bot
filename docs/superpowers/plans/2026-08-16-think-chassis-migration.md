@@ -28,6 +28,88 @@
 
 ---
 
+## Execution speed rules — READ BEFORE DISPATCHING ANY TASK
+
+Same regime as Phases 11–19; **overrides the per-step commands wherever they conflict.** Nothing in this phase builds a container image or pushes to a registry — the whole build surface is Worker TypeScript plus one Vite SPA — so the waves are wide and the wall-clock ceiling is the cutover drill, not the build.
+
+1. **Pre-flight runs alone and first.** Task 1's spike is the one 3-minute check that can invalidate the phase's architecture (if the `CodemodeRuntime` facet cannot boot under `@cloudflare/vitest-pool-workers@0.21`, Task 6 falls back to stateless `createCodeTool()` and the durable-replay half of Tasks 9 and 15 is dropped). It also installs `agents` and `@cloudflare/think`, which every later task imports. Nothing dispatches until it lands.
+2. **Wave A is four writers wide** — Tasks 2, 3, 4, and 5+6 merged. File sets are disjoint (see the table); the cross-task signatures are pinned below. **Do not serialise for a pinned signature** — a task writes against the pin and the merge proves it.
+3. **Task 5 and Task 6 dispatch as ONE subagent** and that subagent owns `src/run/agent.ts` outright. It also creates the four hook modules as **stubs with the exact exported signatures pinned below**. This is what makes Wave B parallel: Tasks 8–11 each fill in exactly one stub file and touch `agent.ts` never.
+4. **Wave B is five writers wide** — Tasks 7, 8, 9, 10, 11 — plus Task 12, which is disjoint from all of them. Six subagents, one file each.
+5. **Wave C is two writers** — Task 13 (dashboard) and Task 15 (correctness proofs).
+6. **Focused tests by exact path only:** `cd apps/worker && pnpm exec vitest run test/<exact-file>.test.ts`. Never a pattern, never bare `pnpm test` inside a task.
+7. **One `pnpm exec tsc --noEmit -p tsconfig.json` per task**, at the end of that task. A task whose pinned import does not exist yet typechecks against the pin — a red `tsc` naming *only* a not-yet-merged sibling file is expected in Wave A and is resolved at the wave close, not by the task.
+8. **`tsc` and the full suite run once per wave close**, by me, on the merged tree. **The full worker suite runs exactly once more at the Gate**, before Task 14. `codemode:dts:check` regenerates inside Task 7, so declaration drift never blocks a suite run.
+9. **Review depth:** *deep* for Task 3 (verified fact 8 lives here — a connector that passes raw Zod silently destroys the model-facing API with no error anywhere) and Task 9 (approval is the requirement most likely to regress, and the edit path has no upstream equivalent); *medium* for Tasks 5+6, 11, 12 and 15; *light* for Tasks 2, 4, 7, 8, 10.
+10. **Dispatch = the task's own text + Global Constraints + Verified package facts + the pinned interfaces + these rules.** Task 3's subagent additionally gets verified fact 8 verbatim as a requirement, not background. Task 9's reads `src/approval/sender.ts` and `src/api/approvals.ts` for the CAS idiom it mirrors. Task 5+6's reads `src/agent/dependencies.ts:380-440` and `src/codemode/tool.ts:85-170`. **No wider exploration than that.**
+11. **No new runtime dependencies beyond the three named in Task 1** (`agents`, `@cloudflare/think`, already-present `@cloudflare/codemode`). `@types/json-schema` as a dev dependency is the only permitted addition. No new test library, no diff library, no octokit.
+12. **Task 14 is NOT subagent-drivable.** It needs a deployed Worker, four live drill scenarios in `#test-firedrill`, and a human confirming before any deletion. Run it interactively and record what actually happened.
+13. **Commit after every task**, conventional prefixes, with this repo's `Co-Authored-By` trailer. Never commit `docs/things-to-remember.md`.
+14. **`main` is never touched.** All work is on `worktree-think-chassis`.
+
+### Wave plan
+
+| Wave | Tasks (one subagent each unless noted) | Files owned — disjoint by construction |
+|---|---|---|
+| Pre-flight | **1** | `package.json`, `wrangler.jsonc`, `worker-configuration.d.ts`, `src/index.ts` (exports only), `phase-25-notes.md` |
+| A | **2** · **3** · **4** · **5+6 (one agent)** | `codemode/schema.ts` · `codemode/connectors/base.ts` + `codemode/registry.ts` · `codemode/connectors/index.ts` · `run/agent.ts` + 4 stub modules + `src/index.ts` |
+| — | *wave close: merge, `tsc`, full suite* | |
+| B | **7** · **8** · **9** · **10** · **11** · **12** | `codemode/dts.ts` + generator · `run/agent-prompt.ts` · `run/agent-approvals.ts` (+`api/approvals.ts`) · `run/agent-steering.ts` · `run/agent-projection.ts` · `run/chassis.ts` (+ triage/ingest call sites) |
+| — | *wave close: merge, `tsc`, full suite* | |
+| C | **13** · **15** | `apps/dashboard/**` + `src/index.ts` route mount · two new test files |
+| Gate | full suite + `tsc` + `codemode:dts:check` once | |
+| Cutover | **14** — interactive, human-gated | |
+
+### Pinned interfaces (write against these; do not wait for the sibling task)
+
+```ts
+// Task 2 → src/codemode/schema.ts
+export function toJsonSchema(schema: z.ZodType): JSONSchema7;
+
+// Task 3 → src/codemode/connectors/base.ts
+export type CapabilityNamespace = {
+  name: string;
+  instructions?: string;
+  tools: Record<string, ToolDescriptor & { effect: CapabilityEffect }>;
+};
+export class FirefighterConnector extends CodemodeConnector<Env> {
+  constructor(ctx: DurableObjectState | ExecutionContext, env: Env, ns: CapabilityNamespace);
+  name(): string;
+}
+// Task 3 also adds to src/codemode/registry.ts (it owns that file):
+export function buildNamespaces(scope, deps, limits, execution): CapabilityRegistry;
+export const buildRegistry = buildNamespaces;   // old name kept, no caller changes
+export type { ToolDescriptor };
+
+// Task 4 → src/codemode/connectors/index.ts
+export function buildConnectors(
+  ctx: DurableObjectState | ExecutionContext,
+  scope: CodeModeScope,
+  deps: CapabilityDependencies,
+  limits: CodeModeLimits,
+  execution: CodeExecution,
+  env: Env,
+): CodemodeConnector[];
+
+// Task 5+6 → the four stub modules it creates, filled in by Wave B.
+// Each stub compiles, returns a safe default, and is marked TODO(Task N).
+export function withFirefighterContext(session: Session, agent: RunAgent): Session;      // agent-prompt.ts  (Task 8)
+export function firefighterSystemBlocks(agent: RunAgent): SystemModelMessage[];          // agent-prompt.ts  (Task 8)
+export function ensureApprovalSchema(agent: RunAgent): void;                             // agent-approvals.ts (Task 9)
+export function escalate(agent: RunAgent, input: EscalateInput): Promise<{ approvalId: string }>;
+export function resolveApproval(agent: RunAgent, input: ResolveInput): Promise<ResolveResult>;
+export function pendingApprovals(agent: RunAgent, opts?: { includeResolved?: boolean }): Promise<Approval[]>;
+export function ensureSteerSchema(agent: RunAgent): void;                                // agent-steering.ts (Task 10)
+export function queueSteer(agent: RunAgent, text: string): Promise<{ queued: number }>;
+export function drainSteers(agent: RunAgent, messages: ModelMessage[]): Promise<ModelMessage[]>;
+export function projectTurn(agent: RunAgent, input: ProjectionInput): Promise<void>;     // agent-projection.ts (Task 11)
+export function recordUsage(agent: RunAgent, input: UsageInput): Promise<void>;
+```
+
+**Task 5+6 additionally:** `agent.ts` calls each stub from the real hook (`configureSession` → `withFirefighterContext`, `beforeStep` → `firefighterSystemBlocks` + `drainSteers`, `onStepFinish` → `projectTurn`/`recordUsage`, `@callable steer` → `queueSteer`, `escalate`/`resolveApproval`/`pendingApprovalsForRun` → the approvals module). Wave B changes **only** the stub bodies and their tests.
+
+---
+
 ## Verified package facts (read from dist on 2026-08-16 — do not re-derive, do not contradict)
 
 These were measured, not assumed. Tasks below depend on them.
@@ -820,6 +902,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ---
 
 ## Task 5: `RunAgent` skeleton — one tool, no model
+
+> **Dispatch note (speed rules 3):** Tasks 5 and 6 are ONE subagent. It owns `src/run/agent.ts` outright and additionally creates the four hook-module **stubs** with the exact signatures pinned in "Pinned interfaces" — each compiling, each returning a safe default, each marked `// TODO(Task N)`. Wave B fills in the stub bodies and never edits `agent.ts`.
 
 Land the class, the tool surface, and the "no second tool" guarantee before any model or session behaviour exists.
 
