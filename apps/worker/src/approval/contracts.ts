@@ -161,7 +161,16 @@ export function resolutionTurnContent(input: {
 function deliveryLine(delivery: ApprovalDelivery, error: string | null): string {
   switch (delivery) {
     case "sent":
-      return "It has been sent to the customer thread. Carry on from there.";
+      // "Do not re-read" is here because a live run did exactly that: told
+      // the reply was sent, it spent one step fetching the thread to confirm
+      // and another announcing that it had — two model turns to learn what
+      // this line already states. Delivery `sent` is the sender's own
+      // receipt (the message ts came back from Slack), so it is authoritative;
+      // the in_doubt branch below is the one that asks for a check.
+      return (
+        "It has been sent to the customer thread; that delivery is confirmed, so do not spend a"
+        + " step re-reading the thread to check. If the customer asked for nothing else, stop here."
+      );
     case "blocked":
       // The honest version of Phase 11's terminal state. The run resumes on
       // this, so the model has to be told what is still owed to the customer.
