@@ -148,6 +148,24 @@ for attempt in 1 2 3; do
 done
 [ "$INSTALLED" = "1" ] || fail "install"
 
+# The checkout must be CLEAN when the agent first sees it, and it is not: the
+# reset above runs BEFORE the install, and the install's scripts write to
+# tracked files (observed live 2026-08-17: `tooling/cli/src/index.ts` modified
+# on a fresh container by the root postinstall, `agents sync`). Left alone,
+# that edit is indistinguishable from the agent's own work — `sandbox.diff`
+# captures every change in the tree, so it would ride into the pull request
+# as an unrelated hunk under the engineer's name. One run noticed and reverted
+# it by hand; a run that did not would have shipped it.
+#
+# Placed HERE, between the install and build-packages, on purpose: it reverts
+# exactly what the install's scripts wrote and nothing that a later step
+# produces. The live status that found this showed one dirty file after the
+# whole boot, so build-packages writes to nothing tracked — but this ordering
+# does not depend on that staying true. Tracked files only, and not `git
+# clean` again: that would delete the ignored trees this step exists to keep.
+step "restore-tracked"
+git checkout -- . || fail "restore-tracked"
+
 # Turbo's cache persists on a warm container, so an unchanged packages/ tree
 # makes this close to a no-op. Cold, it is the 3677-icon SVGR pass plus prisma
 # generate and two tsup builds — measured at 27s.

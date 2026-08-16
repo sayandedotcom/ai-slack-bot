@@ -582,6 +582,7 @@ const STEP_NOTES: Record<string, string> = {
   reset: "resetting the working tree",
   clean: "removing files a previous run left behind",
   install: "installing dependencies",
+  "restore-tracked": "restoring tracked files the install's scripts modified",
   "build-packages": "building the workspace packages",
   browser: "installing the browser (Chromium; non-fatal if it fails)",
   "browser-cached": "browser already installed",
