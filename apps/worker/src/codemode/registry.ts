@@ -25,6 +25,13 @@ import { makeBrowserTools } from "./bindings/browser";
 import { makeGithubTools } from "./bindings/github";
 
 /**
+ * Re-exported so the connector layer can type a namespace's tools without
+ * reaching into `@cloudflare/codemode/ai` itself. One import site for the
+ * package's descriptor shape keeps a version bump a one-file change.
+ */
+export type { ToolDescriptor };
+
+/**
  * The Phase 09 namespace order, frozen.
  *
  * Order is not cosmetic: it is the order declarations are rendered in, so a
@@ -280,7 +287,7 @@ export function auditedCapability<I, O>(
  * `execution` is a required argument rather than something built in here so
  * that reusing one is a thing you have to write down.
  */
-export function buildRegistry(
+export function buildNamespaces(
   scope: CodeModeScope,
   deps: CapabilityDependencies,
   limits: CodeModeLimits,
@@ -302,6 +309,18 @@ export function buildRegistry(
     { name: "github", tools: makeGithubTools(ctx) },
   ]);
 }
+
+/**
+ * The old name, unchanged.
+ *
+ * Phase 25 gave this function a second consumer — `buildConnectors`, which
+ * wraps each namespace in a `FirefighterConnector` for the Think chassis — so
+ * "registry" stopped being the only thing it builds. The alias exists so that
+ * renaming the concept costs zero call-site churn while both chassis are
+ * alive; the legacy chassis keeps calling `buildRegistry` and gets the exact
+ * same function object.
+ */
+export const buildRegistry = buildNamespaces;
 
 /**
  * Refuse to build a registry containing an unclassified method.
