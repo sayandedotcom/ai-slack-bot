@@ -30,7 +30,9 @@ deployed agent act on them. Blast radius, stated plainly:
 - **R2 and the open web.** Proof recordings are served **logged-out** at `/proofs/:key`.
   Anyone with the URL can play them.
 - **Money.** Roughly $1–$2.50 of model spend per run, and a 2–3 minute container boot.
-  The two runs that have actually shipped a PR cost $1.45 and $2.42.
+  The four runs that have actually shipped a PR cost $1.45, $2.42, $2.03 and $1.24. A
+  **follow-up in the same thread is a second generation** with its own spend — and a heavy one
+  can end the run for good (§7, first row).
 
 **Undoable:** the open PR (close it) and its head branch (delete it). That is what
 `apps/worker/scripts/undo-drill-pr.mjs` does. The Linear issue can be detached and re-filed
@@ -195,6 +197,24 @@ The `events_seen` figure is a baseline, not a target — 2.4 asks only that it g
 
 ---
 
+### 2.8 Which chassis is running
+
+The Worker carries two run-session implementations (README §*Two run chassis*): the legacy
+`RunDO`, and `RunAgent` on `@cloudflare/think`, selected by the `RUN_CHASSIS` var. **This
+runbook, and every recorded result in it, is the legacy chassis.** From a logged-in browser tab:
+
+```text
+https://firefighter.sayandeten.workers.dev/api/chassis   → {"chassis":"legacy"}
+```
+
+(From `curl` without an Access session it is a `302`, like every other `/api` route.) If it
+says `think`, stop: the Think chassis carries 14 `it.fails` pins on open defects — among them
+**no generation spend cap** and a run socket that hands the private run key to the browser —
+and has never had a drill run on it. Flip `RUN_CHASSIS` back to `legacy` in
+`apps/worker/wrangler.jsonc` and redeploy before drilling.
+
+---
+
 ## 3. The four scenarios
 
 Shape for every scenario: post the message as yourself in `#test-firedrill`, playing a
@@ -339,6 +359,20 @@ correction came from re-reading the repo, not from the memory being right.
 **Note for a repeat run:** #1508 reuses the branch name `fix/remove-careers-nav-link` from the
 deleted #1507 branch. Harmless here, but delete the branch in §6 before re-running this scenario.
 
+**Follow-up in the same thread — recorded, and it killed the run.** After the PR, the operator
+posted *"Can you re-record the proof and tell me exactly what the page logs in the browser
+console? Paste the diagnostic lines verbatim."* A second generation started: 20 model steps,
+**$2.14**, largest prompt 110,742 tokens — and it ended `generation_cost_limit` with the run
+`failed`, at $2.14 of the $5.00 generation cap and $4.17 of the $10.00 run cap. Neither cap was
+reached: `evaluateSpendGuard` (`src/agent/cost.ts`) refuses a step whose *worst-case* input
+reservation — `promptBytes / 2` tokens at the 1-hour cache-write rate, times two Gateway
+attempts — no longer fits under what is left, and a 110k-token prompt reserves several dollars
+per step. Prompt size, not spend, ended it, and a follow-up thread starts with a fatter prompt
+than a fresh run. That failure is `requires_operator_config` (`src/agent/loop.ts:250-259`): every
+later message in that thread is stored and **blocked** (`src/run/session.ts:1115-1126`), and the
+redeploy config-reset deliberately excludes cost limits. **Paste each new scenario as a fresh
+top-level message, and keep follow-ups to questions.**
+
 ### Scenario 3 — planted bug
 
 This one needs setup **before** you post, because the bug lives on a branch and the PR must
@@ -393,6 +427,53 @@ This is the scenario the roadmap uses as the click-count test.
 5. **Pass/fail is the roadmap's own criterion:** *"Count the clicks on the fourth — gating every
    reply fails it."* If every scoping question raises an approval card, the drill FAILS however
    good the issue is.
+
+---
+
+### Additional live runs — 2026-08-16 evening, after the four-scenario drill
+
+Three more runs were fired in `#test-firedrill` on the same (legacy) deployment. Recorded from
+D1 (`runs`, `codemode_effects`, `approvals`, `agent_model_calls`, `messages`), not from memory.
+
+| Run | Message (customer) | Result | Steps · cost · effects | Clicks |
+|---|---|---|---|---|
+| `60f6354a` 20:13 UTC | *"Can you remove the Pricing link from the landing page nav bar ?"* | `idle`. FIR-6, PR **#1534** (`fix/remove-pricing-navbar-link`, base `staging`) with a proof link; desktop nav + mobile menu removed, `/pricing` page and footer left alone and said so | 17 · **$1.24** · `linear.createIssue`, `github.openPR`, `slack.reply` | **0** |
+| `82157637` 20:43 UTC | *"Did you add a pull request for removing the Pricing link in the nav bar?"* — a **new** top-level thread | `idle`, but the thread reads: *"Not yet … no PR went up. I'm opening one now"* then 32 s later *"Correction, it is up … #1534"*. Wrong status, then a correction, under the engineer's name | 10 · **$0.69** · `slack.reply` ×2 | **0** |
+| `01147944` 21:14 UTC | *"How do I add another language without duplicating the funnel?"* | `idle`. Drafted a **"no"** — *"There isn't a way to do that today…"* — escalated it, filed FIR-7 as a feature request; the human **edited** the draft on the dashboard and it went out under the user token (`decision: edited`, `delivery: sent`, nudge DM delivered) | 7 · **$0.51** · `linear.createIssue` + one approval | **1** (edit) |
+
+What these runs taught, and what changed because of them (all on `main`; the most recent
+deploy, 2026-08-16 21:53 UTC, postdates every commit named below):
+
+- **`82157637`** had no session memory of #1534 (new thread) and graph recall ranked ten
+  "Pricing" facts above the one joining FIR-6 to the PR. Left with `checkPR(number)` alone it
+  probed 28 PR numbers upward from the last one it remembered, replied "not yet" after coming up
+  empty through #1528, and found #1534 in the very next batch. Fix: `github.searchPRs({ query,
+  limit })` — free text over title and body in the pinned repo, `is:pr repo:<pinned>` prepended
+  server-side so a `repo:` in the query cannot widen it — and `checkPR`'s description now points
+  there instead of at a sweep of guessed numbers (`c3e7d64`).
+- **`60f6354a`**'s reply ended *"I'll post here when it's out."* Nothing wakes a run when a PR
+  merges or a deploy lands, so that is a promise the agent cannot keep, and its own summary said
+  "no commitments made" while making one. The escalation policy now says: state what is true
+  now and stop; the ship notice is the reviewer's message (`0a4aaae`). The same read-through found
+  the checkout **dirty before the agent touched it** — `pnpm install`'s root postinstall writes a
+  tracked file (`tooling/cli/src/index.ts`) and `sandbox.diff` would have carried it into the PR;
+  the run noticed and reverted it by hand. `provision.sh` now runs a `restore-tracked` step
+  between install and build; shipped in the sandbox image at `sha256:dc9b98e0…` (`8218aaa`).
+- **`01147944`**, told *"It has been sent to the customer thread. Carry on from there."*, spent
+  one step fetching the thread to confirm and another announcing that it had. Delivery `sent` is
+  the sender's own receipt, so the line now says so (`5eaa603`).
+- A separate proof came out with **five seconds of white** at the start: Playwright starts the
+  screencast at `newPage()`, before the first `goto`, and a cold dev server's compile is recorded
+  as blank frames. The harness now measures the lead-in (`framenavigated` off `about:blank`) and
+  trims it with an ffmpeg input seek; `browser.record`'s description tells the model to warm the
+  route with `sandbox.exec` before recording (`c3104c2`).
+- Linear labels were the model's coin flip (FIR-4 labelled, FIR-3/FIR-6 bare) because the
+  `labels` field had no description; it now names the exact labels and when to use them
+  (`95406bd`). These are board metadata for humans; nothing reads them back and they are not
+  the banned ticket type.
+
+**Open from these runs:** PR **#1534** is still open on `Zellify/web2app-rebuild` and FIR-6 /
+FIR-7 are live in Linear — undo per §6 when you are done with them.
 
 ---
 
@@ -500,7 +581,7 @@ symptoms are what a stuck drill looks like.
 
 | Symptom | Cause | What to do now |
 |---|---|---|
-| Run dies `generation_cost_limit` with budget visibly unspent — once refusing a $0.13 step with $1.19 left | The spend guard reserves worst-case, pricing a mostly-cache-read prompt at the cache-*write* rate | Fixed; the cap is $5.00. If it recurs, suspect the reservation math before the model. |
+| Run dies `generation_cost_limit` with budget visibly unspent — once refusing a $0.13 step with $1.19 left; **again on 2026-08-16**, a follow-up generation dying at $2.14 of $5.00 with a 110k-token prompt | The spend guard reserves worst-case: `promptBytes / 2` tokens at the 1-hour cache-*write* rate × 2 attempts, for a prompt that is 94 % cache reads (`src/agent/cost.ts` `evaluateSpendGuard`) | **Not fixed** — the cap was raised to $5.00 but the reservation math is unchanged, and it bites hardest on long threads. The run is then terminal (`requires_operator_config`) and the thread is dead to further messages. Start a new thread. The fix (reserve at the observed cache rate, or from the previous step's real `input_tokens`) is a one-function change guarded by `test/agent-cost.test.ts`. |
 | Run dies `step_limit` with money left — once at exactly 24 steps with $1.63 of $5.00 spent | The old ceiling was budgeted for exec-and-diff work; the ship loop's tail is 12–14 steps on its own | Fixed; the ceiling is 40. Dying at 40 means steps burned upstream — look for boot-poll storms or a login hunt in the drawer. |
 | PR opens with **no `Fixes` line**, and the agent apologises for it in its own PR body | A prose defect, not broken plumbing: the `fixesIssueIds` doc said "UUIDs (from createIssue)", so the model believed it could not link a pre-existing issue | Fixed — `linear.findIssue({identifier})` exists and the prose is corrected. A PR still lacking the line should not be merged; say so. |
 | Recording shows broken images, missing hero art, a dev-server issue badge | Sparse image exclusions: `public/` assets referenced by URL fail silently at runtime | Homepage assets are baked back in. **Deeper pages may still record with broken images** — a known image-layer gap, not a broken sandbox. Aim drills at landing pages. |
@@ -510,3 +591,8 @@ symptoms are what a stuck drill looks like.
 | Run burns its whole budget "looking for a way to log in" and never records | An auth-gated target; the sandbox has no seeded account, so the login hunt is bottomless | Drill only against pages that render without auth. |
 | Recording comes out with missing images *again*, after the image fix | The sparse-checkout pattern in `apps/worker/sandbox/Dockerfile` (which keeps the landing site's fonts, SVGs, webp and hero video) and the one in `apps/worker/sandbox/provision.sh` (which excludes all of `apps/landing/public`) **disagree**. The Dockerfile's pattern wins on the normal path because the repo is baked; `provision.sh` only clones as a fallback | A latent issue, not a regression: it means the run took the fallback clone. Note it and move on — do not debug it live. |
 | Dev server "isn't up" though the process is running | Three apps default to port 3000, and 3000 is also the container's own control server — `waitForPort(3000)` succeeds against a dev server that never started | The agent starts the landing app on **4100** for exactly this reason. If you see 3000 in the drawer, that is the bug, not the port being busy. |
+| The agent answers "not yet" about a PR it opened in an *earlier* thread, then corrects itself | New thread = no session memory; graph recall ranked topical facts above the PR↔issue link; `checkPR` takes a number, so it guessed numbers upward | Fixed — `github.searchPRs` (free text, pinned repo). If it recurs, check the drawer for a run of `checkPR` calls with consecutive numbers. |
+| The reply ends "I'll post here when it merges / deploys" | Nothing wakes a run on a merge or a deploy; the promise cannot be kept | Fixed in the policy prompt. If you see it, it is a regression, not a feature. |
+| An unrelated hunk in the PR (`tooling/cli/src/index.ts`) | `pnpm install`'s root postinstall writes a tracked file; `sandbox.diff` captures the whole tree | Fixed in the image (`restore-tracked` step in `provision.sh`). A PR carrying it means the container booted from an older image — check the digest in `wrangler.jsonc`. |
+| Proof recording opens on several seconds of white | Screencast starts at `newPage()`, before the first `goto`; a cold compile is recorded as blank | Fixed — the harness trims the measured lead-in; the model is told to warm the route first. |
+| A follow-up message in a finished thread gets no run at all | The previous generation ended on a spend cap; that failure is `requires_operator_config` and blocks every later message in the thread | Expected. Post a new top-level message. |
