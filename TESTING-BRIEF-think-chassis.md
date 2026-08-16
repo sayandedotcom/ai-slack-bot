@@ -51,14 +51,23 @@ exist so the two never collide.
   bare `git stash` (shared stack) — if you must set work aside, WIP-commit it.
 - **Never deploy. Never run `wrangler deploy`, `wrangler containers push`, or
   touch production D1.** Not even to "check". Never edit `RUN_CHASSIS`.
-- **Run ONE test file at a time:** `npx vitest run test/<file>.test.ts`. The
-  pool is one workerd with shared on-disk state; two vitest processes on the
-  full suite in one worktree have stalled for an hour before. Run the full
-  gate (`pnpm test && pnpm typecheck`) exactly ONCE, at the very end, and
-  only after the drill terminal has been told (write "READY FOR FULL GATE" at
-  the bottom of `TEST-FINDINGS.md`) — it will stop its own runs.
-- `pnpm typecheck` after every file you finish. vitest strips types; tsc is
-  half the gate.
+- **Speed regime: write everything first, run once at the end.** Do NOT run
+  vitest after each file. Writing a test file needs no pool; running one does,
+  and the pool is one workerd with shared on-disk state — two vitest processes
+  in one worktree have stalled for an hour before. So:
+  1. Write ALL the files in section 2 (subagent-driven, in parallel — see §3).
+  2. `pnpm typecheck` ONCE when they are all written (tsc is cheap, touches no
+     pool, and is half the gate — vitest strips types).
+  3. Write "READY TO RUN" at the bottom of `TEST-FINDINGS.md`, then run the
+     NEW files together in ONE vitest process:
+     `npx vitest run test/run-agent-*.test.ts test/run-chassis.test.ts test/agents-route.test.ts test/codemode-connectors.test.ts test/codemode-linear.test.ts test/codemode-dts.test.ts`
+     (one invocation, not the full suite). Fix your own test bugs from that
+     run; anything that is a `src/` bug goes to `TEST-FINDINGS.md`.
+  4. Only then, and only once, the full gate: `pnpm test && pnpm typecheck`.
+     Write "READY FOR FULL GATE" first so the drill terminal stops its runs.
+  A subagent that wants to "quickly run its file to check" is the thing this
+  rule forbids. Correctness comes from reading the model files in §1 and the
+  legacy suite it is cribbing from, not from a run per file.
 
 **Harness facts (from CLAUDE.md; they bite).**
 - Storage is SHARED across tests and files (no `isolatedStorage`). Mint a
@@ -210,19 +219,42 @@ on this branch, it says *(verify present)* — confirm and move on.
 #### L. `apps/dashboard/test/run-approvals.test.ts` — Create
 - the approval PATCH goes to `/api/approvals/:id`, never an agent RPC; a 409 renders as "someone else decided", not an error toast
 
-## 3. When you finish a file
+## 3. How to execute — subagent-driven
 
-1. `npx vitest run test/<file>.test.ts` green.
-2. `pnpm typecheck` clean.
-3. `git add apps/worker/test/<file>.test.ts` (and only that) →
+Use `superpowers:subagent-driven-development`. One fresh subagent per file
+(A–L), dispatched in parallel waves so independent files are written at once:
+
+- **Wave 1 (parallel):** A, B, C, D — the P0 files. Independent of each other.
+- **Wave 2 (parallel):** E, F, G, H, I.
+- **Wave 3 (parallel):** J, K, L (dashboard; different package, different
+  vitest config — the subagent must read `apps/dashboard/vitest.config.*`
+  and an existing test there before writing).
+
+Each subagent's prompt MUST carry, verbatim: the file it owns and its
+behaviour list from §2; the coordination rules from §1 (test/ only, explicit
+pathspecs, no vitest runs, findings not fixes); the names of the model files
+to read first; and the legacy suite to crib from. Tell it explicitly: **do not
+run vitest; write the file, run `pnpm typecheck` if you like, commit your one
+file with an explicit pathspec, report back.** A subagent that reports "I ran
+it and it passes" has broken the regime — note it, don't repeat it.
+
+Between waves you (the orchestrator) review each file for the harness traps
+in §1 — fresh keys, no absolute seq, no `runTurn` inside an RPC, no static
+import of `src/agent/model` — because those are the bugs a run would have
+caught and the regime says we catch them by reading instead.
+
+When you finish a file (or a subagent reports one):
+1. Skim it against the traps above.
+2. `git add apps/worker/test/<file>.test.ts` (and only that) →
    `git commit -m "test(<scope>): <what it pins>"`.
-4. Tick it off in this file's list (edit this brief in place; commit it with
-   the same explicit-pathspec rule — this file is yours to edit).
-5. Anything that failed for a `src/` reason → `TEST-FINDINGS.md`, not a fix.
+3. Tick it off in §4 (edit this brief in place; commit it with the same
+   explicit-pathspec rule — this file is yours to edit).
+4. Anything you already know fails for a `src/` reason → `TEST-FINDINGS.md`,
+   not a fix.
 
-When every P0 and P1 item is done, write "READY FOR FULL GATE" at the bottom
-of `TEST-FINDINGS.md` and stop. Do not run the full suite until the drill
-terminal acknowledges.
+Then the run sequence in §1's speed regime: typecheck once → "READY TO RUN"
+→ one vitest process over the new files → fix test bugs → "READY FOR FULL
+GATE" → stop until the drill terminal acknowledges → full gate once.
 
 ## 4. Progress
 
