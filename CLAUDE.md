@@ -1,0 +1,77 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+Fire-Fighter Agent: one Cloudflare Worker that ingests every Slack message the team sees, wakes a generic Claude agent on the ones that matter, lets it fix bugs on a cloud container and open PRs under the on-duty engineer's name, with every committal write gated behind one dashboard approval. Everything is one Worker, one origin (`firefighter.sayandeten.workers.dev`).
+
+Two GitHub repos are in play — do not confuse them:
+- **`Zellify/firefighter`** — this repo, the deliverable.
+- **`Zellify/web2app-rebuild`** — Zellify's product monorepo. The agent clones it in the sandbox and opens PRs against its `staging` branch. Only the sandbox/ship code (`src/sandbox`, `src/git`) touches it.
+
+Canonical docs, in reading order:
+- `docs/superpowers/specs/2026-08-10-firefighter-agent-design.md` — the design spec (§4 ingest/triage, §5 runs, §6 code mode, §8 security).
+- `docs/superpowers/plans/00-roadmap.md` — phase roadmap, global constraints, "verify before you invent" list. Phases 00–24 each have `phase-NN-*.md` (plan) and `phase-NN-notes.md` (dated verification log + invented-API list).
+- `docs/superpowers/plans/phase-10-agent-loop.md` § "Load-bearing invariants" — the numbered list that code comments cite as "invariant N" (1–39).
+- `docs/tech-stack.md`, `docs/inspired-from-ronit.md`, `README.md` (Access gate, channel policy, what the sandbox may know).
+- `docs/things-to-remember.md` — private working notes, **gitignored; never commit it**. Read it: it holds the verified API traps for `@cloudflare/codemode`, Worker Loader, and the test harness.
+
+## Commands
+
+Monorepo: pnpm 10.33.4 + Turborepo, Node ≥ 20. Workspaces: `apps/worker` (the product), `apps/dashboard` (Vite/React SPA served by the Worker), `packages/ui|eslint-config|typescript-config`. Root `pnpm build|dev|lint|typecheck` fan out via turbo.
+
+Almost all work happens in `apps/worker`:
+
+```bash
+pnpm install                          # once, at repo root
+cd apps/worker
+cp .dev.vars.example .dev.vars        # local secrets (gitignored) — needed for wrangler dev, NOT for tests
+pnpm test                             # check-text-files.mjs + vitest run, in workerd against real D1/queues/DOs
+pnpm typecheck                        # tsc --noEmit — REQUIRED alongside tests; vitest strips types
+pnpm codemode:dts:check               # generated capabilities.d.ts is in sync with the Zod schemas
+npx vitest run test/agent-loop.test.ts            # one file
+npx vitest run test/agent-loop.test.ts -t "steer"  # one test by name
+pnpm test:watch
+pnpm dev                              # wrangler dev on :8787 (needs ../dashboard/dist — build it first)
+pnpm run deploy                       # builds the dashboard, then wrangler deploy (`run` — bare `pnpm deploy` is a pnpm builtin)
+pnpm cf-typegen                       # regenerate worker-configuration.d.ts after any wrangler.jsonc binding change
+pnpm codemode:dts                     # regenerate src/codemode/generated/capabilities.d.ts after any capability change
+```
+
+Dashboard (`apps/dashboard`): `pnpm dev` (vite, proxies `/api` and `/ws` to :8787; `dev-stubs.ts` fakes the Access-gated identity/roster/approvals routes so the SPA renders locally), `pnpm build`, `pnpm test`, `pnpm typecheck`. `dist/` is gitignored and is the Worker's `ASSETS` directory, so a fresh checkout must build it before `wrangler dev`/`deploy`/the worker test pool will find it.
+
+There is **no CI**. `pnpm test`, `pnpm typecheck` and `pnpm codemode:dts:check` in `apps/worker` are the gate; run all three yourself and establish the baseline before judging a change — do not trust a stated pass count. Commit after every task, conventional prefixes (`feat(scope):`, `fix(scope):`, `docs:`).
+
+Production secrets: `wrangler secret bulk` — never bare `wrangler secret put` from a non-interactive shell (uploads an empty string and reports success).
+
+## Architecture (the big picture)
+
+**One Worker, three entry points** (`apps/worker/src/index.ts`): Hono `fetch` (Slack webhook, `/api/*`, `/ws/*`, OAuth, `/proofs/*`, asset fallthrough), one `queue()` handler switching on `batch.queue` (`firefighter-ingest|memory|triage`), and a one-minute `scheduled()` cron running four independent repair sweeps (memory outbox, undelivered approvals, nudges, orphan sandboxes) via `Promise.allSettled`.
+
+**One incident, end to end:**
+1. `POST /slack/events` (`src/slack/events.ts`) — HMAC-verify (`src/slack/verify.ts`), then only a queue send. No D1, no fetch, within Slack's 3s.
+2. Ingest consumer (`src/ingest/consumer.ts`, rules in `src/ingest/rules.ts`) — drops DMs/bots unconditionally, dedupes on `event_id`, writes `messages` (D1 is the system of record; every message verbatim with permalink), fans out to `MEMORY_QUEUE` always and `TRIAGE_QUEUE` only for triage-eligible channels. The app's own user-token posts classify as `ingested_self`: stored, remembered, never re-triaged (this is the loop guard).
+3. Channel policy (`src/db/channels.ts`, `canPost()`/`getChannelPolicy()`): `observe` = ingest+triage, never post; `live` = postable (own test channels only); `internal` = no triage; unmapped = fail closed. `canPost()` is enforced inside the Slack binding, not in a prompt.
+4. Triage (`src/triage/`) — Haiku emits `{ wake, why, opening_prompt }`; **never a ticket type**. A thread already owned by a run absorbs the message with no model call (`routeToOwnedRun`).
+5. RunDO (`src/run/do.ts`, SQLite layer `src/run/session.ts`, keys in `src/run/keys.ts` — the only `idFromName()` call site). One Durable Object per run, keyed `slack:{channel}:{thread_ts}` or `chat:{uuid}`; the public `runs.id` is a separate UUID resolved through D1, never string-built into a DO name. The DO is the only session authority: turns, stream events, model messages, tool calls, approval state all live in its SQLite; D1 `runs` is a projection applied only when `projection_seq` increases. One alarm slot drives model work first, then one projection job; the constructor re-arms it. `src/run/coordinator.ts` re-reads channel policy on every wake and applies the shadow ratchet (false→true only).
+6. Agent loop (`src/agent/loop.ts`, prompt in `src/agent/prompt/`, model in `src/agent/model.ts`) — Fable 5 through AI Gateway (mandatory; no direct-Anthropic fallback), exactly one tool: `run_code`. Ports/continuations are a module-scope registry (`src/agent/ports.ts`, `installRunPorts`) because a DO cannot be handed a live port over RPC; tests override per run key.
+7. **Tier 1 execution** (`src/codemode/`) — model-authored TypeScript runs in a Worker Loader isolate with `globalOutbound: null`, empty `env`, clamped CPU (`guarded-loader.ts`, `executor.ts` adds a parent-side timeout race). Its only reach is typed capabilities passed as RPC call *arguments* (`registry.ts`, `bindings/*.ts`): slack, memory, linear, supabase, langsmith, betterstack, files, approval, sandbox, browser, github. Every capability declares an `effect` (`read|external_write|control_write|sandbox_write`); `write-guard.ts` gates `external_write` on channel policy + shadow, re-read from D1 at call time; `effects.ts` is the D1 at-most-once ledger; `bindings/shared.ts` audits and budgets every call.
+8. **Tier 2 execution** (`src/sandbox/`) — a `@cloudflare/sandbox` container per run (`run:{runId}`), pre-baked image with the monorepo, `provision.sh` boots asynchronously and its process table is the state. The container holds **no write credentials**: git's remote points at the sentinel host `git.firefighter.local`, and `Sandbox.outboundByHost` in `class.ts` swaps in `MONOREPO_PAT` at Worker egress. Dev-tier env is injected per process behind a boolean the model sets (`env.ts`), and known values are redacted from anything returning to the model. Teardown on terminal status + cron sweep.
+9. Approval (`src/approval/`, `src/api/approvals.ts`) — `approval.escalate` writes local state + a projection job and returns immediately; the pause latches at finalize (`awaiting_approval`). The human `PATCH`es (Access JWT + roster in `src/access/roster.ts`); a D1 CAS commits, then `RunDO.resolveApproval` re-enters the loop via `appendTurn({id:"approval:..."})`. Undelivered resolutions are repaired by cron.
+10. Notify (`src/notify/nudge.ts`) — one Block Kit DM per approval, claimed by CAS in D1. Bot token is for ingest/permalinks/nudges only; customer-facing speech always goes through the on-duty engineer's user token (`src/approval/sender.ts`, identities from `src/identity`, OAuth in `src/oauth`).
+11. Ship (`src/git/`) — `sandbox.diff` → `apply.ts` (byte-exact unified diff, refuses renames/binaries) → `commit.ts` (blobs→tree→commit→ref→PR against pinned `GITHUB_REPO`/`GITHUB_BASE=staging`). Proof recordings go to R2 under `proofs/`, served Access-bypassed at `/proofs/:key`; other artifacts at `/api/artifacts` stay gated.
+
+**Memory:** Zep V3 graphs (`customer:{slug}` + `org`) are recall, not record; writes go through a D1 outbox → `MEMORY_QUEUE` → `src/memory/consumer.ts`, with the cron sweep as backstop. Citations resolve through D1 (`src/memory/cite.ts`).
+
+## Conventions and traps
+
+- **Generated files — never hand-edit:** `apps/worker/worker-configuration.d.ts` (`pnpm cf-typegen`; only commit it from a real regeneration — it is machine-dependent on `.dev.vars` names) and `apps/worker/src/codemode/generated/capabilities.d.ts` (`pnpm codemode:dts`).
+- **`Env` type** lives in `src/index.ts`: `Cloudflare.Env` plus optional declarations for secrets and test opt-outs `wrangler types` cannot see. `wrangler.jsonc` `vars` are non-secret pins (vendor IDs, hosts, mode flags) deliberately kept in the repo; everything credential-shaped is a `wrangler secret`. Code names variables, never values, in errors/logs/health.
+- **Adding a capability:** define it with `auditedCapability(...)` (a bare descriptor throws at registry construction), `effect` is required, append namespaces to `PHASE_09_NAMESPACES` (order = rendered `.d.ts` order), keep method names globally unique (generator emits un-namespaced `XInput`), regenerate the `.d.ts`, add `test/codemode-<ns>.test.ts`. Zero-arg methods need `z.object({}).default({})`.
+- **Migrations are append-only** — `apps/worker/migrations/*.sql` (D1) and the `migrations` tags in `wrangler.jsonc` (DO SQLite classes; `v1`/`v2` are applied in production). New DO class = new tag. RunDO's own schema is versioned separately in `session.ts` (`RUN_SCHEMA_VERSION`).
+- **Test harness** (`vitest.config.ts`, `test/setup.ts`): runs in workerd; migrations applied once; **storage is shared across tests and files (no `isolatedStorage`)** — mint a fresh run key per case (`chat:${crypto.randomUUID()}`), never assert absolute `seq`, never call `reset()`, never assume an empty DB. The pool binds synthetic vendor credentials (`not-a-real-*`), empty AI Gateway settings, `AGENT_MODEL_DISABLED=true`, `SANDBOX_DISABLED=true`, empty `NUDGE_FALLBACK_CHANNEL_ID`; suites that need a feature opt back in by passing their own env object. Those two `*_DISABLED` flags must never be set on a deployed Worker. Helpers: `test/helpers/agent-driver.ts` (barrier `FakeContinuation`), `run-ws.ts`, `fake-memory.ts`, `codemode.ts`.
+- **`scripts/check-text-files.mjs`** fails on a raw control byte in tracked source (a NUL makes git show "Binary files differ" and hides the diff — it happened four times). `.gitattributes` `diff` attribute is the render-side half.
+- **Verify before you invent.** Worker Loader, `@cloudflare/sandbox`, `@cloudflare/codemode` and Zep V3 have thin training data; read the installed `.d.ts` (and `dist/*.js`) in `node_modules`, or `npm pack` the version, before writing against them. Record any invented API you find in that phase's `phase-NN-notes.md`.
+- **Hard rules from the spec:** channels only, never DMs (the ingest drop is the only guard — the app does hold `im:*` scopes); fail closed on unmapped channels; the webhook does no I/O beyond the queue send; ingest is idempotent on `event_id`; triage never emits a ticket type; the loop never branches on ticket type; Linear team and GitHub repo/base are pinned server-side; secrets never enter prompts, events, tool output, logs or memory (invariant 39). Customer-facing copy: direct, technical, no preamble or recap.
+- `.claude/worktrees/phase-24` is a git worktree on branch `worktree-phase-24` (dashboard narration work) that may be ahead of `main`.
