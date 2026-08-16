@@ -59,7 +59,7 @@ The task bodies below were written with full coverage. **They are now capped at 
 | 2 | **1** — `toJsonSchema` output has real `.properties` | Verified fact 8. Silent: raw Zod also has `.type === "object"`, so the wrong thing looks right. Drop the memoisation and zero-arg tests. |
 | 3 | **1** — `describe()` emits descriptors with `.properties` and the real description | Same trap, one layer up. Drop `name()`, execute-passthrough, unknown-method (package behaviour), and the approval assertion (Task 4 sweeps it). |
 | 4 | **2** — (a) all 11 namespaces × every method have `type: "object"` schemas and no `requiresApproval`; (b) method names globally unique | **The highest-value test in the plan.** One sweep proves the whole model-facing API survived the port; the uniqueness check catches a `.d.ts` type-name collision that would silently mistype a capability. Drop the ordering test. |
-| 5+6 | **2** — (a) `getTools()` returns exactly `["run_code"]`; (b) `run_code` executes model code end to end and returns its value | (a) is invariant 5 and Think would silently merge extra tools. (b) is the smoke test for the whole chassis. Drop the flags test (the compiler and source read it), the description test (Task 7's diff proves it), the console.log test, and the internet-refusal test — `globalOutbound` is already covered by the existing `codemode-security` suite and the plan already flags it as pool-flaky. |
+| 5+6 | **3** — (a) `getTools()` returns exactly `["run_code"]`; (b) the sandbox exposes **no `state` and no `cdp` namespace** (verified fact 3a — this one is silent and ships a filesystem to the model); (c) `run_code` executes model code end to end and returns its value | (a) is invariant 5 and Think would silently merge extra tools. (b) is the smoke test for the whole chassis. Drop the flags test (the compiler and source read it), the description test (Task 7's diff proves it), the console.log test, and the internet-refusal test — `globalOutbound` is already covered by the existing `codemode-security` suite and the plan already flags it as pool-flaky. |
 | 7 | **0 new tests** — the `diff` against the pre-change `capabilities.d.ts` IS the test, plus `codemode:dts:check` in CI-less gate | A byte-diff against the committed oracle is strictly stronger than the unit test it replaces. |
 | 8 | **1** — generated declarations absent from the system prompt, and `maxRetries: 0` + `disableParallelToolUse: true` present | Invariants 24, 6, 27 in one assertion. All three fail silently (a leaked prompt block costs tokens; a missing flag costs correctness). Drop the block-order test. |
 | 9 | **3** — approve is idempotent (CAS returns `already_resolved`); edit sends the edited text not the draft; reject keeps the reason | **No reduction.** Approval is the requirement most likely to regress, the edit path has no upstream equivalent, and every failure here is silent and customer-visible. |
@@ -141,7 +141,15 @@ These were measured, not assumed. Tasks below depend on them.
 1. **`agents@0.20.1`**: `agents/codemode/ai` is **removed** — importing it throws *"This entrypoint has been removed. Use createCodeTool() from @cloudflare/codemode/ai instead."* `AIChatAgent` is also removed from `agents` (moved to `@cloudflare/ai-chat`). Do not import either.
 2. **`@cloudflare/think@0.15.1`** peers on `agents >=0.18.0 <1.0.0` — `agents` must be installed explicitly. `Think extends Agent`, so `this.sql`, `this.schedule()`, `this.setState()`, `@callable`, `this.mcp` are all available.
 3. **`createExecuteTool(source, overrides?)`** and **`createExecuteRuntime(source, overrides?)`** from `@cloudflare/think/tools/execute`. Options: `ctx` (DurableObjectState — required when not passing the agent), `tools`, `state`, `browser`, `session`, `connectors`, `executor`, `loader`, `timeout`, `globalOutbound`, `description`, `name`. **`timeout` and `globalOutbound` are ignored when `executor` is given** — which is why the guarded executor must carry them itself.
-4. **`createExecuteRuntime` returns `{ runtime, connectors, tool }`** and assigns the handle to `agent.codemode`. `runtime` exposes `approve({executionId})`, `reject({seq, executionId})`, `executions()`, `expirePaused()`, `saveSnippet()`.
+4. **`createExecuteRuntime` returns `{ runtime, connectors, tool }`** and assigns the handle to `agent.codemode`. `runtime` exposes `approve({executionId})`, `reject({seq, executionId})`, `executions()`, `expirePaused()`, `saveSnippet()`. `createExecuteTool` is exactly `createExecuteRuntime(...).tool`.
+
+3a. **CORRECTION to fact 3, measured in Task 1 — load-bearing.** `createExecuteRuntime(agent, overrides)` merges `{...optionsFromAgent(agent), ...overrides}`, and `optionsFromAgent` sets **`state: createWorkspaceStateBackend(agent.workspace)`** and **`browser: env.BROWSER`**. `Think.workspace` is a **non-optional property that defaults to a real DO-SQLite `Workspace`** (`index-s3Pl812H.d.ts:1441`) — so the agent path ships a `state.*` filesystem namespace to the model **by default**. Setting `workspaceBash = false` does *not* prevent this; it only drops the `bash` tool. **`RunAgent` MUST pass `state: undefined, browser: undefined` explicitly in the overrides object** or it violates invariants 5 and 38 silently. (D8.)
+
+4a. **`isAgent(source)` is `"env" in source && !("executor" in source) && !("loader" in source)`.** So `executor`/`loader` must go in the **second argument** (overrides); putting them in a single options object with the agent takes the non-agent path and loses `agent.codemode` assignment.
+
+4b. **`getRuntime` runs eagerly at tool construction, but the facet instantiates lazily.** A test that only reads `Object.keys(getTools())` passes against a *broken* facet class. Any facet smoke test must actually call into the runtime (e.g. `agent.codemode.executions()`).
+
+4c. **`CodemodeRuntime` must be listed in a `new_sqlite_classes` migration**, not merely exported. `createCodemodeRuntime` reaches it via `ctx.facets.get(..., () => ({ class: ctx.exports.CodemodeRuntime }))`, and workerd exposes a `LoopbackDurableObjectNamespace` only for exports declared as DO classes; a merely-exported class probes as a `LoopbackServiceStub` and `facets.get` rejects it with *"Incorrect type for the 'class' field on 'StartupOptions'"*. This applies to the deployed Worker too, not just the test pool. Already applied in `wrangler.jsonc` `v3`.
 5. **`CodemodeApproveOptions = { executionId }` only — there is no "edit" or arg-override on approve.** This is the measured reason approval stays host-owned (D4).
 6. **`CodemodeConnector`** (from `@cloudflare/codemode`) is an abstract class extending `WorkerEntrypoint`; constructor is `(ctx: DurableObjectState | ExecutionContext, env)` — pass `this.ctx` from inside the DO with no cast. Implement `name()`, optionally `instructions()`, and `protected tools(): ConnectorTools`. `tool(name, t)` is the per-tool decoration hook. `executeTool` / `describe` / `revertAction` / `getTypeScriptTypes` are plumbing you do not implement.
 7. **`ConnectorTool` = `{ description?, inputSchema?: JSONSchema7, outputSchema?, requiresApproval?, replay?, execute(args, ctx?), revert? }`.** `execute` receives **raw, unvalidated** args — our Zod parse inside `defineCapability` remains the real boundary.
@@ -1045,6 +1053,13 @@ export class RunAgent extends Think<Env> {
     const { tool } = createExecuteRuntime(this, {
       connectors: this.#connectors(),
       executor,
+      // NOT optional. `optionsFromAgent` derives `state` from `this.workspace`
+      // (which defaults to a real DO-SQLite Workspace) and `browser` from
+      // env.BROWSER, so omitting these ships a `state.*` filesystem to the
+      // model behind the write guard's back. See verified fact 3a, D8,
+      // invariants 5 and 38.
+      state: undefined,
+      browser: undefined,
       description: this.#description(),
       name: "run_code",
     });
