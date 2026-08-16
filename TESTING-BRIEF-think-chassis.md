@@ -44,11 +44,11 @@ exist so the two never collide.
   (create it if absent): file, test name, what is wrong, why you think so. The
   drill terminal fixes `src/`. Two sessions editing `src/` in one worktree is
   how work gets lost.
-- Commit often, with explicit pathspecs ONLY: `git add apps/worker/test/x.test.ts`.
-  **Never `git add -A`, never `git add .`, never `git commit -a`.** The other
-  session has uncommitted `src/` edits in flight; sweeping them into your
-  commit is the failure this rule prevents. Prefix `test(scope):`. Never
-  bare `git stash` (shared stack) — if you must set work aside, WIP-commit it.
+- **Do not commit. At all.** Leave every file you write in the working tree.
+  The human commits all the tests together at the end, so the test commit and
+  the code commits it covers stay together. No `git add`, no `git commit`, no
+  `git stash` (the stash stack is shared with other sessions). If a subagent
+  commits anyway, note it in `TEST-FINDINGS.md` — do not try to undo it.
 - **Never deploy. Never run `wrangler deploy`, `wrangler containers push`, or
   touch production D1.** Not even to "check". Never edit `RUN_CHASSIS`.
 - **Speed regime: write everything first, run once at the end.** Do NOT run
@@ -231,12 +231,12 @@ Use `superpowers:subagent-driven-development`. One fresh subagent per file
   and an existing test there before writing).
 
 Each subagent's prompt MUST carry, verbatim: the file it owns and its
-behaviour list from §2; the coordination rules from §1 (test/ only, explicit
-pathspecs, no vitest runs, findings not fixes); the names of the model files
+behaviour list from §2; the coordination rules from §1 (test/ only, no
+commits, no vitest runs, findings not fixes); the names of the model files
 to read first; and the legacy suite to crib from. Tell it explicitly: **do not
-run vitest; write the file, run `pnpm typecheck` if you like, commit your one
-file with an explicit pathspec, report back.** A subagent that reports "I ran
-it and it passes" has broken the regime — note it, don't repeat it.
+run vitest and do not commit; write the file, run `pnpm typecheck` if you
+like, report back.** A subagent that reports "I ran it and it passes" or "I
+committed it" has broken the regime — note it, don't repeat it.
 
 Between waves you (the orchestrator) review each file for the harness traps
 in §1 — fresh keys, no absolute seq, no `runTurn` inside an RPC, no static
@@ -245,11 +245,9 @@ caught and the regime says we catch them by reading instead.
 
 When you finish a file (or a subagent reports one):
 1. Skim it against the traps above.
-2. `git add apps/worker/test/<file>.test.ts` (and only that) →
-   `git commit -m "test(<scope>): <what it pins>"`.
-3. Tick it off in §4 (edit this brief in place; commit it with the same
-   explicit-pathspec rule — this file is yours to edit).
-4. Anything you already know fails for a `src/` reason → `TEST-FINDINGS.md`,
+2. Tick it off in §4 (edit this brief in place — this file is yours to edit;
+   leave it uncommitted like everything else).
+3. Anything you already know fails for a `src/` reason → `TEST-FINDINGS.md`,
    not a fix.
 
 Then the run sequence in §1's speed regime: typecheck once → "READY TO RUN"
