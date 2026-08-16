@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.21.0",
+    "@types/json-schema": "7.0.15",
     "@workspace/dashboard": "workspace:*",
     "tsx": "^4.23.12",
     "typescript": "^5",
