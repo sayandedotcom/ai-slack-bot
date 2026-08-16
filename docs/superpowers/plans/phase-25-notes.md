@@ -222,3 +222,97 @@ Nothing else was invented.
    configured fails inside `_executeSubmission`, which catches it and records
    `status: "error"` on the row — it does not reject the caller and does not
    disturb the second call's `accepted: false`.
+
+## 2026-08-16 — Task 15: thinking-block passthrough and ledger/replay agreement
+
+Both properties were measured against the installed packages, not reasoned
+about. Neither test needed a change in `src/` — no defect was found.
+
+### The invariant-17 answer (the one this task was written to get)
+
+**Think's message sanitiser does NOT strip an omitted-thinking block's
+`signature` or `redactedData`. Verified by round trip, not by reading.**
+
+`agents@0.20.1`'s `sanitizeMessage` (`dist/chat/index.js:22-42`) does exactly
+two things, and both leave an Anthropic thinking block untouched:
+
+1. it strips `itemId` / `reasoningEncryptedContent` **only** from
+   `providerMetadata.openai` / `callProviderMetadata.openai` — a metadata bag
+   keyed `anthropic` is never entered;
+2. it drops a `reasoning` part whose text is empty **unless** that part still
+   carries a non-empty `providerMetadata` — an omitted-thinking block is
+   precisely that exception, so it survives.
+
+Think applies it at one write boundary, `_rowSafe` (`dist/think.js:1389`) =
+`enforceRowSizeLimit(sanitizeMessage(message))`, which every history write goes
+through (`_appendMessageToHistory`, `_updateMessageInHistory`,
+`_upsertMessageInHistory`, `_orphanStore`). `enforceRowSizeLimit` only engages
+above 1.8 MB.
+
+Measured end to end in `test/run-agent-thinking.test.ts`: an assistant message
+carrying a signed omitted-thinking part, a `redactedData` part and a readable
+reasoning part is written with `addMessages`, the Durable Object is evicted,
+and the message comes back **byte-identical** — both from Think's rehydrated
+cache and from the `assistant_messages` row the session stored. The fixture's
+signature deliberately contains `+`, `/`, `=` and a non-ASCII glyph, so a
+re-encode or an NFC normalisation would fail the comparison.
+
+### Invented or corrected APIs
+
+9. **Trap: `getMessages()` on a freshly evicted object answers `[]`, not the
+   stored history (new).** Think hydrates `_cachedMessages` in `onStart`
+   ("transcript-hydration", `dist/think.js:1028`) and `getMessages()` merely
+   returns that cache (`dist/think.js:3816`). A bare RPC against an evicted
+   object does not run `onStart`, so a persist → evict → `getMessages()` test
+   passes vacuously against an empty array. Re-acquire the stub with
+   `getAgentByName` after the eviction. For the same reason `instance.session`
+   is `undefined` inside `runInDurableObject` until the object has been
+   initialised.
+
+10. **`Think.getMessages()` types as `never` through a DO stub (new).**
+    `UIMessage[]` does not survive the RPC type mapper, so
+    `(await stub.getMessages()).find(...)` is a compile error and any
+    assertion chained off it would be silently typed away. Cast at the call
+    site, naming why.
+
+### Codemode replay is UNREACHABLE in this configuration (D4)
+
+The plan's Task 15 Step 3 asks for a pause → resume → replay pass. It cannot
+happen here, and the cause is spec decision D4 rather than a bug. Read from
+`@cloudflare/codemode/dist/index.js` on 2026-08-16:
+
+- `CodemodeRuntime.decide(...)` is the only writer of `status = 'paused'`, in
+  exactly one branch — `if (requiresApproval)` (`dist/index.js:679-690`).
+- `requiresApproval` arrives from
+  ``setup.annotations[`${name}.${method}`]?.requiresApproval ?? false`` in
+  `buildConnectorBindings` (`dist/index.js:1573-1575`), i.e. straight off the
+  connector's own `describe()`.
+- `runtime.resume(id)` returns `null` for anything not `paused`
+  (`dist/index.js:616-625`), and `resumeCodemode` turns that into
+  *"…is not paused (status: …); only a paused run can be approved."*
+  (`dist/index.js:1817-1826`). `runPass` is the only thing that calls the
+  connectors, so no second pass ever runs.
+- The other `{ kind: "pause" }` returns are dead ends, not routes into replay:
+  `#fail`/`#diverge` mark the execution `error` first
+  (`dist/index.js:923-936`), and the "already not running" guard at the top of
+  `decide` can only fire after something else has already paused the run.
+
+This project sets `requiresApproval` on nothing (verified fact 5, D4;
+`test/codemode-connectors.test.ts` sweeps all eleven namespaces for it), so no
+execution can pause and none can be resumed. A "pause, resume, assert once"
+test would be asserting against an error string.
+
+`test/run-agent-replay.test.ts` therefore proves the property directly, at the
+seam a replay pass would actually cross twice: `connector.executeTool(method,
+args, { executionId })` — what `buildConnectorBindings` calls on every pass,
+with the id the package documents as "stable across a run's pause/resume
+passes". Two identical `linear.createIssue` calls in one turn produce **one**
+vendor call, **one** `completed` row in `codemode_effects`, and the second call
+returns the recorded result. The row's `effect_key` equals the
+`idempotencyKey` the vendor was called with, which is what makes "the ledger
+and the vendor agree on what the same effect is" a checked statement rather
+than an assumption.
+
+**If `requiresApproval` is ever set on a connector tool**, the pause/resume
+pass becomes reachable and this test should be upgraded to the pause/resume
+form the plan describes.
