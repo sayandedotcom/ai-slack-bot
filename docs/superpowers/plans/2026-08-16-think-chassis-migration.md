@@ -47,6 +47,30 @@ Same regime as Phases 11–19; **overrides the per-step commands wherever they c
 13. **Commit after every task**, conventional prefixes, with this repo's `Co-Authored-By` trailer. Never commit `docs/things-to-remember.md`.
 14. **`main` is never touched.** All work is on `worktree-think-chassis`.
 
+### Test budget — THIS OVERRIDES EVERY TASK'S TEST LIST
+
+The task bodies below were written with full coverage. **They are now capped at the table here.** A subagent writes *only* the tests named for its task, deletes the rest of that task's test code, and does not add any of its own.
+
+**The rule that decides what survives:** keep a test only if it catches a **silent** failure — a wrong-but-plausible result with no error thrown, no red compiler, and no existing test already watching. Drop anything the type checker proves, anything that re-tests `@cloudflare/codemode`'s or Think's own behaviour, and anything the existing 2133-test suite already covers.
+
+| Task | Tests to write | Why these survive |
+|---|---|---|
+| 1 | 1 (spike boot) — throwaway, deleted at end of task | Answers the architecture question |
+| 2 | **1** — `toJsonSchema` output has real `.properties` | Verified fact 8. Silent: raw Zod also has `.type === "object"`, so the wrong thing looks right. Drop the memoisation and zero-arg tests. |
+| 3 | **1** — `describe()` emits descriptors with `.properties` and the real description | Same trap, one layer up. Drop `name()`, execute-passthrough, unknown-method (package behaviour), and the approval assertion (Task 4 sweeps it). |
+| 4 | **2** — (a) all 11 namespaces × every method have `type: "object"` schemas and no `requiresApproval`; (b) method names globally unique | **The highest-value test in the plan.** One sweep proves the whole model-facing API survived the port; the uniqueness check catches a `.d.ts` type-name collision that would silently mistype a capability. Drop the ordering test. |
+| 5+6 | **2** — (a) `getTools()` returns exactly `["run_code"]`; (b) `run_code` executes model code end to end and returns its value | (a) is invariant 5 and Think would silently merge extra tools. (b) is the smoke test for the whole chassis. Drop the flags test (the compiler and source read it), the description test (Task 7's diff proves it), the console.log test, and the internet-refusal test — `globalOutbound` is already covered by the existing `codemode-security` suite and the plan already flags it as pool-flaky. |
+| 7 | **0 new tests** — the `diff` against the pre-change `capabilities.d.ts` IS the test, plus `codemode:dts:check` in CI-less gate | A byte-diff against the committed oracle is strictly stronger than the unit test it replaces. |
+| 8 | **1** — generated declarations absent from the system prompt, and `maxRetries: 0` + `disableParallelToolUse: true` present | Invariants 24, 6, 27 in one assertion. All three fail silently (a leaked prompt block costs tokens; a missing flag costs correctness). Drop the block-order test. |
+| 9 | **3** — approve is idempotent (CAS returns `already_resolved`); edit sends the edited text not the draft; reject keeps the reason | **No reduction.** Approval is the requirement most likely to regress, the edit path has no upstream equivalent, and every failure here is silent and customer-visible. |
+| 10 | **1** — steers splice in insertion order and drain exactly once | Invariants 12–13, one test. |
+| 11 | **1** — projection advances only when the sequence increases | Invariant 32. Drop the nano-USD integer test (the type system and existing usage tests cover it). |
+| 12 | **1** — a repeated Slack `event_id` returns `accepted: false` | The one genuinely new behaviour (`runTurn` idempotency replacing the hand-rolled dedupe). Drop the two routing tests — the switch is a one-line branch the compiler checks. |
+| 13 | **0 new tests** — `pnpm build` + `pnpm typecheck` + the Task 14 drill | UI tests here are slow and low-signal; the drill is the real check. |
+| 15 | **2** — thinking-block passthrough; ledger/replay agreement | **No reduction.** Both catch silent data corruption (a stripped signature breaks continuation; a double-fired effect double-posts to a customer). These are the reason Task 15 exists. |
+
+**Total: ~15 new tests across 9 files**, down from ~34 across 12. Existing suite (104 files / 2133 tests) is untouched and still the regression net.
+
 ### Wave plan
 
 | Wave | Tasks (one subagent each unless noted) | Files owned — disjoint by construction |
