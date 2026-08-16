@@ -167,7 +167,19 @@
     // opens target the same repo until a fork is actually in play.
     "GITHUB_REPO": "Zellify/web2app-rebuild",
     "GITHUB_BASE": "staging",
-    "GITHUB_AUTHOR": "worker-pat"
+    "GITHUB_AUTHOR": "worker-pat",
+    // --------------------------------------------------------- Phase 25
+    //
+    // Which run chassis a wake resolves to: "legacy" = the hand-built RunDO +
+    // streamText loop, "think" = RunAgent extends Think<Env>. Non-secret by
+    // construction — a mode flag, like NUDGE_MODE above.
+    //
+    // It ships as "legacy" and STAYS "legacy" until the cutover task flips it,
+    // so every intermediate deploy during this migration behaves exactly as
+    // the trial deliverable does. Anything unrecognised must read as "legacy"
+    // in code: the strangler's safe direction is the chassis that already
+    // passed the drill.
+    "RUN_CHASSIS": "legacy"
   },
   "assets": {
     // The dashboard's Vite build output (Phase 14). It replaced ./public, which
@@ -262,6 +274,12 @@
   "durable_objects": {
     "bindings": [
       { "name": "RUNS", "class_name": "RunDO" },
+      // Phase 25's Think chassis (`RunAgent extends Think<Env>`), landing
+      // BESIDE RunDO behind the RUN_CHASSIS var rather than replacing it. Both
+      // classes are live at once during the strangler window; RUN_CHASSIS
+      // decides which one a wake resolves to, and the legacy class is deleted
+      // only after the cutover drill passes.
+      { "name": "RUN_AGENTS", "class_name": "RunAgent" },
       // A container IS a Durable Object — `@cloudflare/sandbox`'s Sandbox
       // extends Container extends DurableObject, and this binding is how the
       // Worker addresses one. The model can never name an id: the lifecycle
@@ -274,7 +292,34 @@
   // storage. A new class gets a new tag.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RunDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["Sandbox"] }
+    { "tag": "v2", "new_sqlite_classes": ["Sandbox"] },
+    // Phase 25. RunAgent is a Think agent, which is an Agents-SDK Agent, which
+    // is a SQLite Durable Object — `new_sqlite_classes`, same as v1.
+    //
+    // CodemodeRuntime IS LISTED HERE, and the reason is measured, not
+    // decorative (Task 1 spike, 2026-08-16 — docs/superpowers/plans/
+    // phase-25-notes.md). The durable codemode runtime behind the execute tool
+    // is a FACET of whichever DO created the tool:
+    //
+    //   ctx.facets.get("codemode:run_code", () => ({
+    //     class: ctx.exports.CodemodeRuntime
+    //   }))
+    //
+    // `facets.get` demands a real Durable Object class, and workerd only makes
+    // `ctx.exports.X` a `LoopbackDurableObjectNamespace` when X is DECLARED as
+    // a Durable Object class. Merely exporting it from src/index.ts — which is
+    // all the package docs and the @cloudflare/codemode/vite plugin do — leaves
+    // it a `LoopbackServiceStub`, and the first facet RPC dies with:
+    //
+    //   TypeError: Incorrect type for the 'class' field on 'StartupOptions':
+    //   the provided value is not of type 'DurableObjectClass or
+    //   LoopbackDurableObjectNamespace or LoopbackColoLocalActorNamespace'.
+    //
+    // This one line is the entire fix. No `durable_objects.bindings` entry is
+    // needed and none is wanted: nothing addresses the runtime from outside —
+    // it is reached only through its host DO's own `facets` map, where it gets
+    // an isolated SQLite database of its own.
+    { "tag": "v3", "new_sqlite_classes": ["RunAgent", "CodemodeRuntime"] }
   ],
   "d1_databases": [
     {

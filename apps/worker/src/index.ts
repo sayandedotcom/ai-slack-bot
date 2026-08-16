@@ -36,6 +36,23 @@ export { RunDO } from "./run/do";
 // stated only in a comment inside the package's `.d.ts`.
 export { ContainerProxy, Sandbox } from "./sandbox/class";
 
+// Phase 25. The durable codemode runtime behind the execute tool is a FACET of
+// whichever Durable Object created the tool, resolved by name off the entry's
+// own `exports` map — `ctx.facets.get("codemode:<name>", () => ({ class:
+// ctx.exports.CodemodeRuntime }))`. Omitting this export throws at
+// tool-construction time rather than at build time: exactly the same shape of
+// trap as ContainerProxy above, and stated only in a comment inside the
+// package's `.d.ts`.
+//
+// This export is HALF the requirement, and the docs only mention this half.
+// `CodemodeRuntime` must ALSO be declared as a Durable Object class in
+// wrangler.jsonc's `migrations` (tag `v3`), or `ctx.exports.CodemodeRuntime` is
+// a plain service stub that `facets.get` rejects. See the comment on that tag
+// for the exact error, and docs/superpowers/plans/phase-25-notes.md for the
+// spike that measured it. No binding: nothing addresses the runtime from
+// outside its host DO.
+export { CodemodeRuntime } from "@cloudflare/codemode";
+
 /**
  * Wrangler-generated bindings, plus the two narrow refinements the application
  * genuinely needs.
