@@ -1,5 +1,5 @@
 /**
- * Render the model-visible capability declarations from the real Zod schemas.
+ * Render the model-visible capability declarations from the real connectors.
  *
  * `--write` updates src/codemode/generated/capabilities.d.ts.
  * `--check` renders in memory and exits non-zero on any difference, without
@@ -11,8 +11,8 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { renderCapabilityDeclarations } from "../src/codemode/dts";
-import { buildRegistry } from "../src/codemode/registry";
+import { renderDeclarationsFromConnectors } from "../src/codemode/dts";
+import { buildConnectors } from "../src/codemode/connectors";
 import {
   alwaysFresh,
   PRODUCTION_LIMITS,
@@ -20,6 +20,7 @@ import {
 } from "../src/codemode/contracts";
 import { newCodeExecution } from "../src/codemode/bindings/shared";
 import type { CapabilityDependencies } from "../src/codemode/gateways";
+import type { Env } from "../src/index";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUTPUT = resolvePath(here, "../src/codemode/generated/capabilities.d.ts");
@@ -70,6 +71,33 @@ const RENDER_SCOPE: CodeModeScope = {
   actor: null,
 };
 
+/**
+ * `FirefighterConnector` extends `CodemodeConnector`, whose constructor takes
+ * the Worker `env` and stores it — nothing on the render path reads a binding
+ * off it. This proxy makes that measurable rather than assumed, for the same
+ * reason the gateways above throw: a build script must never hold a live
+ * binding, and if one is ever read here it should be a loud failure, not a
+ * vendor call from `pnpm codemode:dts`.
+ */
+function unreachableEnv(): Env {
+  return new Proxy({} as Record<string, unknown>, {
+    get(_target, binding) {
+      throw new Error(
+        `the declaration generator must not read env.${String(binding)}`,
+      );
+    },
+  }) as unknown as Env;
+}
+
+/**
+ * `describe()` only reads names, descriptions and schemas, so the connectors
+ * never need a real execution context. A `waitUntil` that drops its argument
+ * is the whole surface a connector could reach for, and dropping it is correct
+ * here: there is no request to keep alive.
+ */
+const renderContext = () =>
+  ({ waitUntil() {} }) as unknown as ExecutionContext;
+
 const silentAudit = {
   async started() {},
   async completed() {},
@@ -104,13 +132,19 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const registry = buildRegistry(
+  // Rendered from the connectors, not the registry: `describe()` is the same
+  // call the codemode runtime makes, so the committed artifact is what the
+  // model is actually handed. Both build over the same `buildNamespaces`
+  // descriptors, so this is a change of vantage point, not of content.
+  const connectors = buildConnectors(
+    renderContext(),
     RENDER_SCOPE,
     unreachableDependencies(),
     PRODUCTION_LIMITS,
     renderExecution(),
+    unreachableEnv(),
   );
-  const rendered = renderCapabilityDeclarations(registry);
+  const rendered = await renderDeclarationsFromConnectors(connectors);
 
   if (mode === "write") {
     await mkdir(dirname(OUTPUT), { recursive: true });

@@ -3,10 +3,10 @@
 // Regenerate with:  pnpm codemode:dts
 // Verify in CI with: pnpm codemode:dts:check
 //
-// Rendered from the real Zod schemas in src/codemode/bindings/ by
-// @cloudflare/codemode@0.5.1's generateTypes. This file exists for
-// review and drift detection; it is NOT a second source of truth, and the tool
-// description the model actually sees comes from the same render function.
+// Rendered from the capability connectors' describe() by
+// @cloudflare/codemode@0.5.1's generateTypesFromJsonSchema — the same
+// call the codemode runtime makes, so this is what the model is handed. It
+// exists for review and drift detection; it is NOT a second source of truth.
 //
 // These declarations are GUIDANCE, not a security boundary. The sandbox runs
 // JavaScript and nothing stops model code calling a method the types forbid.
@@ -180,7 +180,9 @@ type SelectInput = {
     };
     limit?: number;
 }
-type SelectOutput = {}[]
+type SelectOutput = {
+    [key: string]: string | number | boolean | null;
+}[]
 
 declare const supabase: {
 	/**
