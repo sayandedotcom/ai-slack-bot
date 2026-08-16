@@ -158,6 +158,29 @@ export class RunAgent extends Think<Env> {
     return firefighterTurnConfig(this);
   }
 
+  /**
+   * Re-enter the agentic loop after a human resolved an approval.
+   *
+   * A scheduled callback rather than a direct call from `resolveApproval`,
+   * because that runs inside a DO RPC and the turn queue cannot drain until it
+   * returns — calling `runTurn` there deadlocks even unawaited. See the long
+   * comment at the `schedule` call in `agent-approvals.ts`.
+   *
+   * `mode: "submit"` keyed on the approval id: a redelivered resolution or a
+   * repair-sweep retry is `accepted: false`, never a second turn carrying the
+   * same decision twice.
+   */
+  async reenterAfterApproval(payload: {
+    input: string;
+    idempotencyKey: string;
+  }): Promise<void> {
+    await this.runTurn({
+      mode: "submit",
+      input: payload.input,
+      idempotencyKey: payload.idempotencyKey,
+    });
+  }
+
   getTools(): { run_code: Tool } {
     return { run_code: this.#executeTool() };
   }

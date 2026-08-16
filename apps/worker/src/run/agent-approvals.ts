@@ -396,8 +396,22 @@ export async function resolveApproval(
   // repair sweep while a successor turn may already be running. The idempotency
   // key is the approval id, so a redelivered resolution is `accepted: false`
   // rather than a second turn carrying the same decision twice.
-  await agent.runTurn({
-    mode: "submit",
+  // SCHEDULED, not called, and the distinction is load-bearing.
+  //
+  // `resolveApproval` runs INSIDE the Durable Object, reached by RPC from the
+  // dashboard's PATCH. Calling `runTurn` here deadlocks — measured, and it
+  // deadlocks whether or not the promise is awaited, because the DO holds the
+  // RPC open until in-flight promises settle while the turn queue cannot drain
+  // until this call returns. The same three tests hang indefinitely with the
+  // call and pass in ~12s without it.
+  //
+  // `schedule(0, ...)` is the DO-native way to run work AFTER the current call
+  // returns: it writes a row and arms the alarm, so the re-entry survives
+  // eviction and a crash between the decision and the turn. It is also the
+  // right shape for the caller — a human clicking Approve gets their answer as
+  // soon as the decision is committed and the message is sent, and never waits
+  // on a model turn.
+  await agent.schedule(0, "reenterAfterApproval", {
     input: content,
     idempotencyKey: `approval:${won.id}`,
   });
