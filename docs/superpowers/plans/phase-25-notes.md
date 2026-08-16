@@ -198,3 +198,27 @@ throw at `base-BqhlNCSH.js:74`. Corrections and additions:
    module-evaluation time, not at resolution time.
 
 Nothing else was invented.
+
+## 2026-08-16 — Task 12: `wakeRun()` façade and the chassis switch
+
+### Invented or corrected APIs
+
+7. **`Think.runTurn` is overloaded, and a Durable Object RPC stub keeps only
+   the LAST overload.** `runTurn(RunTurnWait)` / `runTurn(RunTurnSubmit)` /
+   `runTurn(RunTurnStream)` collapse, through `DurableObjectStub<RunAgent>`, to
+   the `RunTurnStream` signature alone — so the plan's own Task 12 snippet
+   (`agent.runTurn({ mode: "submit", … })` on the value `getAgentByName`
+   returns) does **not** typecheck: `Type '"submit"' is not assignable to type
+   '"stream"'`, then `Property 'accepted' does not exist on type 'void'`. The
+   runtime behaviour is correct; only the mapped type is wrong.
+   `src/run/chassis.ts` narrows the stub to a local
+   `{ runTurn(options: RunTurnSubmit): Promise<SubmitMessagesResult> }` built
+   from the package's own exported types, rather than reaching for `any`.
+
+8. **Fact 10 confirmed by execution, not by reading.** `submitMessages`
+   (`dist/think.js`) looks the submission up by `idempotency_key` before
+   inserting and returns `{ …inspection, accepted: false }` when one already
+   exists, in any status. The drain that follows a wake with no model
+   configured fails inside `_executeSubmission`, which catches it and records
+   `status: "error"` on the row — it does not reject the caller and does not
+   disturb the second call's `accepted: false`.

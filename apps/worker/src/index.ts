@@ -11,7 +11,9 @@ import { identityApi } from "./api/identity";
 import { evalApi } from "./api/eval";
 import { slackOAuth } from "./oauth/slack";
 import { githubOAuth } from "./oauth/github";
-import { routeSlackMessageToOwnedRun, wakeSlackRun } from "./run/coordinator";
+import { routeSlackMessageToOwnedRun } from "./run/coordinator";
+import { wakeRun as wakeRunOnActiveChassis } from "./run/chassis";
+import { slackRunKey } from "./run/keys";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
@@ -322,8 +324,18 @@ export default {
           // No HTTP self-call and no extra queue: the consumer and the
           // coordinator both run in the trusted parent Worker.
           routeToOwnedRun: (message) => routeSlackMessageToOwnedRun(env, message),
+          // THE wake, for both chassis. `src/run/chassis.ts` is the only reader
+          // of `RUN_CHASSIS`; the legacy branch is still `wakeSlackRun` →
+          // `RunDO.appendTurn`, unchanged. The Slack `event_id` is the
+          // idempotency token on either side, and the D1 `triage_decisions`
+          // dedupe above it stays exactly where it was.
           wakeRun: async (input) => {
-            await wakeSlackRun(env, input);
+            await wakeRunOnActiveChassis(
+              env,
+              slackRunKey(input.channelId, input.threadTs),
+              input.openingPrompt,
+              { idempotencyKey: input.eventId },
+            );
           },
         });
     }
