@@ -281,7 +281,7 @@
       // BuildKit --secret (the PAT) and `wrangler deploy` cannot pass a build
       // secret. Built and pushed via sandbox/build.sh, which proves no
       // credential reached a layer. Bump this digest when you rebuild the image.
-      "image": "registry.cloudflare.com/cdf27b547d94db5a7bb2f42b13c5319b/firefighter-sandbox@sha256:e66182cda1e0e2b24c6cc70c4b663dd4cc5af3eacd8fb883dff90a6571073f32",
+      "image": "registry.cloudflare.com/cdf27b547d94db5a7bb2f42b13c5319b/firefighter-sandbox@sha256:dc9b98e0f2d5f54185979f78414e03a080a96fd872d82634f2fe256220a3ad34",
       "instance_type": "standard-4",
       "max_instances": 3,
       // Operator SSH from the Cloudflare dashboard, for exactly one purpose:
