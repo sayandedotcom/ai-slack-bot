@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { createRunFromChat } from "../run/chassis";
+import { createRunFromChat, resolveChassis } from "../run/chassis";
 import { runStubForKey } from "../run/keys";
 import { getRunById, listRuns, readRunUsage, RUN_LIST_MAX_LIMIT } from "../run/repository";
 import { decimalNanoUsd } from "../agent/cost";
@@ -32,6 +32,45 @@ function publicRun(run: RunRecord) {
 function fail(code: string, message: string) {
   // No stack traces and no internal keys — errors cross to the browser.
   return { code, message };
+}
+
+/**
+ * Phase 25, gap 6. Refuse a LEGACY-ONLY route when the deployment runs Think.
+ *
+ * Three routes in this file reach `RunDO` through `runStubForKey` — the run
+ * snapshot, the steer, and the socket. On `RUN_CHASSIS=think` the session that
+ * owns the run is a `RunAgent`, and `RunDO` for the same key is an empty object
+ * that will answer every one of them successfully: the snapshot returns zero
+ * events and a default driver for a run that is mid-incident, and the steer is
+ * accepted, stored, and never read by anything. A silent wrong answer, which is
+ * the exact failure `wakeRun`/`createRunFromChat` exist to prevent — so these
+ * refuse by NAME instead.
+ *
+ * The dashboard never reaches here on Think: it asks `/api/chassis` on load and
+ * renders `AgentSession` against `/agents/*`. This guard is for the callers the
+ * SPA is not — a curl, a stale bundle a browser still has cached, a future
+ * script — and it is the mirror image of the `chassis !== "think"` refusal on
+ * `/agents/*` in `src/index.ts`. Same code, same status: a route that is not
+ * part of this deployment is a 404, not a 500.
+ *
+ * Returns the body and status to send, or `null` to continue.
+ */
+function refuseIfThink(env: Env): { body: { code: string; message: string }; status: 404 | 500 } | null {
+  let chassis: string;
+  try {
+    chassis = resolveChassis(env);
+  } catch {
+    // Names the variable, never its value (invariant 39 applied uniformly).
+    return {
+      body: fail("invalid_chassis", "RUN_CHASSIS is not a recognised value"),
+      status: 500,
+    };
+  }
+  if (chassis !== "think") return null;
+  return {
+    body: fail("chassis_not_active", "this deployment runs the think run chassis"),
+    status: 404,
+  };
 }
 
 /** D1 only. This must never wake a Durable Object, or the list costs one wake per row. */
@@ -85,6 +124,9 @@ runsApi.post("/runs", async (c) => {
 });
 
 runsApi.get("/runs/:id", async (c) => {
+  const refused = refuseIfThink(c.env);
+  if (refused) return c.json(refused.body, refused.status);
+
   const run = await getRunById(c.env.DB, c.req.param("id"));
   // Looked up in D1 first, so an unknown id cannot instantiate an object.
   if (!run) return c.json(fail("not_found", "no such run"), 404);
@@ -178,6 +220,9 @@ runsApi.get("/runs/:id/usage", async (c) => {
  * over HTTP after an unacknowledged socket send does not steer twice.
  */
 runsApi.post("/runs/:id/turns", async (c) => {
+  const refused = refuseIfThink(c.env);
+  if (refused) return c.json(refused.body, refused.status);
+
   const run = await getRunById(c.env.DB, c.req.param("id"));
   if (!run) return c.json(fail("not_found", "no such run"), 404);
 
@@ -215,6 +260,9 @@ runsApi.post("/runs/:id/turns", async (c) => {
 export const runsWs = new Hono<{ Bindings: Env }>();
 
 runsWs.get("/run/:id", async (c) => {
+  const refused = refuseIfThink(c.env);
+  if (refused) return c.json(refused.body, refused.status);
+
   const run = await getRunById(c.env.DB, c.req.param("id"));
   if (!run) return c.json(fail("not_found", "no such run"), 404);
 

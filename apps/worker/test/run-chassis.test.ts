@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { Env } from "../src/index";
+import { runsApi, runsWs } from "../src/api/runs";
 import { createRunFromChat, wakeRun } from "../src/run/chassis";
 import { getRunByKey } from "../src/run/repository";
 
@@ -107,5 +108,53 @@ describe("wakeRun on the think chassis", () => {
       idempotencyKey: `steer:${requestId}`,
     });
     expect(repeat.accepted).toBe(false);
+  });
+});
+
+/**
+ * Phase 25, gap 6. The three legacy-only routes must refuse on the Think
+ * chassis rather than answer from the wrong session.
+ *
+ * Driven against the exported Hono apps rather than `SELF`, because the whole
+ * subject is a non-default `RUN_CHASSIS` and the pool's `SELF` is bound to the
+ * pool env. The paths are the sub-app's own — `runsApi` is mounted at `/api`
+ * and `runsWs` at `/ws` by `src/index.ts`.
+ *
+ * The run is REAL. A bogus id would 404 either way and prove nothing; using a
+ * run that exists is what shows the answer is "this route is not part of this
+ * deployment" rather than "no such run". The `code` assertion is the
+ * load-bearing half of each case.
+ */
+describe("legacy-only run routes on the think chassis", () => {
+  it("refuse the snapshot, the steer and the socket by name", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+
+    // Created on LEGACY on purpose: this is exactly the dangerous shape — a run
+    // whose session is `RunDO` while the deployment now says think. The routes
+    // must still refuse, because a deployment runs one chassis, not one per run.
+    const run = await createRunFromChat(env as Env, { firstMessage: "hello" });
+
+    const snapshot = await runsApi.fetch(new Request(`http://x/runs/${run.id}`), think);
+    const steer = await runsApi.fetch(
+      new Request(`http://x/runs/${run.id}/turns`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestId: crypto.randomUUID(), content: "steer me" }),
+      }),
+      think,
+    );
+    const socket = await runsWs.fetch(new Request(`http://x/run/${run.id}`), think);
+
+    for (const response of [snapshot, steer, socket]) {
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ code: "chassis_not_active" });
+    }
+  });
+
+  it("still serves the snapshot on the legacy chassis", async () => {
+    // The other half of the guard: it must not have turned these routes off.
+    const run = await createRunFromChat(env as Env, { firstMessage: "hello" });
+    const response = await runsApi.fetch(new Request(`http://x/runs/${run.id}`), env as Env);
+    expect(response.status).toBe(200);
   });
 });
