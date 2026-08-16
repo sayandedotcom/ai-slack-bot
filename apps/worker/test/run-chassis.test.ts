@@ -1,8 +1,11 @@
 import { env } from "cloudflare:test";
+import { getAgentByName } from "agents";
 import { describe, expect, it } from "vitest";
 import type { Env } from "../src/index";
 import { runsApi, runsWs } from "../src/api/runs";
-import { createRunFromChat, wakeRun } from "../src/run/chassis";
+import type { RunAgent } from "../src/run/agent";
+import { createRunFromChat, resolveChassis, RunChassisError, wakeRun } from "../src/run/chassis";
+import { routeSlackMessageToOwnedRun } from "../src/run/coordinator";
 import { getRunByKey } from "../src/run/repository";
 
 /**
@@ -46,6 +49,51 @@ async function seedChannel(slackKey: string, mode: "observe" | "live"): Promise<
   )
     .bind(channelOf(slackKey), `ext-${channelOf(slackKey).toLowerCase()}`, mode)
     .run();
+}
+
+async function setChannelMode(slackKey: string, mode: "observe" | "live"): Promise<void> {
+  await env.DB.prepare("UPDATE channels SET mode = ? WHERE channel_id = ?")
+    .bind(mode, channelOf(slackKey))
+    .run();
+}
+
+/** The Think session that owns `key` — the object a wake has to land in. */
+function agentFor(key: string) {
+  return getAgentByName<Env, RunAgent>(env.RUN_AGENTS, key);
+}
+
+/**
+ * The idempotency token of every durable submission the Think session holds.
+ *
+ * This is the Think chassis's "turns" — `RunDO.turns()` has no counterpart here,
+ * and `cf_think_submissions` is the durable record of what was admitted. Reading
+ * the tokens rather than just the count means a test can say WHICH wake landed,
+ * which is the difference between "one turn" and "the right one turn".
+ */
+async function submissionKeys(key: string): Promise<string[]> {
+  // Narrowed the same way `SubmitOnlyAgent` in `src/run/chassis.ts` is, and for
+  // a neighbouring reason: `ThinkSubmissionInspection` carries a
+  // `Record<string, unknown>` field, so the Durable Object stub's RPC return
+  // mapping collapses `listSubmissions` to `never` at the type level even though
+  // the call is exactly right at runtime. This restates the one field read here.
+  const agent = (await agentFor(key)) as unknown as {
+    listSubmissions(options?: { limit?: number }): Promise<{ idempotencyKey?: string }[]>;
+  };
+  const submissions = await agent.listSubmissions({ limit: 50 });
+  return submissions.map((submission) => submission.idempotencyKey ?? "(none)").sort();
+}
+
+async function runRowCount(key: string): Promise<number> {
+  const row = await env.DB.prepare('SELECT COUNT(*) AS n FROM runs WHERE "key" = ?')
+    .bind(key)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/** `slack:{channel}:{thread_ts}` split back out, for the owned-thread cases. */
+function slackPartsOf(slackKey: string): { channelId: string; threadTs: string } {
+  const [, channelId, threadTs] = slackKey.split(":");
+  return { channelId, threadTs };
 }
 
 describe("wakeRun on the think chassis", () => {
@@ -108,6 +156,336 @@ describe("wakeRun on the think chassis", () => {
       idempotencyKey: `steer:${requestId}`,
     });
     expect(repeat.accepted).toBe(false);
+  });
+
+  /**
+   * The counting half of the idempotency story. The case at the top of this file
+   * asserts the `accepted` FLAGS; this one asserts the two durable records those
+   * flags are supposed to be describing — one D1 `runs` row and one submission —
+   * because a chassis that returned `accepted: false` while still admitting the
+   * work would satisfy the flag assertion and answer the customer twice.
+   */
+  it("creates exactly one run row and one opening submission, and a queue replay adds neither", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+    const key = freshSlackKey();
+    await seedChannel(key, "observe");
+    const eventId = `Ev${crypto.randomUUID()}`;
+
+    await wakeRun(think, key, "opening prompt", { idempotencyKey: eventId });
+    expect(await runRowCount(key)).toBe(1);
+    expect(await submissionKeys(key)).toEqual([eventId]);
+
+    // The queue is at-least-once; this is the redelivery.
+    await wakeRun(think, key, "opening prompt", { idempotencyKey: eventId });
+    expect(await runRowCount(key)).toBe(1);
+    expect(await submissionKeys(key)).toEqual([eventId]);
+  });
+
+  /**
+   * Two deliveries of the same wake, in flight at once — the shape the ingest
+   * queue produces on a retried batch. `INSERT OR IGNORE` and the submission
+   * table's idempotency read are both meant to make this converge; the failure
+   * it guards is two `runs` rows for one thread, which would give the thread two
+   * public ids and let the write guard read the wrong one.
+   */
+  it("converges on one run and one submission when two wakes race", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+    const key = freshSlackKey();
+    await seedChannel(key, "live");
+    const eventId = `Ev${crypto.randomUUID()}`;
+
+    const [a, b] = await Promise.all([
+      wakeRun(think, key, "prompt", { idempotencyKey: eventId }),
+      wakeRun(think, key, "prompt", { idempotencyKey: eventId }),
+    ]);
+
+    // Exactly one of the two admitted the work — never both, never neither.
+    expect([a.accepted, b.accepted].filter(Boolean)).toHaveLength(1);
+    expect(await runRowCount(key)).toBe(1);
+    expect(await submissionKeys(key)).toEqual([eventId]);
+  });
+
+  /**
+   * A `done` run releases its Slack thread back to triage, which may wake it
+   * again. That second wake must reach the SAME session: forking a fresh
+   * message-scoped object would drop everything the first incident established
+   * and re-ask the customer questions it already has answers to.
+   */
+  it("reopens a finished thread on the same agent and keeps its earlier submissions", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+    const key = freshSlackKey();
+    await seedChannel(key, "live");
+    const first = `Ev${crypto.randomUUID()}`;
+    const second = `Ev${crypto.randomUUID()}`;
+
+    await wakeRun(think, key, "first", { idempotencyKey: first });
+    const created = await getRunByKey(env.DB, key);
+    await env.DB.prepare('UPDATE runs SET status = ? WHERE "key" = ?').bind("done", key).run();
+
+    await wakeRun(think, key, "second", { idempotencyKey: second });
+
+    // Same public id, so the dashboard URL and every `run_id` foreign key that
+    // already names this incident still resolve to it.
+    expect((await getRunByKey(env.DB, key))?.id).toBe(created?.id);
+    expect(await runRowCount(key)).toBe(1);
+    // History is continuous, not restarted.
+    expect(await submissionKeys(key)).toEqual([first, second].sort());
+  });
+
+  /**
+   * INVARIANT 37, across two wakes rather than within one.
+   *
+   * The `observe` -> shadow / `live` -> no shadow reading is already asserted by
+   * "creates the D1 run row under the channel policy before it wakes" above.
+   * What that case cannot see is the DIRECTION: the ratchet only means anything
+   * if a downgrade catches an existing unshadowed run, and if flipping the
+   * channel back does not hand that run its authority again. `wakeSlackRun`'s
+   * legacy equivalent is covered in `run-shadow-ratchet.test.ts`; the Think
+   * chassis re-reads the policy through its own call site in `chassis.ts`, so
+   * the property has to be proven there too or only one chassis has it.
+   */
+  it("shadows an existing run when its channel is downgraded, and never clears the flag again", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+    const key = freshSlackKey();
+    await seedChannel(key, "live");
+
+    await wakeRun(think, key, "first", { idempotencyKey: `Ev${crypto.randomUUID()}` });
+    expect((await getRunByKey(env.DB, key))?.shadow).toBe(false);
+
+    await setChannelMode(key, "observe");
+    await wakeRun(think, key, "second", { idempotencyKey: `Ev${crypto.randomUUID()}` });
+    expect((await getRunByKey(env.DB, key))?.shadow).toBe(true);
+
+    // Somebody flips the channel back. Promoting a drafting run to an acting one
+    // is a reviewed action with its own authority; it is not a side effect of a
+    // channel edit that a later Slack event happens to observe.
+    await setChannelMode(key, "live");
+    await wakeRun(think, key, "third", { idempotencyKey: `Ev${crypto.randomUUID()}` });
+    expect((await getRunByKey(env.DB, key))?.shadow).toBe(true);
+  });
+
+  /**
+   * "Fail closed" has two different meanings on this path and only one of them
+   * is a refusal, so both are pinned here.
+   *
+   * An UNMAPPED CHANNEL is a resolvable policy — `getChannelPolicy` answers
+   * `known: false`, `canPost` is false, and the run is created SHADOWED. It does
+   * not throw, and it must not: the run still ingests, still reasons, still
+   * evaluates; it simply cannot emit. Asserting a throw here would be asserting
+   * the wrong closure.
+   *
+   * An UNREADABLE POLICY is the refusal. `chassis.ts` does the row-and-ratchet
+   * work before the submit precisely so an unresolvable policy can never become
+   * a woken run, and there is deliberately no catch that proceeds with a
+   * default. The proof is negative on both records: no `runs` row and no
+   * submission, i.e. nothing scheduled that no row says is shadowed.
+   */
+  it("shadows an unmapped channel but refuses outright when the policy cannot be read", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+
+    const unmapped = freshSlackKey(); // deliberately absent from `channels`
+    await wakeRun(think, unmapped, "prompt", { idempotencyKey: `Ev${crypto.randomUUID()}` });
+    expect((await getRunByKey(env.DB, unmapped))?.shadow).toBe(true);
+
+    const blind: Env = {
+      ...think,
+      DB: {
+        prepare() {
+          throw new Error("d1 unavailable");
+        },
+      } as unknown as D1Database,
+    };
+    const key = freshSlackKey();
+    await seedChannel(key, "live");
+
+    await expect(
+      wakeRun(blind, key, "prompt", { idempotencyKey: `Ev${crypto.randomUUID()}` }),
+    ).rejects.toThrow();
+
+    expect(await getRunByKey(env.DB, key)).toBeNull();
+    expect(await submissionKeys(key)).toEqual([]);
+  });
+});
+
+/**
+ * `RUN_CHASSIS` arrives from a config file at runtime and is typed `string`, so
+ * the single read site in `src/run/chassis.ts` is the only thing standing
+ * between a typo and a run executing on a session implementation the operator
+ * did not choose.
+ */
+describe("an unrecognised RUN_CHASSIS", () => {
+  it("throws rather than falling back to the legacy chassis", async () => {
+    const typo: Env = { ...env, RUN_CHASSIS: "Think" };
+    const key = freshSlackKey();
+    await seedChannel(key, "live");
+
+    expect(() => resolveChassis(typo)).toThrow(RunChassisError);
+    await expect(
+      wakeRun(typo, key, "prompt", { idempotencyKey: `Ev${crypto.randomUUID()}` }),
+    ).rejects.toThrow(RunChassisError);
+
+    // THE LOAD-BEARING HALF. A silent fallback to legacy would have created this
+    // row on its way into `RunDO`, and every assertion above would still pass.
+    expect(await getRunByKey(env.DB, key)).toBeNull();
+
+    // And the value is never echoed back (invariant 39 applied uniformly: no
+    // configured value is quoted, secret-shaped or not).
+    const message = await wakeRun(typo, key, "prompt", { idempotencyKey: "Ev" }).then(
+      () => "resolved",
+      (error: unknown) => String(error),
+    );
+    expect(message).toContain("RUN_CHASSIS");
+    expect(message).not.toContain("Think");
+  });
+});
+
+describe("the legacy branch of wakeRun", () => {
+  /**
+   * Chat runs are created and continued by `src/api/runs.ts` against `RunDO`
+   * directly and have never gone through a wake. Refusing by NAME is the point:
+   * inventing a second chat-creation path inside the wake would be a code path
+   * no caller exercises and no test would keep honest.
+   */
+  it("refuses a chat key by name instead of inventing a second chat path", async () => {
+    const legacy: Env = { ...env, RUN_CHASSIS: "legacy" };
+    const key = `chat:${crypto.randomUUID()}`;
+
+    const outcome = await wakeRun(legacy, key, "hello", { idempotencyKey: "steer:r-1" }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(outcome).toBeInstanceOf(RunChassisError);
+    expect(String(outcome)).toContain("slack runs only");
+    expect(await getRunByKey(env.DB, key)).toBeNull();
+  });
+});
+
+/**
+ * A later message in a thread a run already owns. Continuation bypasses TRIAGE
+ * — the model is not asked a second time whether the thread is worth answering —
+ * but it must not bypass the SESSION: on the Think chassis the object that owes
+ * the customer an answer is the `RunAgent`, and a reply committed anywhere else
+ * is a message nothing will ever read.
+ */
+describe("an owned thread on the think chassis", () => {
+  /**
+   * KNOWN DEFECT, see TEST-FINDINGS.md.
+   *
+   * `src/index.ts` wires `routeToOwnedRun` straight to
+   * `routeSlackMessageToOwnedRun`, which is `RunDO`-shaped end to end
+   * (`ensureSlackRunUnderPolicy` -> `runStubForKey(env.RUNS, ...)` ->
+   * `RunDO.appendTurn`). It does not go through `src/run/chassis.ts` and never
+   * reads `RUN_CHASSIS`. So under `RUN_CHASSIS=think` a customer's follow-up in
+   * a live thread is committed to an empty legacy Durable Object while the
+   * `RunAgent` that owns the incident is never woken — the exact silent wrong
+   * answer the chassis facade exists to prevent, and the same shape that was
+   * fixed for `POST /api/runs` and for the triage wake.
+   *
+   * `it.fails` rather than a fix: `src/` belongs to the drill terminal.
+   */
+  it.fails("absorbs a thread reply into the owning RunAgent with no model call", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+    const key = freshSlackKey();
+    await seedChannel(key, "live");
+    const { channelId, threadTs } = slackPartsOf(key);
+    const opening = `Ev${crypto.randomUUID()}`;
+    const reply = `Ev${crypto.randomUUID()}`;
+
+    await wakeRun(think, key, "opening prompt", { idempotencyKey: opening });
+
+    const routed = await routeSlackMessageToOwnedRun(think, {
+      eventId: reply,
+      channelId,
+      ts: threadTs,
+      threadTs,
+      text: "still broken, any update?",
+      userId: "U1",
+      permalink: "https://slack.com/archives/C1/p2",
+    });
+
+    // Committed, and committed WHERE THE RUN IS. `routed === true` alone is not
+    // enough — that is exactly what the legacy path returns while writing into
+    // the wrong object.
+    expect(routed).toBe(true);
+    expect(await submissionKeys(key)).toHaveLength(2);
+  });
+
+  /**
+   * The other direction, and it holds today because ownership is a D1 status
+   * question rather than a session question: `findOwnedSlackRun` counts only
+   * `live | awaiting_approval | idle`. A `done` run releases the thread so
+   * triage can judge the new message on its merits — and may then reopen this
+   * same run through its key.
+   */
+  it("does not claim a thread whose run is done, on either chassis", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+    const key = freshSlackKey();
+    await seedChannel(key, "live");
+    const { channelId, threadTs } = slackPartsOf(key);
+
+    await wakeRun(think, key, "opening prompt", { idempotencyKey: `Ev${crypto.randomUUID()}` });
+    await env.DB.prepare('UPDATE runs SET status = ? WHERE "key" = ?').bind("done", key).run();
+
+    const routed = await routeSlackMessageToOwnedRun(think, {
+      eventId: `Ev${crypto.randomUUID()}`,
+      channelId,
+      ts: threadTs,
+      threadTs,
+      text: "one more thing",
+      userId: "U1",
+      permalink: null,
+    });
+
+    expect(routed).toBe(false);
+  });
+});
+
+/**
+ * INVARIANT 10, at the one boundary where it can actually be broken: the
+ * response body. A chat run mints two uuids — the public `runs.id` the browser
+ * gets, and the private `chat:{uuid}` key that is the `idFromName()` input — and
+ * the whole value of the split is that a browser can never hand us a Durable
+ * Object name.
+ */
+describe("createRunFromChat on the think chassis", () => {
+  it("mints a public id distinct from the private key, and never returns the key to the client", async () => {
+    const think: Env = { ...env, RUN_CHASSIS: "think" };
+
+    const created = await createRunFromChat(think, {
+      firstMessage: "what happened with pulsefit last week?",
+      requestId: crypto.randomUUID(),
+    });
+    expect(created.key.startsWith("chat:")).toBe(true);
+    // Two uuids, not one value used twice.
+    expect(created.key).not.toContain(created.id);
+
+    // The client's actual view of the same run. `publicRun()` omits `key`, so
+    // this is a whole-body assertion rather than a key-list one: a future field
+    // that leaked the key under another name would still fail here.
+    const response = await runsApi.fetch(
+      new Request("http://x/runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ firstMessage: "hello", requestId: crypto.randomUUID() }),
+      }),
+      think,
+    );
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as { run: { id: string; origin: string } };
+    expect(body.run.origin).toBe("chat");
+
+    const row = await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?')
+      .bind(body.run.id)
+      .first<{ key: string }>();
+    const privateUuid = String(row?.key).slice("chat:".length);
+    expect(privateUuid).not.toBe(body.run.id);
+    expect(JSON.stringify(body)).not.toContain(privateUuid);
+
+    // ...and the list route, which is the other place a run crosses to the
+    // browser, does not carry it either.
+    const list = await runsApi.fetch(new Request("http://x/runs?limit=50"), think);
+    expect(JSON.stringify(await list.json())).not.toContain(privateUuid);
   });
 });
 
