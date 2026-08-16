@@ -368,6 +368,7 @@ describe("every capability declares an effect", () => {
       // `checkPR` only reads status back.
       "github.openPR": "external_write",
       "github.checkPR": "read",
+      "github.searchPRs": "read",
     });
   });
 

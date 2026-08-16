@@ -332,10 +332,36 @@ export function makeGithubTools(ctx: BindingContext): ToolDescriptors {
     checkPR: auditedCapability(ctx, "github", "checkPR", {
       effect: "read",
       description:
-        "Check one PR's live state — open, closed or merged — and whether the linear-code bot's linkback comment has landed (`linearLinkback.commented`). Call this on a LATER turn after `openPR`, not in a loop inside the same one: the bot's comment can take a little while to post. Once `commented` is true, the Fixes/Part of lines are confirmed wired to the issue(s); if it stays false after a few polls, say so in your reply rather than assuming the link took.",
+        "Check one PR's live state — open, closed or merged — and whether the linear-code bot's linkback comment has landed (`linearLinkback.commented`). This takes a number you already HAVE; to find one, use `searchPRs`, never a sweep of guessed numbers. Call this on a LATER turn after `openPR`, not in a loop inside the same one: the bot's comment can take a little while to post. Once `commented` is true, the Fixes/Part of lines are confirmed wired to the issue(s); if it stays false after a few polls, say so in your reply rather than assuming the link took.",
       input: z.strictObject({ number: z.number().int().positive() }),
       output: pullRequestStatusOutput,
       run: (input) => ctx.deps.github.checkPR(input.number),
+    }),
+
+    searchPRs: auditedCapability(ctx, "github", "searchPRs", {
+      effect: "read",
+      // Born from a live run that was asked "did you add a pull request for
+      // X?" with only `checkPR(number)` in reach: it probed 28 PR numbers
+      // upward from the last one it remembered, told the customer "not yet"
+      // after coming up empty through #1528, and found #1534 in the very next
+      // batch. One search call answers that question in one step.
+      description:
+        "Find pull requests by free text — words from the title or body, a branch name, an issue identifier — newest activity first, any state (open, closed or merged), in the one repository this deployment is pinned to. This is how you answer \"is there a PR for X?\" and \"did that ship?\": search first, then `checkPR` the number you find for its branch and linkback. Never probe PR numbers one by one to find something. An empty result means nothing MATCHED THESE WORDS, not that no PR exists — try the branch name or the issue id before you tell anyone there is none, and never send that answer in the same block as the search.",
+      input: z.strictObject({
+        query: z.string().min(1).max(200),
+        limit: z.number().int().min(1).max(20).default(10),
+      }),
+      output: z.array(
+        z.strictObject({
+          number: z.number(),
+          title: z.string(),
+          state: z.enum(["open", "closed", "merged"]),
+          url: z.string(),
+          author: z.string(),
+          updatedAt: z.string(),
+        }),
+      ),
+      run: (input) => ctx.deps.github.searchPRs(input.query, input.limit),
     }),
   };
 }

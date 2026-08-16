@@ -1273,3 +1273,69 @@ describe("checkPR", () => {
     expect(calls.every((c) => c.url.startsWith(ORIGIN))).toBe(true);
   });
 });
+
+describe("searchPRs", () => {
+  const items = [
+    {
+      number: 1534,
+      title: "fix: remove Pricing link from landing navbar",
+      state: "open",
+      html_url: "https://github.com/Zellify/web2app-rebuild/pull/1534",
+      updated_at: "2026-08-16T20:33:39Z",
+      user: { login: "sayandedotcom" },
+      pull_request: { merged_at: null },
+    },
+    {
+      number: 772,
+      title: "landing: nav restructure",
+      state: "closed",
+      html_url: "https://github.com/Zellify/web2app-rebuild/pull/772",
+      updated_at: "2026-04-28T10:43:13Z",
+      user: { login: "NilsNygren" },
+      // The search shape says `closed` for a merged PR; `merged_at` is the tell.
+      pull_request: { merged_at: "2026-04-28T10:40:42Z" },
+    },
+  ];
+
+  it("pins the repo server-side, keeps a model-supplied qualifier from widening it, and reads merged from merged_at", async () => {
+    stubGithub([
+      {
+        match: (url: string, method: string) => method === "GET" && url.startsWith(`${ORIGIN}/search/issues?`),
+        respond: () => ({ status: 200, body: { total_count: 2, incomplete_results: false, items } }),
+      },
+    ]);
+    const testEnv = testEnvWithPat();
+    const config = baseConfig();
+    const gateway = makeGithubGateway(testEnv, config, makeGithubAuthSource(testEnv, config), () => NOW);
+
+    // The model's text carries its own `repo:` — it must be ADDED to ours,
+    // never replace it, so GitHub ANDs both and the pinned one still holds.
+    const found = await gateway.searchPRs("pricing navbar repo:evil/other", 5);
+
+    expect(found).toEqual([
+      {
+        number: 1534,
+        title: "fix: remove Pricing link from landing navbar",
+        state: "open",
+        url: "https://github.com/Zellify/web2app-rebuild/pull/1534",
+        author: "sayandedotcom",
+        updatedAt: "2026-08-16T20:33:39Z",
+      },
+      {
+        number: 772,
+        title: "landing: nav restructure",
+        state: "merged",
+        url: "https://github.com/Zellify/web2app-rebuild/pull/772",
+        author: "NilsNygren",
+        updatedAt: "2026-04-28T10:43:13Z",
+      },
+    ]);
+
+    expect(calls.length).toBe(1);
+    const q = new URL(calls[0].url).searchParams;
+    expect(q.get("q")).toBe("is:pr repo:Zellify/web2app-rebuild pricing navbar repo:evil/other");
+    expect(q.get("per_page")).toBe("5");
+    expect(q.get("advanced_search")).toBe("true");
+    expect(calls[0].url.startsWith(ORIGIN)).toBe(true);
+  });
+});

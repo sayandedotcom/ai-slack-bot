@@ -1,6 +1,11 @@
 import type { Env } from "../index";
 import { CapabilityError } from "../codemode/errors";
-import type { GithubGateway, PullRequestRef, PullRequestStatus } from "../codemode/gateways";
+import type {
+  GithubGateway,
+  PullRequestMatch,
+  PullRequestRef,
+  PullRequestStatus,
+} from "../codemode/gateways";
 import { applyUnifiedDiff, basePaths } from "./apply";
 import { readDiffWithBase } from "../sandbox/diff";
 import { devEnvFor } from "../sandbox/env";
@@ -797,6 +802,47 @@ export function makeGithubGateway(
           : { commented: true, identifiers: extractIdentifiers(linkback.body ?? "") };
 
       return { state, url: pr.html_url, headRef: pr.head.ref, baseRef: pr.base.ref, linearLinkback };
+    },
+
+    async searchPRs(query, limit): Promise<PullRequestMatch[]> {
+      const { token } = await requireToken();
+
+      // The repo qualifier is OURS, prepended server-side, and the model's text
+      // is appended as plain words: a `repo:` or `org:` in the query cannot
+      // widen the search past the pinned repository, because GitHub ANDs
+      // qualifiers and the pinned one is always present. `is:pr` keeps issues
+      // out — this endpoint returns both otherwise. `advanced_search=true` is
+      // the syntax GitHub kept when it retired the legacy issue search in
+      // 2025; verified live against the real repo before this was written.
+      const params = new URLSearchParams({
+        q: `is:pr repo:${config.repo} ${query}`,
+        sort: "updated",
+        order: "desc",
+        per_page: String(limit),
+        advanced_search: "true",
+      });
+      const res = await githubFetch(token, "GET", `${GITHUB_ORIGIN}/search/issues?${params}`);
+      if (!res.ok) throw await upstreamError(res, redact);
+      const body = (await res.json()) as {
+        items?: Array<{
+          number: number;
+          title: string;
+          state: string;
+          html_url: string;
+          updated_at: string;
+          user?: { login?: string } | null;
+          pull_request?: { merged_at?: string | null } | null;
+        }>;
+      };
+      return (body.items ?? []).map((item) => ({
+        number: item.number,
+        title: item.title,
+        // The search shape says `closed` for merged too; `merged_at` is the tell.
+        state: item.pull_request?.merged_at ? "merged" : item.state === "open" ? "open" : "closed",
+        url: item.html_url,
+        author: item.user?.login ?? "",
+        updatedAt: item.updated_at,
+      }));
     },
   };
 }

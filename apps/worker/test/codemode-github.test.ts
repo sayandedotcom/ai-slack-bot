@@ -436,16 +436,40 @@ describe("the github namespace's wiring", () => {
     expect(names[names.length - 1]).toBe("github");
   });
 
-  it("classifies openPR as external_write and checkPR as read", async () => {
+  it("classifies openPR as external_write and the two lookups as read", async () => {
     const { tools } = await githubTools();
     const table: Record<string, string | null> = {};
     for (const [method, tool] of Object.entries(tools)) table[method] = capabilityEffectOf(tool);
-    expect(table).toEqual({ openPR: "external_write", checkPR: "read" });
+    expect(table).toEqual({ openPR: "external_write", checkPR: "read", searchPRs: "read" });
   });
 
-  it("declares exactly openPR and checkPR", async () => {
+  it("declares exactly openPR, checkPR and searchPRs", async () => {
     const { tools } = await githubTools();
-    expect(Object.keys(tools).sort()).toEqual(["checkPR", "openPR"]);
+    expect(Object.keys(tools).sort()).toEqual(["checkPR", "openPR", "searchPRs"]);
+  });
+
+  it("searchPRs reaches the gateway with the query and a default limit of 10", async () => {
+    let seen: { query: string; limit: number } | null = null;
+    const { tools } = await githubTools({
+      github: {
+        searchPRs: async (query, limit) => {
+          seen = { query, limit };
+          return [
+            {
+              number: 1534,
+              title: "fix: remove Pricing link from landing navbar",
+              state: "open",
+              url: "https://github.com/x/y/pull/1534",
+              author: "sayandedotcom",
+              updatedAt: "2026-08-16T20:33:39Z",
+            },
+          ];
+        },
+      },
+    });
+    const out = await call(tools, "searchPRs", { query: "pricing navbar" });
+    expect(seen).toEqual({ query: "pricing navbar", limit: 10 });
+    expect(out).toEqual([expect.objectContaining({ number: 1534, state: "open" })]);
   });
 });
 

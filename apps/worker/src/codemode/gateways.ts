@@ -374,6 +374,23 @@ export type PullRequestStatus = {
 };
 
 /**
+ * One hit from a PR search. Deliberately the SEARCH endpoint's shape and no
+ * more — it does not carry the head branch, so a caller who needs that (or the
+ * linkback) follows up with `checkPR(number)`. Enriching every hit here would
+ * be one extra request per result for a field most questions do not need.
+ */
+export type PullRequestMatch = {
+  number: number;
+  title: string;
+  state: "open" | "closed" | "merged";
+  url: string;
+  /** GitHub login of the PR's author. */
+  author: string;
+  /** ISO-8601, GitHub's `updated_at`. */
+  updatedAt: string;
+};
+
+/**
  * Phase 20's transport to GitHub: blobs → tree → commit → ref → PR, with
  * ensure semantics throughout so a retried call reconciles instead of
  * duplicating. Implemented in `src/git/commit.ts`; no body-rendering or PR
@@ -392,6 +409,11 @@ export interface GithubGateway {
   /** Reconcile: the open PR whose head is `branch`, or null. */
   findPR(branch: string): Promise<PullRequestRef | null>;
   checkPR(number: number): Promise<PullRequestStatus>;
+  /**
+   * PRs in the pinned repo matching free text (title and body), newest
+   * activity first. Any state. `limit` is already validated by the binding.
+   */
+  searchPRs(query: string, limit: number): Promise<PullRequestMatch[]>;
 }
 
 export interface ArtifactPublisher {

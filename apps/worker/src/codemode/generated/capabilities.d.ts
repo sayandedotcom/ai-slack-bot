@@ -505,6 +505,18 @@ type CheckPROutput = {
         identifiers: string[];
     };
 }
+type SearchPRsInput = {
+    query: string;
+    limit?: number;
+}
+type SearchPRsOutput = {
+    number: number;
+    title: string;
+    state: "open" | "closed" | "merged";
+    url: string;
+    author: string;
+    updatedAt: string;
+}[]
 
 declare const github: {
 	/**
@@ -513,7 +525,12 @@ declare const github: {
 	openPR: (input: OpenPRInput) => Promise<OpenPROutput>;
 
 	/**
-	 * Check one PR's live state — open, closed or merged — and whether the linear-code bot's linkback comment has landed (`linearLinkback.commented`). Call this on a LATER turn after `openPR`, not in a loop inside the same one: the bot's comment can take a little while to post. Once `commented` is true, the Fixes/Part of lines are confirmed wired to the issue(s); if it stays false after a few polls, say so in your reply rather than assuming the link took.
+	 * Check one PR's live state — open, closed or merged — and whether the linear-code bot's linkback comment has landed (`linearLinkback.commented`). This takes a number you already HAVE; to find one, use `searchPRs`, never a sweep of guessed numbers. Call this on a LATER turn after `openPR`, not in a loop inside the same one: the bot's comment can take a little while to post. Once `commented` is true, the Fixes/Part of lines are confirmed wired to the issue(s); if it stays false after a few polls, say so in your reply rather than assuming the link took.
 	 */
 	checkPR: (input: CheckPRInput) => Promise<CheckPROutput>;
+
+	/**
+	 * Find pull requests by free text — words from the title or body, a branch name, an issue identifier — newest activity first, any state (open, closed or merged), in the one repository this deployment is pinned to. This is how you answer "is there a PR for X?" and "did that ship?": search first, then `checkPR` the number you find for its branch and linkback. Never probe PR numbers one by one to find something. An empty result means nothing MATCHED THESE WORDS, not that no PR exists — try the branch name or the issue id before you tell anyone there is none, and never send that answer in the same block as the search.
+	 */
+	searchPRs: (input: SearchPRsInput) => Promise<SearchPRsOutput>;
 }

@@ -234,6 +234,7 @@ export function fakeDeps(fixtures: FakeFixtures = {}): CapabilityDependencies {
         return { number: 1, url: "https://github.com/x/y/pull/1", headRef: "fix/x", author: "bot", updated: false };
       },
       async findPR() { return null; },
+      async searchPRs() { return []; },
       async checkPR() {
         return {
           state: "open",
