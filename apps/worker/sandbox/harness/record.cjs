@@ -63,7 +63,11 @@ const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 const BROWSER_UNAVAILABLE_MESSAGE =
   "browser-unavailable: this run's container never got a working Chromium install (the boot-time install is non-fatal by design). Do not retry; report it and continue without a recording.";
 
-const PLAYWRIGHT_CACHE = '/root/.cache/ms-playwright';
+// Playwright's own override for where browsers live, honoured so this guard
+// and Playwright's launch can never disagree about the cache; the default is
+// the path provision.sh installs to and checks. Also what lets the harness
+// self-test (record.selftest.mjs) run on a machine that is not the image.
+const PLAYWRIGHT_CACHE = process.env.PLAYWRIGHT_BROWSERS_PATH || '/root/.cache/ms-playwright';
 
 // The transcode's own budget, and the harness's overall wall clock.
 //
@@ -201,7 +205,32 @@ function findChromiumExecutable() {
   return null;
 }
 
-async function transcode(webmPath, mp4Path) {
+// The blank lead-in a recording is allowed to keep before it is cut, and the
+// slice kept in front of the first navigation so the cut can never land AFTER
+// the page begins to paint.
+//
+// WHY THERE IS A LEAD-IN AT ALL. Playwright starts the screencast the moment
+// `context.newPage()` resolves, and that is BEFORE the model's script has run a
+// line: its first `page.goto` is still to come, and against a cold dev server
+// that navigation waits on a compile that routinely takes 5-40 seconds. Every
+// one of those seconds is recorded as a white frame of `about:blank`. A
+// 10-second proof that is 5 seconds of nothing is what a live drill produced.
+//
+// The cut is MEASURED, not detected. `framenavigated` on the main frame is the
+// moment the blank document is replaced by the real one, and it is stamped
+// against the same clock as the recording's start, so the offset is the true
+// length of the blank — no frame analysis, no guess about what "blank" looks
+// like, and a page that legitimately holds still after it paints is never
+// mistaken for one. A recording whose script never navigates has no commit
+// and is left whole.
+const LEAD_IN_MARGIN_MS = 300;
+const MIN_LEAD_IN_TRIM_MS = 1000;
+
+async function transcode(webmPath, mp4Path, startOffsetMs) {
+  // `-ss` BEFORE `-i` seeks the input; with a re-encode (which this always is,
+  // webm to h264) that is frame-accurate, and it discards the lead-in rather
+  // than decoding it and throwing it away.
+  const seek = startOffsetMs > 0 ? ['-ss', (startOffsetMs / 1000).toFixed(3)] : [];
   try {
     await execFileAsync(
       'ffmpeg',
@@ -215,6 +244,7 @@ async function transcode(webmPath, mp4Path) {
         '-loglevel',
         'error',
         '-y',
+        ...seek,
         '-i',
         webmPath,
         '-c:v',
@@ -265,6 +295,10 @@ async function main() {
   let context = null;
   let state = 'passed';
   let error = null;
+  // How long the recording ran before the first real navigation committed —
+  // the blank lead-in. Rebound once the page exists; 0 until then and 0 for a
+  // script that never navigates.
+  let leadInMs = () => 0;
   // Whether the script's own race is over, so `state` means something. Read by
   // the wall clock below, which must not report an unfinished script as a pass.
   let settled = false;
@@ -329,6 +363,17 @@ async function main() {
       recordVideo: { dir: videoDir, size: RECORD_VIEWPORT },
     });
     const page = await context.newPage();
+    // The recording's clock starts here (see LEAD_IN_MARGIN_MS above), and the
+    // first main-frame commit away from about:blank is where the blank ends.
+    const recordingStartedAt = Date.now();
+    let firstCommitAt = null;
+    page.on('framenavigated', (frame) => {
+      if (firstCommitAt !== null) return;
+      if (frame !== page.mainFrame()) return;
+      if (frame.url() === 'about:blank') return;
+      firstCommitAt = Date.now();
+    });
+    leadInMs = () => (firstCommitAt === null ? 0 : firstCommitAt - recordingStartedAt);
 
     // BROWSER-SIDE DIAGNOSTICS, because nothing else in this system can see
     // them.
@@ -466,7 +511,22 @@ async function main() {
     // RESULT line regardless of whether the Worker passed outDir as
     // relative or absolute.
     const mp4Path = path.resolve(outDir, 'out.mp4');
-    const result = await transcode(webmPath, mp4Path);
+    // Cut the blank lead-in, keeping LEAD_IN_MARGIN_MS ahead of the commit so
+    // the first painted frame is never lost to clock skew between Playwright's
+    // screencast start and `recordingStartedAt`. Never cut when it would leave
+    // less than a second of video, and never cut a lead-in shorter than a
+    // second — the gain is invisible and the seek is not free.
+    let startOffsetMs = 0;
+    const measuredLeadIn = leadInMs();
+    if (measuredLeadIn - LEAD_IN_MARGIN_MS >= MIN_LEAD_IN_TRIM_MS && durationMs - measuredLeadIn >= 1000) {
+      startOffsetMs = measuredLeadIn - LEAD_IN_MARGIN_MS;
+      // To stdout, not the RESULT line: the RESULT shape is pinned at five
+      // fields, and `stdoutTail` already reaches the model and the operator.
+      process.stdout.write(
+        'trimmed ' + startOffsetMs + 'ms of blank lead-in recorded before the first navigation committed\n',
+      );
+    }
+    const result = await transcode(webmPath, mp4Path, startOffsetMs);
     if (result.ok) {
       const { size } = fs.statSync(mp4Path);
       if (size > MAX_VIDEO_BYTES) {
