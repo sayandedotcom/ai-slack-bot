@@ -110,48 +110,43 @@ LINEAR_API_KEY=
 # Sent as the `x-api-key` header (NOT Authorization) against
 # https://api.smith.langchain.com. Verified 2026-08-12.
 #
-# THE READ KEY. LangSmith goes both ways now and the two halves need two
-# credentials; this comment used to say "Firefighter only reads" and that is no
-# longer true. See LANGSMITH_TRACE_API_KEY below.
+# ONE KEY, BOTH DIRECTIONS, TWO PROJECTS. This comment used to say "Firefighter
+# only reads" and that is no longer true.
 #
-#   READ -- the `langsmith` capability pulls a CUSTOMER's traces so the agent
-#           can investigate their AI. Project `tweakleaf`, addressed by ID
-#           (LANGSMITH_PROJECT_ID), one endpoint: POST /runs/query.
-#
-# The project is pinned in wrangler.jsonc vars because this credential is
-# workspace-wide, so the project must never come from the caller.
-#
-# SECURITY: an "lsv2_pt_" key is a personal token and inherits the creator's
-# workspace role. Ours is Admin: it can delete runs and projects, manage
-# workspace secrets, and exec sandboxes. The read path needs runs:read alone.
-# This is fixable -- mint the key in a second, read-only workspace -- and until
-# that happens the read-only guarantee lives only in the capability layer.
-LANGSMITH_API_KEY=
-
-# THE TRACE-WRITE KEY (src/langsmith/tracer.ts). Optional: falls back to
-# LANGSMITH_API_KEY when unset.
-#
+#   READ  -- the `langsmith` capability pulls a CUSTOMER's traces so the agent
+#            can investigate their AI. Project `tweakleaf`, addressed by ID
+#            (LANGSMITH_PROJECT_ID). Endpoint: POST /runs/query.
 #   WRITE -- the agent emits its OWN run as a trace: a root `chain` span, one
 #            `llm` per model step, one `tool` per run_code call. Project
 #            `fire-fighter`, addressed by NAME (LANGSMITH_TRACE_PROJECT),
 #            because ingest takes a `session_name` and creates the project on
-#            first write. One endpoint: POST /runs/batch, `x-api-key` again.
+#            first write. Endpoint: POST /runs/batch. Same `x-api-key`.
 #
-# WHY A SECOND KEY AND NOT THE ONE ABOVE. MEASURED 2026-08-17: a LangSmith key
-# is scoped to ONE workspace. `GET /workspaces` on our trace key returns
-# be566aab-...; the reader needs d81d9ce6-... (LANGSMITH_WORKSPACE_ID), and
-# `tweakleaf` is not visible from the trace workspace at all. Reusing one key
-# for both does not fail loudly -- a project id from another workspace is not an
-# error, it is simply absent -- so every langsmith.trace/searchTraces call would
-# quietly return nothing. Two keys is the only configuration where both halves
-# work.
+# Both projects are pinned in wrangler.jsonc vars because this credential is
+# workspace-wide, so neither may ever come from a caller.
 #
-# Switched on by LANGSMITH_TRACING in wrangler.jsonc (opt-in; only "true"/"1"
-# enables) and its content by LANGSMITH_TRACE_PAYLOADS ("none" | "redacted").
-# LANGSMITH_TRACING is also what the official `langsmith` npm package auto-reads;
-# we do not install it -- the emitter is hand-rolled -- so nothing else picks it
-# up today.
-LANGSMITH_TRACE_API_KEY=
+# THE ONE CONSTRAINT ON THIS KEY, measured 2026-08-17: a LangSmith key is scoped
+# to exactly ONE workspace -- `GET /workspaces` returns a single entry -- and a
+# project in any other workspace is INVISIBLE rather than an error. So both
+# projects must live in the workspace this key belongs to
+# (LANGSMITH_WORKSPACE_ID). Get that wrong and nothing raises: a read comes back
+# with zero runs reporting success, and a write lands in a project nobody is
+# watching. If you swap this key, re-check `GET /workspaces` against
+# LANGSMITH_WORKSPACE_ID before assuming either half still works.
+#
+# The emitter is switched on by LANGSMITH_TRACING in wrangler.jsonc (opt-in;
+# only "true"/"1" enables) and its content by LANGSMITH_TRACE_PAYLOADS
+# ("none" | "redacted"). LANGSMITH_TRACING is also what the official `langsmith`
+# npm package auto-reads; we do not install it -- the emitter is hand-rolled --
+# so nothing else picks it up today.
+#
+# SECURITY: an "lsv2_pt_" key is a personal token and inherits the creator's
+# workspace role. Ours is Admin: it can delete runs and projects, manage
+# workspace secrets, and exec sandboxes. These two paths need runs:read and
+# runs:write. Still fixable by minting a scoped key; until then the bound on
+# what this credential is USED for lives in the capability layer and in
+# tracer.ts, not in the token.
+LANGSMITH_API_KEY=
 
 # Supabase PostgREST key (Phase 09 Task 9). Supabase -> Project Settings ->
 # API keys. Sent as BOTH `apikey:` and `Authorization: Bearer` headers against

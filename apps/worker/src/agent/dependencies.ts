@@ -449,28 +449,30 @@ export function langsmithTracerConfig(env: Env): LangSmithTracerConfig {
     );
   }
   /**
-   * A SEPARATE credential from the reader's, falling back to it.
+   * ONE credential for both directions, and that constrains the CONFIGURATION
+   * rather than the code.
    *
-   * MEASURED, 2026-08-17: a LangSmith key is scoped to ONE workspace, and the
-   * key that owns the `fire-fighter` trace project is in a different workspace
-   * from the one holding `tweakleaf`, which the read capability is pinned to by
-   * id. `GET /workspaces` on the trace key returns `be566aab-…`; the reader
-   * needs `d81d9ce6-…`. One key cannot serve both — pointing
-   * `LANGSMITH_API_KEY` at the trace workspace makes every
-   * `langsmith.trace`/`searchTraces` call return nothing, silently, because a
-   * project id from another workspace is not an error, it is just absent.
+   * MEASURED 2026-08-17: a LangSmith key is scoped to exactly ONE workspace.
+   * `GET /workspaces` returns a single entry, and a project in any other
+   * workspace is invisible — not an error, just absent. So
+   * `LANGSMITH_TRACE_PROJECT` MUST name a project in the same workspace as
+   * `LANGSMITH_API_KEY` (`LANGSMITH_WORKSPACE_ID`, pinned beside it). Ingest
+   * creates the project on first write, so satisfying that costs nothing.
    *
-   * So they are two secrets. The fallback keeps a single-workspace deployment
-   * working with one, and costs nothing when both are set.
+   * Point this at another workspace's project and there is no failure to see:
+   * the write is accepted into a project nobody is looking at, or — the worse
+   * direction, if the KEY is the one that moves — every
+   * `langsmith.trace`/`searchTraces` call returns zero runs while reporting
+   * success. Both halves have to stay in one workspace or one of them goes
+   * quiet.
    */
-  const apiKey = env.LANGSMITH_TRACE_API_KEY ?? env.LANGSMITH_API_KEY;
   return {
     endpoint: env.LANGSMITH_ENDPOINT,
-    apiKey,
+    apiKey: env.LANGSMITH_API_KEY,
     project: env.LANGSMITH_TRACE_PROJECT ?? "",
     // The key is the second half of the gate. A deployment with the flag on and
     // no credential emits nothing rather than posting unauthenticated.
-    enabled: enabled && apiKey !== "",
+    enabled: enabled && env.LANGSMITH_API_KEY !== "",
     payloads: mode,
   };
 }

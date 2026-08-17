@@ -167,6 +167,30 @@ describe("langsmith tracer — wire shape", () => {
     expect(llm!.dotted_order < tool!.dotted_order).toBe(true);
   });
 
+  it("stamps dotted_order with MICROSECONDS, which ingest requires", async () => {
+    // MEASURED 2026-08-17: LangSmith parses this with the Go layout
+    // `20060102T150405.000000` and rejects three-digit precision outright:
+    //
+    //   HTTP 400 invalid 'dotted_order': ... parsing time "20260817T083114.022"
+    //   as "20060102T150405.000000": cannot parse ".022" as ".000000"
+    //
+    // `toISOString()` gives three, so they are padded to six. This is the only
+    // assertion standing between a green suite and a feature that 400s on every
+    // real request — `scripts/langsmith-seed.mjs` has the unpadded form and its
+    // ingest has never succeeded.
+    stubFetch();
+    await tracedRun().flush();
+
+    const stamp = /^\d{8}T\d{6}\d{6}Z$/;
+    for (const run of sent[0]!.body.post) {
+      for (const segment of run.dotted_order.split(".")) {
+        expect(segment.slice(0, 22)).toMatch(stamp);
+        // ...and the uuid follows the `Z`, un-truncated.
+        expect(segment.slice(22)).toHaveLength(36);
+      }
+    }
+  });
+
   it("orders same-millisecond spans deterministically", async () => {
     stubFetch();
     const tracer = makeLangSmithTracer(config(), () => NOW);

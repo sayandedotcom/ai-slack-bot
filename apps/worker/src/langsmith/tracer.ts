@@ -228,15 +228,29 @@ type WireRun = {
 };
 
 /**
- * LangSmith's `dotted_order` timestamp: compact ISO, no separators, no dot.
+ * LangSmith's `dotted_order` timestamp: compact ISO, no separators, and
+ * MICROSECONDS — exactly six fractional digits.
  *
- * `2026-08-17T12:00:00.000Z` → `20260817T120000000Z`. Three fractional digits,
- * matching the seed script. The published docs show six; three is what has
- * actually been accepted here, and the monotonic guard below is what makes
- * ordering correct regardless of the precision LangSmith sorts on.
+ * `2026-08-17T12:00:00.000Z` → `20260817T120000000000Z`.
+ *
+ * MEASURED 2026-08-17, and it is a hard requirement, not a preference. Ingest
+ * parses this with the Go layout `20060102T150405.000000` and rejects anything
+ * else with HTTP 400:
+ *
+ *   invalid 'dotted_order': ... parsing time "20260817T083114.022" as
+ *   "20060102T150405.000000": cannot parse ".022" as ".000000"
+ *
+ * `toISOString()` yields three fractional digits, so they are padded to six.
+ * `scripts/langsmith-seed.mjs` does NOT pad — its ingest has therefore never
+ * succeeded, which is consistent with `phase-09-notes.md` recording that the
+ * seeded project has zero runs. Do not "align" this back to that script.
  */
 function compact(ms: number): string {
-  return new Date(ms).toISOString().replace(/[-:]/g, "").replace(".", "");
+  return new Date(ms)
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(".", "")
+    .replace("Z", "000Z");
 }
 
 /**

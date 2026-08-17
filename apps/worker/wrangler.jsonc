@@ -70,13 +70,15 @@
     "LANGSMITH_WORKSPACE_ID": "d81d9ce6-2548-465e-bd56-72e2f97a1f19",
     "LANGSMITH_PROJECT_ID": "647f1d2e-bb76-48b3-adad-1d196ca0debe",
     "LANGSMITH_PROJECT_NAME": "tweakleaf",
-    // LangSmith WRITE surface: the agent's own traces, in a SECOND project and
-    // -- measured 2026-08-17 -- a SECOND WORKSPACE. Reads address `tweakleaf`
-    // by id above; ingest addresses this one by name, because `session_name` is
-    // what the batch endpoint accepts and it creates the project on first
-    // write. A LangSmith key is scoped to one workspace, so this half has its
-    // own credential (LANGSMITH_TRACE_API_KEY); see .dev.vars.example for why
-    // reusing LANGSMITH_API_KEY breaks the read capability silently.
+    // LangSmith WRITE surface: the agent's own traces, in a SECOND project.
+    // Reads address `tweakleaf` by id above; ingest addresses this one by NAME,
+    // because `session_name` is what the batch endpoint accepts and it creates
+    // the project on first write.
+    //
+    // MUST BE IN THE SAME WORKSPACE as LANGSMITH_API_KEY (LANGSMITH_WORKSPACE_ID
+    // above). Measured 2026-08-17: a LangSmith key is scoped to exactly one
+    // workspace and a project in any other is invisible rather than an error, so
+    // a mismatch here does not fail -- it writes into a project nobody watches.
     //
     // OPT-IN, and read strictly: only "true"/"1" enables. A typo leaves a new
     // outbound sink OFF, which is the safe direction for this one -- the

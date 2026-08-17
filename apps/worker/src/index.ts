@@ -174,16 +174,6 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   /** `"none"` or `"redacted"`. Anything else is refused by name. */
   LANGSMITH_TRACE_PAYLOADS?: string;
   /**
-   * The trace emitter's own credential — a SECRET, so `wrangler types` cannot
-   * see it, same as every entry above.
-   *
-   * Separate from `LANGSMITH_API_KEY` because a LangSmith key is scoped to ONE
-   * workspace and the trace project lives in a different one from the project
-   * the read capability is pinned to. Falls back to `LANGSMITH_API_KEY` when
-   * unset, so a single-workspace deployment needs only one.
-   */
-  LANGSMITH_TRACE_API_KEY?: string;
-  /**
    * Phase 18's read-only monorepo credential — a SECRET, so `wrangler types`
    * cannot know it, same as every entry above. Fine-grained, `web2app-rebuild`
    * only, Contents: read-only.

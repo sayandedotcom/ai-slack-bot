@@ -1137,11 +1137,16 @@ key name only, and these are exactly the twenty currently set on the deployed Wo
 `BETTERSTACK_SQL_USERNAME`, `BETTERSTACK_SQL_PASSWORD`, `BETTERSTACK_UPTIME_TOKEN`,
 `NUCLEO_LICENSE_KEY`. Values, prefixes and OAuth client ids appear nowhere in this
 repository's documentation, by rule.
-A twenty-first, `LANGSMITH_TRACE_API_KEY`, is needed only to emit the agent's own traces
-(`LANGSMITH_TRACING=true`). It is a **separate** secret rather than a reuse of
-`LANGSMITH_API_KEY` because a LangSmith key is scoped to one workspace and the two projects
-live in different ones; sharing a key does not fail, it makes the read capability return
-zero runs forever. Unset, the emitter falls back to `LANGSMITH_API_KEY`.
+Before trusting the trace pipe, run `pnpm exec tsx scripts/langsmith-trace-smoke.mts fire-fighter-smoke`
+with `LANGSMITH_API_KEY` in the environment: it writes one real trace with the real tracer and
+reads it back, which is the only check that catches a wire-format rejection. Measured 2026-08-17:
+`HTTP 202`, visible in ~2s, span order preserved.
+
+`LANGSMITH_API_KEY` now serves both directions — reading a customer's traces and writing the
+agent's own. No new secret. It does carry one configuration constraint: a LangSmith key is
+scoped to exactly one workspace, and a project in any other workspace is *invisible* rather
+than an error, so `LANGSMITH_PROJECT_ID` and `LANGSMITH_TRACE_PROJECT` must both live in
+`LANGSMITH_WORKSPACE_ID`. A mismatch reports success and does nothing.
 Non-secret pins — vendor ids, hosts, `GITHUB_REPO`, `GITHUB_BASE`, mode flags — live in
 `wrangler.jsonc` `vars` on purpose.
 

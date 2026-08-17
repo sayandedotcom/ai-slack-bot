@@ -76,7 +76,6 @@ export default defineConfig({
           // stub fetch; they never enable it through the pool.
           LANGSMITH_TRACING: "false",
           LANGSMITH_TRACE_PAYLOADS: "none",
-          LANGSMITH_TRACE_API_KEY: "not-a-real-langsmith-trace-key",
           BETTERSTACK_SQL_USERNAME: "not-a-real-betterstack-username",
           BETTERSTACK_SQL_PASSWORD: "not-a-real-betterstack-password",
           BETTERSTACK_UPTIME_TOKEN: "not-a-real-betterstack-uptime-token",

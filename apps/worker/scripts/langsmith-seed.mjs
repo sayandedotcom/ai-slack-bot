@@ -45,7 +45,20 @@ const headers = { "x-api-key": KEY ?? "", "content-type": "application/json" };
 
 // LangSmith's dotted_order: compact ISO timestamp + run id, children append
 // ".<their own>" to the parent's. This is what orders spans inside a trace.
-const compact = (d) => d.toISOString().replace(/[-:]/g, "").replace(".", "");
+//
+// MICROSECONDS -- six fractional digits, padded from toISOString()'s three.
+// Ingest parses this with the Go layout `20060102T150405.000000` and rejects
+// anything shorter with HTTP 400:
+//
+//   invalid 'dotted_order': ... parsing time "20260817T083114.022" as
+//   "20060102T150405.000000": cannot parse ".022" as ".000000"
+//
+// This script emitted the unpadded form until 2026-08-17, so every ingest it
+// ever attempted was rejected -- which is why the seeded project has zero runs
+// (phase-09-notes.md). The failure was visible in the script's own output and
+// nobody read it. Verified fixed by scripts/langsmith-trace-smoke.mts.
+const compact = (d) =>
+  d.toISOString().replace(/[-:]/g, "").replace(".", "").replace("Z", "000Z");
 const uuid = () => crypto.randomUUID();
 
 /** Build one trace: a root plus ordered children. Returns flat run objects. */
