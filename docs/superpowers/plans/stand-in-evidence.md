@@ -1,5 +1,37 @@
 # Stand-in evidence for `supabase.*` and `langsmith.*`
 
+> ## LangSmith: ANSWERED 2026-08-17 — and the seeding below had never worked
+>
+> Zellify handed over a key for their real workspace,
+> `be566aab-b1b1-4542-9532-aeca116117b2`. It holds the live projects this file
+> was asking about:
+>
+> | project | last run (2026-08-17) |
+> |---|---|
+> | **`zellify-prod`** | 11:05 — live traffic |
+> | `zellify-agent-dev` | 10:04 |
+> | `zellify-sandbox-staging` | 6 days |
+> | `zellify-sandbox`, `langsmith-polly` | stale |
+>
+> **Nothing is wired to any of them, deliberately.** The read pin is
+> `fire-fighter-standin` (`4a42e1fa-…`), seeded in that workspace; the write
+> project is `fire-fighter`. Pointing the read capability at `zellify-prod`
+> would let the agent surface real customer traffic into a Slack reply — a
+> decision to make on purpose, not a config default.
+>
+> The earlier key reached workspace `d81d9ce6-…` / project `tweakleaf`, which is
+> unreachable from the new key. A cross-workspace project id returns HTTP 200
+> with zero runs rather than an error, so a key swap without repointing the pin
+> fails **silently**.
+>
+> **The `--project zellify-web2app-standin` seeding below had never succeeded.**
+> `langsmith-seed.mjs` emitted `dotted_order` with three fractional digits;
+> ingest requires six and rejects the batch with HTTP 400. That — not "Zellify's
+> resources are empty" — is why `tweakleaf` shows zero runs and why
+> `phase-09-notes.md` records normalization as never having seen a real trace.
+> The script printed its own failure every time. Fixed 2026-08-17; the first
+> successful seed in this repo's history ran that day.
+
 **Written 2026-08-16.** Both capabilities are built, keyed, and proven against
 their live APIs — and both read **nothing**, because the credentials Zellify
 handed over point at empty resources:

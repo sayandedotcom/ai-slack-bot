@@ -75,7 +75,7 @@ All reached by the model as **typed bindings**, never as raw credentials. The ge
 | **GitHub REST** | Open PRs as the fire-fighter, Worker-side, from a diff. `openPR()` takes a **diff**, not a repo handle — the credential topology expressed in a type signature. |
 | **Linear** | File and update issues. Team id pinned server-side to `fire-fighter-testing`; the agent cannot choose it. |
 | **Supabase** (prod, read-only) | The customer's real data while debugging. Writes are rejected by the database role, not by application logic. |
-| **LangSmith** | Both directions, two projects, one key. **Read:** pull a customer's trace when they say our AI did something weird (`tweakleaf`, by id). **Write:** emit the agent's own run as a trace — root chain, one span per model step, one per `run_code` call (`fire-fighter`, by name). Neither project can come from a caller; both are pinned in `wrangler.jsonc`. |
+| **LangSmith** | Both directions, two projects, one key, one workspace (Zellify's, `be566aab-…`). **Read:** pull a customer's trace when they say our AI did something weird (`fire-fighter-standin`, by id — a seeded stand-in, *not* the live `zellify-prod` that sits in the same workspace). **Write:** emit the agent's own run as a trace — root chain, one span per model step, one per `run_code` call (`fire-fighter`, by name). Neither project can come from a caller; both are pinned in `wrangler.jsonc`. |
 | **Better Stack** | Logs and uptime when something looks broken in prod. |
 | **Playwright** | Reproduce the bug in a real browser, verify the fix, and `recordVideo` the proof. |
 

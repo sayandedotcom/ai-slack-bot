@@ -114,8 +114,14 @@ LINEAR_API_KEY=
 # only reads" and that is no longer true.
 #
 #   READ  -- the `langsmith` capability pulls a CUSTOMER's traces so the agent
-#            can investigate their AI. Project `tweakleaf`, addressed by ID
-#            (LANGSMITH_PROJECT_ID). Endpoint: POST /runs/query.
+#            can investigate their AI. Project `fire-fighter-standin`, addressed
+#            by ID (LANGSMITH_PROJECT_ID). Endpoint: POST /runs/query.
+#
+#            A STAND-IN, on purpose. The same workspace holds Zellify's live
+#            projects (zellify-prod and friends) and the pin points at NEITHER,
+#            so the agent cannot pull real customer traffic into a Slack reply.
+#            Repointing it at zellify-prod is a decision somebody makes on
+#            purpose, in a diff, not a config drift.
 #   WRITE -- the agent emits its OWN run as a trace: a root `chain` span, one
 #            `llm` per model step, one `tool` per run_code call. Project
 #            `fire-fighter`, addressed by NAME (LANGSMITH_TRACE_PROJECT),

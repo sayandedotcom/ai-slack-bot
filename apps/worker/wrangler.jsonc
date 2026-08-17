@@ -67,11 +67,24 @@
     // reason as the Linear team: LANGSMITH_API_KEY is workspace-wide, so the
     // project must never come from the caller.
     "LANGSMITH_ENDPOINT": "https://api.smith.langchain.com",
-    "LANGSMITH_WORKSPACE_ID": "d81d9ce6-2548-465e-bd56-72e2f97a1f19",
-    "LANGSMITH_PROJECT_ID": "647f1d2e-bb76-48b3-adad-1d196ca0debe",
-    "LANGSMITH_PROJECT_NAME": "tweakleaf",
+    // Zellify's own workspace (handed over 2026-08-17). It also holds the LIVE
+    // production projects -- zellify-prod, zellify-agent-dev, zellify-sandbox,
+    // zellify-sandbox-staging, langsmith-polly. NONE of them is wired to
+    // anything here, deliberately: the read pin below is a stand-in we created,
+    // so the agent cannot surface real customer traffic into Slack, and the
+    // write project is ours. Do not repoint either at a zellify-* project
+    // without deciding that on purpose.
+    "LANGSMITH_WORKSPACE_ID": "be566aab-b1b1-4542-9532-aeca116117b2",
+    // Stand-in, seeded by scripts/langsmith-seed.mjs: 5 traces / 14 runs
+    // including the "assistant told the customer their app was live while the
+    // tool said in_review" case the read capability exists for. Replaces
+    // `tweakleaf` (647f1d2e, workspace d81d9ce6), which is unreachable from
+    // this key -- a project id from another workspace returns 200 with zero
+    // runs rather than an error.
+    "LANGSMITH_PROJECT_ID": "4a42e1fa-d619-49a9-afe4-0a9e97a5196f",
+    "LANGSMITH_PROJECT_NAME": "fire-fighter-standin",
     // LangSmith WRITE surface: the agent's own traces, in a SECOND project.
-    // Reads address `tweakleaf` by id above; ingest addresses this one by NAME,
+    // Reads address the stand-in by id above; ingest addresses this one by NAME,
     // because `session_name` is what the batch endpoint accepts and it creates
     // the project on first write.
     //
