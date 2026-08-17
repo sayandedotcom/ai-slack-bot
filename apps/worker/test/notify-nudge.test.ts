@@ -11,7 +11,7 @@ import {
 } from "../src/approval/repository";
 import type { ApprovalRow } from "../src/approval/contracts";
 import { upsertIdentity } from "../src/db/identities";
-import { onDuty } from "../src/identity/rotation";
+import { FIREFIGHTERS } from "../src/access/roster";
 import type { Env } from "../src/index";
 import { sendNudge, sweepNudges, updateNudge } from "../src/notify/nudge";
 
@@ -30,16 +30,14 @@ import { sendNudge, sweepNudges, updateNudge } from "../src/notify/nudge";
  */
 
 const NOW = Date.parse("2026-08-14T12:00:00Z");
-/** Whose shift `NOW` falls in — the cases that pass `NOW` into `sendNudge`. */
-const ON_DUTY = onDuty(NOW).email;
 /**
- * The projection hook has no clock to inject, so it nudges whoever is on duty
- * in REAL time. Shifts are three days wide, so that is a different person from
- * `ON_DUTY` on most days: `connectOnDuty` seeds both, and the cleanup below
- * removes both. Without this the DM cases would silently start taking the
- * fallback branch after 2026-08-16 and this file would fail on a calendar date.
+ * Who gets the DM: the default speaker — the first fire-fighter in roster order
+ * who has connected Slack (`src/identity/speaker.ts`). No shift, no clock, so
+ * `NOW` only stamps the claim; it never decides the person. When nobody has
+ * connected, the channel fallback names the first roster address in plain text.
  */
-const CONNECTED = [...new Set([ON_DUTY, onDuty(Date.now()).email])];
+const SPEAKER = FIREFIGHTERS[0]!;
+const CONNECTED = [SPEAKER];
 const SLACK_USER = "U0NDUTY";
 const FALLBACK = "C_FALLBACK";
 const DM_CHANNEL = "D0PENED";
@@ -120,8 +118,8 @@ async function seedApproval(createdAt = NOW): Promise<ApprovalRow> {
   return row!;
 }
 
-/** The on-duty engineer has connected Slack. No token is ever opened for a nudge. */
-async function connectOnDuty(): Promise<void> {
+/** A fire-fighter has connected Slack. No token is ever opened for a nudge. */
+async function connectSpeaker(): Promise<void> {
   for (const email of CONNECTED) {
     await upsertIdentity(
       env.DB,
@@ -144,16 +142,17 @@ async function connectOnDuty(): Promise<void> {
  * This pool has no `isolatedStorage` (see `test/approval-repository.test.ts`'s
  * note), so rows written here outlive the file — and the two kinds this file
  * writes are exactly the two `sweepNudges` feeds on: a pending, unnudged
- * approval and an `identities` row for the on-duty engineer. Left behind, they
+ * approval and an `identities` row for a fire-fighter. Left behind, they
  * would make `worker.scheduled()` in another suite open a REAL DM against
  * slack.com with the pool's fake bot token. Cleaning up in an `afterEach` (not
  * only a `beforeEach`) is what keeps that unreachable.
  */
 async function cleanD1(): Promise<void> {
   await env.DB.prepare("DELETE FROM approvals").run();
-  for (const email of CONNECTED) {
-    await env.DB.prepare("DELETE FROM identities WHERE email = ?").bind(email).run();
-  }
+  // Every Slack row, not only ours: any connected fire-fighter is a speaker
+  // now, so a row another suite left behind would turn a fallback case into a
+  // DM case.
+  await env.DB.prepare("DELETE FROM identities WHERE provider = 'slack'").run();
 }
 
 beforeEach(cleanD1);
@@ -168,16 +167,16 @@ describe("sendNudge", () => {
   it("skips without a single Slack call when the row is already claimed", async () => {
     const row = await seedApproval();
     expect(await claimNudge(env.DB, row.id, NOW)).toBe(true);
-    await connectOnDuty();
+    await connectSpeaker();
     stubSlack(happySlack);
 
     expect(await sendNudge(testEnv(), row, NOW)).toBe("skipped");
     expect(sent).toEqual([]);
   });
 
-  it("opens a DM with the on-duty engineer and posts the nudge blocks there", async () => {
+  it("opens a DM with the speaker and posts the nudge blocks there", async () => {
     const row = await seedApproval();
-    await connectOnDuty();
+    await connectSpeaker();
     stubSlack(happySlack);
 
     expect(await sendNudge(testEnv(), row, NOW)).toBe("sent");
@@ -209,7 +208,7 @@ describe("sendNudge", () => {
     expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.postMessage"]);
     expect(sent[0]!.body.channel).toBe(FALLBACK);
     const payload = JSON.stringify(sent[0]!.body);
-    expect(payload).toContain(ON_DUTY);
+    expect(payload).toContain(SPEAKER);
     // There is no user id to mention, so there must be no mention syntax at all.
     expect(payload).not.toContain("<@");
 
@@ -221,7 +220,7 @@ describe("sendNudge", () => {
 
   it("posts straight to the fallback channel with an <@id> mention in channel mode", async () => {
     const row = await seedApproval();
-    await connectOnDuty();
+    await connectSpeaker();
     stubSlack(happySlack);
 
     expect(await sendNudge(testEnv({ NUDGE_MODE: "channel" }), row, NOW)).toBe("sent");
@@ -233,7 +232,7 @@ describe("sendNudge", () => {
 
   it("unclaims the row when Slack refuses, so the sweeper can retry", async () => {
     const row = await seedApproval();
-    await connectOnDuty();
+    await connectSpeaker();
     stubSlack((method) =>
       method === "conversations.open" ? { ok: true, channel: { id: DM_CHANNEL } } : { ok: false, error: "channel_not_found" },
     );
@@ -247,7 +246,7 @@ describe("sendNudge", () => {
 
   it("unclaims the row when the request throws", async () => {
     const row = await seedApproval();
-    await connectOnDuty();
+    await connectSpeaker();
     stubTransport(async () => {
       throw new Error("network down");
     });
@@ -258,7 +257,7 @@ describe("sendNudge", () => {
 
   it("keeps the claim when the DM lands but the bookkeeping write fails", async () => {
     const row = await seedApproval();
-    await connectOnDuty();
+    await connectSpeaker();
     stubSlack(happySlack);
     // Only the `recordNudgeMessage` statement fails; the claim and every read
     // go through untouched.
@@ -396,7 +395,7 @@ describe("sweepNudges", () => {
   it("nudges pending cards older than 60s and leaves fresh ones alone", async () => {
     const old = await seedApproval(NOW - 120_000);
     const fresh = await seedApproval(NOW - 10_000);
-    await connectOnDuty();
+    await connectSpeaker();
     stubSlack(happySlack);
 
     expect(await sweepNudges(testEnv(), NOW)).toBe(1);
@@ -445,7 +444,7 @@ describe("the approval_card projection hook", () => {
   it("still delivers the card when the nudge fails", async () => {
     const runId = await seedRun();
     const approvalId = `apr:${crypto.randomUUID()}`;
-    await connectOnDuty();
+    await connectSpeaker();
     stubSlack(() => ({ ok: false, error: "channel_not_found" }));
 
     const runner = makeApprovalCardRunner({
@@ -482,7 +481,7 @@ describe("the approval_card projection hook", () => {
   it("nudges once when the card projects", async () => {
     const runId = await seedRun();
     const approvalId = `apr:${crypto.randomUUID()}`;
-    await connectOnDuty();
+    await connectSpeaker();
     stubSlack(happySlack);
 
     const runner = makeApprovalCardRunner({

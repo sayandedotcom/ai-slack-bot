@@ -767,6 +767,10 @@ export class RunDO extends DurableObject<Env> {
         channelId: state.channelId,
         threadTs: state.threadTs,
         text,
+        // The human who clicked speaks, if they have connected Slack. This is
+        // the sender's input, not the model's: `decidedBy` still never reaches
+        // `appendTurn` (invariant 12).
+        decidedBy: card.decidedBy,
       });
     } catch (error) {
       // A THROWN sender is an unknown outcome, not a failure to send: the

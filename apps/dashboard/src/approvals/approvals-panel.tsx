@@ -5,7 +5,7 @@ import type { DecideAction } from "./api";
 import { ApprovalCard, type CardState } from "./approval-card";
 
 /**
- * The dashboard's queue of decisions. Like `RotationStrip` and unlike
+ * The dashboard's queue of decisions. Like `SpeakerStrip` and unlike
  * `RunList`, this panel takes its state as a prop rather than polling: the
  * approvals hook owns the clock because a decision and the poll that would
  * overwrite it have to be reconciled in one place.

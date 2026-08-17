@@ -260,16 +260,10 @@ export function devAccessStubs(): Plugin {
         }
 
         if (path === "/api/roster") {
-          const hour = 3_600_000;
           return send(response, 200, {
-            onDuty: {
-              email: DEV_EMAIL,
-              index: 0,
-              shiftStartMs: bootedAt - hour,
-              shiftEndMs: bootedAt + hour * 7,
-              nextEmail: "dana@example.com",
-            },
-            rotation: [DEV_EMAIL, "dana@example.com", "ravi@example.com"],
+            speaker: { email: DEV_EMAIL },
+            githubSpeaker: { email: DEV_EMAIL },
+            pool: [DEV_EMAIL, "dana@example.com"],
             engineers: [
               { email: DEV_EMAIL, role: "firefighter", slack: true, github: true },
               { email: "dana@example.com", role: "firefighter", slack: true, github: false },

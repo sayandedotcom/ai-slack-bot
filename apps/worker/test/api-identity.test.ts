@@ -9,7 +9,8 @@ import {
 import { upsertIdentity, type ConnectStatus } from "../src/db/identities";
 import { importIdentityKey, seal, SealError } from "../src/identity/crypto";
 import { getDecryptedToken } from "../src/identity/tokens";
-import { ROTATION } from "../src/identity/rotation";
+import { SPEAKER_POOL } from "../src/identity/speaker";
+import { FIREFIGHTERS } from "../src/access/roster";
 import type { Env } from "../src/index";
 
 /**
@@ -128,7 +129,7 @@ describe("GET /roster", () => {
     expect((await req("/roster", OUTSIDER)).status).toBe(403);
   });
 
-  it("returns onDuty, rotation and every roster member's connect state", async () => {
+  it("returns the speaker, the pool and every roster member's connect state", async () => {
     installIdentityApiPorts({ verifier: fakeVerifier() });
     const key = await importIdentityKey(IDENTITY_KEY);
     await upsertIdentity(
@@ -147,14 +148,21 @@ describe("GET /roster", () => {
     const res = await req("/roster", VIEWER);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      onDuty: { email: string; index: number; shiftStartMs: number; shiftEndMs: number; nextEmail: string };
-      rotation: string[];
+      speaker: { email: string } | null;
+      githubSpeaker: { email: string } | null;
+      pool: string[];
       engineers: ConnectStatus[];
     };
 
-    expect(body.rotation).toEqual([...ROTATION]);
-    expect(ROTATION).toContain(body.onDuty.email);
-    expect(body.onDuty.shiftEndMs).toBeGreaterThan(body.onDuty.shiftStartMs);
+    // No shift, no clock: the pool is the roster and the speaker is whoever has
+    // connected — here the one seeded row. GitHub has nobody.
+    expect(body.pool).toEqual([...SPEAKER_POOL]);
+    expect(body.pool).toEqual([...FIREFIGHTERS]);
+    expect(body.speaker).toEqual({ email: FIREFIGHTER });
+    expect(body.githubSpeaker).toBeNull();
+    // Nothing shift-shaped survives on the wire.
+    expect(body).not.toHaveProperty("onDuty");
+    expect(body).not.toHaveProperty("rotation");
 
     expect(body.engineers).toContainEqual({
       email: FIREFIGHTER,

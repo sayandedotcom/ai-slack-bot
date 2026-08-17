@@ -3,7 +3,8 @@
  *
  * Confirmed 2026-08-13 by the operator relaying their manager: "a hardcoded
  * map of seven emails to roles is fine; nobody is judging IAM here." Two
- * roles, three-day fire-fighter rotation vs. read-only viewers. Full
+ * roles, fire-fighters (any of whom may speak once connected — no shift since
+ * 2026-08-17, see src/identity/speaker.ts) vs. read-only viewers. Full
  * provenance is in docs/superpowers/plans/phase-11-notes.md ("Roster —
  * confirmed"); the shape this file must expose is the plan's "Authorization
  * seam".
@@ -35,7 +36,7 @@ export const FIREFIGHTERS: readonly string[] = [
   "sayandeten@gmail.com",
 ];
 
-/** Viewers: dashboard and chat only, no rotation, no OAuth, read-only. */
+/** Viewers: dashboard and chat only, never the speaker, no OAuth, read-only. */
 export const VIEWERS: readonly string[] = [
   "marcus@zellify.app",
   "nils@zellify.app",

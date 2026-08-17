@@ -54,7 +54,7 @@ export {
  *
  *   1. stable system policy        (never varies)
  *   2. stable voice examples       (never varies, cache mark)
- *  2b. engineer voice, if any      (shift-stable, its OWN cache mark)
+ *  2b. engineer voice, if any      (day-stable, its OWN cache mark)
  *   3. dynamic trusted context     (varies per run)
  *   4. untrusted model messages    (messages, chronological, all role user/…)
  *
@@ -62,12 +62,12 @@ export {
  * they have different lifetimes:
  *
  *  - The mark on block 2 ends the BUILD-STABLE prefix. It is byte-identical on
- *    every request this build ever makes, so it survives shift boundaries and
- *    rotations, and a cold engineer with no samples costs nothing.
- *  - The mark on block 2b ends the SHIFT-STABLE prefix. Block 2b changes exactly
- *    once every three days, at the boundary, and is frozen between them (see
+ *    every request this build ever makes, so it survives day boundaries and
+ *    speaker changes, and a cold engineer with no samples costs nothing.
+ *  - The mark on block 2b ends the DAY-STABLE prefix. Block 2b changes at most
+ *    once a day, at 00:00 UTC, and is frozen between boundaries (see
  *    `voice.ts` — the freeze is a SQL bound, not a memo). Every request within
- *    one shift reuses it.
+ *    one day reuses it.
  *
  * Block 2b is OMITTED entirely when it renders empty, which keeps the two-block
  * layout and its single mark exactly as it was before this existed. It is never
@@ -113,7 +113,7 @@ export function buildAgentPrompt(input: {
    * a caller with no D1 handle (a composer test, a prompt snapshot) gets exactly
    * the layout that shipped before this existed. `resolveEngineerVoice` is the
    * only thing that should ever produce this value — a caller assembling one by
-   * hand from live data would be re-introducing the mid-shift churn the freeze
+   * hand from live data would be re-introducing the mid-day churn the freeze
    * exists to prevent.
    */
   voice?: EngineerVoice | null;
@@ -140,7 +140,7 @@ export function buildAgentPrompt(input: {
             content: engineerVoice,
             // The end of the SHIFT-stable prefix, and the second of Anthropic's
             // four breakpoints. Safe to mark only because the block is frozen
-            // for the whole shift; marking anything that could change
+            // for the whole day; marking anything that could change
             // mid-request-stream pays the write multiplier for nothing.
             providerOptions: STABLE_PREFIX_CACHE_OPTIONS,
           },

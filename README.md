@@ -139,7 +139,7 @@ sequenceDiagram
   participant L as agent loop src/agent/loop.ts
   participant S as sandbox src/sandbox
   participant A as src/api/approvals.ts
-  participant E as on-duty engineer
+  participant E as fire-fighter (the speaker)
   participant G as src/git/commit.ts
 
   C->>W: message event, HMAC-verified, queued
@@ -251,7 +251,7 @@ the Think chassis adds and what it still lacks.
 | 9 | The sandbox container holds no write credential: it receives the sentinel host and a placeholder, and the PAT is substituted at Worker egress for one pinned repo | `src/sandbox/class.ts:40,109,137-155` | `test/sandbox-lifecycle.test.ts` (23). **Partial:** the container-side half is proven by test; the egress swap itself has no test — see the gaps below |
 | 10 | Dev-tier env is injected **per process**, only when model code sets `injectDevEnv`, and known values are redacted from every return path — stdout, stderr, process tails, file reads | `src/sandbox/env.ts:74-83,150-158`; `src/sandbox/gateway.ts:125-141,231-234` | `test/sandbox-env.test.ts` (22) · `test/codemode-sandbox.test.ts` (51) |
 | 11 | Approval needs a verified Access JWT plus roster membership (viewers read, fire-fighters `PATCH`), and a D1 CAS makes exactly one decision win; the loser gets 409 naming the winner | `src/api/approvals.ts:148-155,203,220,264`; `src/access/roster.ts:22-53`; `src/approval/repository.ts:167-201`; on the Think chassis the local half is `src/run/agent-approvals.ts` behind the same route | `test/approval-api.test.ts` (24) · `test/approval-repository.test.ts` (40) · `test/access-jwt.test.ts` (17) · `test/approval-e2e.test.ts` (11) · `test/run-agent-approvals.test.ts` (24, of which **4 are `it.fails`** — `awaiting_approval` is not projected and `withdraw` is a stub there) |
-| 12 | Customer-facing **Slack replies** go out under the on-duty engineer's user token. A missing identity terminates as `blocked` — there is never a bot-token fallback, even though a working bot token is right there | `src/approval/sender.ts:56-73,98-126`; `src/identity/user-token.ts` | `test/slack-reply-identity.test.ts` (22) · `test/user-token-sender.test.ts` (11) · `test/codemode-slack.test.ts` (25) |
+| 12 | Customer-facing **Slack replies** go out under a fire-fighter's own user token — the approver's when they clicked and have connected Slack, otherwise the default speaker's (first in roster order who has connected; **no shift, no clock** since 2026-08-17, `src/identity/speaker.ts`). A missing identity terminates as `blocked` — there is never a bot-token fallback, even though a working bot token is right there | `src/approval/sender.ts`; `src/identity/user-token.ts`; `src/identity/speaker.ts` | `test/slack-reply-identity.test.ts` (22) · `test/user-token-sender.test.ts` (13) · `test/speaker.test.ts` (8) · `test/codemode-slack.test.ts` (25) |
 | 13 | Secrets never reach prompts, events, tool output, logs, memory or the LangSmith trace batch (invariant 39). There is no single choke point — it is enforced at each surface and swept by a planted-canary test | `src/redact.ts`; `src/codemode/bindings/shared.ts:178-205`; `src/sandbox/gateway.ts:231-234`; `src/sandbox/env.ts:39-83`; `src/agent/ports.ts:47`; `src/memory/consumer.ts:425` | `test/agent-canaries.test.ts` (6) — sweeps the model call, events, turns, transcript, D1, memory, logs and the outbound trace body, with a control proving the probe works · `test/codemode-security.test.ts` (41). **Not yet extended** to `RunAgent`'s session tables or the code-mode runtime's replay log — spec §5 requires that before cutover |
 | 13a | **The agent's own traces leave the Worker.** One LangSmith trace per continuation — root `chain`, one `llm` span per model step, one `tool` span per `run_code` call — carrying ids, tokens, cost, latency, finish reason and the AI Gateway log id. With `LANGSMITH_TRACE_PAYLOADS=redacted` it *also* carries bounded prompt/completion/program text, scrubbed by the shared denylist. **Never reasoning** (invariant 18), enforced twice: the loop drops reasoning parts before they reach the tracer, and the tracer strips `reasoning`/`thinking`/`thought` keys on the way out. Opt-in (`LANGSMITH_TRACING`), off in the test pool, and a flush failure can never fail a run — one POST, no retries, through `ctx.waitUntil` | `src/langsmith/tracer.ts`; `src/redact.ts`; `src/agent/loop.ts` (`composeAndRun` root, `onStepEnd` llm, `withOuterToolEvents` tool); `src/agent/dependencies.ts:langsmithTracerConfig` | `test/langsmith-tracer.test.ts` (20) · `test/agent-trace-emit.test.ts` (7), incl. "completes the run when LangSmith is unreachable" · `test/agent-canaries.test.ts` "keeps every canary out of the LangSmith trace batch" · `test/agent-composer.test.ts` "binds the trace emitter off in the pool". **Note:** this does not change AI Gateway, which still runs `cf-aig-collect-log-payload: false` |
 | 14 | The Linear team and the GitHub repo/base are pinned server-side; the bindings take no destination argument, and base `dev` is refused by name | `src/agent/dependencies.ts:272`; `src/codemode/bindings/linear.ts:26`; `src/git/commit.ts:87-89,459,523,562` | `test/codemode-linear.test.ts` (63) · `test/github-gateway.test.ts` (49) |
@@ -322,12 +322,14 @@ wins; these are the six places it did.
    *Access and the temporary override* below.
 7. **PR authorship — the deployed value is `worker-pat`, not the engineer.** `src/git/commit.ts:107`
    resolves `GITHUB_AUTHOR` to one of `on-duty | worker-pat`, and `wrangler.jsonc` sets
-   **`worker-pat`**: PRs are authored by the ship credential's owner, not by the on-duty
-   engineer's OAuth identity. The `on-duty` path is built and reachable — it is one value away —
-   but it is not what is running, and the distinction matters because the **Slack reply** genuinely
-   does go out under the engineer's own user token. Only half of "under the on-duty engineer's
-   name" is true today, and it is the Slack half. Flipping the flag additionally requires a GitHub
-   OAuth identity row for that engineer.
+   **`worker-pat`**: PRs are authored by the ship credential's owner, not by a fire-fighter's
+   OAuth identity. The `on-duty` path is built and reachable — it is one value away — but it is
+   not what is running, and the distinction matters because the **Slack reply** genuinely does go
+   out under the engineer's own user token. Only half of "under the engineer's name" is true
+   today, and it is the Slack half. (`on-duty` is the var's historical value: since 2026-08-17
+   there is no shift, and it means the first fire-fighter in roster order who has connected
+   GitHub — `src/identity/speaker.ts`.) Flipping the flag additionally requires a GitHub OAuth
+   identity row for a fire-fighter.
 
 ---
 
@@ -898,7 +900,7 @@ schema and source names — a conversation, then a two-line diff each.
 the offline gate ran, but the live steps are deferred — no measured triage precision/recall with
 its `n` and window, no ten shadow drafts read side by side against the humans' actual replies, no
 prompt iteration where they diverge (`phase-21-notes.md`, "DEFERRED GATE"). The eval routes,
-tell-detector, shift-frozen voice block and side-by-side panel all exist. What is missing is real
+tell-detector, day-frozen voice block and side-by-side panel all exist. What is missing is real
 observe-mode traffic and roughly a day of human judgment.
 
 **5. The handoff summary (Phase 22), entirely unbuilt.** A trusted host-side aggregator enumerates
@@ -917,7 +919,7 @@ triage the run's terminal status as a fact, and discount a failed run's optimist
 memory-write or recall time.
 
 **7. A revoke path for "the agent speaks as me."** The agent sends customer-facing replies under
-the on-duty engineer's OAuth token, and there is no way to withdraw that: no disconnect route, no
+a fire-fighter's OAuth token, and there is no way to withdraw that: no disconnect route, no
 consent column on `identities`. That is exactly why Phase 24 declined to render the prototype's
 "Agent may act as me" toggle — *"building the switch without the mechanism would be a lie on
 screen."* A consent column, a disconnect route, and the toggle becomes honest.

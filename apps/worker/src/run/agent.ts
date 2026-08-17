@@ -101,7 +101,7 @@ function discardingSink(): CapabilityAuditSink {
  * exactly as `src/agent/dependencies.ts` documents for the legacy chassis:
  * the public run id and `shadow` come from the D1 `runs` row, `customerSlug`
  * from the channel policy (invariant 35), the Slack coordinates from the run
- * key, and `actor` from the on-duty rotation.
+ * key, and `actor` from the speaker rule (src/identity/speaker.ts).
  */
 type RunFacts = {
   /** The public `runs.id` UUID. NEVER the Durable Object name. */
@@ -166,7 +166,7 @@ async function resolveRunFacts(env: Env, name: string): Promise<RunFacts | null>
   // the credential is re-resolved at the last trusted moment inside the
   // gateway (invariant 39).
   const mayReply = slackThread !== null && !run.shadow;
-  const onDuty = mayReply ? await makeUserTokenSource(env).onDutyToken(Date.now()) : null;
+  const speaker = mayReply ? await makeUserTokenSource(env).speakerToken() : null;
 
   return {
     runId: run.id,
@@ -175,9 +175,9 @@ async function resolveRunFacts(env: Env, name: string): Promise<RunFacts | null>
     customerSlug: policy?.customer_slug ?? null,
     slackThread,
     actor:
-      onDuty === null
+      speaker === null
         ? null
-        : { engineerEmail: onDuty.email, slackUserId: onDuty.slackUserId },
+        : { engineerEmail: speaker.email, slackUserId: speaker.slackUserId },
   };
 }
 

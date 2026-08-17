@@ -71,7 +71,7 @@ All reached by the model as **typed bindings**, never as raw credentials. The ge
 
 | Tech | What the agent uses it for |
 |---|---|
-| **Slack Web API** | Read threads; post as the on-duty engineer (user token); nudge them (bot token). One app carries both. |
+| **Slack Web API** | Read threads; post as a connected fire-fighter (user token — approver first, else roster order; no shift); nudge them (bot token). One app carries both. |
 | **GitHub REST** | Open PRs as the fire-fighter, Worker-side, from a diff. `openPR()` takes a **diff**, not a repo handle — the credential topology expressed in a type signature. |
 | **Linear** | File and update issues. Team id pinned server-side to `fire-fighter-testing`; the agent cannot choose it. |
 | **Supabase** (prod, read-only) | The customer's real data while debugging. Writes are rejected by the database role, not by application logic. |

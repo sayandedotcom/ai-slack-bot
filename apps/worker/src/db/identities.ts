@@ -109,6 +109,31 @@ export async function getIdentity(
   return row ? toRow(row) : null;
 }
 
+/** One connected identity without its credential. What the speaker rule sees. */
+export type ConnectedIdentity = Pick<IdentityRow, "email" | "externalId" | "connectedAt" | "updatedAt">;
+
+/**
+ * Every row for one provider, credential column deliberately NOT selected —
+ * the speaker rule (src/identity/speaker.ts) chooses a person, and the token is
+ * re-read at the last trusted moment by `getDecryptedToken`. Roster filtering
+ * happens in the caller: this function does not know who is a fire-fighter.
+ */
+export async function listConnected(
+  db: D1Database,
+  provider: Provider,
+): Promise<ConnectedIdentity[]> {
+  const { results } = await db
+    .prepare(`SELECT email, external_id, connected_at, updated_at FROM identities WHERE provider = ?`)
+    .bind(provider)
+    .all<{ email: string; external_id: string; connected_at: number; updated_at: number }>();
+  return (results ?? []).map((r) => ({
+    email: r.email,
+    externalId: r.external_id,
+    connectedAt: r.connected_at,
+    updatedAt: r.updated_at,
+  }));
+}
+
 /**
  * The dashboard's connect page: every roster member and what they have hooked
  * up. Built from the roster in code plus one `SELECT email, provider` — the

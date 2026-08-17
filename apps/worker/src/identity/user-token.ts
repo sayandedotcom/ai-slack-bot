@@ -1,6 +1,5 @@
 import type { Env } from "../index";
-import { getIdentity } from "../db/identities";
-import { onDuty } from "./rotation";
+import { resolveSpeaker } from "./speaker";
 import { getDecryptedToken } from "./tokens";
 
 /**
@@ -23,18 +22,22 @@ export type UserToken = {
 };
 
 export interface UserTokenSource {
-  /** The on-duty engineer's decrypted Slack user token, or null when
-   *  unconnected. Never throws for "not connected" — null is the honest answer. */
-  onDutyToken(nowMs: number): Promise<UserToken | null>;
+  /**
+   * The speaker's decrypted Slack user token, or null when no fire-fighter has
+   * connected Slack. `preferredEmail` is the human who decided an approval —
+   * they speak if they have connected; otherwise the default speaker does (see
+   * `src/identity/speaker.ts`). Never throws for "not connected" — null is the
+   * honest answer.
+   */
+  speakerToken(preferredEmail?: string | null): Promise<UserToken | null>;
 }
 
 /**
- * The production source: rotation → identity row → decrypted token.
+ * The production source: speaker rule → identity row → decrypted token.
  *
- * `nowMs` is a parameter rather than `Date.now()` inside because the shift is
- * the thing that decides WHOSE identity gets used, and a caller that already
- * knows the instant it is acting at must not get a different answer from a
- * clock read microseconds later.
+ * No clock. The old `onDutyToken(nowMs)` took an instant because a rotation
+ * decided WHOSE identity was used; the speaker rule is a function of who has
+ * connected, so there is no instant to get wrong.
  *
  * Two failure shapes, deliberately different, inherited from
  * `getDecryptedToken`: a missing row is `null` (an engineer who has not clicked
@@ -45,15 +48,14 @@ export interface UserTokenSource {
  */
 export function makeUserTokenSource(env: Env): UserTokenSource {
   return {
-    async onDutyToken(nowMs: number): Promise<UserToken | null> {
-      const { email } = onDuty(nowMs);
-      const row = await getIdentity(env.DB, email, "slack");
-      if (!row) return null;
+    async speakerToken(preferredEmail?: string | null): Promise<UserToken | null> {
+      const speaker = await resolveSpeaker(env.DB, "slack", preferredEmail);
+      if (!speaker) return null;
 
-      const token = await getDecryptedToken(env, email, "slack");
+      const token = await getDecryptedToken(env, speaker.email, "slack");
       if (!token) return null;
 
-      return { token, slackUserId: row.externalId, email };
+      return { token, slackUserId: speaker.externalId, email: speaker.email };
     },
   };
 }

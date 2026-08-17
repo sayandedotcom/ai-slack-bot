@@ -578,11 +578,11 @@ export async function runContinuation(
       });
     }
 
-    // Asked at the LOOP'S clock, never `Date.now()`. The rotation and the shift
-    // boundary are pure functions of an instant, so reading a second clock here
-    // would let one step's prompt carry a different shift's samples from the
+    // Asked at the LOOP'S clock, never `Date.now()`. The voice's freeze window
+    // (one UTC day) is a pure function of an instant, so reading a second clock
+    // here would let one step's prompt carry a different day's samples from the
     // step beside it — and would make the freeze untestable, since a test
-    // driving a fixed instant could not reach it. Frozen for the whole shift, so
+    // driving a fixed instant could not reach it. Frozen for the whole day, so
     // this is byte-identical on every step of every run until the boundary.
     const voice = deps.voice === undefined ? null : await deps.voice.resolve(clock.now());
 

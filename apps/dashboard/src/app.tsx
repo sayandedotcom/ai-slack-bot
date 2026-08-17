@@ -10,7 +10,7 @@ import { ConnectPanel } from "./components/connect-panel";
 import { CountersPanel } from "./components/counters-panel";
 import { Header, SignedOutPage, useIdentity } from "./components/header";
 import type { PanelState } from "./components/panel";
-import { RotationStrip } from "./components/rotation-strip";
+import { SpeakerStrip } from "./components/speaker-strip";
 import { getRoster, type Role } from "./lib/api";
 import { useChassis } from "./lib/chassis";
 import { usePoll } from "./lib/use-poll";
@@ -161,7 +161,7 @@ function ChassisPending() {
  * Identity, because a failure to establish it is not a panel-shaped problem —
  * every panel would 401 in exactly the same way, so the whole grid is replaced
  * by one honest page instead of four separately-broken ones. The roster,
- * because the rotation strip and the connect panel read the SAME document; two
+ * because the speaker strip and the connect panel read the SAME document; two
  * `usePoll` calls would mean two requests a minute for one answer, and two
  * copies of it that could disagree on screen. Each takes the poll's
  * `PanelState` as a prop and renders it through `Panel`.
@@ -211,7 +211,7 @@ export function App() {
           <main className="mx-auto grid max-w-5xl grid-cols-1 gap-4 p-6 md:grid-cols-2">
             {/* First in the grid, deliberately: a pending escalation is the only
                 thing on this page with a human waiting on the other end of it, so
-                it is pinned above the fold ahead of the rotation and the counters. */}
+                it is pinned above the fold ahead of the fire-fighters and the counters. */}
             <div data-slot="approvals-panel" className="md:col-span-2">
               <ApprovalsPanel
                 state={approvals.state}
@@ -220,7 +220,7 @@ export function App() {
               />
             </div>
             <div className="md:col-span-2">
-              <RotationStrip state={roster} />
+              <SpeakerStrip state={roster} />
             </div>
             <ConnectPanel state={roster} identity={identity} />
             <CountersPanel />

@@ -34,40 +34,40 @@ import {
  * Every case stubs `fetch`. Nothing here reaches Slack.
  */
 
-const USER_TOKEN = "xoxp-not-a-real-on-duty-token";
-const ON_DUTY = "ronit@zellify.app";
+const USER_TOKEN = "xoxp-not-a-real-speaker-token";
+const SPEAKER = "ronit@zellify.app";
 
-/** The on-duty engineer, connected. */
+/** A fire-fighter has connected: the speaker. */
 function connected(token = USER_TOKEN): UserTokenSource {
   return {
-    async onDutyToken() {
-      return { token, slackUserId: "U0NDUTY01", email: ON_DUTY };
+    async speakerToken() {
+      return { token, slackUserId: "U0NDUTY01", email: SPEAKER };
     },
   };
 }
 
-/** Nobody on duty has connected Slack. An ordinary state, not an error. */
+/** No fire-fighter has connected Slack. An ordinary state, not an error. */
 const unconnected: UserTokenSource = {
-  async onDutyToken() {
+  async speakerToken() {
     return null;
   },
 };
 
 /**
- * A source that records every instant it was asked about.
+ * A source that records every time it was asked, and for whom.
  *
  * `asked` is the assertion that matters for the runs that cannot speak: "the
  * identity table was never read" is a strictly stronger claim than "the actor
- * came out null", and only the first one says a corrupt row for the on-duty
- * engineer cannot take out a Chat run.
+ * came out null", and only the first one says a corrupt row for the speaker
+ * cannot take out a Chat run.
  */
-function counting(inner: UserTokenSource): UserTokenSource & { asked: number[] } {
-  const asked: number[] = [];
+function counting(inner: UserTokenSource): UserTokenSource & { asked: (string | null | undefined)[] } {
+  const asked: (string | null | undefined)[] = [];
   return {
     asked,
-    async onDutyToken(nowMs: number) {
-      asked.push(nowMs);
-      return inner.onDutyToken(nowMs);
+    async speakerToken(preferred) {
+      asked.push(preferred);
+      return inner.speakerToken(preferred);
     },
   };
 }
@@ -188,20 +188,20 @@ async function seedScopeRun(input: {
  * fail loudly (a `SealError`, or an `externalId` `validateScope` rejects) and
  * that failure must not reach a Chat run that was never going to reply.
  */
-describe("resolveCodeModeScope resolves the on-duty engineer", () => {
+describe("resolveCodeModeScope resolves the speaker", () => {
   it("names the connected engineer, and carries no credential", async () => {
     const state = await seedScopeRun({ origin: "slack" });
 
     const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:1", connected());
 
     expect(scope.actor).toEqual({
-      engineerEmail: ON_DUTY,
+      engineerEmail: SPEAKER,
       slackUserId: "U0NDUTY01",
     });
     expect(JSON.stringify(scope)).not.toContain(USER_TOKEN);
   });
 
-  it("resolves no actor when nobody on duty has connected Slack", async () => {
+  it("resolves no actor when no fire-fighter has connected Slack", async () => {
     const state = await seedScopeRun({ origin: "slack" });
     const scope = await resolveCodeModeScope(env.DB, state, "agent:gen:2", unconnected);
     expect(scope.actor).toBeNull();
@@ -215,16 +215,15 @@ describe("resolveCodeModeScope resolves the on-duty engineer", () => {
     expect(scope.actor).toBeNull();
   });
 
-  it("asks at the RUN'S instant, not the wall clock", async () => {
-    // The rotation is a pure function of an instant, so the clock is what
-    // decides WHOSE identity is used.
+  it("asks for the default speaker — a run's own replies carry no approver", async () => {
+    // No clock any more: the speaker is a function of who has connected, not
+    // of the instant (src/identity/speaker.ts). Asked exactly once, unnamed.
     const state = await seedScopeRun({ origin: "slack" });
     const source = counting(connected());
-    const runInstant = 1_760_000_000_000;
 
-    await resolveCodeModeScope(env.DB, state, "agent:gen:4", source, () => runInstant);
+    await resolveCodeModeScope(env.DB, state, "agent:gen:4", source);
 
-    expect(source.asked).toEqual([runInstant]);
+    expect(source.asked).toEqual([undefined]);
   });
 
   it("never reads an identity for a Chat run", async () => {
@@ -266,7 +265,7 @@ describe("resolveCodeModeScope resolves the on-duty engineer", () => {
   it("lets a tampered identity fail loudly rather than look unconnected", async () => {
     const state = await seedScopeRun({ origin: "slack" });
     const sealed: UserTokenSource = {
-      async onDutyToken() {
+      async speakerToken() {
         throw new Error("SealError: ciphertext did not open");
       },
     };
@@ -278,7 +277,7 @@ describe("resolveCodeModeScope resolves the on-duty engineer", () => {
 
 /* ------------------------------------------------------------- the send -- */
 
-describe("slack.reply as the on-duty engineer", () => {
+describe("slack.reply as the speaker", () => {
   it("posts under the engineer's OWN token, to the run's pinned thread", async () => {
     const scope = await seedPermittedScope(env.DB);
     const calls = stubSlack(ok("1720000000.000200"));
@@ -322,7 +321,7 @@ describe("slack.reply as the on-duty engineer", () => {
     expect(rows[0].state).toBe("completed");
     expect(rows[0].safe_result_json).toContain("1720000000.000202");
     expect(JSON.stringify(rows)).not.toContain(USER_TOKEN);
-    expect(JSON.stringify(rows)).not.toContain(ON_DUTY);
+    expect(JSON.stringify(rows)).not.toContain(SPEAKER);
   });
 
   it("posts once when the same reply is replayed inside one turn", async () => {

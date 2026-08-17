@@ -16,9 +16,6 @@ const worker = env as unknown as Env;
 
 const IDENTITY_KEY = btoa(String.fromCharCode(...new Uint8Array(32).map((_, i) => (i * 7 + 3) & 0xff)));
 const NOW = Date.parse("2026-08-15T00:00:00Z");
-// Two shifts before NOW so the trial-tester override at ROTATION[0] is not
-// who's on duty; keeps these cases independent of the roster's index-0 quirk.
-const ON_DUTY_INSTANT = NOW;
 
 const ORIGIN = "https://api.github.com";
 
@@ -51,8 +48,11 @@ function stubGithub(routes: Route[]) {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllGlobals();
+  // Shared D1, no isolatedStorage: a github row left here would make another
+  // suite's "nobody connected" case find a speaker.
+  await env.DB.prepare("DELETE FROM identities WHERE provider = 'github'").run();
 });
 
 function baseConfig(overrides: Partial<GithubShipConfig> = {}): GithubShipConfig {
@@ -82,20 +82,21 @@ describe("auth + config", () => {
     expect(await auth.token(NOW)).toBeNull();
   });
 
-  it("on-duty resolves the shift engineer's decrypted github identity", async () => {
+  it("on-duty resolves a connected fire-fighter's decrypted github identity", async () => {
     const testEnv = { ...worker, IDENTITY_KEY } as unknown as Env;
     const key = await importIdentityKey(IDENTITY_KEY);
-    // Whoever is on duty at ON_DUTY_INSTANT -- read it back via the same
-    // `onDuty` the source uses, so this case does not hardcode the roster.
-    const { onDuty } = await import("../src/identity/rotation");
-    const { email } = onDuty(ON_DUTY_INSTANT);
+    // No shift: the speaker is the first fire-fighter in roster order who has
+    // connected GitHub (src/identity/speaker.ts). Seed the LAST so the case
+    // proves "connected" is what counts, not position.
+    const { FIREFIGHTERS } = await import("../src/access/roster");
+    const email = FIREFIGHTERS[FIREFIGHTERS.length - 1]!;
 
     await upsertIdentity(
       testEnv.DB,
       {
         email,
         provider: "github",
-        externalId: "octo-shift",
+        externalId: "octo-speaker",
         scopes: "repo",
         tokenCiphertext: await seal(key, "gho_on_duty_token"),
         connectedAt: NOW,
@@ -105,15 +106,14 @@ describe("auth + config", () => {
 
     const config = baseConfig({ author: "on-duty" });
     const auth = makeGithubAuthSource(testEnv, config);
-    expect(await auth.token(ON_DUTY_INSTANT)).toEqual({ token: "gho_on_duty_token" });
+    expect(await auth.token(NOW)).toEqual({ token: "gho_on_duty_token" });
   });
 
-  it("on-duty resolves null when the shift engineer has not connected github", async () => {
+  it("on-duty resolves null when no fire-fighter has connected github", async () => {
     const testEnv = { ...worker, IDENTITY_KEY } as unknown as Env;
     const config = baseConfig({ author: "on-duty" });
     const auth = makeGithubAuthSource(testEnv, config);
-    // Use a far-future instant so no earlier test's upsert can leak in.
-    expect(await auth.token(Date.parse("2027-01-01T00:00:00Z"))).toBeNull();
+    expect(await auth.token(NOW)).toBeNull();
   });
 
   it("a null auth source produces capability_unavailable naming the fix (worker-pat)", async () => {

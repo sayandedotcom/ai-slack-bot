@@ -477,8 +477,9 @@ async function deliver(
     return { delivery: "in_doubt", error: REENTERED_WHILE_SENDING };
   }
 
-  // No bot-token fallback, ever: a source with nobody on duty returns an honest
-  // `blocked`, and customer-facing speech carries a human's name or is not sent.
+  // No bot-token fallback, ever: a source with no connected fire-fighter returns
+  // an honest `blocked`, and customer-facing speech carries a human's name or is
+  // not sent. The human who clicked speaks when they have connected Slack.
   const sender = makeUserTokenSender(makeUserTokenSource(env));
   try {
     const outcome = await sender.send({
@@ -486,6 +487,7 @@ async function deliver(
       channelId: run.channelId,
       threadTs: run.threadTs,
       text,
+      decidedBy: row.decided_by,
     });
     return outcome.result === "sent"
       ? { delivery: "sent", error: null }

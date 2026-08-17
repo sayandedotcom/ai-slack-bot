@@ -65,14 +65,6 @@ export type Identity = {
   role: Role;
 };
 
-export type Shift = {
-  email: string;
-  index: number;
-  shiftStartMs: number;
-  shiftEndMs: number;
-  nextEmail: string;
-};
-
 export type ConnectStatus = {
   email: string;
   role: Role;
@@ -80,9 +72,17 @@ export type ConnectStatus = {
   github: boolean;
 };
 
+/**
+ * No shift and no clock (2026-08-17): every fire-fighter on the roster who has
+ * connected is eligible. `speaker` is who a direct reply and the nudge DM go
+ * out as — the first in `pool` order who has connected Slack — or null when
+ * nobody has; an APPROVED reply goes out as the approver instead when they
+ * have connected. `githubSpeaker` is the same question for the PR author.
+ */
 export type Roster = {
-  onDuty: Shift;
-  rotation: string[];
+  speaker: { email: string } | null;
+  githubSpeaker: { email: string } | null;
+  pool: string[];
   engineers: ConnectStatus[];
 };
 

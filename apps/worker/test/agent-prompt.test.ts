@@ -185,7 +185,7 @@ describe("input authority", () => {
  * lands and what cache mark it carries.
  */
 const voice = {
-  shiftIndex: 400,
+  windowIndex: 22_000,
   email: "luka@zellify.app",
   samples: Array.from({ length: 6 }, (_, index) => ({
     text: `a real message the engineer typed, number ${index}`,
@@ -247,11 +247,11 @@ describe("prompt section order", () => {
   /**
    * The engineer-voice block, placed and marked.
    *
-   * It sits AFTER the two build-stable blocks (which are reused across shifts
-   * and rotations) and BEFORE the dynamic trusted context (which changes every
-   * run). It carries the SECOND of Anthropic's four breakpoints, ending the
-   * shift-stable prefix — safe only because the block is frozen for the whole
-   * shift, which `test/prompt-voice.test.ts` proves against real D1 rows.
+   * It sits AFTER the two build-stable blocks (which are reused across days
+   * and speaker changes) and BEFORE the dynamic trusted context (which changes
+   * every run). It carries the SECOND of Anthropic's four breakpoints, ending
+   * the day-stable prefix — safe only because the block is frozen for the whole
+   * UTC day, which `test/prompt-voice.test.ts` proves against real D1 rows.
    */
   it("places the engineer voice after the stable pair, before trusted context", () => {
     const prompt = buildAgentPrompt({ context, voice, messages: [] });
@@ -260,7 +260,7 @@ describe("prompt section order", () => {
     expect(prompt.instructions[0].content).toBe(renderStablePolicy());
     expect(prompt.instructions[1].content).toBe(renderVoiceExamples());
     expect(prompt.instructions[2].content).toBe(renderEngineerVoice(voice));
-    expect(prompt.instructions[2].content).toContain("How the on-duty engineer actually writes");
+    expect(prompt.instructions[2].content).toContain("How the engineer whose name is on the reply actually writes");
     expect(prompt.instructions[3].content).toBe(renderTrustedContext(context));
     expect(prompt.instructions.every((block) => block.role === "system")).toBe(true);
   });
@@ -269,7 +269,7 @@ describe("prompt section order", () => {
     const prompt = buildAgentPrompt({ context, voice, messages: [] });
 
     expect(prompt.instructions[0].providerOptions).toBeUndefined();
-    // Two breakpoints of the four available: build-stable, then shift-stable.
+    // Two breakpoints of the four available: build-stable, then day-stable.
     expect(prompt.instructions[1].providerOptions).toEqual({
       anthropic: { cacheControl: { type: "ephemeral", ttl: "5m" } },
     });
@@ -297,11 +297,11 @@ describe("prompt section order", () => {
   });
 
   /**
-   * The block is shift-stable, not run-stable: two unrelated runs inside one
-   * shift must produce the same bytes for blocks 0-2, or the shift-stable
+   * The block is day-stable, not run-stable: two unrelated runs inside one
+   * UTC day must produce the same bytes for blocks 0-2, or the day-stable
    * prefix is not a prefix and every request re-pays for it.
    */
-  it("keeps the engineer voice byte-identical across unrelated runs in one shift", () => {
+  it("keeps the engineer voice byte-identical across unrelated runs in one day", () => {
     const a = buildAgentPrompt({ context, voice, messages: [] });
     const b = buildAgentPrompt({
       context: { ...context, runId: "different", customerSlug: "othercorp", shadow: true },
@@ -745,10 +745,10 @@ describe("trusted context", () => {
    * on run 9967082a.
    */
   const fakeIdentity = (token: { email: string; slackUserId: string } | null) => ({
-    onDutyToken: async () => (token === null ? null : { ...token, token: "xoxp-not-read-here" }),
+    speakerToken: async () => (token === null ? null : { ...token, token: "xoxp-not-read-here" }),
   });
 
-  it("reports the on-duty engineer when one is connected", async () => {
+  it("reports the speaker when a fire-fighter is connected", async () => {
     await seedRun();
     await seedChannel("pulsefit");
 

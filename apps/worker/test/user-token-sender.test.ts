@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeUserTokenSender, type ApprovalSendResult } from "../src/approval/sender";
 import { upsertIdentity } from "../src/db/identities";
 import { importIdentityKey, seal, SealError } from "../src/identity/crypto";
-import { onDuty } from "../src/identity/rotation";
 import { makeUserTokenSource, type UserTokenSource } from "../src/identity/user-token";
+import { FIREFIGHTERS } from "../src/access/roster";
 import type { Env } from "../src/index";
 
 /**
@@ -12,12 +12,12 @@ import type { Env } from "../src/index";
  * this deployment is willing to claim about whether it landed.
  *
  * Two halves, tested separately. The SOURCE runs against real D1 and real
- * AES-GCM — the only fake is `nowMs`, which selects a shift. It never edits
- * `src/identity/rotation.ts`: the rotation order and epoch are unconfirmed
- * upstream, so each case asks `onDuty()` who is on duty and seeds a row for
- * exactly that person. The SENDER never touches D1 at all; it takes a stubbed
- * source and a stubbed `fetch`, because the thing under test is the mapping
- * from a Slack response to an outcome a human will act on.
+ * AES-GCM, with no clock: since 2026-08-17 there is no shift, and the speaker
+ * is a connected fire-fighter chosen by roster order (or the approver, when
+ * named and connected — `src/identity/speaker.ts`). Each case seeds rows for
+ * roster members and asks who speaks. The SENDER never touches D1 at all; it
+ * takes a stubbed source and a stubbed `fetch`, because the thing under test is
+ * the mapping from a Slack response to an outcome a human will act on.
  */
 
 function randomKeyB64(): string {
@@ -30,15 +30,16 @@ function randomKeyB64(): string {
 const IDENTITY_KEY = randomKeyB64();
 const testEnv = { ...env, IDENTITY_KEY } as unknown as Env;
 
-const NOW = Date.parse("2026-08-14T00:00:00Z");
 const TOKEN = "xoxp-user-token-do-not-leak";
+/** Roster order is the tie-break, so "first" and "second" are the two facts that matter. */
+const [FIRST_FF, SECOND_FF] = FIREFIGHTERS as [string, string, ...string[]];
 
 /**
  * Leave the shared D1 as we found it — in an `afterEach`, not only a
  * `beforeEach`.
  *
  * This pool has no `isolatedStorage`, so an `identities` row seeded here
- * outlives the file, and a row for the ON-DUTY engineer is one of the two
+ * outlives the file, and a row for a connected fire-fighter is one of the two
  * things `sweepNudges` feeds on (see `test/notify-nudge.test.ts`'s note). Left
  * behind, it is one stale pending approval in some other suite away from
  * `worker.scheduled()` opening a REAL DM against slack.com with the pool's fake
@@ -54,15 +55,17 @@ afterEach(async () => {
   await cleanIdentities();
 });
 
-async function seedOnDutySlack(patch: { token?: string; ciphertext?: string; externalId?: string } = {}) {
-  const { email } = onDuty(NOW);
+async function seedSlack(
+  email: string,
+  patch: { token?: string; ciphertext?: string; externalId?: string } = {},
+) {
   const key = await importIdentityKey(IDENTITY_KEY);
   await upsertIdentity(
     env.DB,
     {
       email,
       provider: "slack",
-      externalId: patch.externalId ?? "U0NDUTY",
+      externalId: patch.externalId ?? "U0SPEAKER",
       scopes: "chat:write",
       tokenCiphertext: patch.ciphertext ?? (await seal(key, patch.token ?? TOKEN)),
       connectedAt: 1000,
@@ -73,49 +76,58 @@ async function seedOnDutySlack(patch: { token?: string; ciphertext?: string; ext
 }
 
 describe("makeUserTokenSource", () => {
-  it("returns the on-duty engineer's decrypted token and Slack user id", async () => {
-    const email = await seedOnDutySlack({ externalId: "U0ONCALL" });
+  it("returns the speaker's decrypted token and Slack user id", async () => {
+    const email = await seedSlack(FIRST_FF, { externalId: "U0ONCALL" });
 
-    expect(await makeUserTokenSource(testEnv).onDutyToken(NOW)).toEqual({
+    expect(await makeUserTokenSource(testEnv).speakerToken()).toEqual({
       token: TOKEN,
       slackUserId: "U0ONCALL",
       email,
     });
   });
 
-  it("returns null when the on-duty engineer has no Slack row", async () => {
-    expect(await makeUserTokenSource(testEnv).onDutyToken(NOW)).toBeNull();
+  it("returns null when no fire-fighter has a Slack row", async () => {
+    expect(await makeUserTokenSource(testEnv).speakerToken()).toBeNull();
   });
 
-  it("ignores another engineer's row — only the on-duty one counts", async () => {
-    const key = await importIdentityKey(IDENTITY_KEY);
-    const offDuty = onDuty(NOW).nextEmail;
-    await upsertIdentity(
-      env.DB,
-      {
-        email: offDuty,
-        provider: "slack",
-        externalId: "U0OFFDUTY",
-        scopes: "chat:write",
-        tokenCiphertext: await seal(key, "xoxp-somebody-else"),
-        connectedAt: 1000,
-      },
-      1000,
-    );
+  it("speaks as whoever HAS connected — roster order only breaks ties, it never blocks", async () => {
+    // The old rotation returned null here: the seat belonged to someone else
+    // for three days and a connected fire-fighter sat idle. Not any more.
+    await seedSlack(SECOND_FF, { externalId: "U0SECOND", token: "xoxp-second" });
+    expect(await makeUserTokenSource(testEnv).speakerToken()).toEqual({
+      token: "xoxp-second",
+      slackUserId: "U0SECOND",
+      email: SECOND_FF,
+    });
 
-    expect(await makeUserTokenSource(testEnv).onDutyToken(NOW)).toBeNull();
+    await seedSlack(FIRST_FF, { externalId: "U0FIRST", token: "xoxp-first" });
+    expect(await makeUserTokenSource(testEnv).speakerToken()).toMatchObject({ email: FIRST_FF });
+  });
+
+  it("speaks as the approver when they are a connected fire-fighter", async () => {
+    await seedSlack(FIRST_FF, { externalId: "U0FIRST", token: "xoxp-first" });
+    await seedSlack(SECOND_FF, { externalId: "U0SECOND", token: "xoxp-second" });
+    expect(await makeUserTokenSource(testEnv).speakerToken(SECOND_FF)).toEqual({
+      token: "xoxp-second",
+      slackUserId: "U0SECOND",
+      email: SECOND_FF,
+    });
+    // An approver who has not connected does not silence the reply.
+    expect(await makeUserTokenSource(testEnv).speakerToken("nobody@zellify.app")).toMatchObject({
+      email: FIRST_FF,
+    });
   });
 
   it("propagates a SealError on corrupt ciphertext instead of reporting not-connected", async () => {
-    await seedOnDutySlack({ ciphertext: "not-a-sealed-value" });
+    await seedSlack(FIRST_FF, { ciphertext: "not-a-sealed-value" });
 
-    await expect(makeUserTokenSource(testEnv).onDutyToken(NOW)).rejects.toBeInstanceOf(SealError);
+    await expect(makeUserTokenSource(testEnv).speakerToken()).rejects.toBeInstanceOf(SealError);
   });
 });
 
 /** A source that hands back a fixed credential, or nothing. */
 function fixedSource(token: { token: string; slackUserId: string; email: string } | null): UserTokenSource {
-  return { async onDutyToken() { return token; } };
+  return { async speakerToken() { return token; } };
 }
 
 const CREDENTIAL = { token: TOKEN, slackUserId: "U0ONCALL", email: "ronit@zellify.app" };
@@ -141,20 +153,36 @@ const INPUT = {
   channelId: "C0THREAD",
   threadTs: "1723600000.000100",
   text: "The export job hit the 30s worker timeout. We raised the limit; retry now.",
+  decidedBy: null,
 };
 
 const send = (source: UserTokenSource = fixedSource(CREDENTIAL)): Promise<ApprovalSendResult> =>
   makeUserTokenSender(source).send(INPUT);
 
 describe("makeUserTokenSender", () => {
-  it("blocks without calling Slack when the on-duty engineer has not connected", async () => {
+  it("blocks without calling Slack when no fire-fighter has connected", async () => {
     stubSlack(() => new Response("{}", { status: 200 }));
 
     expect(await send(fixedSource(null))).toEqual({
       result: "blocked",
-      reason: "on-duty engineer has not connected Slack",
+      reason: "no fire-fighter has connected Slack",
     });
     expect(sent).toEqual([]);
+  });
+
+  it("asks the source for the approver's token, so the human who clicked is the name on it", async () => {
+    stubSlack(() => new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 }));
+    const asked: (string | null | undefined)[] = [];
+    const source: UserTokenSource = {
+      async speakerToken(preferred) {
+        asked.push(preferred);
+        return CREDENTIAL;
+      },
+    };
+
+    await makeUserTokenSender(source).send({ ...INPUT, decidedBy: "luka@zellify.app" });
+    await makeUserTokenSender(source).send(INPUT);
+    expect(asked).toEqual(["luka@zellify.app", null]);
   });
 
   it("sends under the user token and returns Slack's ts", async () => {

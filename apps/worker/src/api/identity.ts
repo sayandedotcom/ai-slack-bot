@@ -4,7 +4,7 @@ import type { Env } from "../index";
 import { AccessJwtError, makeAccessVerifier, type AccessVerifier } from "../access/jwt";
 import { isFirefighter, isTeamMember } from "../access/roster";
 import { listConnectStatus } from "../db/identities";
-import { onDuty, ROTATION } from "../identity/rotation";
+import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
 
 /**
  * Who am I, and who is on duty — the two read-only questions the dashboard asks
@@ -12,7 +12,7 @@ import { onDuty, ROTATION } from "../identity/rotation";
  *
  * Both answers are PUBLIC-SAFE BY CONSTRUCTION, and that is the whole point of
  * keeping them in their own file. `GET /api/identity` returns an email and a
- * role; `GET /api/roster` returns the rotation and `listConnectStatus`, which
+ * role; `GET /api/roster` returns the speaker, the pool and `listConnectStatus`, which
  * selects no token column at all (see `src/db/identities.ts`). No route here
  * touches `IDENTITY_KEY`, opens a sealed value, or has a ciphertext in reach —
  * so there is nothing on this surface for a serialisation mistake to leak.
@@ -119,21 +119,29 @@ identityApi.get("/identity", async (c) => {
 });
 
 /**
- * The rotation board: who is on duty right now, the shift order, and every
- * roster member's connect state.
+ * The fire-fighters board: who speaks right now, the pool in tie-break order,
+ * and every roster member's connect state.
  *
- * `onDuty` is pure UTC arithmetic over a fixed epoch (see
- * `src/identity/rotation.ts`), so this route stores nothing and cannot drift;
- * D1 is consulted only for which providers each person has connected.
+ * No shift, no clock (`src/identity/speaker.ts`): `speaker` is the first
+ * fire-fighter in roster order who has connected Slack — the name a direct
+ * reply and the nudge DM go to — or null when nobody has. An approved reply
+ * goes out as the approver instead when they have connected. `githubSpeaker`
+ * is the same question for the PR author. D1 is consulted only for who has
+ * connected what; the pool itself is code.
  */
 identityApi.get("/roster", async (c) => {
   const member = await requireTeamMember(c);
   if (member instanceof Response) return member;
 
-  const engineers = await listConnectStatus(c.env.DB);
+  const [engineers, slack, github] = await Promise.all([
+    listConnectStatus(c.env.DB),
+    resolveSpeaker(c.env.DB, "slack"),
+    resolveSpeaker(c.env.DB, "github"),
+  ]);
   return c.json({
-    onDuty: onDuty(Date.now()),
-    rotation: [...ROTATION],
+    speaker: slack === null ? null : { email: slack.email },
+    githubSpeaker: github === null ? null : { email: github.email },
+    pool: [...SPEAKER_POOL],
     engineers,
   });
 });

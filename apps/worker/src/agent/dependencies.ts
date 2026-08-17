@@ -67,7 +67,7 @@ import {
  * | turnId                 | persisted `agent_turn_id` | caller must supply     |
  * | shadow                 | D1 `runs` row             | REFUSE (fail closed)   |
  * | customerSlug           | D1 channel policy         | null (no customer)     |
- * | actor                  | rotation + identities¹    | null (nobody to speak) |
+ * | actor                  | speaker rule + identities¹| null (nobody to speak) |
  *
  * ¹ and only for a run that could speak: a Slack run with a pinned thread that
  *   is not shadowed. Every other run resolves `actor: null` without reading the
@@ -106,16 +106,6 @@ export async function resolveCodeModeScope(
    * gateway's own default takes.
    */
   identity?: UserTokenSource,
-  /**
-   * The run's clock, not the wall clock.
-   *
-   * It decides WHOSE identity is used: the rotation is a pure function of an
-   * instant, so a caller that already knows the instant it is acting at must
-   * not get a different engineer from a clock read microseconds later. That
-   * coupling is exactly what `UserTokenSource`'s `nowMs` parameter exists to
-   * prevent, and reading `Date.now()` here would have reintroduced it.
-   */
-  now: () => number = () => Date.now(),
 ): Promise<CodeModeScope> {
   const run = await getRunById(db, state.runId);
   if (run === null) {
@@ -151,13 +141,13 @@ export async function resolveCodeModeScope(
   // `IDENTITY_KEY` — deliberately propagates rather than reading as "not
   // connected", which means it aborts the turn before the prompt is built; so
   // does an `externalId` that `validateScope` will not accept. Asking on every
-  // turn would let one corrupt row for the on-duty engineer take out Chat runs,
+  // turn would let one corrupt row for the speaker take out Chat runs,
   // shadow runs and read-only investigations that were never going to reply.
   // Narrowed, the loud failure lands exactly on the runs whose purpose includes
   // replying, and degrades nothing else.
   const mayReply = slackThread !== null && !run.shadow;
-  const onDutyToken =
-    identity === undefined || !mayReply ? null : await identity.onDutyToken(now());
+  const speakerToken =
+    identity === undefined || !mayReply ? null : await identity.speakerToken();
 
   // `validateScope` rather than an object literal: it is strict at every level,
   // so a field this function forgets, mistypes, or accidentally widens is a
@@ -170,11 +160,11 @@ export async function resolveCodeModeScope(
     customerSlug: policy?.customer_slug ?? null,
     slackThread,
     actor:
-      onDutyToken === null
+      speakerToken === null
         ? null
         : {
-            engineerEmail: onDutyToken.email,
-            slackUserId: onDutyToken.slackUserId,
+            engineerEmail: speakerToken.email,
+            slackUserId: speakerToken.slackUserId,
           },
   });
 }
@@ -190,10 +180,10 @@ export async function resolveCodeModeScope(
  * prompt a function of the moment it was assembled, which is precisely the
  * property the freeze exists to remove.
  *
- * `nowMs` is a PARAMETER, never a `Date.now()` read inside. The rotation is a
- * pure function of an instant, and a caller that already knows the instant it is
- * acting at must not get a different engineer — or a different shift's samples —
- * from a clock read microseconds later. Same discipline as `UserTokenSource`.
+ * `nowMs` is a PARAMETER, never a `Date.now()` read inside. The freeze window
+ * is a pure function of an instant, and a caller that already knows the instant
+ * it is acting at must not get a different day's samples from a clock read
+ * microseconds later.
  */
 export type EngineerVoiceSource = {
   resolve(nowMs: number): Promise<EngineerVoice>;
@@ -203,8 +193,8 @@ export type EngineerVoiceSource = {
  * The production source: this deployment's D1, and nothing else.
  *
  * Cheap to call on every turn. `resolveEngineerVoice` memoises per isolate by
- * the monotonic shift ordinal, so the two D1 reads happen once per isolate per
- * three-day shift and every other call is a map lookup.
+ * the UTC-day ordinal, so the two D1 reads happen once per isolate per day and
+ * every other call is a map lookup.
  */
 export function makeEngineerVoiceSource(env: Env): EngineerVoiceSource {
   return { resolve: (nowMs) => resolveEngineerVoice(env.DB, nowMs) };
@@ -264,7 +254,7 @@ export function makeCapabilityDependencies(
     db: env.DB,
     // THE CREDENTIAL SEAM for customer-facing speech. The gateway receives a
     // port that can answer "whose token do I speak as right now", never `env`
-    // and never a token — and a deployment where nobody on duty has connected
+    // and never a token — and a deployment where no fire-fighter has connected
     // Slack gets a `reply` that refuses, not one that speaks as the app.
     slack: makeSlackGateway(env.DB, scope, makeUserTokenSource(env)),
     memory: closeOver(new ZepMemory(env.ZEP_API_KEY)),
@@ -405,7 +395,6 @@ export async function makeRunCodeToolForRun(
     input.state,
     input.turnId,
     makeUserTokenSource(input.env),
-    clock,
   );
 
   return makeRunCodeTool({

@@ -1,5 +1,6 @@
 /**
- * Sending an approved reply, as the on-duty engineer.
+ * Sending an approved reply, as a fire-fighter — the approver when they have
+ * connected Slack, the default speaker otherwise (src/identity/speaker.ts).
  *
  * A port with one method and, in Phase 11, one production implementation that
  * refuses. The seam exists now rather than later because the RESOLUTION path
@@ -24,8 +25,8 @@ export type ApprovalSendResult =
 
 export interface ApprovalSender {
   /**
-   * Send the approved/edited text to the run's pinned thread AS the on-duty
-   * engineer.
+   * Send the approved/edited text to the run's pinned thread AS a fire-fighter
+   * (`decidedBy` if connected, else the default speaker).
    *
    * `channelId`/`threadTs` are re-derived by the CALLER from the run's own
    * state at delivery time (invariant 10). They are not on this input so that
@@ -39,6 +40,13 @@ export interface ApprovalSender {
     channelId: string;
     threadTs: string;
     text: string;
+    /**
+     * Who decided the approval, if anyone did. The sender speaks as this
+     * person when they have connected Slack — the human who signed off is the
+     * name on the message — and as the default speaker otherwise. `null` for
+     * a delivery with no human decision behind it.
+     */
+    decidedBy: string | null;
   }): Promise<ApprovalSendResult>;
 }
 
@@ -51,8 +59,8 @@ export const IDENTITY_UNAVAILABLE = "identity_unavailable";
 /**
  * THE PHASE 11 PRODUCTION SENDER. It refuses, every time.
  *
- * Customer-facing speech carries a human's name. Phase 12 resolves the on-duty
- * engineer and their encrypted user token; until it does, there is nobody to
+ * Customer-facing speech carries a human's name. Phase 12 resolves the speaker
+ * and their encrypted user token; until it does, there is nobody to
  * send as — and there is NO BOT-TOKEN FALLBACK, ever. The bot token exists for
  * ingestion, permalinks and later nudges; using it here would mean the product
  * says something to a customer that no person said, which is the exact failure
@@ -75,8 +83,8 @@ export function makeIdentityRefusingSender(): ApprovalSender {
   };
 }
 
-/** Nobody is on duty with a connected Slack account. Configuration, not error. */
-export const NOT_CONNECTED = "on-duty engineer has not connected Slack";
+/** No fire-fighter has connected a Slack account. Configuration, not error. */
+export const NOT_CONNECTED = "no fire-fighter has connected Slack";
 
 /**
  * The only thing we are entitled to say when the request's fate is unknown: it
@@ -122,7 +130,7 @@ export function makeUserTokenSender(
 ): ApprovalSender {
   return {
     async send(input): Promise<ApprovalSendResult> {
-      const credential = await source.onDutyToken(Date.now());
+      const credential = await source.speakerToken(input.decidedBy);
       if (!credential) return { result: "blocked", reason: NOT_CONNECTED };
 
       let body: PostMessageResponse;

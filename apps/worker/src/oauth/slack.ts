@@ -46,8 +46,8 @@ function fail(code: string, message: string) {
 /**
  * The roster half of the gate, on top of `requireTeamMember`'s JWT half.
  *
- * Connecting an account is FIRE-FIGHTERS ONLY: a viewer has no rotation shift
- * and nothing to post as, so a token stored for one would be a credential with
+ * Connecting an account is FIRE-FIGHTERS ONLY: a viewer is never the speaker
+ * and has nothing to post as, so a token stored for one would be a credential with
  * no purpose and a blast radius anyway.
  *
  * The verification itself is deliberately not reimplemented here. It lives in

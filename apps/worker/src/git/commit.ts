@@ -11,9 +11,8 @@ import { readDiffWithBase } from "../sandbox/diff";
 import { devEnvFor } from "../sandbox/env";
 import { makeRedactor } from "../sandbox/gateway";
 import { MONOREPO_SLUG } from "../sandbox/class";
-import { getIdentity } from "../db/identities";
 import { getDecryptedToken } from "../identity/tokens";
-import { onDuty } from "../identity/rotation";
+import { resolveSpeaker } from "../identity/speaker";
 
 /**
  * The last leg of the pipeline: a stored diff becomes a real commit on a real
@@ -116,13 +115,15 @@ function resolveAuthor(raw: string | undefined): "on-duty" | "worker-pat" {
 
 /**
  * The `on-duty` / `worker-pat` chain, mirroring `src/identity/user-token.ts`'s
- * rotation → identity row → decrypted token pattern exactly, narrowed to just
- * the token this gateway needs.
+ * speaker → identity row → decrypted token pattern exactly, narrowed to just
+ * the token this gateway needs. (`on-duty` is the var's historical value; since
+ * 2026-08-17 there is no shift, and it means "the default speaker's own GitHub
+ * token" — the first fire-fighter in roster order who has connected GitHub.)
  *
- * `worker-pat` never touches D1 or the rotation — it is a single Worker
- * secret, present or not. `on-duty` never falls back to `worker-pat` on a
- * missing credential: a missing credential is an honest refusal, not a
- * silent switch to a different identity's authority.
+ * `worker-pat` never touches D1 or the roster — it is a single Worker secret,
+ * present or not. `on-duty` never falls back to `worker-pat` on a missing
+ * credential: a missing credential is an honest refusal, not a silent switch to
+ * a different identity's authority.
  */
 export function makeGithubAuthSource(env: Env, config: GithubShipConfig): GithubAuthSource {
   return {
@@ -132,11 +133,10 @@ export function makeGithubAuthSource(env: Env, config: GithubShipConfig): Github
         return pat ? { token: pat } : null;
       }
 
-      const { email } = onDuty(nowMs);
-      const row = await getIdentity(env.DB, email, "github");
-      if (!row) return null;
+      const speaker = await resolveSpeaker(env.DB, "github");
+      if (!speaker) return null;
 
-      const token = await getDecryptedToken(env, email, "github");
+      const token = await getDecryptedToken(env, speaker.email, "github");
       return token ? { token } : null;
     },
   };

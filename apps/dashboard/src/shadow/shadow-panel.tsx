@@ -9,7 +9,7 @@ import { Panel, type PanelState } from "../components/panel";
  * an observe-mode channel, next to what the on-duty engineer actually sent in
  * that thread. Self-polling like `RunList` and `CountersPanel` — nothing else
  * on the grid needs this document, so there is no reason to lift the fetch
- * into `App` the way the roster poll is shared between `RotationStrip` and
+ * into `App` the way the roster poll is shared between `SpeakerStrip` and
  * `ConnectPanel`.
  *
  * A quiet corpus is the good case, not a failure: no shadow drafts means no

@@ -8,7 +8,7 @@ import { fetchRuns, type RunStatus, type RunSummary } from "./api";
 /**
  * The dashboard's index of agent runs: one row per run, newest activity first,
  * polled every five seconds. It owns its own poll rather than taking a
- * `PanelState` prop (the way `RotationStrip` does) because it is the only
+ * `PanelState` prop (the way `SpeakerStrip` does) because it is the only
  * consumer of `/api/runs` and the drawer above it must never restart the list's
  * clock when it opens.
  *

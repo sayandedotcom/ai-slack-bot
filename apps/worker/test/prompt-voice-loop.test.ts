@@ -6,8 +6,9 @@ import {
   renderStablePolicy,
   renderVoiceExamples,
 } from "../src/agent/prompt";
+import { ENGINEER_VOICE_WINDOW_MS } from "../src/agent/prompt/voice";
+import { FIREFIGHTERS } from "../src/access/roster";
 import { upsertIdentity } from "../src/db/identities";
-import { onDuty, SHIFT_MS } from "../src/identity/rotation";
 import { FakeClock } from "./helpers/agent-driver";
 import { customerTurn, freshLoopRun, mockModel, textStep, toolStep } from "./helpers/agent-loop";
 
@@ -33,18 +34,23 @@ import { customerTurn, freshLoopRun, mockModel, textStep, toolStep } from "./hel
  *    run ports from the pre-reset graph then never runs a continuation at all —
  *    the alarm dispatches and nothing happens. The two techniques cannot share a
  *    file.
- *  - The cache here is real and is NOT defeated. Every case therefore runs at
- *    its OWN shift, `SHIFT_MS` apart, so one case's resolved voice can never be
- *    served to the next. That the cache is sticky across a case is the point of
- *    the feature, so it is worked with rather than switched off.
+ *  - The cache here is real and is NOT defeated. Every case therefore runs on
+ *    its OWN UTC day, `ENGINEER_VOICE_WINDOW_MS` apart, so one case's resolved
+ *    voice can never be served to the next. That the cache is sticky across a
+ *    case is the point of the feature, so it is worked with rather than
+ *    switched off.
  *
  * HARNESS: no `isolatedStorage` in this pool. Rows are seeded with ids this file
- * owns and cleaned by prefix; the identity row is cleaned by its fake external
- * id, never by email, because the rotation emails belong to every suite.
+ * owns and cleaned by prefix. Every Slack identity row is cleared before each
+ * case: any connected fire-fighter is a candidate speaker now
+ * (`src/identity/speaker.ts`), so a row another suite left behind would change
+ * whose voice is sampled.
  */
 
 const SLACK_ID = "U-VOICE-LOOP-ENGINEER";
-const HEADING = "How the on-duty engineer actually writes";
+const HEADING = "How the engineer whose name is on the reply actually writes";
+/** The speaker once connected: last in the roster, so position is not what makes it work. */
+const ENGINEER = FIREFIGHTERS[FIREFIGHTERS.length - 1]!;
 
 /** The system blocks of one provider invocation, in order. */
 function systemBlocks(callOptions: unknown): string[] {
@@ -57,24 +63,25 @@ function systemBlocks(callOptions: unknown): string[] {
 }
 
 /**
- * A clock `shiftsAhead` shifts from now, and the rotation read from it.
+ * A clock `daysAhead` UTC days from now, and that day's window start.
  *
  * Near wall time rather than pinned years out, because the same clock arms this
  * pool's real alarms. Distinct per case so each gets its own cache key; see the
  * file comment.
  */
-function loopFixture(shiftsAhead: number) {
-  const clock = new FakeClock(Date.now() + 3_600_000 + shiftsAhead * SHIFT_MS);
-  return { clock, shift: onDuty(clock.now()) };
+function loopFixture(daysAhead: number) {
+  const clock = new FakeClock(Date.now() + 3_600_000 + daysAhead * ENGINEER_VOICE_WINDOW_MS);
+  const windowStartMs = Math.floor(clock.now() / ENGINEER_VOICE_WINDOW_MS) * ENGINEER_VOICE_WINDOW_MS;
+  return { clock, windowStartMs };
 }
 
-async function seedMessages(shiftStartMs: number, count: number): Promise<void> {
+async function seedMessages(windowStartMs: number, count: number): Promise<void> {
   for (let i = 0; i < count; i += 1) {
-    const eventId = `voiceloop-${shiftStartMs}-${i}`;
+    const eventId = `voiceloop-${windowStartMs}-${i}`;
     // Behind the FROZEN BOUND, which sits `ENGINEER_VOICE_FREEZE_GRACE_MS`
     // before the boundary rather than on it. Seeding inside the grace window
     // would exclude every row and turn the positive cases into vacuous ones.
-    const receivedAt = shiftStartMs - ENGINEER_VOICE_FREEZE_GRACE_MS - 1_000 - i;
+    const receivedAt = windowStartMs - ENGINEER_VOICE_FREEZE_GRACE_MS - 1_000 - i;
     await env.DB.prepare(
       `INSERT OR REPLACE INTO events_seen (event_id, channel_id, outcome, received_at)
        VALUES (?, 'C-VOICE-LOOP', 'ingested', ?)`,
@@ -90,7 +97,7 @@ async function seedMessages(shiftStartMs: number, count: number): Promise<void> 
         eventId,
         `${Math.floor(receivedAt / 1000)}.000100`,
         SLACK_ID,
-        `a real message the on-duty engineer typed to a customer, number ${i}`,
+        `a real message the engineer typed to a customer, number ${i}`,
         receivedAt,
       )
       .run();
@@ -135,7 +142,7 @@ async function runTurn(input: { clock: FakeClock; steps: 1 | 2 }): Promise<strin
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM messages WHERE event_id LIKE 'voiceloop-%'").run();
   await env.DB.prepare("DELETE FROM events_seen WHERE event_id LIKE 'voiceloop-%'").run();
-  await env.DB.prepare("DELETE FROM identities WHERE external_id = ?").bind(SLACK_ID).run();
+  await env.DB.prepare("DELETE FROM identities WHERE provider = 'slack'").run();
 });
 
 afterEach(() => {
@@ -144,9 +151,9 @@ afterEach(() => {
 
 describe("the assembled request the provider actually receives", () => {
   it("carries the engineer voice block when the engineer has enough samples", async () => {
-    const { clock, shift } = loopFixture(0);
-    await connect(shift.email);
-    await seedMessages(shift.shiftStartMs, 6);
+    const { clock, windowStartMs } = loopFixture(0);
+    await connect(ENGINEER);
+    await seedMessages(windowStartMs, 6);
 
     const calls = await runTurn({ clock, steps: 1 });
 
@@ -165,13 +172,13 @@ describe("the assembled request the provider actually receives", () => {
   /**
    * The block is frozen, so every step of a multi-step generation carries the
    * same bytes. `prepareTurn` re-resolves before each step; a resolve that
-   * ignored the freeze, or a cache keyed on anything that moves within a shift,
+   * ignored the freeze, or a cache keyed on anything that moves within a day,
    * would show up right here as two different prefixes in one generation.
    */
   it("carries the same bytes on every step of one generation", async () => {
-    const { clock, shift } = loopFixture(1);
-    await connect(shift.email);
-    await seedMessages(shift.shiftStartMs, 6);
+    const { clock, windowStartMs } = loopFixture(1);
+    await connect(ENGINEER);
+    await seedMessages(windowStartMs, 6);
 
     const calls = await runTurn({ clock, steps: 2 });
 
@@ -188,9 +195,9 @@ describe("the assembled request the provider actually receives", () => {
    * nothing.
    */
   it("is byte-identical to the pre-Phase-21 shape below the usable floor", async () => {
-    const { clock, shift } = loopFixture(2);
-    await connect(shift.email);
-    await seedMessages(shift.shiftStartMs, 4);
+    const { clock, windowStartMs } = loopFixture(2);
+    await connect(ENGINEER);
+    await seedMessages(windowStartMs, 4);
 
     const calls = await runTurn({ clock, steps: 1 });
 
@@ -202,17 +209,12 @@ describe("the assembled request the provider actually receives", () => {
     expect(blocks.some((block) => block.includes(HEADING))).toBe(false);
   });
 
-  it("is byte-identical to the pre-Phase-21 shape for an unconnected engineer", async () => {
-    const { clock, shift } = loopFixture(3);
-    // NOTHING IS DELETED BY EMAIL HERE, and it would be wrong to: this file's
-    // own header says the rotation emails belong to every suite, and
-    // `user-token-sender.test.ts` and `notify-nudge.test.ts` both seed them. The
-    // `beforeEach` clearing this file's own `external_id` is the whole cleanup
-    // needed. A foreign identity row left behind for `shift.email` cannot make
-    // this case pass falsely either — its `external_id` is somebody else's, so
-    // it selects none of the messages seeded below, and the block is empty for
-    // the same reason it would be with no row at all.
-    await seedMessages(shift.shiftStartMs, 10);
+  it("is byte-identical to the pre-Phase-21 shape when no fire-fighter has connected", async () => {
+    const { clock, windowStartMs } = loopFixture(3);
+    // `beforeEach` cleared every Slack row, so there is no speaker at all: the
+    // block is empty for the same reason it would be with rows for someone
+    // else's `external_id` — nothing selects the messages seeded below.
+    await seedMessages(windowStartMs, 10);
 
     const calls = await runTurn({ clock, steps: 1 });
 

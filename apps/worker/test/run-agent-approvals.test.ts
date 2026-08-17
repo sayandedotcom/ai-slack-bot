@@ -20,7 +20,7 @@ import {
   recordNudgeMessage,
 } from "../src/approval/repository";
 import { upsertIdentity } from "../src/db/identities";
-import { onDuty } from "../src/identity/rotation";
+import { FIREFIGHTERS } from "../src/access/roster";
 import type { Env } from "../src/index";
 import type { RunAgent } from "../src/run/agent";
 import { makeRunAgentResolutionNotifier } from "../src/run/agent-approvals";
@@ -535,24 +535,22 @@ describe("a human decision", () => {
 
 describe("delivery", () => {
   /**
-   * The on-duty engineer's `identities` row decides everything in this block,
-   * and this pool's D1 is shared across files — so each case sets the row it
-   * needs and clears it afterwards, the same discipline
-   * `test/user-token-sender.test.ts` documents. Only the on-duty engineer's
-   * Slack row is touched; other suites' rows are left alone.
+   * The fire-fighters' `identities` rows decide everything in this block, and
+   * this pool's D1 is shared across files — so each case sets the row it needs
+   * and clears the whole Slack set afterwards (any connected fire-fighter is a
+   * speaker now, so a leftover row from another suite would change the answer),
+   * the same discipline `test/user-token-sender.test.ts` documents.
    */
-  const onDutyEmail = () => onDuty(Date.now()).email;
+  const speakerEmail = () => FIREFIGHTERS[0]!;
 
-  async function clearOnDutySlack(): Promise<void> {
-    await env.DB.prepare("DELETE FROM identities WHERE email = ? AND provider = 'slack'")
-      .bind(onDutyEmail())
-      .run();
+  async function clearSlackIdentities(): Promise<void> {
+    await env.DB.prepare("DELETE FROM identities WHERE provider = 'slack'").run();
   }
 
-  beforeEach(clearOnDutySlack);
-  afterEach(clearOnDutySlack);
+  beforeEach(clearSlackIdentities);
+  afterEach(clearSlackIdentities);
 
-  it("blocks honestly, and calls nothing, when nobody on duty has connected Slack", async () => {
+  it("blocks honestly, and calls nothing, when no fire-fighter has connected Slack", async () => {
     // `SLACK_BOT_TOKEN` is present and usable in this pool, which is exactly why
     // this matters: refusing has to be a decision, not a missing credential.
     // Customer-facing speech carries a human's name or is not sent at all.
@@ -605,7 +603,7 @@ describe("delivery", () => {
     await upsertIdentity(
       env.DB,
       {
-        email: onDutyEmail(),
+        email: speakerEmail(),
         provider: "slack",
         externalId: "U0NDUTY",
         scopes: "chat:write",
@@ -669,7 +667,7 @@ describe("delivery", () => {
    * `deliver()` in `src/run/agent-approvals.ts` composes its sender inline —
    * `makeUserTokenSender(makeUserTokenSource(env))` — with no port to override,
    * where the legacy chassis has `installRunPorts({ approvalSender })`. Reaching
-   * `sent` therefore needs a decryptable on-duty token inside the Durable
+   * `sent` therefore needs a decryptable speaker token inside the Durable
    * Object, which needs `IDENTITY_KEY` bound in the POOL env; it is not, and a
    * test that depended on the developer's `.dev.vars` would pass here and fail
    * on a fresh checkout.
@@ -680,7 +678,7 @@ describe("delivery", () => {
    * See TEST-FINDINGS.md; the assertions are written out so they can be
    * un-skipped the moment a sender seam exists.
    */
-  it.skip("sends the edited text, byte exact, under the on-duty engineer's own token", async () => {
+  it.skip("sends the edited text, byte exact, under the speaker's own token", async () => {
     const run = await slackRun();
     const { approvalId } = await run.agent.escalate({ draft: DRAFT, why: WHY });
 

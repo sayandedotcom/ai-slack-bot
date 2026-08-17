@@ -32,7 +32,7 @@ import { FakeContinuation, freshDriverRun, turn, type DriverHarness } from "./he
  * Everything here runs against the real RunDO, the real session transactions,
  * the real D1 `approvals` row and the real driver. The two cases that decide
  * whether a customer hears anything use the REAL Phase 13 sender
- * (`makeUserTokenSender`) over a stubbed transport — one with the on-duty
+ * (`makeUserTokenSender`) over a stubbed transport — one with the speaker
  * engineer connected, one with nobody connected — because "delivery reached
  * `sent`" and "delivery blocked honestly" are the behaviours that have to be
  * proved, not mocked. The remaining cases fake the port, because what they are
@@ -41,7 +41,7 @@ import { FakeContinuation, freshDriverRun, turn, type DriverHarness } from "./he
  * The two properties worth naming, because both look like bugs from outside:
  *
  *  - a `blocked` delivery is TERMINAL and the run STILL RESUMES. A deployment
- *    where nobody on duty has connected Slack has nobody to speak as, and there
+ *    where no fire-fighter has connected Slack has nobody to speak as, and there
  *    is no bot-token fallback, ever, so parking the run until the send succeeds
  *    would strand every escalation. The decision is a fact; delivery is a
  *    separate state machine.
@@ -85,18 +85,18 @@ function recordingSender(
 
 /* ------------------------------------------------- the real Phase 13 sender -- */
 
-const USER_TOKEN = "xoxp-not-a-real-on-duty-token";
+const USER_TOKEN = "xoxp-not-a-real-speaker-token";
 
-/** The on-duty engineer, connected. */
+/** A fire-fighter has connected: the speaker. */
 const connected: UserTokenSource = {
-  async onDutyToken() {
+  async speakerToken() {
     return { token: USER_TOKEN, slackUserId: "U0NDUTY01", email: "ronit@zellify.app" };
   },
 };
 
-/** Nobody on duty has connected Slack. Configuration, not error. */
+/** No fire-fighter has connected Slack. Configuration, not error. */
 const unconnected: UserTokenSource = {
-  async onDutyToken() {
+  async speakerToken() {
     return null;
   },
 };
@@ -312,7 +312,7 @@ describe("an approved reply resolves through the one inbox", () => {
     expect(JSON.stringify(resolution)).not.toContain(USER_TOKEN);
   });
 
-  it("blocks when nobody on duty has connected Slack, and never uses the bot", async () => {
+  it("blocks when no fire-fighter has connected Slack, and never uses the bot", async () => {
     // THE HONEST FALLBACK, preserved rather than deleted. `SLACK_BOT_TOKEN` is
     // present and usable in this environment, which is exactly why this
     // matters: refusing has to be a decision, not a missing credential.
@@ -933,6 +933,7 @@ describe("makeIdentityRefusingSender", () => {
         channelId: CHANNEL,
         threadTs: "1720000000.000001",
         text: DRAFT,
+        decidedBy: null,
       }),
     ).toEqual({ result: "blocked", reason: "identity_unavailable" });
   });

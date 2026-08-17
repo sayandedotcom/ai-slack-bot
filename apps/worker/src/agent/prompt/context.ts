@@ -143,7 +143,7 @@ export async function resolveTrustedContext(
      */
     storage: DurableObjectStorage | null;
     /**
-     * Resolves the on-duty engineer, or null when nobody is connected.
+     * Resolves the speaker (src/identity/speaker.ts), or null when no fire-fighter is connected.
      *
      * OPTIONAL, and its absence means `actor: null` — the pre-Phase-13 answer.
      * That default is safe in the only direction that matters: a caller that
@@ -215,10 +215,10 @@ export async function resolveTrustedContext(
    * reordering the generation's composition or handing the prompt a value the
    * capability layer had not yet validated. Two reads of one indexed row and
    * one decryption is the cheaper trade, and both callers ask the SAME question
-   * of the SAME source, so they cannot disagree about who is on duty.
+   * of the SAME source, so they cannot disagree about who speaks.
    */
-  const onDutyToken =
-    input.identity === undefined || run.shadow ? null : await input.identity.onDutyToken(Date.now());
+  const speakerToken =
+    input.identity === undefined || run.shadow ? null : await input.identity.speakerToken();
 
   return {
     outcome: "resolved",
@@ -231,11 +231,11 @@ export async function resolveTrustedContext(
       hasSlackTarget: true,
       pendingApproval,
       actor:
-        onDutyToken === null
+        speakerToken === null
           ? null
           : {
-              engineerEmail: onDutyToken.email,
-              slackUserId: onDutyToken.slackUserId,
+              engineerEmail: speakerToken.email,
+              slackUserId: speakerToken.slackUserId,
             },
     },
   };

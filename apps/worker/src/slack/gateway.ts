@@ -123,6 +123,9 @@ export function makeSlackGateway(
         threadTs: scope.slackThread.threadTs,
         // Byte-exact. No prefix, no signature, no "sent by" footer.
         text,
+        // A direct reply has no human decision behind it, so it goes out as
+        // the default speaker — the actor already resolved into this scope.
+        decidedBy: null,
       });
 
       switch (outcome.result) {

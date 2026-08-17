@@ -2,8 +2,7 @@ import type { Env } from "../index";
 import type { ApprovalRow } from "../approval/contracts";
 import { claimNudge, getApproval, recordNudgeMessage, releaseNudge } from "../approval/repository";
 import { getChannelPolicy } from "../db/channels";
-import { getIdentity } from "../db/identities";
-import { onDuty } from "../identity/rotation";
+import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
 import { nudgeBlocks, resolvedBlocks } from "./blocks";
 
 /**
@@ -80,18 +79,19 @@ async function slackCall(
 /**
  * Who to nudge, and where.
  *
- * `slackUserId` is null when the on-duty engineer has not connected Slack —
+ * The default speaker (`src/identity/speaker.ts`): the first fire-fighter in
+ * roster order who has connected Slack. `slackUserId` is null when nobody has —
  * an ordinary configuration fact, not an error, and the reason the fallback
  * channel exists at all: a nudge nobody can address is still better delivered
- * to the fire-fighting channel than dropped. FALLBACK BEATS SILENCE.
+ * to the fire-fighting channel than dropped. FALLBACK BEATS SILENCE. In that
+ * case `email` is the first roster address, so the channel message can still
+ * name someone in plain text.
  */
-async function resolveTarget(
-  env: Env,
-  nowMs: number,
-): Promise<{ email: string; slackUserId: string | null }> {
-  const { email } = onDuty(nowMs);
-  const identity = await getIdentity(env.DB, email, "slack");
-  return { email, slackUserId: identity?.externalId ?? null };
+async function resolveTarget(env: Env): Promise<{ email: string; slackUserId: string | null }> {
+  const speaker = await resolveSpeaker(env.DB, "slack");
+  return speaker === null
+    ? { email: SPEAKER_POOL[0] ?? "", slackUserId: null }
+    : { email: speaker.email, slackUserId: speaker.externalId };
 }
 
 /**
@@ -101,11 +101,11 @@ async function resolveTarget(
  * success, not failure. `"failed"` means the slot has been handed back and
  * the sweeper will try again.
  *
- * `nowMs` is a parameter, defaulted rather than read inside, for the same
- * reason it is one on `makeUserTokenSource.onDutyToken`: it decides WHOSE
- * shift this is. A caller that already fixed the instant it is acting at — the
- * sweeper, a test — must not get a different engineer from a clock read
- * microseconds later, or from a suite that outlives a three-day shift boundary.
+ * `nowMs` is a parameter, defaulted rather than read inside: it stamps the
+ * claim and the age filter, and a caller that already fixed the instant it is
+ * acting at — the sweeper, a test — must not get a different one from a clock
+ * read microseconds later. (It no longer decides WHO is nudged; the speaker
+ * rule has no clock.)
  */
 export async function sendNudge(
   env: Env,
@@ -118,7 +118,7 @@ export async function sendNudge(
 
   let target: { email: string; slackUserId: string | null };
   try {
-    target = await resolveTarget(env, now);
+    target = await resolveTarget(env);
   } catch {
     return "failed";
   }
@@ -297,7 +297,7 @@ export async function updateNudge(env: Env, row: ApprovalRow): Promise<void> {
  * error report with it. The FEED query is deliberately outside: if the sweep
  * cannot read its own work list, the cron run really did fail and should say so.
  *
- * `now` is threaded into `sendNudge` so the age filter and the shift lookup
+ * `now` is threaded into `sendNudge` so the age filter and the claim stamp
  * agree on one instant.
  *
  * ONE LINE PER ROW, and it carries the approval id and the outcome word and

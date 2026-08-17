@@ -60,7 +60,7 @@ const UNRESOLVED: PromptFacts = { context: null, refusal: null, voice: null };
 
 /**
  * Weakly keyed by the agent instance, so a hibernated Durable Object drops its
- * facts with the isolate rather than serving a previous shift's engineer voice
+ * facts with the isolate rather than serving a previous day's engineer voice
  * or a stale customer scope from a warm module.
  */
 const FACTS = new WeakMap<object, PromptFacts>();
@@ -243,7 +243,7 @@ export function withFirefighterContext(session: Session, agent: RunAgent): Sessi
       provider: { get: async () => renderVoiceExamples() },
     })
     .withContext("engineer", {
-      description: "the on-duty engineer's own writing, frozen for this shift",
+      description: "the speaker's own writing, frozen for this UTC day",
       provider: {
         get: async () => {
           const facts = await refreshFacts(agent);
@@ -348,8 +348,8 @@ async function resolveFacts(agent: RunAgent): Promise<PromptFacts> {
   const rest = key.slice(origin.length + 1);
   const colon = rest.indexOf(":");
 
-  // Asked at one instant with the context below, so a shift boundary crossed
-  // mid-refresh cannot split the prompt across two shifts.
+  // Asked at one instant with the context below, so a day boundary crossed
+  // mid-refresh cannot split the prompt across two days.
   const voice = await resolveEngineerVoice(env.DB, Date.now()).catch(() => null);
 
   // Through the run KEY — this object's name — because a Slack run's public
