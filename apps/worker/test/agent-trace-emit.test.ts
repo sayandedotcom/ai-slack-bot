@@ -28,6 +28,7 @@ type WireRun = {
   inputs: Record<string, unknown>;
   outputs?: Record<string, unknown>;
   error?: string;
+  extra?: { metadata?: Record<string, unknown> };
 };
 
 let posted: Array<{ url: string; post: WireRun[] }> = [];
@@ -109,11 +110,39 @@ describe("agent loop -> langsmith trace", () => {
 
     for (const llm of posted[0]!.post.filter((r) => r.run_type === "llm")) {
       expect(llm.inputs).toMatchObject({ provider: "anthropic" });
-      expect(llm.outputs).toHaveProperty("input_tokens");
-      expect(llm.outputs).toHaveProperty("output_tokens");
-      expect(llm.outputs).toHaveProperty("cost_nano_usd");
       // The field the `/reason|thinking/` deny-pattern used to eat.
       expect(llm.outputs).toHaveProperty("finish_reason");
+      expect(llm.outputs).toHaveProperty("cost_nano_usd");
+
+      // TOKENS LIVE IN `outputs.usage_metadata`, NOWHERE ELSE. Measured against
+      // live ingest: any other placement is accepted with 202 and silently
+      // discarded, and the run then shows 0 tokens and $0.00 in the UI. Asserted
+      // here on a REAL loop run rather than a hand-built span, because the bug
+      // this replaces was exactly a hand-built span agreeing with itself while
+      // the loop fed different field names through.
+      const usage = llm.outputs!.usage_metadata as Record<string, unknown>;
+      expect(usage).toBeDefined();
+      for (const key of ["input_tokens", "output_tokens", "total_tokens"]) {
+        expect(typeof usage[key]).toBe("number");
+      }
+      expect(usage.input_token_details).toMatchObject({
+        cache_read: expect.any(Number),
+        cache_creation: expect.any(Number),
+      });
+      // Our cost, in USD, consistent with the nano-USD figure beside it — the
+      // property that keeps this column equal to `agent_model_calls` in D1.
+      expect(usage.total_cost).toBeCloseTo(
+        (llm.outputs!.cost_nano_usd as number) / 1_000_000_000,
+        12,
+      );
+      expect((usage.input_cost as number) + (usage.output_cost as number))
+        .toBeCloseTo(usage.total_cost as number, 12);
+
+      // And the model is named where LangSmith looks, or it prices nothing.
+      expect(llm.extra?.metadata).toMatchObject({
+        ls_model_name: expect.any(String),
+        ls_provider: "anthropic",
+      });
     }
   });
 

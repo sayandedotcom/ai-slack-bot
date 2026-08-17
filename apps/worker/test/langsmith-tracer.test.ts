@@ -32,6 +32,7 @@ type WireRun = {
   outputs?: Record<string, unknown>;
   error?: string;
   session_name: string;
+  extra?: { metadata?: Record<string, unknown> };
 };
 
 let sent: Sent[] = [];
@@ -87,8 +88,15 @@ function tracedRun(patch: Partial<LangSmithTracerConfig> = {}, promptText = "wha
   at += 1_200;
   tracer.endLlm(llm, {
     endedAtMs: at,
-    usage: { inputTokens: 900, outputTokens: 120, cachedInputTokens: 400 },
-    costNanoUsd: 42_000,
+    usage: {
+      inputTokens: 900,
+      outputTokens: 120,
+      totalTokens: 1_020,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 50,
+    },
+    costNanoUsd: 42_000_000,
+    outputCostNanoUsd: 18_000_000,
     latencyMs: 1_200,
     finishReason: "tool-calls",
     rawFinishReason: "tool_use",
@@ -214,11 +222,31 @@ describe("langsmith tracer — wire shape", () => {
       stubFetch();
       await tracedRun({ payloads }).flush();
       const llm = sent[0]!.body.post.find((r) => r.run_type === "llm")!;
-      expect(llm.outputs).toMatchObject({
+      // THE SHAPE LANGSMITH READS. Measured 2026-08-17: token counts are picked
+      // up ONLY from `outputs.usage_metadata` or `outputs.llm_output.token_usage`.
+      // A top-level `usage_metadata`, `extra.usage_metadata`, top-level
+      // `prompt_tokens`, and the provider-native `outputs.usage` are all
+      // accepted with 202 and silently discarded — the run comes back showing
+      // 0 tokens and $0.00. Nothing but this assertion notices.
+      expect(llm.outputs!.usage_metadata).toEqual({
         input_tokens: 900,
         output_tokens: 120,
-        cached_input_tokens: 400,
-        cost_nano_usd: 42_000,
+        total_tokens: 1_020,
+        input_token_details: { cache_read: 400, cache_creation: 50 },
+        // OUR cost, in USD, not LangSmith's estimate — 42_000_000 nano-USD.
+        // Given tokens without these it invents a figure from its own price
+        // table, which would then disagree with `agent_model_calls` in D1.
+        input_cost: 0.024,
+        output_cost: 0.018,
+        total_cost: 0.042,
+      });
+      // ...and the model is named where LangSmith looks for it.
+      expect(llm.extra?.metadata).toMatchObject({
+        ls_model_name: "claude-fable-5",
+        ls_provider: "anthropic",
+      });
+      expect(llm.outputs).toMatchObject({
+        cost_nano_usd: 42_000_000,
         latency_ms: 1_200,
         finish_reason: "tool-calls",
         provider_request_id: "req_abc",

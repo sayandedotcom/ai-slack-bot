@@ -652,6 +652,7 @@ export async function runContinuation(
     const closeLlmSpan = (fields: {
       usage: ReturnType<typeof normalizeSdkUsage>;
       costNanoUsd: number;
+      outputCostNanoUsd: number;
       finishReason: string;
       rawFinishReason: string | null;
       providerRequestId: string | null;
@@ -670,8 +671,15 @@ export async function runContinuation(
         .join("");
       trace.tracer.endLlm(currentLlm, {
         endedAtMs: clock.now(),
-        usage: fields.usage,
+        usage: {
+          inputTokens: fields.usage.inputTokens,
+          outputTokens: fields.usage.outputTokens,
+          totalTokens: fields.usage.totalTokens,
+          cacheReadTokens: fields.usage.cacheReadTokens,
+          cacheWriteTokens: fields.usage.cacheWriteTokens,
+        },
         costNanoUsd: fields.costNanoUsd,
+        outputCostNanoUsd: fields.outputCostNanoUsd,
         latencyMs: Math.max(0, Math.round(clock.now() - stepStartedAt.at)),
         finishReason: fields.finishReason,
         rawFinishReason: fields.rawFinishReason,
@@ -734,13 +742,19 @@ export async function runContinuation(
         // ledger that drops the row understates a ceiling enforced from it.
         const usage = normalizeSdkUsage(step.usage);
         let costNano = 0;
+        // The OUTPUT half, kept so the trace can carry a cost split rather than
+        // one lump. `costNanoUsd` already computes it; only the total was being
+        // read.
+        let outputCostNano = 0;
         try {
-          costNano = costNanoUsd({
+          const breakdown = costNanoUsd({
             modelId: deps.model.modelId,
             usage,
             cacheWriteTtl: "5m",
             billing: outcome.billing,
-          }).totalNanoUsd;
+          });
+          costNano = breakdown.totalNanoUsd;
+          outputCostNano = outcome.billing === "none" ? 0 : breakdown.outputNanoUsd;
         } catch (error) {
           if (!(error instanceof UnknownModelPriceError)) throw error;
           // Close the span BEFORE halting. `halt` throws, so the flush would
@@ -749,6 +763,7 @@ export async function runContinuation(
           closeLlmSpan({
             usage,
             costNanoUsd: 0,
+            outputCostNanoUsd: 0,
             finishReason: step.finishReason,
             rawFinishReason: step.rawFinishReason ?? null,
             providerRequestId: step.response.id,
@@ -783,6 +798,7 @@ export async function runContinuation(
         closeLlmSpan({
           usage,
           costNanoUsd: costNano,
+          outputCostNanoUsd: outputCostNano,
           finishReason: step.finishReason,
           rawFinishReason: step.rawFinishReason ?? null,
           providerRequestId: step.response.id,

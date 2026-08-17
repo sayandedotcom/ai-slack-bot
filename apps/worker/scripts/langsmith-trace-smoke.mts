@@ -46,8 +46,11 @@ const llm1 = tracer.startLlm(root, {
 at += 1_100;
 tracer.endLlm(llm1, {
   endedAtMs: at,
-  usage: { inputTokens: 910, outputTokens: 120, cachedInputTokens: 400 },
-  costNanoUsd: 42_000, latencyMs: 1_100,
+  usage: {
+    inputTokens: 910, outputTokens: 120, totalTokens: 1_030,
+    cacheReadTokens: 400, cacheWriteTokens: 50,
+  },
+  costNanoUsd: 42_000_000, outputCostNanoUsd: 18_000_000, latencyMs: 1_100,
   finishReason: "tool-calls", rawFinishReason: "tool_use",
   providerRequestId: "req_smoke", gatewayLogId: "log_smoke", errorCode: null,
   outputText: "Let me check the deploy logs.",
@@ -68,8 +71,11 @@ const llm2 = tracer.startLlm(root, {
 at += 900;
 tracer.endLlm(llm2, {
   endedAtMs: at,
-  usage: { inputTokens: 1_400, outputTokens: 60 },
-  costNanoUsd: 51_000, latencyMs: 900,
+  usage: {
+    inputTokens: 1_400, outputTokens: 60, totalTokens: 1_460,
+    cacheReadTokens: 0, cacheWriteTokens: 0,
+  },
+  costNanoUsd: 51_000_000, outputCostNanoUsd: 20_000_000, latencyMs: 900,
   finishReason: "stop", rawFinishReason: "end_turn",
   providerRequestId: "req_smoke_2", gatewayLogId: "log_smoke_2", errorCode: null,
   outputText: "The 04:12 deploy dropped the export worker.",
@@ -121,6 +127,9 @@ for (let attempt = 1; attempt <= 12; attempt += 1) {
       `  ${String(run.run_type).padEnd(5)} ${String(run.name).padEnd(12)}`,
       `parent=${run.parent_run_id === null || run.parent_run_id === undefined ? "-" : "root"}`,
       `err=${run.error ?? "-"}`,
+      run.run_type === "llm"
+        ? `tokens=${run.total_tokens} cost=$${run.total_cost}`
+        : "",
     );
   }
   const names = ordered.map((r) => String(r.name));

@@ -35,6 +35,7 @@
  *     successful attempt past its deadline and cause a retry of committed work.
  */
 import { boundedText, EVENT_CODE_PREVIEW_CHARS } from "../agent/audit";
+import { NANO_USD_PER_USD } from "../agent/limits";
 import { redact } from "../redact";
 
 /**
@@ -121,12 +122,27 @@ export type RootSpanEnd = {
   pausedApprovalId?: string;
 };
 
+/**
+ * Token counts, in the loop's own vocabulary.
+ *
+ * Field names deliberately match `NormalizedUsage` (`agent/contracts.ts`)
+ * EXACTLY, and all of them are required. They were optional and differently
+ * named once — `cachedInputTokens`, `cacheCreationInputTokens` — which meant
+ * the loop's `NormalizedUsage` satisfied the type while populating neither, and
+ * every real trace shipped without cache figures. The unit test hand-built the
+ * object and so agreed with itself. Optional fields on a mapping type are how
+ * that happens; required ones make the mismatch a compile error.
+ *
+ * `reasoningTokens` is NOT carried. It is only a count, but invariant 18 is
+ * cleaner to hold as "no reasoning field exists here" than as a judgement about
+ * which reasoning-derived numbers are safe.
+ */
 export type SpanUsage = {
   inputTokens: number;
   outputTokens: number;
-  cachedInputTokens?: number;
-  cacheCreationInputTokens?: number;
-  totalTokens?: number;
+  totalTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 export type LlmSpanInput = {
@@ -142,7 +158,10 @@ export type LlmSpanInput = {
 export type LlmSpanEnd = {
   endedAtMs: number;
   usage: SpanUsage;
+  /** Total, integer nano-USD (invariant 29). Converted to float USD only on the wire. */
   costNanoUsd: number;
+  /** The output half of the same figure, so the wire can carry a split. */
+  outputCostNanoUsd: number;
   latencyMs: number;
   finishReason: string;
   rawFinishReason: string | null;
@@ -419,6 +438,14 @@ export function makeLangSmithTracer(
         session_name: config.project,
         extra: {
           metadata: safeExtras({
+            // `ls_model_name` and `ls_provider` are the keys LangSmith looks for
+            // to identify the model. Without `ls_model_name` it records tokens
+            // but computes no cost at all. We send our own cost regardless, so
+            // these are for grouping and filtering in the UI rather than for
+            // pricing — but a trace that cannot say which model ran is not worth
+            // much either.
+            ls_model_name: input.modelId,
+            ls_provider: input.provider,
             model_id: input.modelId,
             provider: input.provider,
             global_step: input.globalStep,
@@ -432,11 +459,38 @@ export function makeLangSmithTracer(
         span,
         end.endedAtMs,
         {
-          input_tokens: end.usage.inputTokens,
-          output_tokens: end.usage.outputTokens,
-          cached_input_tokens: end.usage.cachedInputTokens,
-          cache_creation_input_tokens: end.usage.cacheCreationInputTokens,
-          total_tokens: end.usage.totalTokens,
+          // THE SHAPE LANGSMITH ACTUALLY READS, and it is not obvious.
+          //
+          // MEASURED 2026-08-17 against live ingest. Token counts are picked up
+          // from exactly two places — `outputs.usage_metadata` (this one) and
+          // `outputs.llm_output.token_usage`. A top-level `usage_metadata` on
+          // the run, `extra.usage_metadata`, top-level `prompt_tokens`, and the
+          // provider-native `outputs.usage` are ALL accepted with HTTP 202 and
+          // silently discarded: the run comes back with 0 tokens, $0.00, and
+          // `usage_metadata: null`. The published docs describe the SDK's
+          // run-tree object, which is not this.
+          //
+          // Cost is OURS, not LangSmith's. Given tokens and an `ls_model_name`
+          // it recognises, LangSmith will happily invent a figure — it produced
+          // $0.02 for a model it cannot know. Sending explicit costs overrides
+          // that exactly (verified: 0.123456 round-tripped), which is what keeps
+          // this column equal to `agent_model_calls` in D1 and to the number the
+          // spend guard enforces against the run ceiling. Two systems disagreeing
+          // about spend is worse than one system not showing it.
+          usage_metadata: {
+            input_tokens: end.usage.inputTokens,
+            output_tokens: end.usage.outputTokens,
+            total_tokens: end.usage.totalTokens,
+            input_token_details: {
+              cache_read: end.usage.cacheReadTokens,
+              cache_creation: end.usage.cacheWriteTokens,
+            },
+            // Integer nano-USD is the internal unit (invariant 29); USD floats
+            // exist only here, on the wire, because that is what LangSmith takes.
+            input_cost: (end.costNanoUsd - end.outputCostNanoUsd) / NANO_USD_PER_USD,
+            output_cost: end.outputCostNanoUsd / NANO_USD_PER_USD,
+            total_cost: end.costNanoUsd / NANO_USD_PER_USD,
+          },
           cost_nano_usd: end.costNanoUsd,
           latency_ms: end.latencyMs,
           finish_reason: end.finishReason,
