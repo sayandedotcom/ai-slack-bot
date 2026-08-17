@@ -184,11 +184,15 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
       : outcome.why;
   // A wake=0 decision has no reason to carry a usable opening prompt, so the
   // override cannot assume one. Falling back to the customer's own words is
-  // both honest and enough for the agent to start from.
+  // both honest and enough for the agent to start from. The fallback is only
+  // for a wake: an ordinary decline stores what the model wrote (which may be
+  // ""), so the table never claims a run died when none did — and the "failed
+  // before it finished" line is only added when that is actually true.
   const openingPrompt =
-    outcome.opening_prompt.trim().length > 0
-      ? outcome.opening_prompt
-      : `${policy.customer_slug} wrote in ${policy.name}: ${row.text}\n\nA previous attempt on this thread failed before it finished. Pick it up.`;
+    wake && outcome.opening_prompt.trim().length === 0
+      ? `${policy.customer_slug} wrote in ${policy.name}: ${row.text}` +
+        (abandoned ? `\n\nA previous attempt on this thread failed before it finished. Pick it up.` : "")
+      : outcome.opening_prompt;
 
   await env.DB.prepare(
     `INSERT OR IGNORE INTO triage_decisions

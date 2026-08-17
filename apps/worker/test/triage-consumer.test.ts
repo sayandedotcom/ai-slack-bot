@@ -176,9 +176,14 @@ describe("handleTriageBatch", () => {
 
       // `idle` means waiting on the customer -- healthy, and exactly the case
       // triage exists to judge. Overriding it would wake a run per follow-up.
-      const row = await env.DB.prepare("SELECT wake FROM triage_decisions WHERE event_id = 'Ev1'")
-        .first<{ wake: number }>();
+      const row = await env.DB.prepare("SELECT wake, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'")
+        .first<{ wake: number; opening_prompt: string }>();
       expect(row?.wake).toBe(0);
+      // The "previous attempt failed" fallback belongs to the override only.
+      // Storing it on an ordinary decline made the table say a run had died
+      // when none had.
+      expect(row?.opening_prompt).not.toContain("previous attempt");
+      expect(row?.opening_prompt).toBe("");
     });
 
     it("stops overriding once a later run succeeds", async () => {

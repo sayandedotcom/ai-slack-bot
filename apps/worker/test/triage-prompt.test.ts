@@ -24,6 +24,20 @@ describe("buildTriagePrompt", () => {
     expect(p).toContain("(no stored context for this customer)");
   });
 
+  /**
+   * Observed live, 2026-08-16 (#test-firedrill): "Do you support stripe?" —
+   * twice, as fresh top-level messages — triaged wake=0 with "obvious answer,
+   * doesn't require action — Stripe is explicitly listed as supported". Recall
+   * had handed the model the answer, and it read that as nobody needing to
+   * reply. The customer got silence. Knowing the answer is not the same as the
+   * customer having received it; the prompt has to say so, because the better
+   * memory gets, the more direct questions this drops.
+   */
+  it("says a direct question wakes even when the answer is already known", () => {
+    expect(TRIAGE_SYSTEM).toContain("Knowing the answer is not the same as the customer having received it");
+    expect(TRIAGE_SYSTEM).toContain("even when the answer is obvious or already known to us");
+  });
+
   it("never mentions ticket types in the system prompt", () => {
     for (const banned of ["bug report", "feature request", "ticket type", "categor"]) {
       expect(TRIAGE_SYSTEM.toLowerCase()).not.toContain(banned);
