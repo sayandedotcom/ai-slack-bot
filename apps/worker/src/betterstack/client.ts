@@ -1,4 +1,5 @@
 import { CapabilityError } from "../codemode/errors";
+import { redact } from "../redact";
 import type {
   BetterStackReader,
   LogLine,
@@ -40,25 +41,6 @@ export type BetterStackConfig = {
  * model code the first time upstream adds a field nobody thought to denylist.
  */
 const MONITOR_FIELDS = ["id", "name", "status", "lastCheckedAt"] as const;
-
-/**
- * Patterns redacted from returned log lines.
- *
- * Defense in depth only. Logs are written by another system and we do not
- * control what goes into them, so this reduces the blast radius of somebody
- * else's mistake — it is not a guarantee.
- */
-const REDACTIONS: Array<[RegExp, string]> = [
-  [/\b(authorization|cookie|set-cookie)\s*[:=]\s*\S+/gi, "$1: [redacted]"],
-  [/\bBearer\s+[A-Za-z0-9._~+/-]{8,}/gi, "Bearer [redacted]"],
-  [/\bxox[baprs]-[A-Za-z0-9-]+/g, "[redacted-slack-token]"],
-  [/\b(sk|lin_api|lsv2_pt|sb_secret)[-_][A-Za-z0-9-]{8,}/g, "[redacted-key]"],
-  [/\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b/g, "[redacted-email]"],
-];
-
-function redact(message: string): string {
-  return REDACTIONS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), message);
-}
 
 function invalid(reason: string): CapabilityError {
   return new CapabilityError("invalid_input", reason);

@@ -179,12 +179,19 @@ export function modelDisposition(env: Env): ProductionPortsReport {
 function productionContinuation(ctx: DurableObjectState, env: Env): AgentContinuation {
   return {
     async run(claim: ClaimedGeneration): Promise<ContinuationOutcome> {
-      const [{ makeAgentContinuation }, { createProductionModelFactory }, { alwaysFresh }] =
-        await Promise.all([
-          import("./loop"),
-          import("./model"),
-          import("../codemode/contracts"),
-        ]);
+      const [
+        { makeAgentContinuation },
+        { createProductionModelFactory },
+        { alwaysFresh },
+        { makeLangSmithTracer },
+        { langsmithTracerConfig },
+      ] = await Promise.all([
+        import("./loop"),
+        import("./model"),
+        import("../codemode/contracts"),
+        import("../langsmith/tracer"),
+        import("./dependencies"),
+      ]);
 
       return makeAgentContinuation(ctx, env, {
         /**
@@ -209,6 +216,19 @@ function productionContinuation(ctx: DurableObjectState, env: Env): AgentContinu
         // durable `generationFreshnessGuard` is always ANDed in underneath and
         // cannot be switched off from here.
         additionalGuard: alwaysFresh(),
+        /**
+         * A FRESH TRACER PER ATTEMPT, and that is not incidental.
+         *
+         * The tracer buffers exactly one trace and flushes it once. Hoisting
+         * this to module scope, or building it once per Durable Object, would
+         * merge every run the isolate handles into a single tree and post it
+         * whenever the first continuation happened to finish.
+         *
+         * Disabled deployments get the no-op instance from inside
+         * `makeLangSmithTracer`, which buffers nothing and reaches no network —
+         * so the cost of this line when the feature is off is one object.
+         */
+        tracer: makeLangSmithTracer(langsmithTracerConfig(env), () => Date.now()),
       }).run(claim);
     },
   };

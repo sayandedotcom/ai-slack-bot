@@ -12,6 +12,7 @@ import { FABLE_5_MODEL_ID } from "../../src/agent/cost";
 import { DEFAULT_AGENT_LIMITS, type AgentLimits } from "../../src/agent/limits";
 import type { ModelHandle } from "../../src/agent/model";
 import type { StreamClock } from "../../src/agent/stream";
+import type { LangSmithTracer } from "../../src/langsmith/tracer";
 import {
   alwaysFresh,
   type AgentExecutionGuard,
@@ -523,6 +524,15 @@ export type LoopOptions = {
   env?: Record<string, string>;
   /** Observe the options every provider invocation was actually built with. */
   onModelCall?: (callOptions: unknown) => void;
+  /**
+   * Emit LangSmith spans for this run.
+   *
+   * OPT-IN, and every other suite leaves it unset, which is what keeps them at
+   * zero outbound calls: `makeAgentContinuation` builds no tracer of its own,
+   * and the pool binds `LANGSMITH_TRACING: "false"` besides. A suite that wants
+   * spans passes its own tracer AND stubs `fetch`.
+   */
+  tracer?: LangSmithTracer;
 };
 
 export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
@@ -589,6 +599,7 @@ export async function freshLoopRun(options: LoopOptions): Promise<LoopHarness> {
           limits,
           clock,
           onOutcome: (result) => results.push(result),
+          ...(options.tracer === undefined ? {} : { tracer: options.tracer }),
           ...(options.flush === undefined ? {} : { flush: options.flush }),
           ...(options.historyBounds === undefined
             ? {}

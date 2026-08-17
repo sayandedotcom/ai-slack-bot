@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  langsmithTracerConfig,
   makeAgentTools,
   makeCapabilityDependencies,
   makeRunCodeToolForRun,
@@ -274,6 +275,45 @@ describe("a capability never receives Env", () => {
     // whole list a reader has to check against `agent/dependencies.ts`.
     expect(env.ZEP_API_KEY).toBe("zep-test-key");
     expect(env.SLACK_BOT_TOKEN).toBe("xoxb-test");
+  });
+
+  /**
+   * The trace emitter's off switch, pinned for a sharper reason than the block
+   * above.
+   *
+   * Every other credential here is one a test would have to CHOOSE to spend.
+   * The tracer is different: `productionRunPorts` composes one on every
+   * continuation from `LANGSMITH_TRACING`, and wrangler.jsonc sets that var to
+   * `"true"`. The pool inherits vars. So without the `vitest.config.ts`
+   * binding, tracing is ON for every suite that drives the real ports — with a
+   * key that, on a developer machine, `.dev.vars` makes real.
+   *
+   * Equality, not falsiness, for the reason stated above: `undefined` is falsy
+   * too, and would mean the binding had silently vanished.
+   */
+  it("binds the trace emitter off in the pool", () => {
+    // Cast because these two are `vars` added AFTER the last real `cf-typegen`
+    // run, so `Cloudflare.Env` does not carry them yet. They are declared
+    // optional on `Env` in `src/index.ts` under that file's stated interim
+    // convention; regenerating will narrow both to a required `string` and this
+    // cast can go.
+    const poolEnv = env as unknown as Env;
+    expect(poolEnv.LANGSMITH_TRACING).toBe("false");
+    expect(poolEnv.LANGSMITH_TRACE_PAYLOADS).toBe("none");
+    // The composer must agree, not just the raw binding: this is the function
+    // `ports.ts` actually calls.
+    expect(langsmithTracerConfig(poolEnv).enabled).toBe(false);
+  });
+
+  it("refuses an unrecognised payload mode by name rather than coercing it", () => {
+    // A typo that silently downgraded what a trace carries is a setting nobody
+    // would notice was wrong. It names the variable, never the value.
+    expect(() =>
+      langsmithTracerConfig({
+        ...(env as unknown as Env),
+        LANGSMITH_TRACE_PAYLOADS: "reddacted",
+      })
+    ).toThrow(/LANGSMITH_TRACE_PAYLOADS/);
   });
 });
 

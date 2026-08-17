@@ -5,6 +5,7 @@ import { BETTERSTACK_UPTIME_ENDPOINT, makeBetterStackReader } from "../bettersta
 import { getChannelPolicy, type ChannelPolicy } from "../db/channels";
 import { makeArtifactPublisher } from "../files/r2";
 import { makeLangSmithReader } from "../langsmith/client";
+import type { LangSmithTracerConfig } from "../langsmith/tracer";
 import { makeUserTokenSource, type UserTokenSource } from "../identity/user-token";
 import { makeLinearGateway } from "../linear/client";
 import { makeGithubAuthSource, makeGithubGateway, resolveGithubConfig } from "../git/commit";
@@ -421,6 +422,57 @@ export async function makeRunCodeToolForRun(
     guard: input.guard,
     loader: input.env.LOADER,
   });
+}
+
+/**
+ * Resolve the trace emitter's configuration from this deployment's settings.
+ *
+ * Deliberately NOT part of `makeCapabilityDependencies`. The tracer is a host
+ * sink, not a capability: nothing the model authors may reach it, and a config
+ * that arrived through the capability bundle would eventually be handed to
+ * something that does. See the banner in `langsmith/tracer.ts`.
+ *
+ * Absence is not a mode. `LANGSMITH_TRACING` must SAY "true"; anything else,
+ * including the empty string the test pool binds, disables the emitter. An
+ * unrecognised `LANGSMITH_TRACE_PAYLOADS` is refused BY NAME rather than
+ * coerced to the safe default, because a typo that silently downgraded what a
+ * trace carries is a setting nobody would notice was wrong.
+ */
+export function langsmithTracerConfig(env: Env): LangSmithTracerConfig {
+  const flag = (env.LANGSMITH_TRACING ?? "").trim().toLowerCase();
+  const enabled = flag === "true" || flag === "1";
+  const mode = (env.LANGSMITH_TRACE_PAYLOADS ?? "none").trim();
+  if (mode !== "none" && mode !== "redacted") {
+    throw new CapabilityError(
+      "invalid_input",
+      "LANGSMITH_TRACE_PAYLOADS is set to an unrecognised value; expected \"none\" or \"redacted\"",
+    );
+  }
+  /**
+   * A SEPARATE credential from the reader's, falling back to it.
+   *
+   * MEASURED, 2026-08-17: a LangSmith key is scoped to ONE workspace, and the
+   * key that owns the `fire-fighter` trace project is in a different workspace
+   * from the one holding `tweakleaf`, which the read capability is pinned to by
+   * id. `GET /workspaces` on the trace key returns `be566aab-…`; the reader
+   * needs `d81d9ce6-…`. One key cannot serve both — pointing
+   * `LANGSMITH_API_KEY` at the trace workspace makes every
+   * `langsmith.trace`/`searchTraces` call return nothing, silently, because a
+   * project id from another workspace is not an error, it is just absent.
+   *
+   * So they are two secrets. The fallback keeps a single-workspace deployment
+   * working with one, and costs nothing when both are set.
+   */
+  const apiKey = env.LANGSMITH_TRACE_API_KEY ?? env.LANGSMITH_API_KEY;
+  return {
+    endpoint: env.LANGSMITH_ENDPOINT,
+    apiKey,
+    project: env.LANGSMITH_TRACE_PROJECT ?? "",
+    // The key is the second half of the gate. A deployment with the flag on and
+    // no credential emits nothing rather than posting unauthenticated.
+    enabled: enabled && apiKey !== "",
+    payloads: mode,
+  };
 }
 
 /**

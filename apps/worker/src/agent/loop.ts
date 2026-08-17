@@ -38,6 +38,7 @@ import type {
   FencedAppendOutcome,
 } from "./contracts";
 import { auditSinkFactory, outerToolMapper, type ToolUpdateWriter } from "./audit";
+import type { LangSmithTracer, TraceSpan } from "../langsmith/tracer";
 import {
   costNanoUsd,
   evaluateSpendGuard,
@@ -339,6 +340,18 @@ export type ContinuationDeps = {
   historyBounds?: { maxMessages: number; maxBytes: number };
   /** Batching thresholds. Tests inject smaller ones. */
   flush?: { chars?: number; ms?: number };
+  /**
+   * The LangSmith trace this continuation writes its spans into.
+   *
+   * Optional, and its absence means "emit nothing" — every existing caller is
+   * unchanged and reaches no network. The ROOT span is opened by
+   * `composeAndRun`, not here, because the `run_code` wrapper is composed
+   * before this function is entered and needs the parent handle.
+   *
+   * Nothing in this loop may await the tracer or branch on it. See
+   * `langsmith/tracer.ts` for why the calls cannot throw.
+   */
+  trace?: { tracer: LangSmithTracer; root: TraceSpan };
 };
 
 const DEFAULT_HISTORY_BOUNDS = { maxMessages: 200, maxBytes: 400_000 };
@@ -357,6 +370,18 @@ export async function runContinuation(
   const bounds = deps.historyBounds ?? DEFAULT_HISTORY_BOUNDS;
   const { storage, events, context } = deps;
   const fence = claim.fence;
+  const trace = deps.trace ?? null;
+  /** The llm span for the step currently in flight, or null between steps. */
+  let currentLlm: TraceSpan | null = null;
+  /**
+   * The last prompt `prepareTurn` built, for the llm span's `inputs`.
+   *
+   * Captured rather than re-derived: `prepareTurn` rebuilds the prompt on every
+   * step and this is the only point that holds the exact messages the provider
+   * was given. Only the trailing message, and only when payloads are on — the
+   * stable prefix is the same on every step and is not worth shipping N times.
+   */
+  let lastPromptText: string | undefined;
 
   const stream = new AssistantStream({
     fence,
@@ -585,6 +610,11 @@ export async function runContinuation(
       });
     }
 
+    // The exact messages the provider is about to be given. Read here because
+    // this is the only point that holds them; the tracer decides whether the
+    // text is actually emitted (`payloads: "none"` discards it).
+    lastPromptText = trace === null ? undefined : trailingMessageText(prompt.messages);
+
     stream.beginStep();
     return {
       messages: prompt.messages,
@@ -599,6 +629,59 @@ export async function runContinuation(
     await stream.start();
 
     const stepStartedAt = { at: clock.now() };
+    const openLlmSpan = (stepNumber: number): void => {
+      if (trace === null) return;
+      currentLlm = trace.tracer.startLlm(trace.root, {
+        stepNumber,
+        globalStep: claim.stepCount + stepNumber,
+        modelId: deps.model.modelId,
+        provider: deps.model.provider,
+        startedAtMs: stepStartedAt.at,
+        ...(lastPromptText === undefined ? {} : { promptText: lastPromptText }),
+      });
+    };
+    /**
+     * Close the in-flight llm span.
+     *
+     * `step` is taken structurally rather than by the SDK's step type: all this
+     * needs is the assistant's TEXT parts, and naming the wider type here would
+     * make a future SDK field look like something this function considered.
+     * Reasoning parts are not read — invariant 18, and the tracer strips them
+     * again on the way out.
+     */
+    const closeLlmSpan = (fields: {
+      usage: ReturnType<typeof normalizeSdkUsage>;
+      costNanoUsd: number;
+      finishReason: string;
+      rawFinishReason: string | null;
+      providerRequestId: string | null;
+      gatewayLogId: string | null;
+      errorCode: string | null;
+      step: { content: readonly unknown[] };
+    }): void => {
+      if (trace === null || currentLlm === null) return;
+      const text = fields.step.content
+        .filter((part): part is { type: "text"; text: string } =>
+          typeof part === "object"
+          && part !== null
+          && (part as { type?: unknown }).type === "text"
+          && typeof (part as { text?: unknown }).text === "string")
+        .map((part) => part.text)
+        .join("");
+      trace.tracer.endLlm(currentLlm, {
+        endedAtMs: clock.now(),
+        usage: fields.usage,
+        costNanoUsd: fields.costNanoUsd,
+        latencyMs: Math.max(0, Math.round(clock.now() - stepStartedAt.at)),
+        finishReason: fields.finishReason,
+        rawFinishReason: fields.rawFinishReason,
+        providerRequestId: fields.providerRequestId,
+        gatewayLogId: fields.gatewayLogId,
+        errorCode: fields.errorCode,
+        ...(text === "" ? {} : { outputText: text }),
+      });
+      currentLlm = null;
+    };
     const generation = streamText({
       model: deps.model.model,
       // EXACTLY one tool. `makeAgentTools` is the one home for that fact; this
@@ -617,6 +700,7 @@ export async function runContinuation(
       prepareStep: async ({ stepNumber }) => {
         stepStartedAt.at = clock.now();
         if (stepNumber === 0) {
+          openLlmSpan(stepNumber);
           return {
             instructions: first.instructions,
             messages: first.messages,
@@ -624,6 +708,9 @@ export async function runContinuation(
           };
         }
         const prepared = await prepareTurn(stepNumber);
+        // AFTER `prepareTurn`, which is what refreshes `lastPromptText`. Before
+        // it, the span would carry the previous step's prompt.
+        openLlmSpan(stepNumber);
         return {
           instructions: prepared.instructions,
           messages: prepared.messages,
@@ -656,6 +743,19 @@ export async function runContinuation(
           }).totalNanoUsd;
         } catch (error) {
           if (!(error instanceof UnknownModelPriceError)) throw error;
+          // Close the span BEFORE halting. `halt` throws, so the flush would
+          // otherwise report this step as `span_not_closed` and lose the one
+          // fact worth having — which step could not be priced.
+          closeLlmSpan({
+            usage,
+            costNanoUsd: 0,
+            finishReason: step.finishReason,
+            rawFinishReason: step.rawFinishReason ?? null,
+            providerRequestId: step.response.id,
+            gatewayLogId: step.response.headers?.["cf-aig-log-id"] ?? null,
+            errorCode: "unknown_model_price",
+            step,
+          });
           halt({
             path: "infrastructure_exhausted",
             errorCode: "unknown_model_price",
@@ -677,6 +777,18 @@ export async function runContinuation(
           finishReason: step.finishReason,
           rawFinishReason: step.rawFinishReason ?? null,
           errorCode: outcome.errorCode,
+        });
+        // Every field above, into the trace. Same numbers, same instant, no
+        // second computation — the ledger row and the span cannot disagree.
+        closeLlmSpan({
+          usage,
+          costNanoUsd: costNano,
+          finishReason: step.finishReason,
+          rawFinishReason: step.rawFinishReason ?? null,
+          providerRequestId: step.response.id,
+          gatewayLogId: step.response.headers?.["cf-aig-log-id"] ?? null,
+          errorCode: outcome.errorCode,
+          step,
         });
 
         const hadToolCalls = step.toolCalls.length > 0;
@@ -1312,6 +1424,7 @@ export function withOuterToolEvents(
   inner: Tool<{ code: string }, CodeModeOutput>,
   generationId: string,
   writer: ToolUpdateWriter,
+  trace: { tracer: LangSmithTracer; root: TraceSpan } | null = null,
 ): Tool<{ code: string }, CodeModeOutput> {
   const mapper = outerToolMapper(generationId);
   const execute = inner.execute;
@@ -1324,7 +1437,45 @@ export function withOuterToolEvents(
       options: ToolExecutionOptions<never>,
     ): Promise<CodeModeOutput> => {
       await writer.write(mapper.started({ toolCallId: options.toolCallId, code: args.code }));
-      const output = (await execute(args, options as never)) as CodeModeOutput;
+      // Wrapped in `try/catch` rather than left to the flush's dangling-span
+      // closer: `execute` can throw, and a span the flush closes reports
+      // `span_not_closed` — true, but it loses the one fact worth having, which
+      // is that the tool threw. The error is rethrown untouched; the tracer
+      // observes, it never intercepts.
+      const span = trace === null
+        ? null
+        : trace.tracer.startTool(trace.root, {
+          toolName: OUTER_TOOL_NAME,
+          toolCallId: options.toolCallId,
+          startedAtMs: Date.now(),
+          code: args.code,
+        });
+      let output: CodeModeOutput;
+      try {
+        output = (await execute(args, options as never)) as CodeModeOutput;
+      } catch (error) {
+        if (span !== null && trace !== null) {
+          trace.tracer.endTool(span, {
+            endedAtMs: Date.now(),
+            ok: false,
+            durationMs: 0,
+            capabilityCalls: 0,
+            errorCode: "tool_threw",
+          });
+        }
+        throw error;
+      }
+      if (span !== null && trace !== null) {
+        const preview = toolResultText(output);
+        trace.tracer.endTool(span, {
+          endedAtMs: Date.now(),
+          ok: output.error === undefined,
+          durationMs: output.metrics.durationMs,
+          capabilityCalls: output.metrics.capabilityCalls,
+          errorCode: output.error === undefined ? null : "tool_error",
+          ...(preview === undefined ? {} : { resultPreview: preview }),
+        });
+      }
       await writer.write(mapper.ended({ toolCallId: options.toolCallId, output }));
       return output;
     },
@@ -1332,6 +1483,54 @@ export function withOuterToolEvents(
     // adds no context of its own and forwards `options` untouched, so widening
     // through `unknown` here loses nothing the inner tool declared.
   } as unknown as Tool<{ code: string }, CodeModeOutput>;
+}
+
+/* ------------------------------------------------------- trace text reads -- */
+
+/**
+ * The TEXT of the last message in a prompt, for an llm span's `inputs`.
+ *
+ * Only the trailing message: the stable prefix is byte-identical on every step
+ * (that is the point of it — prompt caching), and shipping it N times per run
+ * makes a trace expensive and no more legible. Only `text` parts, so a tool
+ * result or an image part contributes nothing.
+ *
+ * Returns `undefined` rather than `""` when there is nothing, so the tracer
+ * omits the field instead of emitting an empty one.
+ */
+function trailingMessageText(messages: ModelMessage[]): string | undefined {
+  const last = messages.at(-1);
+  if (!last) return undefined;
+  const { content } = last;
+  if (typeof content === "string") return content === "" ? undefined : content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((part): part is { type: "text"; text: string } =>
+      typeof part === "object"
+      && part !== null
+      && (part as { type?: unknown }).type === "text"
+      && typeof (part as { text?: unknown }).text === "string")
+    .map((part) => part.text)
+    .join("\n");
+  return text === "" ? undefined : text;
+}
+
+/**
+ * A tool result flattened for a tool span's `outputs`.
+ *
+ * The error when there is one, otherwise the result. Deliberately NOT the logs:
+ * they are already a bounded event field, they are the largest thing a program
+ * can produce, and a trace is not where anyone reads them.
+ */
+function toolResultText(output: CodeModeOutput): string | undefined {
+  if (output.error !== undefined) return output.error;
+  if (output.result === null || output.result === undefined) return undefined;
+  if (typeof output.result === "string") return output.result;
+  try {
+    return JSON.stringify(output.result);
+  } catch {
+    return undefined;
+  }
 }
 
 /* ----------------------------------------------------------- the factory -- */
@@ -1382,6 +1581,20 @@ export type AgentContinuationOptions = {
    * them. This is where that detail is available without widening the port.
    */
   onOutcome?: (result: ContinuationResult) => void;
+  /**
+   * Emit a LangSmith trace for this continuation.
+   *
+   * ONE TRACER PER RUN — `makeAgentContinuation` is called per Durable Object,
+   * and the tracer buffers one trace, so a factory that returned a shared
+   * instance would merge every run in the isolate into one tree. `ports.ts`
+   * builds a fresh one per continuation for that reason.
+   *
+   * Deliberately NOT folded into `onOutcome`, which is already occupied: the
+   * test harness passes it (`test/helpers/agent-loop.ts`) and the canary suite
+   * reads what it collects. It is also a `void` callback, so it could not own
+   * the flush, which is async.
+   */
+  tracer?: LangSmithTracer;
 };
 
 /**
@@ -1415,6 +1628,45 @@ export function makeAgentContinuation(
 
       const events = makeRunEventPort(ctx, claim.fence);
       const result = await composeAndRun(ctx, env, state, claim, events, options);
+      // FIRE AND FORGET, deliberately, and this is the load-bearing line of the
+      // whole feature.
+      //
+      // `runContinuation`'s promise is wrapped by the driver in
+      // `#withDeadline` (see `run/do.ts`). Awaiting a third-party POST anywhere
+      // inside it spends continuation budget and can push an attempt that
+      // ALREADY SUCCEEDED past its deadline, which the driver reads as a crash
+      // and retries — re-running work that committed. A telemetry sink must
+      // never be able to change a run's outcome, so the flush happens out here,
+      // after the result is settled, and nothing waits for it.
+      //
+      // Swallowed and warned, on the same argument as `RunDO.#kickSandboxTeardown`.
+      // One POST, no retry, no durable job: invariant 27 has one retry owner and
+      // it is not this. A lost trace costs a trace.
+      //
+      // `waitUntil` is not durable — an evicted object never runs it. Accepted:
+      // a missing trace is a missing trace; a delayed run is an incident.
+      if (options.tracer) {
+        ctx.waitUntil(
+          options.tracer.flush().then(
+            (report) => {
+              if (report.outcome === "sent" || report.outcome === "disabled") return;
+              // Ids and an outcome code only. Never the body, never the key —
+              // logs are one of the surfaces the canary sweep reads.
+              console.warn("langsmith trace flush did not land", {
+                generationId: claim.generationId,
+                outcome: report.outcome,
+                ...(report.status === undefined ? {} : { status: report.status }),
+              });
+            },
+            (error: unknown) => {
+              console.warn("langsmith trace flush threw", {
+                generationId: claim.generationId,
+                name: error instanceof Error ? error.name : "unknown",
+              });
+            },
+          ),
+        );
+      }
       options.onOutcome?.(result);
       return toContinuationOutcome(result);
     },
@@ -1429,6 +1681,41 @@ async function composeAndRun(
   events: RunEventPort,
   options: AgentContinuationOptions,
 ): Promise<ContinuationResult> {
+  // OPENED HERE, not in `runContinuation`, for two reasons. The `run_code`
+  // wrapper is composed below and needs the parent handle, which does not exist
+  // yet inside the loop. And a root opened this early means the three
+  // compose-time refusals — an unresolvable trusted context, a model that will
+  // not build, a tool layer that throws — get a trace at all, which today they
+  // do not: they return before any telemetry is written.
+  const startedAtMs = options.clock?.now() ?? Date.now();
+  const trace = options.tracer
+    ? {
+      tracer: options.tracer,
+      root: options.tracer.startRoot({
+        runId: state.runId,
+        generationId: claim.generationId,
+        agentTurnId: claim.agentTurnId,
+        attempt: claim.attempt,
+        surface: state.origin,
+        startedAtMs,
+      }),
+    }
+    : null;
+  /** Close the root on whichever path this function returns by. */
+  const settle = (result: ContinuationResult): ContinuationResult => {
+    trace?.tracer.endRoot(trace.root, {
+      endedAtMs: options.clock?.now() ?? Date.now(),
+      path: result.path,
+      errorCode: result.errorCode,
+      ...(result.detail === undefined ? {} : { detail: result.detail }),
+      ...(result.finalTurnId === undefined ? {} : { finalTurnId: result.finalTurnId }),
+      ...(result.pausedApprovalId === undefined
+        ? {}
+        : { pausedApprovalId: result.pausedApprovalId }),
+    });
+    return result;
+  };
+
   const resolved = await resolveTrustedContext(env.DB, {
     generationId: claim.generationId,
     // THE PENDING APPROVAL'S ONLY SOURCE. A generation woken by a customer
@@ -1449,11 +1736,11 @@ async function composeAndRun(
     identity: makeUserTokenSource(env),
   });
   if (resolved.outcome === "refused") {
-    return {
+    return settle({
       path: "infrastructure_exhausted",
       errorCode: `trusted_context_${resolved.reason}`,
       detail: "the run's trusted facts could not be resolved; no model work was started",
-    };
+    });
   }
 
   let model: ModelHandle;
@@ -1465,7 +1752,7 @@ async function composeAndRun(
       surface: state.origin,
     });
   } catch (error) {
-    return classifyThrown(error);
+    return settle(classifyThrown(error));
   }
 
   const writer: ToolUpdateWriter = {
@@ -1525,13 +1812,20 @@ async function composeAndRun(
         : { dependencies: options.dependencies }),
     });
   } catch (error) {
-    return classifyThrown(error);
+    return settle(classifyThrown(error));
   }
 
-  return runContinuation(claim, {
+  return settle(await runContinuation(claim, {
     storage: ctx.storage,
     events,
-    tools: { [OUTER_TOOL_NAME]: withOuterToolEvents(tools.run_code, claim.generationId, writer) },
+    tools: {
+      [OUTER_TOOL_NAME]: withOuterToolEvents(
+        tools.run_code,
+        claim.generationId,
+        writer,
+        trace,
+      ),
+    },
     model,
     context: resolved.context,
     // THE PRODUCTION SOURCE for the engineer-voice block. This deployment's D1,
@@ -1543,5 +1837,6 @@ async function composeAndRun(
     ...(options.historyBounds === undefined
       ? {}
       : { historyBounds: options.historyBounds }),
-  });
+    ...(trace === null ? {} : { trace }),
+  }));
 }

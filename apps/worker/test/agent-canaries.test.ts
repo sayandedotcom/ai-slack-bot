@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetRunPorts } from "../src/agent/driver";
 import { gatewayHeaders } from "../src/agent/gateway";
+import { makeLangSmithTracer } from "../src/langsmith/tracer";
 import {
   listEvents,
   listTurns,
@@ -29,8 +30,15 @@ import {
  * any suite from composing a real provider, and nothing here touches them.
  *
  * The property (invariant 39): secrets never enter prompts, Gateway metadata,
- * events, tool output, D1 telemetry, memory or logs. Metadata carries opaque
- * run/generation/attempt/step identifiers and nothing else.
+ * events, tool output, D1 telemetry, memory, logs or the LangSmith trace batch.
+ * Metadata carries opaque run/generation/attempt/step identifiers and nothing
+ * else.
+ *
+ * The trace batch is the newest sink and the only one that is an OUTBOUND HTTP
+ * BODY rather than something durable, so it is swept in its own case below —
+ * see "keeps every canary out of the LangSmith trace batch". README security
+ * model row 13 claims this property has no single choke point and is held by
+ * this file; a sink added without a sweep here makes that row false.
  *
  * WHAT THIS DOES NOT COVER, stated so nobody reads more into a green run than is
  * there: the vendor gateways are faked at the `dependencies` seam, so a real
@@ -170,6 +178,72 @@ describe("no credential reaches anything the run produces", () => {
     /* --- logs --------------------------------------------------------------- */
 
     expectNoCanary("a log line", logged.join("\n"));
+  });
+
+  it("keeps every canary out of the LangSmith trace batch", async () => {
+    // WORST CASE ON PURPOSE: `payloads: "redacted"` is the mode that ships
+    // prompt, completion and program text, so it is the only mode where a
+    // credential could ride out in prose. Proving containment in the quiet mode
+    // would prove nothing about the one actually deployed.
+    const bodies: string[] = [];
+    const headers: Headers[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      headers.push(new Headers(init.headers));
+      return new Response("{}", { status: 202 });
+    });
+
+    const tracer = makeLangSmithTracer(
+      {
+        endpoint: "https://api.smith.langchain.com",
+        // THE CANARY ITSELF as the tracer's credential, which is what makes the
+        // header/body split below a real assertion rather than a vacuous one.
+        apiKey: CANARIES.LANGSMITH_API_KEY!,
+        project: "fire-fighter",
+        enabled: true,
+        payloads: "redacted",
+      },
+      () => Date.now(),
+    );
+
+    const harness = await freshLoopRun({
+      origin: "slack",
+      env: CANARIES,
+      tracer,
+      fixtures: {
+        slackSearch: [
+          { ts: "1.0", userId: "U1", text: "exports are empty", permalink: null, eventId: "ev_1" },
+        ],
+        logLines: [{ at: "2026-08-13T04:12:00Z", level: "error", message: "export worker gone" }],
+        supabaseRows: [{ id: 1 }],
+      },
+      model: mockModel([
+        toolStep({ toolCallId: "call_1", code: BUSY_PROGRAM, narration: ["Checking."] }),
+        textStep({ chunks: ["The export worker was dropped at 04:12."] }),
+      ]),
+    });
+
+    await harness.stub.appendTurn(customerTurn("t1", "why are the exports empty"));
+    await harness.alarm();
+    expect(harness.results.at(-1)?.path).toBe("completed");
+
+    expect(bodies.length).toBeGreaterThan(0);
+    expectNoCanary("the LangSmith trace batch", bodies.join("\n"));
+
+    // The BODY only, and this is the distinction the sweep turns on.
+    //
+    // `LANGSMITH_API_KEY` is the credential this request authenticates WITH, so
+    // it legitimately appears in the `x-api-key` header of every batch — that is
+    // not a leak, it is the request working. Sweeping headers too would fail
+    // forever; sweeping neither would be vacuous. So: it must be in the header
+    // and it must not be in the body.
+    expect(headers.some((h) => h.get("x-api-key") === CANARIES.LANGSMITH_API_KEY)).toBe(true);
+    expect(bodies.join("\n")).not.toContain(CANARIES.LANGSMITH_API_KEY!);
+
+    // ...and the batch really did carry the run, so the sweep looked at
+    // something. A tracer that emitted nothing would pass every line above.
+    expect(bodies.join("\n")).toContain("run_code");
+    expect(bodies.join("\n")).toContain("export worker was dropped");
   });
 
   it("keeps a canary out of a capability's own failure message", async () => {

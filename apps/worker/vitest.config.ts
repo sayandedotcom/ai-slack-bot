@@ -60,6 +60,23 @@ export default defineConfig({
           LINEAR_API_KEY: "not-a-real-linear-key",
           SUPABASE_KEY: "not-a-real-supabase-key",
           LANGSMITH_API_KEY: "not-a-real-langsmith-key",
+          // THE TRACE EMITTER'S OFF SWITCH, and it is load-bearing for the same
+          // reason as the empty Gateway URL below.
+          //
+          // `productionRunPorts` composes a tracer on every continuation. The
+          // wrangler.jsonc var says "true", the pool inherits every var, and
+          // this file's own note above applies: there is no fetchMock and no
+          // miniflare outboundService, so nothing stops an outbound POST. A
+          // developer machine additionally has a live LANGSMITH_API_KEY in
+          // .dev.vars. Without this line every loop test would ship its spans
+          // into the real project, slowly and silently.
+          //
+          // A binding overrides both wrangler.jsonc and .dev.vars, so this wins
+          // everywhere. Suites that WANT tracing build their own tracer and
+          // stub fetch; they never enable it through the pool.
+          LANGSMITH_TRACING: "false",
+          LANGSMITH_TRACE_PAYLOADS: "none",
+          LANGSMITH_TRACE_API_KEY: "not-a-real-langsmith-trace-key",
           BETTERSTACK_SQL_USERNAME: "not-a-real-betterstack-username",
           BETTERSTACK_SQL_PASSWORD: "not-a-real-betterstack-password",
           BETTERSTACK_UPTIME_TOKEN: "not-a-real-betterstack-uptime-token",

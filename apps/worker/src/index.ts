@@ -158,6 +158,32 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    */
   PROOFS_BASE_URL?: string;
   /**
+   * The LangSmith trace EMITTER's three settings — NON-SECRET `vars`, declared
+   * here for the same reason as `PROOFS_BASE_URL` above: they are in
+   * wrangler.jsonc, and regenerating `worker-configuration.d.ts` will narrow
+   * both to a required `string`. The credential they spend is the existing
+   * `LANGSMITH_API_KEY`, which `wrangler types` already knows.
+   *
+   * Optionality is safe here because `langsmithTracerConfig` treats a missing
+   * or non-`"true"` flag as OFF and an unrecognised payload mode as a refusal
+   * naming the variable. There is no state in which absence silently enables an
+   * outbound sink.
+   */
+  LANGSMITH_TRACING?: string;
+  LANGSMITH_TRACE_PROJECT?: string;
+  /** `"none"` or `"redacted"`. Anything else is refused by name. */
+  LANGSMITH_TRACE_PAYLOADS?: string;
+  /**
+   * The trace emitter's own credential — a SECRET, so `wrangler types` cannot
+   * see it, same as every entry above.
+   *
+   * Separate from `LANGSMITH_API_KEY` because a LangSmith key is scoped to ONE
+   * workspace and the trace project lives in a different one from the project
+   * the read capability is pinned to. Falls back to `LANGSMITH_API_KEY` when
+   * unset, so a single-workspace deployment needs only one.
+   */
+  LANGSMITH_TRACE_API_KEY?: string;
+  /**
    * Phase 18's read-only monorepo credential — a SECRET, so `wrangler types`
    * cannot know it, same as every entry above. Fine-grained, `web2app-rebuild`
    * only, Contents: read-only.
