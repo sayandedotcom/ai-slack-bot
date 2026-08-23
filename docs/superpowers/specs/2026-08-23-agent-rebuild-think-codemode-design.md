@@ -74,12 +74,26 @@ headers: { "cf-aig-authorization": … } })(model)` wrapped with `maxRetries: 0`
 a missing gateway URL throws (no direct-Anthropic fallback), the same rule
 `src/triage/run.ts` enforces.
 
+**Amendment (2026-08-23, found while planning).** The self-check above cannot be
+"the merged tool map is exactly `{ run_code }`". `think.js:2628` calls
+`createWorkspaceTools(this.workspace, { bash: this.workspaceBash })`
+unconditionally and `tools/workspace.js:72` always returns `read, write, edit,
+list, find, grep, delete`; `this.workspace` is auto-created in `onStart` if
+unset, so zero workspace tools is unreachable. The enforceable invariant is two
+parts: `beforeTurn` returns `activeTools: ["run_code"]` (the control Think
+forwards to `streamText` at `think.js:2729`, so the provider sees nothing else),
+and a test pins the merged map to the exact allowlist
+`{read, write, edit, list, find, grep, delete, run_code}` (the tripwire — a
+session block auto-wiring `set_context`, a skill, an extension or MCP changes
+that set and fails).
+
 ## 4. Capabilities — `src/capabilities/`
 
 - `define.ts` — `auditedCapability({ namespace, method, effect, input: ZodObject, describe, run })`. `effect ∈ read | external_write | control_write | sandbox_write`, required, no default. Zero-arg inputs use `z.object({}).default({})`.
 - `registry.ts` — `NAMESPACES = ["slack","memory","linear","supabase","langsmith","betterstack","files","approval","sandbox","browser","github"]` (order = rendered `.d.ts` order). Every implementation takes `(deps: CapabilityDependencies, scope: RunScope, input)`; `Env` never appears under `src/capabilities/`. Method names globally unique (the generator types by method name alone). A bare descriptor or a duplicate method name throws at registry construction.
 - `connector.ts` — `class FirefighterConnector extends CodemodeConnector`, one instance per namespace. Each tool sets `inputSchema = z.toJSONSchema(zod)` (never the raw Zod schema — it is accepted silently and degrades the model-facing type to `unknown`) and keeps the Zod schema for the runtime parse. `execute` wraps, in order: stale-generation check (turn revision), `assertEffectPermitted` (write guard: for `external_write` re-read `runs.shadow` and channel policy from D1 at call time; `canPost()` for Slack), effect ledger (`effects` table, at-most-once on `(run_id, turn_id, namespace, method, sha256(args))`; `in_doubt` on ambiguous failure), budget + audit row via `shared.ts`, error serialisation as `"code: message"`. `requiresApproval` and `needsApproval` are never set (registry test sweeps for both).
 - `executor.ts` — `DynamicWorkerExecutor` over a wrapper implementing the full `WorkerLoader` interface (`get` and `load`) that injects `limits: { cpuMs, subRequests }`, forces `compatibilityDate: "2026-08-01"`, `globalOutbound: null`; plus a parent-side wall-clock race with the late rejection swallowed. Model code always goes through `load()`.
+- The D1 table keeps its existing name `codemode_effects` — migrations are append-only, so the module moves but the schema does not.
 - `dts.ts` + `scripts/generate-capabilities-dts.ts` → `src/capabilities/generated/capabilities.d.ts`; `pnpm capabilities:dts` / `capabilities:dts:check`. The `.d.ts` appears only in the `run_code` tool description.
 
 Silent-ship tests, written before any namespace is ported: raw Zod → `unknown`
@@ -130,9 +144,13 @@ speaker from `src/identity/speaker.ts`, `identity_unavailable` fails safe (34).
 Server: `/agents/run-agents/:runId/*` behind Access (`src/api/agents.ts`).
 Resolve `runs.id → runs.key` via `getRunById` (404 on miss), `assertRunKey`,
 rewrite the third path segment, then `routeAgentRequest(request, env)`. The
-`cf_agent_identity` frame carrying the DO name is stripped on the Worker side
-before the socket reaches the browser (defect 2); test: no early frame matches
-`/^(slack|chat):/`. Steer is `@callable steer(text, requestId)`; the client
+`cf_agent_identity` frame carrying the DO name is suppressed with the SDK's own
+opt-out — `static options = { sendIdentityOnConnect: false }` on `RunAgent`
+(`agents/dist/index.js:951-964`, which even warns when the name is not already
+visible in the URL). **Amendment (2026-08-23):** an earlier draft of this spec
+called for stripping the frame in the Worker; that relay is unnecessary. Test:
+no early frame matches `/^(slack|chat):/` or carries
+`type === "cf_agent_identity"` (defect 2). Steer is `@callable steer(text, requestId)`; the client
 mints `requestId` once per send.
 
 Client (`apps/dashboard`): `useAgent({ agent: "run-agents", name: runId })` +

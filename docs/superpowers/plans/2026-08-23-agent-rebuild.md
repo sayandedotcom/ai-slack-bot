@@ -1536,8 +1536,9 @@ Closes the wave: all eleven namespaces exist and the `BindingContext` is built p
 
 **Files:**
 - Create: `apps/worker/src/capabilities/namespaces/{sandbox,browser,approval}.ts`
+- Create: `apps/worker/src/run/dependencies.ts`
 - Modify: `apps/worker/src/capabilities/registry.ts`, `apps/worker/src/run/agent.ts`
-- Test: `apps/worker/test/capabilities-{sandbox,browser,approval}.test.ts`
+- Test: `apps/worker/test/capabilities-{sandbox,browser,approval}.test.ts`, `apps/worker/test/run-dependencies.test.ts`
 
 | Method | Effect | Notes |
 |---|---|---|
@@ -1548,15 +1549,47 @@ Closes the wave: all eleven namespaces exist and the `BindingContext` is built p
 
 The `approval` namespace is built against the `ApprovalPort` **interface** (`src/approval/contracts.ts`) and tested against a double. The real port lands in Task 20.
 
-Then complete the agent wiring: the `BindingContext` — and therefore `newCodeExecution`, the call counter and the freshness guard — is per `run_code` invocation, not per turn. Build it inside the tool's `execute`, carrying `outerToolCallId` from the tool call id.
+**This task also builds the production `CapabilityDependencies`**, which nothing has constructed until now — the namespaces have only ever seen test doubles. `src/run/dependencies.ts` is the one place `Env` meets the capability layer:
+
+```ts
+/**
+ * The only function that turns Env into CapabilityDependencies.
+ *
+ * `CapabilityDependencies` is deliberately not `Env` (src/gateways/ports.ts):
+ * a namespace file that wanted a credential would have to widen that type
+ * first, in a diff. This module is the boundary where the credentials actually
+ * live, so it is the one place to look when asking what a capability can reach.
+ */
+export function productionDependencies(env: Env, scope: RunScope): CapabilityDependencies {
+  return {
+    db: env.DB,
+    slack: makeSlackGateway(env, scope),
+    memory: new ZepMemory(env.ZEP_API_KEY),
+    linear: makeLinearClient(env),
+    supabase: makeSupabaseReader(env),
+    langsmith: makeLangSmithClient(env),
+    betterstack: makeBetterStackClient(env),
+    files: makeR2Publisher(env),
+    approval: makeApprovalPort({ ... }),      // the real port lands in Task 20
+    sandbox: makeSandboxGateway(env, scope),
+    github: makeGithubGateway(env, scope),
+    clock: () => Date.now(),
+  };
+}
+```
+
+Port the composition from `git show c9c53f7:apps/worker/src/agent/dependencies.ts`, dropping everything that referenced the deleted loop. Every factory it calls already exists and is unchanged (`src/slack/gateway.ts`, `src/linear/client.ts`, `src/supabase/reader.ts`, `src/langsmith/client.ts`, `src/betterstack/client.ts`, `src/files/r2.ts`, `src/sandbox/gateway.ts`, `src/git/commit.ts`, `src/memory/zep.ts`). Until Task 20, `approval` is the interface-shaped double.
+
+Then complete the agent wiring: the `BindingContext` — and therefore `newCodeExecution`, the call counter and the freshness guard — is per `run_code` invocation, not per turn. Build it inside the tool's `execute`, carrying `outerToolCallId` from the tool call id, with `deps: productionDependencies(this.env, scope)`.
 
 - [ ] **Step 1:** Write the three test files. Required cases: no sandbox method accepts a container or run id; a second `boot(longPoll: true)` in one execution is refused or coerced to a short poll; `escalate` refuses a second open approval with `approval_already_open`; `withdraw` returns the human's real decision when the human won the race.
 - [ ] **Step 2:** Run them; expect FAIL.
 - [ ] **Step 3:** Port the three namespaces; append them to `buildNamespaces` so all eleven are present in the pinned order.
-- [ ] **Step 4:** Move `BindingContext` construction into the `run_code` execute path in `src/run/agent.ts`.
-- [ ] **Step 5:** Extend `test/run-agent-boot.test.ts` with a case asserting `connectorNames()` is exactly the eleven namespaces in order.
-- [ ] **Step 6:** Run the four commands; all pass.
-- [ ] **Step 7:** Commit — `feat(capabilities): sandbox, browser and approval namespaces; per-execution context`
+- [ ] **Step 4:** Write `test/run-dependencies.test.ts`: `productionDependencies` returns all eleven gateways plus `db` and `clock`; the returned object exposes no property carrying a token, key or secret (assert against the `Env` secret names, so a future gateway that leaked one through would fail here).
+- [ ] **Step 5:** Write `src/run/dependencies.ts`, then move `BindingContext` construction into the `run_code` execute path in `src/run/agent.ts`.
+- [ ] **Step 6:** Extend `test/run-agent-boot.test.ts` with a case asserting `connectorNames()` is exactly the eleven namespaces in order.
+- [ ] **Step 7:** Run the four commands; all pass.
+- [ ] **Step 8:** Commit — `feat(capabilities): sandbox, browser and approval namespaces; per-execution context`
 
 ---
 
@@ -2255,4 +2288,5 @@ Checked against the spec, 2026-08-23:
   2. Spec §7's "strip the `cf_agent_identity` frame in the Worker" is unnecessary — `static options = { sendIdentityOnConnect: false }` is the SDK's own opt-out (Task 22).
   3. The D1 table keeps its existing name `codemode_effects` even though the module moves to `src/capabilities/` — migrations are append-only.
 - **Deferred deliberately.** `slack.searchMessages`'s customer-reference argument and the provenance sink are introduced in Task 9 with the memory namespace rather than in Task 8, because invariant 36 is a memory-scoped rule and splitting it across two tasks would leave a half-enforced guard in between.
+- **Gap found by the coverage check and closed.** Nothing built the production `CapabilityDependencies` from `Env` — the namespaces had only test doubles through W2. `src/run/dependencies.ts` is now Task 12, ported from the deleted `src/agent/dependencies.ts`.
 - **Not in this plan.** No new D1 migration: `runs`, `approvals`, `codemode_effects`, `agent_model_calls`, `agent_memory_outbox` and `memory_episode_sources` all survive. The only schema change anywhere is wrangler migration tag `v5`.
