@@ -41,19 +41,6 @@ export type RunDetail = {
 };
 
 /**
- * The snapshot reshaped into the same message the live socket sends, so the
- * session reducer has exactly one input shape to fold and cannot drift between
- * "loaded from HTTP" and "streamed".
- */
-export type RunSync = {
-  type: "sync";
-  events: unknown[];
-  cursor: number;
-  complete: boolean;
-  status: RunStatus | null;
-};
-
-/**
  * POST a relative JSON endpoint. Mirrors `getJson`: the thrown `ApiError`
  * names the path and never the response body, and the request is same-origin
  * so no credential can be sent anywhere else.
@@ -89,45 +76,6 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
 export async function fetchRuns(limit = 50): Promise<RunSummary[]> {
   const body = await getJson<{ runs: RunSummary[] }>(`/api/runs?limit=${limit}`);
   return body.runs;
-}
-
-export async function fetchRunSnapshot(
-  id: string,
-  since?: number,
-): Promise<{ run: RunDetail; sync: RunSync }> {
-  const path =
-    since === undefined
-      ? `/api/runs/${encodeURIComponent(id)}`
-      : `/api/runs/${encodeURIComponent(id)}?since=${since}`;
-  const body = await getJson<{
-    run: RunDetail;
-    events: unknown[];
-    cursor: number;
-    complete: boolean;
-  }>(path);
-  return {
-    run: body.run,
-    sync: {
-      type: "sync",
-      events: body.events,
-      cursor: body.cursor,
-      complete: body.complete,
-      status: body.run.status,
-    },
-  };
-}
-
-export async function postSteer(
-  id: string,
-  requestId: string,
-  content: string,
-): Promise<{ seq: number; appended: boolean }> {
-  // Exactly these two keys: `requestId` is the idempotency key the worker
-  // dedupes on, and anything extra would be an unaudited field on a write.
-  return postJson<{ seq: number; appended: boolean }>(`/api/runs/${encodeURIComponent(id)}/turns`, {
-    requestId,
-    content,
-  });
 }
 
 /**

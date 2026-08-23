@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { detectAiTells } from "../src/eval/ai-tells";
-import { VOICE_EXAMPLES } from "../src/agent/prompt/policy";
+import { VOICE_EXAMPLES } from "../src/eval/voice-examples";
 
 describe("detectAiTells", () => {
   it("returns [] for the canonical clean reply", () => {

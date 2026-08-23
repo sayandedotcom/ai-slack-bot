@@ -1,10 +1,8 @@
 import { Hono } from "hono";
-import { routeAgentRequest } from "agents";
-import { modelDisposition } from "./agent/ports";
 import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
 import { backfillApi } from "./api/backfill";
-import { runsApi, runsWs } from "./api/runs";
+import { runsApi } from "./api/runs";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
 import { proofsApi } from "./api/proofs";
@@ -12,10 +10,7 @@ import { identityApi } from "./api/identity";
 import { evalApi } from "./api/eval";
 import { slackOAuth } from "./oauth/slack";
 import { githubOAuth } from "./oauth/github";
-import { routeSlackMessageToOwnedRun } from "./run/coordinator";
-import { resolveChassis, wakeRun as wakeRunOnActiveChassis } from "./run/chassis";
-import { assertRunKey, slackRunKey } from "./run/keys";
-import { getRunById } from "./run/repository";
+import { slackRunKey } from "./run/keys";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
@@ -26,11 +21,6 @@ import { handleTriageBatch, type TriageJob } from "./triage/consumer";
 import { makeTriageRunner } from "./triage/run";
 import type { QueuedEvent } from "./slack/types";
 
-// The named export is what the RUNS binding resolves to. Keep it above Env:
-// src/run/do.ts imports Env from here, and that import must stay type-only or
-// the two modules form a real cycle.
-export { RunDO } from "./run/do";
-
 // The SANDBOX binding's class (Phase 18), and the SDK's own ContainerProxy.
 //
 // `ContainerProxy` is not decoration: the Sandbox DO resolves
@@ -40,28 +30,6 @@ export { RunDO } from "./run/do";
 // stated only in a comment inside the package's `.d.ts`.
 export { ContainerProxy, Sandbox } from "./sandbox/class";
 
-// Phase 25. The durable codemode runtime behind the execute tool is a FACET of
-// whichever Durable Object created the tool, resolved by name off the entry's
-// own `exports` map — `ctx.facets.get("codemode:<name>", () => ({ class:
-// ctx.exports.CodemodeRuntime }))`. Omitting this export throws at
-// tool-construction time rather than at build time: exactly the same shape of
-// trap as ContainerProxy above, and stated only in a comment inside the
-// package's `.d.ts`.
-//
-// This export is HALF the requirement, and the docs only mention this half.
-// `CodemodeRuntime` must ALSO be declared as a Durable Object class in
-// wrangler.jsonc's `migrations` (tag `v3`), or `ctx.exports.CodemodeRuntime` is
-// a plain service stub that `facets.get` rejects. See the comment on that tag
-// for the exact error, and docs/superpowers/plans/phase-25-notes.md for the
-// spike that measured it. No binding: nothing addresses the runtime from
-// outside its host DO.
-export { CodemodeRuntime } from "@cloudflare/codemode";
-
-// Phase 25. The run session on the Think chassis, live BESIDE `RunDO` behind
-// the `RUN_CHASSIS` var for the strangler window. `wrangler deploy` refuses a
-// `durable_objects.bindings` entry whose class is not exported here, so this
-// line is what makes the tree deployable again after Task 1 added the binding.
-export { RunAgent } from "./run/agent";
 
 /**
  * Wrangler-generated bindings, plus the two narrow refinements the application
@@ -98,28 +66,6 @@ export { RunAgent } from "./run/agent";
 export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
   MEMORY_QUEUE: Queue<MemoryJob>;
   TRIAGE_QUEUE: Queue<TriageJob>;
-  /**
-   * Phase 25's Think-chassis binding, RETYPED. `wrangler types` emits it as a
-   * bare `DurableObjectNamespace` (it cannot see a class it is not told about),
-   * and the generic is what gives every call site the agent's RPC surface —
-   * exactly as `RUNS` carries `RunDO`. A type-only import so this module and
-   * `src/run/agent.ts` never form a real cycle.
-   */
-  RUN_AGENTS: DurableObjectNamespace<import("./run/agent").RunAgent>;
-  /**
-   * Which chassis a wake resolves to — a non-secret `var` pinned in
-   * wrangler.jsonc, restated here to NAME its two legal values where every
-   * reader will look.
-   *
-   * Deliberately not narrowed to the bare literal union. `Env` is an
-   * intersection over `Cloudflare.Env`, which types this `string`, and dozens
-   * of existing tests hand the pool's raw `Cloudflare.Env` to functions taking
-   * `Env` — narrowing here makes that assignment illegal everywhere at once
-   * for no safety gained, because the value arrives from a config file at
-   * runtime either way. `src/run/chassis.ts` (Task 12) is the ONE place it is
-   * read, and that is where an unrecognised value is refused by name.
-   */
-  RUN_CHASSIS?: "think" | "legacy" | (string & {});
   AI_GATEWAY_ANTHROPIC_URL?: string;
   AI_GATEWAY_TOKEN?: string;
   AGENT_MODEL_DISABLED?: string;
@@ -255,7 +201,7 @@ const app = new Hono<{ Bindings: Env }>();
  * invisible outside one `console.warn` per isolate: the dashboard showed `live`
  * runs with `error: null` that were never going to move.
  */
-app.get("/api/health", (c) => c.json({ ok: true, model: modelDisposition(c.env) }));
+app.get("/api/health", (c) => c.json({ ok: true }));
 
 // Must stay above the catch-all below, which would otherwise swallow them.
 app.route("/slack", slackEvents);
@@ -294,115 +240,7 @@ app.route("/api", evalApi);
 // key are what protect the object instead. See src/api/proofs.ts for the full
 // argument and for everything that guards it.
 app.route("/", proofsApi);
-// Not JSON, so it is mounted outside /api — but still above the asset
-// catch-all, and still behind the same Access application as the dashboard.
-app.route("/ws", runsWs);
 
-/**
- * Which session chassis is live, so the SPA can mount the matching view.
- *
- * The dashboard ships BOTH views for the length of the strangler window: the
- * legacy `/ws` transcript and the `useAgentChat` one. Nothing in the bundle can
- * know which chassis a given deployment runs — `RUN_CHASSIS` is a wrangler
- * `var`, not a build input, and baking it into the SPA would mean a chassis
- * flip needs a dashboard rebuild rather than a `wrangler deploy`. So the
- * browser asks.
- *
- * D1-free, DO-free, and it names the variable rather than echoing an
- * unrecognised value (invariant 39's rule applied uniformly). Under /api so it
- * inherits the same Access application as everything else.
- */
-app.get("/api/chassis", (c) => {
-  try {
-    return c.json({ chassis: resolveChassis(c.env) });
-  } catch {
-    return c.json(
-      { code: "invalid_chassis", message: "RUN_CHASSIS is not a recognised value" },
-      500,
-    );
-  }
-});
-
-/**
- * Phase 25. The Agents SDK's own transport for `RunAgent` — the WebSocket the
- * dashboard's `useAgentChat` speaks, plus the `/get-messages` HTTP read behind
- * it.
- *
- * MOUNTED AT THE TOP LEVEL AND DELIBERATELY *NOT* BYPASSED. Read the comment
- * on `/proofs/*` below: that route is the ONE path in this Worker that Cloudflare
- * Access must let through unauthenticated, and it stays the only one. `/agents/*`
- * is a new top-level path on the same origin, so the dashboard's Access
- * application covers it by default — exactly like `/ws`, which is the socket
- * this one replaces and which is likewise gated by the application and absent
- * from its bypass policy. Adding a bypass for `/agents/*` would hand an
- * anonymous caller a live steer channel into a customer-facing run.
- *
- * TWO things happen here before `routeAgentRequest` sees the request, and both
- * are load-bearing:
- *
- *  1. **The chassis check.** `routeAgentRequest` would happily boot a `RunAgent`
- *     for a run the legacy chassis owns, giving the operator an empty transcript
- *     for a run that is very much alive in `RunDO`. Refused by name instead.
- *
- *  2. **The id→key resolution.** `routePartykitRequest` names the Durable Object
- *     with `idFromName(<third path segment>)` — verbatim, undecoded. Letting the
- *     browser put that segment there directly would make the public URL a DO
- *     name, which is exactly what invariant 10 forbids: `runs.id` is a UUID and
- *     the `slack:{channel}:{thread_ts}` key is resolved through D1, server-side,
- *     never string-built from anything a client sent. So the browser addresses
- *     `/agents/run-agents/{runs.id}`, D1 answers with the key, and the path is
- *     rewritten before routing. A caller who guesses a raw key gets a 404 from
- *     `getRunById`, because a key is not an id.
- *
- * `run-agents` is `camelCaseToKebabCase("RUN_AGENTS")` — partyserver derives the
- * namespace segment from the BINDING name in wrangler.jsonc, not from the class.
- */
-const AGENT_NAMESPACE = "run-agents";
-
-app.all("/agents/*", async (c) => {
-  let chassis: string;
-  try {
-    chassis = resolveChassis(c.env);
-  } catch {
-    return c.json(
-      { code: "invalid_chassis", message: "RUN_CHASSIS is not a recognised value" },
-      500,
-    );
-  }
-  if (chassis !== "think") {
-    return c.json(
-      { code: "chassis_not_active", message: "this deployment runs the legacy run chassis" },
-      404,
-    );
-  }
-
-  // ["agents", "<namespace>", "<runs.id>", ...rest]. `rest` is preserved
-  // verbatim: `useAgentChat` reads the transcript from `<room>/get-messages`.
-  const url = new URL(c.req.url);
-  const segments = url.pathname.split("/").filter(Boolean);
-  const namespace = segments[1];
-  const runId = segments[2];
-  if (namespace !== AGENT_NAMESPACE || runId === undefined || runId === "") {
-    return c.json({ code: "not_found", message: "no such agent route" }, 404);
-  }
-
-  const run = await getRunById(c.env.DB, decodeURIComponent(runId));
-  if (!run) return c.json({ code: "not_found", message: "no such run" }, 404);
-
-  let key: string;
-  try {
-    // Re-validated before it names an object, exactly as `runStubForKey` and
-    // `wakeRun` do — a corrupted `runs.key` must not conjure an anonymous agent.
-    key = assertRunKey(run.key);
-  } catch {
-    return c.json({ code: "invalid_run_key", message: "this run cannot be addressed" }, 500);
-  }
-
-  segments[2] = key;
-  url.pathname = `/${segments.join("/")}`;
-  const routed = await routeAgentRequest(new Request(url, c.req.raw), c.env);
-  return routed ?? c.json({ code: "not_found", message: "no such agent route" }, 404);
-});
 
 /**
  * An unmatched API or WebSocket path is a 404, and it stops HERE — it must
@@ -447,20 +285,17 @@ export default {
           memory: new ZepMemory(env.ZEP_API_KEY),
           // No HTTP self-call and no extra queue: the consumer and the
           // coordinator both run in the trusted parent Worker.
-          routeToOwnedRun: (message) => routeSlackMessageToOwnedRun(env, message),
-          // THE wake, for both chassis. `src/run/chassis.ts` is the only reader
-          // of `RUN_CHASSIS`; the legacy branch is still `wakeSlackRun` →
-          // `RunDO.appendTurn`, unchanged. The Slack `event_id` is the
-          // idempotency token on either side, and the D1 `triage_decisions`
-          // dedupe above it stays exactly where it was.
-          wakeRun: async (input) => {
-            await wakeRunOnActiveChassis(
-              env,
-              slackRunKey(input.channelId, input.threadTs),
-              input.openingPrompt,
-              { idempotencyKey: input.eventId },
-            );
-          },
+          // NO WAKE. The agent layer was removed on 2026-08-23 to be rebuilt
+          // on the Agents SDK / Project Think / Code Mode. Triage still runs,
+          // still classifies with the cheap model, and still writes its
+          // decision to `triage_decisions` — so the corpus, the counters and
+          // the eval routes keep working — but there is nothing to wake yet.
+          //
+          // Restore both deps when the new chassis lands: `routeToOwnedRun`
+          // absorbs a reply into the run that already owns the thread, and
+          // `wakeRun` starts one. `slackRunKey(channelId, threadTs)` is the
+          // run key both of them address, and the Slack `event_id` is the
+          // idempotency token on either path.
         });
     }
   },

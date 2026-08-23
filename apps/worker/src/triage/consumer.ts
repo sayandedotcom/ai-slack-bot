@@ -4,7 +4,7 @@ import type { TriageInput } from "./prompt";
 import type { TriageRunner } from "./run";
 import { getChannelPolicy, shouldTriage } from "../db/channels";
 import { graphIdFor } from "../memory/graphs";
-import type { SlackRunMessage } from "../run/coordinator";
+import type { SlackRunMessage } from "./contracts";
 
 export type TriageJob = { event_id: string };
 

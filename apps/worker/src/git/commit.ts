@@ -1,11 +1,11 @@
 import type { Env } from "../index";
-import { CapabilityError } from "../codemode/errors";
+import { CapabilityError } from "../gateways/errors";
 import type {
   GithubGateway,
   PullRequestMatch,
   PullRequestRef,
   PullRequestStatus,
-} from "../codemode/gateways";
+} from "../gateways/ports";
 import { applyUnifiedDiff, basePaths } from "./apply";
 import { readDiffWithBase } from "../sandbox/diff";
 import { devEnvFor } from "../sandbox/env";

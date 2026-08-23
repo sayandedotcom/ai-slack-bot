@@ -19,7 +19,6 @@ import {
 import {
   canonicalThreadTs,
   chatRunKey,
-  runStubForKey,
   slackRunKey,
 } from "../src/run/keys";
 
@@ -175,46 +174,12 @@ describe("chat run keys", () => {
   );
 });
 
-describe("runStubForKey", () => {
-  function fakeNamespace() {
-    const names: string[] = [];
-    const namespace = {
-      idFromName(name: string) {
-        names.push(name);
-        return { name } as unknown as DurableObjectId;
-      },
-      get(id: DurableObjectId) {
-        return { id } as unknown as DurableObjectStub;
-      },
-    };
-    return { namespace, names };
-  }
-
-  it("routes a slack key through idFromName verbatim", () => {
-    const { namespace, names } = fakeNamespace();
-    const key = slackRunKey("C123", "1720000000.123456");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    runStubForKey(namespace as any, key);
-    expect(names).toEqual(["slack:C123:1720000000.123456"]);
-  });
-
-  it("routes a chat key through the same helper", () => {
-    const { namespace, names } = fakeNamespace();
-    const key = chatRunKey("3f2504e0-4f89-11d3-9a0c-0305e82c3301");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    runStubForKey(namespace as any, key);
-    expect(names).toEqual(["chat:3f2504e0-4f89-11d3-9a0c-0305e82c3301"]);
-  });
-
-  it("refuses a malformed key rather than naming a junk object", () => {
-    const { namespace, names } = fakeNamespace();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(() => runStubForKey(namespace as any, "slack:C123")).toThrow();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(() => runStubForKey(namespace as any, "wat:nope")).toThrow();
-    expect(names).toEqual([]);
-  });
-});
+// The `runStubForKey` cases lived here. It was the codebase's only
+// `idFromName()` call — the seam that turned a validated run key into the
+// Durable Object that owned the session — and it went with the agent layer on
+// 2026-08-23. The property is worth restoring against whatever names the new
+// session: a malformed or unknown-origin key must THROW rather than conjure an
+// anonymous object, and the public `runs.id` must never be the name.
 
 describe("client message parser", () => {
   function steer(payload: unknown) {

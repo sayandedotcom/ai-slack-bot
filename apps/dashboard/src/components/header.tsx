@@ -9,35 +9,10 @@ import type { Identity } from "../lib/api";
  * Identity is fetched once, at the shell, and passed down. The header itself
  * never fetches — it only renders what it is given.
  */
-export function Header({
-  identity,
-  page,
-}: {
-  identity?: Identity;
-  page: "dashboard" | "chat";
-}) {
+export function Header({ identity }: { identity?: Identity }) {
   return (
     <header className="flex items-center justify-between border-b px-6 py-4">
       <span className="text-sm font-semibold tracking-tight">Fire-Fighter</span>
-      <nav aria-label="Pages" className="flex items-center gap-1">
-        {(
-          [
-            ["dashboard", "Dashboard", "#"],
-            ["chat", "Chat", "#chat"],
-          ] as const
-        ).map(([key, label, href]) => (
-          <a
-            key={key}
-            href={href}
-            aria-current={page === key ? "page" : undefined}
-            className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
-              page === key ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {label}
-          </a>
-        ))}
-      </nav>
       {identity ? (
         <span className="flex items-center gap-2 text-sm text-muted-foreground">
           {identity.email}

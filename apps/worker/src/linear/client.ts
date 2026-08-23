@@ -1,5 +1,5 @@
-import { CapabilityError } from "../codemode/errors";
-import type { IssueRef, LinearGateway } from "../codemode/gateways";
+import { CapabilityError } from "../gateways/errors";
+import type { IssueRef, LinearGateway } from "../gateways/ports";
 
 /**
  * Pinned in code, not configuration. An origin that can be supplied is an

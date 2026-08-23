@@ -1,4 +1,4 @@
-import { CapabilityError } from "../codemode/errors";
+import { CapabilityError } from "../gateways/errors";
 
 /**
  * The seam between a stored diff and a real commit.

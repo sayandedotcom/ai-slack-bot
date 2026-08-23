@@ -1,5 +1,5 @@
-import { CapabilityError } from "../codemode/errors";
-import type { ArtifactPublisher, PublishedFile } from "../codemode/gateways";
+import { CapabilityError } from "../gateways/errors";
+import type { ArtifactPublisher, PublishedFile } from "../gateways/ports";
 
 /**
  * Small on purpose. The Code Mode codec base64-encodes bytes into a JSON string

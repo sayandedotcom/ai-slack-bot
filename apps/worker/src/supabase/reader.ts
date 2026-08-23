@@ -1,10 +1,10 @@
-import type { CodeModeScope } from "../codemode/contracts";
-import { CapabilityError } from "../codemode/errors";
+import type { RunScope } from "../gateways/scope";
+import { CapabilityError } from "../gateways/errors";
 import type {
   ResourceDescription,
   Row,
   SupabaseReader,
-} from "../codemode/gateways";
+} from "../gateways/ports";
 import {
   findResource,
   type SupabaseAllowlist,
@@ -81,7 +81,7 @@ function normalizeCell(value: unknown): string | number | boolean | null {
 
 export function makeSupabaseReader(
   config: SupabaseConfig,
-  scope: CodeModeScope,
+  scope: RunScope,
 ): SupabaseReader {
   return {
     async describe(resource): Promise<ResourceDescription[]> {

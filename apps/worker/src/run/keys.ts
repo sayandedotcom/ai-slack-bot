@@ -73,19 +73,3 @@ export function runOriginOf(key: string): RunOrigin {
   assertRunKey(key);
   return key.startsWith("slack:") ? "slack" : "chat";
 }
-
-/**
- * The only `idFromName()` call in the codebase. Generic over the DO class so
- * this module never imports the Durable Object implementation — keys stay pure
- * and testable against a fake namespace.
- *
- * `Rpc` is a global ambient namespace from worker-configuration.d.ts. It is NOT
- * exported by "cloudflare:workers"; importing it from there typechecks in the
- * pool-workers .d.ts but not in application code.
- */
-export function runStubForKey<T extends Rpc.DurableObjectBranded | undefined = undefined>(
-  namespace: DurableObjectNamespace<T>,
-  key: string,
-): DurableObjectStub<T> {
-  return namespace.get(namespace.idFromName(assertRunKey(key)));
-}

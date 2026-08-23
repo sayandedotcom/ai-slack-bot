@@ -1,4 +1,4 @@
-import type { SlackMessage } from "../codemode/gateways";
+import type { SlackMessage } from "../gateways/ports";
 
 /**
  * Reads over the ingested message table.

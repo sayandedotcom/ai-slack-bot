@@ -1,6 +1,6 @@
 import type { Env } from "../index";
-import { CapabilityError } from "../codemode/errors";
-import { sha256Bytes } from "../codemode/effects";
+import { CapabilityError } from "../gateways/errors";
+import { sha256Bytes } from "../gateways/hash";
 
 /**
  * The seam between the sandbox and Phase 20's pull request.
