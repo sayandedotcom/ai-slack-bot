@@ -29,8 +29,8 @@ import type {
   SandboxCommandResult,
   SandboxGateway,
   SandboxProcessState,
-} from "../codemode/gateways";
-import { CapabilityError } from "../codemode/errors";
+} from "../gateways/ports";
+import { CapabilityError } from "../gateways/errors";
 import type { Env } from "../index";
 import { captureDiff, type DiffResult } from "./diff";
 import { devEnvFor, devEnvForProcess } from "./env";

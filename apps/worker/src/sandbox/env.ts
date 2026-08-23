@@ -1,4 +1,4 @@
-import { CapabilityError } from "../codemode/errors";
+import { CapabilityError } from "../gateways/errors";
 import type { Env } from "../index";
 
 /**

@@ -1,6 +1,5 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeApprovalCardRunner } from "../src/approval/projection";
 import {
   claimNudge,
   decideApproval,
@@ -405,115 +404,13 @@ describe("sweepNudges", () => {
   });
 });
 
-/**
- * The projection hook. A fake storage rather than a live Durable Object: what
- * is under test is the runner's OUTCOME when the nudge fails, and the two
- * reads it makes of local state are a fixed pair of SELECTs.
- */
-function fakeStorage(input: { runId: string; approvalId: string }): DurableObjectStorage {
-  const approvalState = {
-    approval_id: input.approvalId,
-    generation_id: `gen:${crypto.randomUUID()}`,
-    state: "open",
-    draft: "We can refund the last invoice.",
-    why: "customer asked for a refund, this is committal",
-    created_at: NOW,
-    updated_at: NOW,
-  };
-  const runState = {
-    run_id: input.runId,
-    run_key: `slack:${input.runId}`,
-    origin: "slack",
-    channel_id: "C_CUST",
-    thread_ts: "1720000000.000100",
-    status: "awaiting_approval",
-    summary: null,
-    created_at: NOW,
-    updated_at: NOW,
-  };
-  return {
-    sql: {
-      exec: (query: string) => ({
-        toArray: () => (query.includes("approval_state") ? [approvalState] : [runState]),
-      }),
-    },
-  } as unknown as DurableObjectStorage;
-}
 
-describe("the approval_card projection hook", () => {
-  it("still delivers the card when the nudge fails", async () => {
-    const runId = await seedRun();
-    const approvalId = `apr:${crypto.randomUUID()}`;
-    await connectSpeaker();
-    stubSlack(() => ({ ok: false, error: "channel_not_found" }));
-
-    const runner = makeApprovalCardRunner({
-      storage: fakeStorage({ runId, approvalId }),
-      db: env.DB,
-      env: testEnv(),
-    });
-
-    const outcome = await runner.run({
-      job: {
-        id: "pj1",
-        kind: "approval_card",
-        sourceId: approvalId,
-        state: "claimed",
-        claimToken: "t1",
-        leaseExpiresAt: NOW + 1000,
-        attempts: 1,
-        nextAttemptAt: NOW,
-        lastError: null,
-        createdAt: NOW,
-        updatedAt: NOW,
-      },
-      claimToken: "t1",
-      runId,
-    });
-
-    expect(outcome).toEqual({ outcome: "delivered" });
-    const card = await getApproval(env.DB, approvalId);
-    expect(card).not.toBeNull();
-    // The failed nudge left the slot free for the sweeper.
-    expect(card?.nudgedAt).toBeNull();
-  });
-
-  it("nudges once when the card projects", async () => {
-    const runId = await seedRun();
-    const approvalId = `apr:${crypto.randomUUID()}`;
-    await connectSpeaker();
-    stubSlack(happySlack);
-
-    const runner = makeApprovalCardRunner({
-      storage: fakeStorage({ runId, approvalId }),
-      db: env.DB,
-      env: testEnv(),
-    });
-    const job = {
-      job: {
-        id: "pj1",
-        kind: "approval_card" as const,
-        sourceId: approvalId,
-        state: "claimed" as const,
-        claimToken: "t1",
-        leaseExpiresAt: NOW + 1000,
-        attempts: 1,
-        nextAttemptAt: NOW,
-        lastError: null,
-        createdAt: NOW,
-        updatedAt: NOW,
-      },
-      claimToken: "t1",
-      runId,
-    };
-
-    expect(await runner.run(job)).toEqual({ outcome: "delivered" });
-    const posts = sent.filter((s) => s.url.endsWith("chat.postMessage")).length;
-    expect(posts).toBe(1);
-
-    // A REDELIVERY of the same job — an at-least-once alarm, or a crashed
-    // worker replaying it — must not DM the engineer a second time.
-    expect(await runner.run(job)).toEqual({ outcome: "delivered" });
-    expect(sent.filter((s) => s.url.endsWith("chat.postMessage")).length).toBe(1);
-  });
-});
+// The `approval_card` projection-hook cases lived here. They drove
+// `makeApprovalCardRunner`, which was part of the agent layer removed on
+// 2026-08-23 — the projection job that turned an escalation into a D1 card and
+// then nudged once. What they pinned is still true of the pieces that remain
+// and is worth re-pinning when the new chassis lands: the card is committed
+// BEFORE the DM is attempted, a failed nudge still reports the card delivered
+// and leaves the claim free for the sweeper, and a redelivered job never DMs
+// the engineer twice. `sendNudge`, `updateNudge` and `sweepNudges` — all
+// covered above — are the halves that survived.

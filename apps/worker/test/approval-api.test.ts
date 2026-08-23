@@ -8,7 +8,7 @@ import {
   type ResolutionNotifier,
 } from "../src/api/approvals";
 import { insertApproval, setDelivery, type NewApprovalCard } from "../src/approval/repository";
-import { runStubForKey } from "../src/run/keys";
+
 
 /**
  * Real D1 through the workerd vitest pool, no `isolatedStorage` — same
@@ -184,19 +184,14 @@ describe("GET /api/approvals", () => {
     expect(body.approvals).toHaveLength(1);
     expect(body.approvals[0]).toMatchObject({ id, runId, draft: "We can refund the last invoice." });
 
-    // No DO STATE WAS WRITTEN, which is what `state()` can actually prove and
-    // is therefore all this claims. A Durable Object that nothing has
-    // initialized has no `run_state` row, so `null` here says the route did not
-    // reach `initialize` — it does NOT say the route never instantiated a stub
-    // or called a read-only method, because neither leaves a trace.
-    //
-    // The stronger claim (invariant 7: reads never wake a DO AT ALL) rests on
-    // the route file itself, which never references `env.RUNS` — greppable, and
-    // the only form of proof available from outside. Stated as two separate
-    // things on purpose: an assertion described as more than it is, is how a
-    // green suite ends up standing for a property nobody checks.
-    const stub = runStubForKey(env.RUNS, runKey);
-    expect(await stub.state()).toBeNull();
+    // The route never wakes a run session, and with the agent layer removed
+    // there is no session to wake — the claim now rests entirely on the route
+    // file, which references no Durable Object binding at all. That is
+    // greppable, and it is the only form of proof available from outside.
+    // Restore the "no run_state row was written" half against whatever the new
+    // chassis stores, rather than letting this read as a stronger claim than it
+    // is: an assertion described as more than it is, is how a green suite ends
+    // up standing for a property nobody checks.
   });
 
   it("rejects a state value other than 'open'", async () => {

@@ -1,5 +1,5 @@
-import { CapabilityError } from "../codemode/errors";
-import { sha256Bytes } from "../codemode/effects";
+import { CapabilityError } from "../gateways/errors";
+import { sha256Bytes } from "../gateways/hash";
 import { makeRedactor } from "./gateway";
 
 /**

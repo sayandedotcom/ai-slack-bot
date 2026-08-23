@@ -233,19 +233,7 @@
     // opens target the same repo until a fork is actually in play.
     "GITHUB_REPO": "Zellify/web2app-rebuild",
     "GITHUB_BASE": "staging",
-    "GITHUB_AUTHOR": "worker-pat",
-    // --------------------------------------------------------- Phase 25
-    //
-    // Which run chassis a wake resolves to: "legacy" = the hand-built RunDO +
-    // streamText loop, "think" = RunAgent extends Think<Env>. Non-secret by
-    // construction — a mode flag, like NUDGE_MODE above.
-    //
-    // It ships as "legacy" and STAYS "legacy" until the cutover task flips it,
-    // so every intermediate deploy during this migration behaves exactly as
-    // the trial deliverable does. Anything unrecognised must read as "legacy"
-    // in code: the strangler's safe direction is the chassis that already
-    // passed the drill.
-    "RUN_CHASSIS": "legacy"
+    "GITHUB_AUTHOR": "worker-pat"
   },
   "assets": {
     // The dashboard's Vite build output (Phase 14). It replaced ./public, which
@@ -287,15 +275,6 @@
   "r2_buckets": [
     { "binding": "ARTIFACTS", "bucket_name": "firefighter-artifacts" }
   ],
-  // Worker Loader (Dynamic Workers, open beta since 2026-03-24). Unlike most
-  // bindings this points at no external resource -- it just exposes the loader
-  // API as env.LOADER. Shape verified against this repo's
-  // node_modules/wrangler/config-schema.json (RawConfig.properties.worker_loaders).
-  //
-  // Phase 09 loads model-authored code through it with globalOutbound: null.
-  // Deliberately no service binding, no outbound fetcher, no second Worker: the
-  // isolate's only reach is RPC capabilities passed as call arguments.
-  "worker_loaders": [{ "binding": "LOADER" }],
   // One Durable Object class, keyed by the run's origin key. `new_sqlite_classes`
   // (not `new_classes`) is what makes ctx.storage.sql available; the legacy
   // `migrations` array is used over the newer declarative `exports` map because
@@ -339,13 +318,6 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "name": "RUNS", "class_name": "RunDO" },
-      // Phase 25's Think chassis (`RunAgent extends Think<Env>`), landing
-      // BESIDE RunDO behind the RUN_CHASSIS var rather than replacing it. Both
-      // classes are live at once during the strangler window; RUN_CHASSIS
-      // decides which one a wake resolves to, and the legacy class is deleted
-      // only after the cutover drill passes.
-      { "name": "RUN_AGENTS", "class_name": "RunAgent" },
       // A container IS a Durable Object — `@cloudflare/sandbox`'s Sandbox
       // extends Container extends DurableObject, and this binding is how the
       // Worker addresses one. The model can never name an id: the lifecycle
@@ -385,7 +357,19 @@
     // needed and none is wanted: nothing addresses the runtime from outside —
     // it is reached only through its host DO's own `facets` map, where it gets
     // an isolated SQLite database of its own.
-    { "tag": "v3", "new_sqlite_classes": ["RunAgent", "CodemodeRuntime"] }
+    { "tag": "v3", "new_sqlite_classes": ["RunAgent", "CodemodeRuntime"] },
+    // The agent layer was removed on 2026-08-23, to be rebuilt on the Agents
+    // SDK / Project Think / Code Mode. `deleted_classes` is what tells the
+    // platform to drop the objects; without it a deploy that no longer exports
+    // these classes is refused outright.
+    //
+    // Every run transcript lived in that SQLite and goes with it. The D1 rows
+    // — `runs`, `approvals`, `messages`, `channels`, the memory outbox — are
+    // untouched, so ingest, the run index, the approval history and memory all
+    // survive the teardown.
+    //
+    // v1-v3 are applied in production and are never edited; this is appended.
+    { "tag": "v4", "deleted_classes": ["RunDO", "RunAgent", "CodemodeRuntime"] }
   ],
   "d1_databases": [
     {

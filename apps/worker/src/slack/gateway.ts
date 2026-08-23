@@ -1,6 +1,6 @@
-import type { CodeModeScope } from "../codemode/contracts";
-import { CapabilityError } from "../codemode/errors";
-import type { SlackGateway, SlackMessage } from "../codemode/gateways";
+import type { RunScope } from "../gateways/scope";
+import { CapabilityError } from "../gateways/errors";
+import type { SlackGateway, SlackMessage } from "../gateways/ports";
 import { makeUserTokenSender, NOT_CONNECTED } from "../approval/sender";
 import type { UserTokenSource } from "../identity/user-token";
 import { readThread, searchStoredMessages, isWildcardOnly } from "./messages";
@@ -42,7 +42,7 @@ function identityUnavailable(): CapabilityError {
  */
 export function makeSlackGateway(
   db: D1Database,
-  scope: CodeModeScope,
+  scope: RunScope,
   identity: UserTokenSource | null = null,
 ): SlackGateway {
   const sender = identity === null ? null : makeUserTokenSender(identity);

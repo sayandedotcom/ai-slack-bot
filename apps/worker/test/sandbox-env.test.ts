@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CapabilityError } from "../src/codemode/errors";
+import { CapabilityError } from "../src/gateways/errors";
 import type { Env } from "../src/index";
 import { devEnvFor, devEnvForProcess, devEnvKeyNames } from "../src/sandbox/env";
 

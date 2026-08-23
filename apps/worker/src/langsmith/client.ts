@@ -1,10 +1,10 @@
-import { CapabilityError } from "../codemode/errors";
+import { CapabilityError } from "../gateways/errors";
 import type {
   LangSmithReader,
   Trace,
   TraceNode,
   TraceRef,
-} from "../codemode/gateways";
+} from "../gateways/ports";
 
 /**
  * Caps that are independent of each other on purpose: a trace can be wide
