@@ -54,6 +54,28 @@ describe("RunAgent boot", () => {
     expect(await stub.codemodeReady()).toBe(true);
   });
 
+  it("exposes exactly the eleven capability namespaces, in the frozen order", async () => {
+    const stub = await getAgentByName(env.RUN_AGENTS, freshKey());
+    expect(await stub.connectorNames()).toEqual([
+      "slack",
+      "memory",
+      "linear",
+      "supabase",
+      "langsmith",
+      "betterstack",
+      "files",
+      "approval",
+      "sandbox",
+      "browser",
+      "github",
+    ]);
+  });
+
+  it("no longer exposes the Task 1 boot probe", async () => {
+    const stub = await getAgentByName(env.RUN_AGENTS, freshKey());
+    expect(await stub.connectorNames()).not.toContain("bootProbe");
+  });
+
   it("does not send the private run key to a client on connect", async () => {
     // The DO name IS the run key. agents/dist/index.js:951-964 would otherwise
     // send it as a cf_agent_identity frame to every connecting browser.

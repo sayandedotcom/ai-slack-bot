@@ -11,16 +11,116 @@
  * `chat:{uuid}`), built only by `src/run/keys.ts`. The public `runs.id` is a
  * separate UUID resolved through D1. Nothing here may hand the name to a client.
  */
-import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { Think } from "@cloudflare/think";
 import { createExecuteRuntime } from "@cloudflare/think/tools/execute";
 import type { LanguageModel, Tool, ToolSet } from "ai";
 
+import type { ApprovalPort } from "../approval/contracts";
+import { renderCapabilityDeclarations } from "../capabilities/dts";
+import {
+  alwaysFresh,
+  newCodeExecution,
+  PRODUCTION_LIMITS,
+} from "../capabilities/execution";
+import { makeGuardedExecutor } from "../capabilities/executor";
+import { guardLoader } from "../capabilities/guarded-loader";
+import {
+  type BindingContext,
+  buildConnectors,
+  buildNamespaces,
+  NAMESPACE_FACTORIES,
+} from "../capabilities/registry";
+import { CapabilityError } from "../gateways/errors";
 import type { Env } from "../index";
-import { BootProbeConnector } from "./boot-probe";
+import { productionDependencies } from "./dependencies";
+import { resolveRunScope } from "./scope";
 
 /** The one outer tool. Named in the prompt, the tests and the README. */
 export const RUN_CODE_TOOL = "run_code";
+
+/**
+ * Approval's real port lands in Task 20. Refusing with a readable code is the
+ * honest placeholder: the namespace is declared so the model's API is stable,
+ * and calling it says plainly that it is not available rather than pretending
+ * to succeed.
+ */
+function notYetWiredApprovalPort(): ApprovalPort {
+  const refuse = () => {
+    throw new CapabilityError(
+      "capability_unavailable",
+      "approval is not wired on this build yet.",
+    );
+  };
+  return {
+    open: async () => refuse(),
+    openApprovalId: () => null,
+    withdraw: async () => refuse(),
+  };
+}
+
+/**
+ * A context good enough to render schemas and descriptions, and nothing else.
+ *
+ * Every gateway throws: rendering reads schemas, so if this ever reached a
+ * vendor it should fail loudly rather than make a call while composing a
+ * prompt. Same discipline as the declaration generator.
+ */
+function declarationNamespaces() {
+  const refuse = (name: string) =>
+    new Proxy({} as Record<string, unknown>, {
+      get: (_t, method) => () => {
+        throw new CapabilityError(
+          "invalid_context",
+          `rendering declarations must not call ${name}.${String(method)}`,
+        );
+      },
+    });
+
+  return buildNamespaces({
+    scope: {
+      runId: "render",
+      turnId: "render",
+      origin: "chat",
+      shadow: false,
+      customerSlug: null,
+      slackThread: null,
+      actor: null,
+    },
+    deps: {
+      db: refuse("db") as never,
+      slack: refuse("slack") as never,
+      memory: refuse("memory") as never,
+      linear: refuse("linear") as never,
+      supabase: refuse("supabase") as never,
+      langsmith: refuse("langsmith") as never,
+      betterstack: refuse("betterstack") as never,
+      files: refuse("files") as never,
+      approval: notYetWiredApprovalPort(),
+      sandbox: refuse("sandbox") as never,
+      github: refuse("github") as never,
+      clock: () => 0,
+    },
+    limits: PRODUCTION_LIMITS,
+    execution: newCodeExecution({
+      outerToolCallId: "render",
+      audit: { async started() {}, async completed() {}, async failed() {} },
+      guard: alwaysFresh(),
+      limits: PRODUCTION_LIMITS,
+      clock: () => 0,
+    }),
+  });
+}
+
+/** The model-facing API. Invariant 24: this is its ONE home. */
+function runCodeDescription(): string {
+  return [
+    "Write and run TypeScript against the typed capability namespaces below.",
+    "The code runs in an isolated Worker with no network access of its own:",
+    "every effect it has goes through one of these calls.",
+    "",
+    renderCapabilityDeclarations(declarationNamespaces()),
+  ].join("\n");
+}
 
 export class RunAgent extends Think<Env> {
   /**
@@ -50,6 +150,8 @@ export class RunAgent extends Think<Env> {
 
   #model: LanguageModel | null = null;
   #runCode: Tool | undefined;
+  #cachedRunId: string | undefined;
+  #cachedTurnId: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -60,6 +162,11 @@ export class RunAgent extends Think<Env> {
       const { buildModel } = await import("./model");
       this.#model = buildModel(env);
 
+      // The BindingContext is per EXECUTION, not per agent — the call budget,
+      // the citation cache, the customer references and the audit stream all
+      // belong to one `run_code` call. `#executionContext` builds a fresh one
+      // each time the tool runs; this construction exists only so the tool and
+      // its facet exist before the first turn.
       // `state` and `browser` MUST be passed explicitly, even as undefined.
       // createExecuteTool derives `state` from this.workspace and `browser`
       // from env.BROWSER via optionsFromAgent, merged as
@@ -70,11 +177,21 @@ export class RunAgent extends Think<Env> {
         name: RUN_CODE_TOOL,
         state: undefined,
         browser: undefined,
-        executor: new DynamicWorkerExecutor({ loader: env.LOADER }),
-        // TEMPORARY: Task 8 replaces this with the real capability
-        // connectors. createExecuteTool throws on an empty connector list, and
-        // the facet check below is worth having now — see ./boot-probe.ts.
-        connectors: [new BootProbeConnector(ctx, env)],
+        executor: makeGuardedExecutor(
+          guardLoader(env.LOADER, PRODUCTION_LIMITS),
+          PRODUCTION_LIMITS,
+          () => Date.now(),
+        ),
+        // A PROVIDER, not a context: the connectors rebuild each namespace
+        // against a fresh BindingContext on every call, so no two executions
+        // share a call budget, an audit stream or a customer reference map.
+        connectors: buildConnectors(ctx, env, () => this.#bindingContext()),
+        // Invariant 24: the generated declarations have ONE home, and it is
+        // the tool description. They are guidance, not a boundary — the
+        // sandbox runs JavaScript and nothing stops model code calling a
+        // method the types forbid. The boundary is the Zod parse.
+        // Rendered from the schemas, which do not vary by run.
+        description: runCodeDescription(),
       });
       this.#runCode = tool;
     });
@@ -107,6 +224,11 @@ export class RunAgent extends Think<Env> {
   // These exist so the tool boundary can be asserted from outside. They are
   // reads; none of them mutates the run.
 
+  /** The capability namespaces reachable inside run_code. Test surface. */
+  async connectorNames(): Promise<string[]> {
+    return NAMESPACE_FACTORIES.map((factory) => factory.name);
+  }
+
   /** The merged map Think would assemble for a turn. */
   async toolNames(): Promise<string[]> {
     const { createWorkspaceTools } = await import("@cloudflare/think/tools/workspace");
@@ -129,6 +251,46 @@ export class RunAgent extends Think<Env> {
   async codemodeReady(): Promise<boolean> {
     await this.codemode?.executions(1);
     return true;
+  }
+
+  /**
+   * The capability surface for one execution.
+   *
+   * Approval is not wired yet — Task 20 builds the real port. Until then the
+   * namespace is DECLARED (so the model sees a stable API and the .d.ts does
+   * not churn) and refuses at call time with a code the model can read, which
+   * is the same shape every other unusable-in-this-context capability takes.
+   */
+  async #bindingContext(outerToolCallId = crypto.randomUUID()): Promise<BindingContext> {
+    const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
+    return {
+      scope,
+      deps: productionDependencies(this.env, scope, notYetWiredApprovalPort()),
+      limits: PRODUCTION_LIMITS,
+      execution: newCodeExecution({
+        outerToolCallId,
+        audit: { async started() {}, async completed() {}, async failed() {} },
+        guard: alwaysFresh(),
+        limits: PRODUCTION_LIMITS,
+        clock: () => Date.now(),
+      }),
+    };
+  }
+
+  /**
+   * The public run id. Resolved from D1 by key rather than parsed out of the
+   * DO name: the name is the private key and the two are deliberately
+   * different values.
+   */
+  #runId(): string {
+    if (this.#cachedRunId === undefined) {
+      throw new CapabilityError("invalid_context", "this agent has no resolved run id yet");
+    }
+    return this.#cachedRunId;
+  }
+
+  #turnId(): string {
+    return this.#cachedTurnId ?? "boot";
   }
 
   /** Pins the identity opt-out above against an SDK default change. */

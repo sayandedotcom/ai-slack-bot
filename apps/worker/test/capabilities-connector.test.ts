@@ -40,7 +40,12 @@ const namespace = {
 };
 
 function connector() {
-  return new FirefighterConnector({} as ExecutionContext, env, namespace);
+  return new FirefighterConnector(
+    {} as ExecutionContext,
+    env,
+    { name: namespace.name, instructions: namespace.instructions, build: () => namespace.tools },
+    async () => undefined,
+  );
 }
 
 describe("FirefighterConnector — the raw-Zod trap", () => {
@@ -124,5 +129,33 @@ describe("toJsonSchema", () => {
   it("caches by schema instance", () => {
     const schema = z.strictObject({ a: z.string() });
     expect(toJsonSchema(schema)).toBe(toJsonSchema(schema));
+  });
+});
+
+describe("FirefighterConnector — per-execution isolation", () => {
+  it("rebuilds the namespace against a FRESH context on every call", async () => {
+    // CodemodeConnector.resolvedTools() caches tools() per connector instance
+    // (`#toolsPromise ??=`), so the connector cannot be where per-execution
+    // state refreshes. If it were, two executions would share one call budget,
+    // one audit stream and one customer-reference map.
+    let contexts = 0;
+    const connector = new FirefighterConnector(
+      {} as ExecutionContext,
+      env,
+      {
+        name: "demo",
+        build: () => {
+          contexts += 1;
+          return namespace.tools;
+        },
+      },
+      async () => undefined,
+    );
+
+    await connector.executeTool("echo", { text: "a" }, { executionId: "e1" });
+    const afterFirst = contexts;
+    await connector.executeTool("echo", { text: "b" }, { executionId: "e2" });
+
+    expect(contexts).toBeGreaterThan(afterFirst);
   });
 });

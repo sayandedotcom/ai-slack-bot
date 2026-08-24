@@ -11,7 +11,11 @@ import type { CodemodeConnector } from "@cloudflare/codemode";
 import type { CapabilityDependencies } from "../gateways/ports";
 import type { RunScope } from "../gateways/scope";
 import type { Env } from "../index";
-import { FirefighterConnector, type CapabilityNamespace } from "./connector";
+import {
+  type CapabilityNamespace,
+  type CapabilityNamespaceFactory,
+  FirefighterConnector,
+} from "./connector";
 import {
   assertClassified,
   type CapabilityEffect,
@@ -27,8 +31,11 @@ import { makeFilesTools } from "./namespaces/files";
 import { makeGithubTools } from "./namespaces/github";
 import { makeLinearTools } from "./namespaces/linear";
 import { makeMemoryTools } from "./namespaces/memory";
+import { makeApprovalTools } from "./namespaces/approval";
 import { makeBetterStackTools } from "./namespaces/betterstack";
+import { makeBrowserTools } from "./namespaces/browser";
 import { makeLangSmithTools } from "./namespaces/langsmith";
+import { makeSandboxTools } from "./namespaces/sandbox";
 import { makeSlackTools } from "./namespaces/slack";
 import { makeSupabaseTools } from "./namespaces/supabase";
 
@@ -135,17 +142,33 @@ function auditArgs(input: unknown): Record<string, unknown> | undefined {
  * references, its audit stream. Handing one set to two executions merges all
  * four, so `execution` is a required argument rather than something built here.
  */
+/**
+ * The namespaces as unbound factories, in the frozen order.
+ *
+ * Separate from `buildNamespaces` because a connector must be able to rebuild
+ * a namespace against a FRESH context on every call — see
+ * `CapabilityNamespaceFactory`.
+ */
+export const NAMESPACE_FACTORIES: CapabilityNamespaceFactory<BindingContext>[] = [
+  { name: "slack", build: makeSlackTools },
+  { name: "memory", build: makeMemoryTools },
+  { name: "linear", build: makeLinearTools },
+  { name: "supabase", build: makeSupabaseTools },
+  { name: "langsmith", build: makeLangSmithTools },
+  { name: "betterstack", build: makeBetterStackTools },
+  { name: "files", build: makeFilesTools },
+  { name: "approval", build: makeApprovalTools },
+  { name: "sandbox", build: makeSandboxTools },
+  { name: "browser", build: makeBrowserTools },
+  { name: "github", build: makeGithubTools },
+];
+
 export function buildNamespaces(ctx: BindingContext): CapabilityNamespace[] {
-  const namespaces: CapabilityNamespace[] = [
-    { name: "slack", tools: makeSlackTools(ctx) },
-    { name: "memory", tools: makeMemoryTools(ctx) },
-    { name: "linear", tools: makeLinearTools(ctx) },
-    { name: "supabase", tools: makeSupabaseTools(ctx) },
-    { name: "langsmith", tools: makeLangSmithTools(ctx) },
-    { name: "betterstack", tools: makeBetterStackTools(ctx) },
-    { name: "files", tools: makeFilesTools(ctx) },
-    { name: "github", tools: makeGithubTools(ctx) },
-  ];
+  const namespaces = NAMESPACE_FACTORIES.map((factory) => ({
+    name: factory.name,
+    instructions: factory.instructions,
+    tools: factory.build(ctx),
+  }));
 
   for (const namespace of namespaces) {
     // Checks the BRAND, not the label. A hand-rolled tool that helpfully
@@ -173,9 +196,16 @@ export function buildNamespaces(ctx: BindingContext): CapabilityNamespace[] {
 export function buildConnectors(
   doCtx: DurableObjectState | ExecutionContext,
   env: Env,
-  ctx: BindingContext,
+  /**
+   * Resolves the CURRENT execution's context. Called once per capability call,
+   * never memoised: two executions must not share a budget, an audit stream or
+   * a set of customer references.
+   */
+  getContext: () => Promise<BindingContext>,
 ): CodemodeConnector[] {
-  return buildNamespaces(ctx).map((ns) => new FirefighterConnector(doCtx, env, ns));
+  return NAMESPACE_FACTORIES.map(
+    (factory) => new FirefighterConnector(doCtx, env, factory, getContext),
+  );
 }
 
 export type { CapabilityEffect };

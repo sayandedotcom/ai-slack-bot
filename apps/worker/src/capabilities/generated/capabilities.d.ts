@@ -293,6 +293,185 @@ declare const files: {
 	publish: (input: PublishInput) => Promise<PublishOutput>;
 }
 
+type EscalateInput = {
+    draft: string;
+    why: string;
+}
+type EscalateOutput = {
+    approvalId: string;
+    state: "pending";
+}
+type WithdrawInput = {}
+type WithdrawOutput = {
+    withdrawn: true;
+} | {
+    withdrawn: false;
+    decision: "approved" | "edited" | "rejected";
+}
+
+declare const approval: {
+	/**
+	 * Park this run for one human decision on one proposed customer Slack reply. Returns immediately; the pause happens when you finish your turn. Escalate when the message is committal, closes a thread, tells a customer no, or could embarrass the engineer whose name is on it. Do NOT escalate clarifying questions or status updates — send those with slack.reply.
+	 */
+	escalate: (input: EscalateInput) => Promise<EscalateOutput>;
+
+	/**
+	 * Retract the open approval, e.g. because the customer's newest message made the draft moot. Loses gracefully: if a human already decided, you get their decision back instead of a withdrawal.
+	 */
+	withdraw: (input: WithdrawInput) => Promise<WithdrawOutput>;
+}
+
+type BootInput = {}
+type BootOutput = {
+    state: "provisioning" | "ready" | "failed";
+    commit: string | null;
+    repoPath: string;
+    elapsedMs: number;
+    note: string;
+}
+type ExecInput = {
+    cmd: string;
+    cwd?: string;
+    timeoutMs?: number;
+    injectDevEnv?: boolean;
+}
+type ExecOutput = {
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    truncated: boolean;
+}
+type SpawnInput = {
+    cmd: string;
+    cwd?: string;
+    injectDevEnv?: boolean;
+}
+type SpawnOutput = {
+    processId: string;
+}
+type CheckProcessInput = {
+    processId: string;
+}
+type CheckProcessOutput = {
+    running: boolean;
+    exitCode: number | null;
+    stdoutTail: string;
+    stderrTail: string;
+}
+type KillProcessInput = {
+    processId: string;
+}
+type KillProcessOutput = {
+    killed: boolean;
+}
+type ReadFileInput = {
+    path: string;
+}
+type ReadFileOutput = {
+    content: string;
+    truncated: boolean;
+}
+type WriteFileInput = {
+    path: string;
+    content: string;
+}
+type WriteFileOutput = {
+    bytesWritten: number;
+}
+type PreviewInput = {
+    port: number;
+}
+type PreviewOutput = {
+    url: string;
+}
+type DiffInput = {}
+type DiffOutput = {
+    preview: string;
+    truncated: boolean;
+    filesChanged: number;
+    insertions: number;
+    deletions: number;
+    diffRef: string | null;
+}
+
+declare const sandbox: {
+	/**
+	 * Start this run's container, or report on one already starting. Idempotent. The FIRST boot call in a code block waits up to ~14s for provisioning progress; any further boot call in the same block returns immediately — so call it once per block, and poll across blocks, not within one. A COLD machine clones the monorepo and installs from scratch, which takes 2-4 minutes (~10-14 blocks). Budget for that: call boot early, do genuinely useful work between polls (read memory, draft from what you already know, send a brief status reply if warranted), and only wait on the machine when nothing else moves the task. If the question is answerable without code — a how-to, a status — answer it; the machine is for reproducing, editing and running, not a reflex. Every other capability here refuses with sandbox_not_ready until state is 'ready'. `note` names the current provisioning step; `repoPath` is where commands run by default, and `pnpm build-packages` has already run by the time state is 'ready'.
+	 */
+	boot: (input: BootInput) => Promise<BootOutput>;
+
+	/**
+	 * Run one command to completion and get its output. It blocks, so it must finish inside this execution's budget: timeoutMs defaults to 10000 and anything above 15000 is REFUSED rather than quietly shortened. Use spawn for installs, builds, test suites and servers. Runs in the checkout unless cwd says otherwise. Set injectDevEnv when the command needs the app's dev-tier environment — the monorepo's dev scripts are Infisical-wrapped and there is no credential to authenticate with here, so run the inner command directly and pass this flag instead of running `pnpm dev`. Output is truncated per stream and scrubbed of injected values, so do not try to print them.
+	 */
+	exec: (input: ExecInput) => Promise<ExecOutput>;
+
+	/**
+	 * Start a long-running command in the background and get a processId back. This is how anything slower than a few seconds is run — a dev server, a build, a test suite — because one execution has 20 seconds and a blocking command cannot outlive it. Poll it with checkProcess on later turns. NEVER bind a server to port 3000: three apps here default to it, the port is a CLI flag inside their package script so a PORT variable does NOT override it, and 3000 is the container's own control server. Use 4100 or above, e.g. `pnpm --filter @web2app/web exec next dev --port 4100`. Dev scripts are Infisical-wrapped and cannot authenticate here, so run the inner command directly and pass injectDevEnv: true.
+	 */
+	spawn: (input: SpawnInput) => Promise<SpawnOutput>;
+
+	/**
+	 * Report on a process spawn started: whether it is still running, its exit code once it is not, and the tail of each output stream. This is the poll — call it on a later turn rather than looping here, since waiting burns the same 20 second budget the process needs. A server that is listening but erroring is still 'running'; read the tails to tell those apart.
+	 */
+	checkProcess: (input: CheckProcessInput) => Promise<CheckProcessOutput>;
+
+	/**
+	 * Stop a process this run started. `killed: false` means there was no such process, which is a fact rather than an error. Kill a dev server before starting another on the same port: a process that failed to come up is not reaped, keeps its port, and the next attempt dies with EADDRINUSE pointing at the wrong problem.
+	 */
+	killProcess: (input: KillProcessInput) => Promise<KillProcessOutput>;
+
+	/**
+	 * Read a text file from the container. Content is truncated with a visible marker and scrubbed of injected environment values. Narrow first with exec and grep or sed rather than reading a large file and searching it here — that is the whole reason you are running code instead of calling tools one at a time.
+	 */
+	readFile: (input: ReadFileInput) => Promise<ReadFileOutput>;
+
+	/**
+	 * Write a text file in the container, creating or replacing it whole. Before calling diff, format every file you edited with `pnpm exec biome check --write` and the explicit paths — this repo blocks unformatted commits. NEVER pass a directory or a computed-empty list to that command: it then sweeps the entire repo and rewrites files you never touched. EXPECT PRE-EXISTING LINT ERRORS ON OLDER FILES: this repo migrated to Biome/Ultracite recently, and CI runs `biome ci --changed`, which judges the WHOLE file you touched, not your lines — so a two-line edit to an untouched-since-migration file can surface hundreds of diagnostics that are not yours. The repo's own policy is to fix lint in files you edit and never refactor unrelated ones, so: run `biome check --write <paths>`, then `biome check --write --unsafe <paths>` for the rest. What remains after that has NO automatic fix (cognitive complexity, and the a11y rules about click handlers on non-interactive elements), and the repo sanctions suppressing those rather than rewriting a legacy component: put `// biome-ignore-all lint/<group>/<rule>: <short reason>` lines at the VERY TOP of the file, above every import, one per rule — anywhere else and Biome reports them as unused. Judgement call worth making deliberately: if formatting the file rewrites far more lines than your actual change, that buries your diff for a reviewer, and it is better to leave the formatting alone and SAY SO in the pull request's notes for reviewers, naming the file and roughly how many lines a format would touch, than to ship a change nobody can read.
+	 */
+	writeFile: (input: WriteFileInput) => Promise<WriteFileOutput>;
+
+	/**
+	 * Open a public URL for a port inside the container and wait until it actually serves — a fresh tunnel answers 530 for several seconds, so this retries rather than reporting a broken one. Port 3000 is refused: it is the container's own control server, so a check against it succeeds whether or not your server ever started. Bind and preview 4100 or above.
+	 */
+	preview: (input: PreviewInput) => Promise<PreviewOutput>;
+
+	/**
+	 * Capture everything changed in the checkout, including new files. Returns a bounded preview plus an opaque diffRef; the full patch is stored intact and is what a pull request will be built from, so never reconstruct it from the preview or paste it back. `diffRef: null` means nothing changed. Format your edited files first — an unformatted change arrives as a review comment rather than a merge.
+	 */
+	diff: (input: DiffInput) => Promise<DiffOutput>;
+}
+
+type RecordInput = {
+    script: string;
+    label: string;
+    timeoutMs?: number;
+}
+type RecordOutput = {
+    recordingId: string;
+}
+type CheckRecordingInput = {
+    recordingId: string;
+}
+type CheckRecordingOutput = {
+    state: "running" | "passed" | "failed";
+    url: string | null;
+    error: string | null;
+    stdoutTail: string;
+    durationMs: number;
+}
+
+declare const browser: {
+	/**
+	 * Run a Playwright script with video recording, on this run's own container. `page` is already in scope — do not open a browser or a context yourself, do not call recordVideo, and do not call setViewportSize; the harness owns all three and records at a fixed 1280x720 — resizing the page only makes your own video letterbox with a grey band. Write the script as you would a Playwright test body and THROW to fail: the last expression's truthiness is never consulted. This does not block — it starts the recording and returns a recordingId; poll checkRecording for the result on a LATER turn, across blocks rather than in a loop inside this one, because a real run is minutes and this execution has seconds. WARM THE ROUTE BEFORE YOU RECORD: the recording starts the instant the page exists, before your first `goto`, and a dev server compiles a page on its first request — 5-40 seconds during which the video is blank white. Hit the URL first with `sandbox.exec` (`curl -s -o /dev/null -w '%{http_code}' http://localhost:4100/the-route`) and only call record once that answers 200; then the first navigation paints at once and the proof opens on the page, not on nothing. `timeoutMs` defaults to 60000 (60 seconds) and bounds the SCRIPT: if you could not warm the route, raise it, because a cold compile eats the budget and the run fails with "script exceeded timeoutMs", which looks exactly like the bug reproducing and is not. Anything above 180000 (3 minutes) is REFUSED rather than quietly shortened. `script` is capped at 20000 characters and `label` at 200; both are refused, not truncated. A script that throws is not a wasted call: the harness still flushes a playable video of the failure, and checkRecording returns it — that recording IS the proof a bug is real, so keep it rather than re-running for a clean one. If this run's machine never got a working browser, checkRecording reports that by name (browser-unavailable) instead of a generic failure or a hang.
+	 */
+	record: (input: RecordInput) => Promise<RecordOutput>;
+
+	/**
+	 * Poll a recording record started. state: "running" means keep waiting — call again on a later turn, never in a tight loop here. Once it settles ("passed" or "failed"), url — when present — is a public link to a playable mp4: safe to paste as-is into a pull request body or a Slack message, no signing, no escaping, nothing else to fetch. error carries Playwright's own message when the script threw, trimmed to the useful part, or names browser-unavailable when this run's machine never got a working browser — either way it is a reason you can act on. A FAILED recording is a first-class result, not a dead end: its video is what proves the bug is real, and it is worth linking exactly like a passing one, not discarded in favor of a cleaner rerun.
+	 */
+	checkRecording: (input: CheckRecordingInput) => Promise<CheckRecordingOutput>;
+}
+
 type OpenPRInput = {
     branch: string;
     title: string;

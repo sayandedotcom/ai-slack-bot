@@ -20,7 +20,15 @@ describe("capability declarations", () => {
     const namespaces = buildNamespaces(testBindingContext());
     const fromRegistry = renderCapabilityDeclarations(namespaces);
     const fromConnectors = await renderDeclarationsFromConnectors(
-      namespaces.map((ns) => new FirefighterConnector({} as ExecutionContext, env, ns)),
+      namespaces.map(
+        (ns) =>
+          new FirefighterConnector(
+            {} as ExecutionContext,
+            env,
+            { name: ns.name, instructions: ns.instructions, build: () => ns.tools },
+            async () => undefined,
+          ),
+      ),
     );
     expect(fromConnectors).toBe(fromRegistry);
   });
@@ -28,7 +36,15 @@ describe("capability declarations", () => {
   it("matches the committed artifact", async () => {
     const namespaces = buildNamespaces(testBindingContext());
     const rendered = await renderDeclarationsFromConnectors(
-      namespaces.map((ns) => new FirefighterConnector({} as ExecutionContext, env, ns)),
+      namespaces.map(
+        (ns) =>
+          new FirefighterConnector(
+            {} as ExecutionContext,
+            env,
+            { name: ns.name, instructions: ns.instructions, build: () => ns.tools },
+            async () => undefined,
+          ),
+      ),
     );
     expect(rendered).toBe(generated);
   });
