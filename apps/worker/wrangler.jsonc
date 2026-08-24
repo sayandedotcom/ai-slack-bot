@@ -4,6 +4,14 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
+  // Dynamic Workers. Model-authored TypeScript runs in an isolate created
+  // through this binding, with `globalOutbound: null` and clamped CPU — see
+  // src/capabilities/guarded-loader.ts. Unlike most bindings it points at no
+  // external resource; it is just access to the Worker Loader API.
+  //
+  // Billing calls this "Dynamic Workers". It is gated on Workers Paid, not on
+  // an allowlist.
+  "worker_loaders": [{ "binding": "LOADER" }],
   // `enabled: true` alone already persists 100% of logs; the sub-objects are
   // here to be explicit about the two things that are NOT the default.
   //
@@ -322,7 +330,12 @@
       // extends Container extends DurableObject, and this binding is how the
       // Worker addresses one. The model can never name an id: the lifecycle
       // derives it from the run.
-      { "name": "SANDBOX", "class_name": "Sandbox" }
+      { "name": "SANDBOX", "class_name": "Sandbox" },
+      // One Durable Object per run. The name is the private run key
+      // (slack:{channel}:{thread_ts} or chat:{uuid}) and is built ONLY by
+      // src/run/keys.ts; the public runs.id is a separate UUID resolved
+      // through D1, so a browser never learns the key.
+      { "name": "RUN_AGENTS", "class_name": "RunAgent" }
     ]
   },
   // APPENDED, never edited. `v1` is RunDO's and is already applied in
@@ -369,7 +382,20 @@
     // survive the teardown.
     //
     // v1-v3 are applied in production and are never edited; this is appended.
-    { "tag": "v4", "deleted_classes": ["RunDO", "RunAgent", "CodemodeRuntime"] }
+    { "tag": "v4", "deleted_classes": ["RunDO", "RunAgent", "CodemodeRuntime"] },
+    // The agent layer, rebuilt on Think + Code Mode (Phase 26). v4 deleted
+    // these classes; re-declaring them here creates them fresh, with empty
+    // SQLite — nothing survives from the v1-v3 objects and nothing should.
+    //
+    // CodemodeRuntime is listed for the same measured reason as in v3 above:
+    // `facets.get` needs `ctx.exports.CodemodeRuntime` to be a
+    // LoopbackDurableObjectNamespace, and only a `new_sqlite_classes`
+    // declaration makes it one. Exporting it from src/index.ts is necessary
+    // but NOT sufficient — without this line the first facet RPC dies with
+    // "Incorrect type for the 'class' field on 'StartupOptions'".
+    //
+    // v1-v4 are applied and are never edited; this is appended.
+    { "tag": "v5", "new_sqlite_classes": ["RunAgent", "CodemodeRuntime"] }
   ],
   "d1_databases": [
     {

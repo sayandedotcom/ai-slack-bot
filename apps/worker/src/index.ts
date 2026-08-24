@@ -29,6 +29,13 @@ import type { QueuedEvent } from "./slack/types";
 // .ContainerProxy is undefined" rather than at build time. The requirement is
 // stated only in a comment inside the package's `.d.ts`.
 export { ContainerProxy, Sandbox } from "./sandbox/class";
+export { RunAgent } from "./run/agent";
+// The durable Code Mode runtime lives in a Durable Object FACET of RunAgent.
+// It needs no `durable_objects.bindings` entry — nothing addresses it from
+// outside — but it must be exported here AND declared in the v5 migration, or
+// `ctx.exports.CodemodeRuntime` is a LoopbackServiceStub and `facets.get`
+// throws "Incorrect type for the 'class' field on 'StartupOptions'".
+export { CodemodeRuntime } from "@cloudflare/codemode";
 
 
 /**

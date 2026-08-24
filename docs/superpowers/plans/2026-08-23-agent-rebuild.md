@@ -1,6 +1,8 @@
 # Agent Layer Rebuild (Think + Code Mode) — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **⛔ THIS PLAN OVERRIDES THOSE SKILLS ON ONE POINT: you do not commit, ever.** Both of them commit at the end of a task by default. Here, every task ends by stopping for human review with the work left uncommitted and unstaged. See "The review gate" below before starting Task 1.
 
 **Goal:** Rebuild the deleted agent layer as one `RunAgent extends Think<Env>` Durable Object whose only tool is `run_code` over eleven typed Code Mode connectors, restoring the wake path, the approval loop, the live run transport and the dashboard.
 
@@ -27,7 +29,7 @@ Every task's requirements implicitly include this section.
 - **`effect` is required on every capability, with no default.** Never set `requiresApproval` or `needsApproval` on a connector tool — approval is a model-called capability (spec R5).
 - **Secrets never enter prompts, events, tool output, logs or memory** (invariant 39). Code names variables, never values, in errors and logs.
 - **Customer-facing copy is direct and technical** — no preamble, no "Great question!", no bulleted recap, no closing restatement.
-- **Commit after every task**, conventional prefixes (`feat(scope):`, `fix(scope):`, `docs:`). Never `git add` an untracked root `*.md` or `docs/things-to-remember.md`.
+- **NEVER COMMIT. Never stage.** Every task ends by stopping for human review — see "The review gate" below. Commit messages in this plan are *suggestions* for the reviewer, not instructions to run. Conventional prefixes (`feat(scope):`, `fix(scope):`, `docs:`). When the reviewer does commit, never `git add` an untracked root `*.md` or `docs/things-to-remember.md`.
 - **Verify before you invent.** Worker Loader, `@cloudflare/sandbox`, `@cloudflare/codemode`, `@cloudflare/think` and Zep V3 have thin training data. Read the installed `.d.ts` **and** `dist/*.js` in `node_modules` before writing against them. Record every invented API you hit in `docs/superpowers/plans/phase-26-notes.md`.
 
 ## File Structure
@@ -55,6 +57,48 @@ Every task's requirements implicitly include this section.
 **Dashboard:** `src/runs/run-view.tsx`, `src/runs/use-run-agent.ts`, `src/chat/chat-page.tsx`, `src/dev-stubs.ts`.
 
 ---
+
+## The review gate
+
+**Branch: `main`. No worktree.** The work happens directly on `main`, which is
+clean and green at `0c80558`. Nothing is pushed, so `git reset --hard` to the
+commit before a task is always available as an undo.
+
+**The agent never commits and never stages.** Each task ends with the working
+tree dirty and the index untouched. The agent reports what changed and stops;
+the human reads the diff and commits it themselves.
+
+The last step of every task is therefore:
+
+```bash
+git status --short
+git diff --stat
+```
+
+…followed by the agent stating, in a few lines: what it changed, what the gate
+reported (test counts, `tsc`, `capabilities:dts:check`), anything it could not
+verify, and the suggested commit message. Then it waits.
+
+The reviewer commits with the `git add` path list and the message the task
+supplies. Two standing rules for that commit, from CLAUDE.md: never `git add`
+an untracked root `*.md`, and never `docs/things-to-remember.md`.
+
+**Wave boundaries are the larger checkpoints.** A task's gate is its own tests
+plus `pnpm typecheck`; a wave's last task additionally runs the full
+`pnpm test && pnpm typecheck && pnpm capabilities:dts:check` in `apps/worker`
+and, for waves 5 and 6, `pnpm test && pnpm typecheck` in `apps/dashboard`. Do
+not begin the next wave until the previous wave's final review has been
+committed by the human.
+
+**If a task is rejected in review**, the agent fixes it in the same dirty tree
+and stops again. It does not open a new task, and it does not commit the
+rejected state "to keep history honest".
+
+**The same rule covers deploys.** `pnpm run deploy` publishes to the single
+production origin `firefighter.sayandeten.workers.dev`, which is what the Slack
+app points at, and migration `v5` creates Durable Object classes there. Task 2
+and Task 28 need a real deploy to measure and to drill — the agent prepares the
+command and the reason, and the human runs it. The agent never deploys.
 
 ## Recovering the deleted implementation
 
@@ -296,7 +340,8 @@ export class RunAgent extends Think<Env> {
         state: undefined,
         browser: undefined,
         executor: new DynamicWorkerExecutor({ loader: env.LOADER }),
-        connectors: [],
+        // NOT `[]` — see the note below.
+        connectors: [new BootProbeConnector(ctx, env)],
       });
       this.#runCode = tool;
     });
@@ -341,6 +386,11 @@ export class RunAgent extends Think<Env> {
 }
 ```
 
+**Two findings from executing this task, folded back in:**
+
+1. **`connectors: []` throws.** `@cloudflare/think/dist/tools/execute.js:84` refuses to build: *"createExecuteTool has nothing to expose — provide at least one of `tools`, `state`, `browser`, or `connectors`."* Deferring the whole Code Mode runtime to Task 8 would also defer the only proof that `v5` wired the `CodemodeRuntime` facet — and `facets.get` is lazy, so nothing but a real call into it can tell. A migration error found at Task 8 would mean all of Wave 1 sat on a broken foundation, and migrations are append-only. So Task 1 creates `src/run/boot-probe.ts`, a one-method placeholder connector, and **Task 8 deletes it**. It is unreachable by a model: no wake path until Task 19, no transport until Task 22.
+2. **`static options = { sendIdentityOnConnect: false }` is set here, not in Task 22.** It is one line on the class and it is a security default; creating the class with a known-unsafe default and scheduling the fix twenty tasks later is the wrong order. Task 22 keeps the end-to-end assertion over the real transport.
+
 - [ ] **Step 7: Export the classes from `src/index.ts`**
 
 Beside the existing `export { ContainerProxy, Sandbox } from "./sandbox/class";`:
@@ -381,7 +431,14 @@ npx wrangler deploy --dry-run --outdir /tmp/ff-dryrun
 
 Expected: no error, and the output names `RunAgent`, `Sandbox` and `CodemodeRuntime`. A binding pointing at an unexported class is tolerated by miniflare but is a hard error here.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 11: STOP for review — do not commit**
+
+```bash
+git status --short
+git diff --stat
+```
+
+Report what changed and what the gate reported, then wait. The reviewer commits:
 
 ```bash
 git add apps/worker/wrangler.jsonc apps/worker/src/run/agent.ts apps/worker/src/run/model.ts \
@@ -404,6 +461,8 @@ cd apps/worker && npx wrangler deploy --dry-run --outdir /tmp/ff-size
 ```
 
 Record `Total Upload: … / gzip: …`. The platform limit is **10 MB gzip** on Workers Paid.
+
+**Measured at Task 1 (2026-08-24): `8902.03 KiB / gzip: 1710.78 KiB`** — 17% of the ceiling. The uncompressed figure matches the ~10 MB eager graph the previous build recorded as its unsolved cost; gzip is what the limit is actually against, and it is comfortable. Re-measure after Wave 2, when eleven namespaces and their vendor clients are in the graph.
 
 - [ ] **Step 2: Deploy and record the startup time**
 
@@ -432,7 +491,14 @@ A `url_verification` is rejected without a valid signature, which is fine — th
 
 Create `docs/superpowers/plans/phase-26-notes.md` with a dated `## Startup gate` section recording: gzip size, reported startup time, p95 probe latency, and one sentence — either "one-Worker topology confirmed" or "gate failed, splitting per spec R3 contingency". Start the file's `## Invented or corrected APIs` section too; every later task appends to it.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: STOP for review — do not commit**
+
+```bash
+git status --short
+git diff --stat
+```
+
+Report what changed and what the gate reported, then wait. The reviewer commits:
 
 ```bash
 git add docs/superpowers/plans/phase-26-notes.md
@@ -696,7 +762,14 @@ npx vitest run test/capabilities-write-guard.test.ts && pnpm typecheck
 
 Expected: all five PASS, tsc clean.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: STOP for review — do not commit**
+
+```bash
+git status --short
+git diff --stat
+```
+
+Report what changed and what the gate reported, then wait. The reviewer commits:
 
 ```bash
 git add apps/worker/src/capabilities apps/worker/test/capabilities-write-guard.test.ts
@@ -843,7 +916,14 @@ npx vitest run test/capabilities-effects.test.ts && pnpm typecheck
 
 Expected: five PASS, tsc clean.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: STOP for review — do not commit**
+
+```bash
+git status --short
+git diff --stat
+```
+
+Report what changed and what the gate reported, then wait. The reviewer commits:
 
 ```bash
 git add apps/worker/src/capabilities/effects.ts apps/worker/test/capabilities-effects.test.ts
@@ -998,7 +1078,14 @@ npx vitest run test/capabilities-execution.test.ts && pnpm typecheck
 
 Expected: five PASS, tsc clean.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: STOP for review — do not commit**
+
+```bash
+git status --short
+git diff --stat
+```
+
+Report what changed and what the gate reported, then wait. The reviewer commits:
 
 ```bash
 git add apps/worker/src/capabilities/execution.ts apps/worker/src/capabilities/audit.ts \
@@ -1099,7 +1186,14 @@ npx vitest run test/capabilities-executor.test.ts && pnpm typecheck
 
 Expected: five PASS. **Do not add a CPU-burn test** — `limits.cpuMs` is not enforced under the vitest pool, and a `while (true) {}` isolate pins workerd at ~75% CPU and wedges later tests including vitest's own timeout. That is a permanently-skipped test in this repo; leave it skipped.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: STOP for review — do not commit**
+
+```bash
+git status --short
+git diff --stat
+```
+
+Report what changed and what the gate reported, then wait. The reviewer commits:
 
 ```bash
 git add apps/worker/src/capabilities/guarded-loader.ts apps/worker/src/capabilities/executor.ts \
@@ -1282,7 +1376,14 @@ npx vitest run test/capabilities-connector.test.ts && pnpm typecheck
 
 Expected: six PASS, tsc clean.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: STOP for review — do not commit**
+
+```bash
+git status --short
+git diff --stat
+```
+
+Report what changed and what the gate reported, then wait. The reviewer commits:
 
 ```bash
 git add apps/worker/src/capabilities/schema.ts apps/worker/src/capabilities/connector.ts \
@@ -1413,7 +1514,22 @@ Port the slack binding from `git show c9c53f7:apps/worker/src/codemode/bindings/
 
 `scripts/` is outside the `tsconfig` include, so it is checked by running, not by `tsc`.
 
-- [ ] **Step 6: Generate the declarations and wire the agent**
+- [ ] **Step 6: Delete the boot probe**
+
+```bash
+git rm apps/worker/src/run/boot-probe.ts
+```
+
+Remove its import and its use from `src/run/agent.ts`, which now passes the real connectors. Add to `test/capabilities-registry.test.ts`:
+
+```ts
+it("no longer exposes the Task 1 boot probe", async () => {
+  const stub = await getAgentByName(env.RUN_AGENTS, chatRunKey(crypto.randomUUID()));
+  expect(await stub.connectorNames()).not.toContain("bootProbe");
+});
+```
+
+- [ ] **Step 7: Generate the declarations and wire the agent**
 
 ```bash
 cd apps/worker && pnpm capabilities:dts
@@ -1421,7 +1537,7 @@ cd apps/worker && pnpm capabilities:dts
 
 Then in `src/run/agent.ts`, replace `connectors: []` with `connectors: buildConnectors(this.ctx, this.env, ctx)` and set the `run_code` tool description to the generated declarations. The `BindingContext` is per-execution, so it is built in the tool's `execute`, not in the constructor — Task 12 completes that wiring; for now build it from a scope resolved in `beforeTurn`.
 
-- [ ] **Step 7: Run everything**
+- [ ] **Step 8: Run everything**
 
 ```bash
 pnpm test && pnpm typecheck && pnpm capabilities:dts:check
@@ -1429,9 +1545,17 @@ pnpm test && pnpm typecheck && pnpm capabilities:dts:check
 
 Expected: the new tests PASS, the Task-1 boot test still PASSES with `run_code` in the merged map, tsc clean, no `.d.ts` drift.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: STOP for review — do not commit**
 
 ```bash
+git status --short
+git diff --stat
+```
+
+Report what changed and what the gate reported, then wait. The reviewer commits:
+
+```bash
+git rm apps/worker/src/run/boot-probe.ts
 git add apps/worker/src/capabilities apps/worker/scripts/generate-capabilities-dts.ts \
         apps/worker/package.json apps/worker/src/run/agent.ts apps/worker/test
 git commit -m "feat(capabilities): registry, slack namespace and generated declarations"
@@ -1474,7 +1598,7 @@ Invariant 36 is the whole point of this task and needs its own tests: only an au
 - [ ] **Step 4:** Port `memory.ts`, `files.ts`, the resolver and the provenance sink; restore `slack.searchMessages`'s `customerRef` argument.
 - [ ] **Step 5:** Append `"memory"` and `"files"` to `buildNamespaces`.
 - [ ] **Step 6:** Run the four commands above; all pass.
-- [ ] **Step 7:** Commit — `feat(capabilities): memory and files namespaces`
+- [ ] **Step 7:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(capabilities): memory and files namespaces`
 
 ### Task 10: `linear` and `github`
 
@@ -1501,7 +1625,7 @@ The team and the repo are **pinned server-side** (`LINEAR_TEAM_ID`, `GITHUB_REPO
 - [ ] **Step 3:** Port both namespaces.
 - [ ] **Step 4:** Append `"linear"` and `"github"` to `buildNamespaces`.
 - [ ] **Step 5:** Run the four commands; all pass.
-- [ ] **Step 6:** Commit — `feat(capabilities): linear and github namespaces`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(capabilities): linear and github namespaces`
 
 ### Task 11: `supabase`, `langsmith` and `betterstack`
 
@@ -1528,7 +1652,7 @@ The LangSmith read pin must stay `LANGSMITH_PROJECT_ID` (`fire-fighter-standin`)
 - [ ] **Step 3:** Port the three namespaces.
 - [ ] **Step 4:** Append them to `buildNamespaces`.
 - [ ] **Step 5:** Run the four commands; all pass.
-- [ ] **Step 6:** Commit — `feat(capabilities): supabase, langsmith and betterstack namespaces`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(capabilities): supabase, langsmith and betterstack namespaces`
 
 ### Task 12: `sandbox`, `browser`, `approval`, and the per-execution context
 
@@ -1589,7 +1713,7 @@ Then complete the agent wiring: the `BindingContext` — and therefore `newCodeE
 - [ ] **Step 5:** Write `src/run/dependencies.ts`, then move `BindingContext` construction into the `run_code` execute path in `src/run/agent.ts`.
 - [ ] **Step 6:** Extend `test/run-agent-boot.test.ts` with a case asserting `connectorNames()` is exactly the eleven namespaces in order.
 - [ ] **Step 7:** Run the four commands; all pass.
-- [ ] **Step 8:** Commit — `feat(capabilities): sandbox, browser and approval namespaces; per-execution context`
+- [ ] **Step 8:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(capabilities): sandbox, browser and approval namespaces; per-execution context`
 
 ---
 
@@ -1707,7 +1831,7 @@ describe("prompt assembly", () => {
 - [ ] **Step 3:** Write `agent-prompt.ts` and wire `configureSession`/`beforeTurn` in `agent.ts`. Port the prompt text from `git show c9c53f7:apps/worker/src/agent/prompt/{policy,voice,evidence,context}.ts` — the voice block especially, since the AI-tells eval (`src/eval/ai-tells.ts`) scores against `src/eval/voice-examples.ts`.
 - [ ] **Step 4:** Extend `test/run-agent-boot.test.ts`'s allowlist assertion — it must still be exactly the eight names, proving no `set_context` appeared.
 - [ ] **Step 5:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 6:** Commit — `feat(run): prompt assembly, context blocks and turn scope`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(run): prompt assembly, context blocks and turn scope`
 
 ### Task 14: The generation spend ceiling
 
@@ -1769,7 +1893,7 @@ describe("spend ceiling", () => {
 - [ ] **Step 2:** Run it; expect FAIL.
 - [ ] **Step 3:** Write `agent-spend.ts` with the per-token-class pricing table for `claude-fable-5` in **nano-USD integers** (invariant 29 — never floats), wire `beforeStep`, add the `RUN_SPEND_CEILING_NANO_USD` var to `wrangler.jsonc`.
 - [ ] **Step 4:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 5:** Commit — `feat(run): preflight generation spend ceiling`
+- [ ] **Step 5:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(run): preflight generation spend ceiling`
 
 ### Task 15: The freshness guard reaches the tool
 
@@ -1802,7 +1926,7 @@ override async beforeToolCall(ctx: ToolCallContext): Promise<ToolCallDecision | 
 - [ ] **Step 2:** Run it; expect FAIL.
 - [ ] **Step 3:** Implement `#isStale()` against the DO-local input revision bumped by every `submit`, and wire `beforeToolCall`.
 - [ ] **Step 4:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 5:** Commit — `fix(run): freshness guard and approval pause reach the tool`
+- [ ] **Step 5:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `fix(run): freshness guard and approval pause reach the tool`
 
 ### Task 16: Projection and usage
 
@@ -1868,7 +1992,7 @@ Add a second describe block for usage: two `recordUsage` calls with the same `(g
 - [ ] **Step 2:** Run it; expect FAIL.
 - [ ] **Step 3:** Write `agent-projection.ts` calling `evaluateTransition` before any write, and wire `onStepFinish` to record usage first, then project (invariant 32 — local first, projection second; a D1 outage must never force another billed call).
 - [ ] **Step 4:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 5:** Commit — `feat(run): validated status projection and idempotent usage rows`
+- [ ] **Step 5:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(run): validated status projection and idempotent usage rows`
 
 ### Task 17: Terminal status, error classification, and thinking blocks
 
@@ -1899,7 +2023,7 @@ it("fails the step safely when readable, unsigned thinking arrives", () => {
 - [ ] **Step 2:** Run it; expect FAIL.
 - [ ] **Step 3:** Implement the three behaviours in `agent.ts`.
 - [ ] **Step 4:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 5:** Commit — `feat(run): terminal status, refusal handling and thinking passthrough`
+- [ ] **Step 5:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(run): terminal status, refusal handling and thinking passthrough`
 
 ### Task 18: Steering
 
@@ -1950,7 +2074,7 @@ it("does not let a steer around a run parked on an open approval", async () => {
 - [ ] **Step 2:** Run it; expect FAIL.
 - [ ] **Step 3:** Write `agent-steering.ts` and wire `steer`, the `beforeStep` splice and the approval interaction.
 - [ ] **Step 4:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 5:** Commit — `feat(run): idempotent steering that wakes an idle run`
+- [ ] **Step 5:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(run): idempotent steering that wakes an idle run`
 
 ---
 
@@ -2025,7 +2149,7 @@ export async function wakeRun(env: Env, input: WakeInput): Promise<void> {
 ```
 
 - [ ] **Step 5:** Run `pnpm test && pnpm typecheck`. `test/triage-consumer.test.ts` already covers the ordering rules (stored decision before owned-thread routing, the abandoned-thread override) — those must still pass unchanged.
-- [ ] **Step 6:** Commit — `feat(run): restore the triage wake and owned-thread routing`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(run): restore the triage wake and owned-thread routing`
 
 ### Task 20: The real approval port
 
@@ -2052,7 +2176,7 @@ Defects 4, 5 and 6 all live in `withdraw()`, which the previous build stubbed as
 - [ ] **Step 3:** Write `port.ts`; wire it into the agent so the `approval` namespace (Task 12) gets the real port instead of the double.
 - [ ] **Step 4:** Make `onChatResponse` project `awaiting_approval` when `openApprovalId() !== null` (defect 3), and add the test that a parked run is distinguishable from a working one in D1.
 - [ ] **Step 5:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 6:** Commit — `feat(approval): real approval port with an honest withdraw`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(approval): real approval port with an honest withdraw`
 
 ### Task 21: The resolution notifier
 
@@ -2093,7 +2217,7 @@ The idempotency key is what makes the cron sweep safe: an undelivered resolution
 - [ ] **Step 3:** Write `notifier.ts` and return it from `resolvePorts`, replacing the comment block.
 - [ ] **Step 4:** Restore the re-pin cases named in `test/notify-nudge.test.ts:409-415` — the card is committed before the DM, a failed nudge leaves the claim free, and no double DM is sent.
 - [ ] **Step 5:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 6:** Commit — `feat(approval): deliver human decisions back into the run`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(approval): deliver human decisions back into the run`
 
 ---
 
@@ -2108,7 +2232,7 @@ The idempotency key is what makes the cron sweep safe: an undelivered resolution
 
 `routePartykitRequest` names the Durable Object `idFromName(<third path segment>)`, **verbatim and undecoded**. Mounting `routeAgentRequest` naively therefore makes the browser's URL the DO name, which is forbidden. The browser addresses `/agents/run-agents/{runs.id}`; this route resolves `runs.id → runs.key` through D1, re-validates with `assertRunKey`, and rewrites the segment before delegating. The namespace slug derives from the **binding** name (`RUN_AGENTS` → `run-agents`), not the class name.
 
-**Defect 2 has a one-line fix, discovered while planning.** The previous build leaked the private run key to every browser as the first frame of each connect burst, and pinned it as an open defect. `agents/dist/index.js:951-964` gates that frame on `sendIdentityOnConnect` and the SDK even warns when the name is not already visible in the URL — which is exactly this case. Opt out on the class:
+**Defect 2's fix already landed in Task 1** — `static options = { sendIdentityOnConnect: false }` is on the class. What remains here is the end-to-end assertion over the real transport, which is where a regression would actually show. The reasoning, for the record: The previous build leaked the private run key to every browser as the first frame of each connect burst, and pinned it as an open defect. `agents/dist/index.js:951-964` gates that frame on `sendIdentityOnConnect` and the SDK even warns when the name is not already visible in the URL — which is exactly this case. Opt out on the class:
 
 ```ts
 export class RunAgent extends Think<Env> {
@@ -2128,7 +2252,7 @@ export class RunAgent extends Think<Env> {
 - [ ] **Step 2:** Run it; expect FAIL. Note: workerd normalises a WebSocket upgrade to `GET` before the object sees it, and Node's `fetch` forbids setting `Upgrade`, so the test must use a real `WebSocket`, not `fetch`.
 - [ ] **Step 3:** Write `src/api/agents.ts` and mount it in `index.ts` before the `/api/*` 404 catch-all. Add `static options` to `RunAgent`.
 - [ ] **Step 4:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 5:** Commit — `feat(api): /agents transport with server-side run-key resolution`
+- [ ] **Step 5:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(api): /agents transport with server-side run-key resolution`
 
 ### Task 23: The run view
 
@@ -2153,7 +2277,7 @@ The view renders: the transcript with `run_code` tool parts as "ran code → res
 - [ ] **Step 3:** Write `use-run-agent.ts` and `run-view.tsx`; wire into `app.tsx` under `<Suspense>` + `<ErrorBoundary>`.
 - [ ] **Step 4:** Restore `apps/dashboard/src/dev-stubs.ts` so the SPA renders locally without Access, and proxy `/agents` to `:8787` in `vite.config.ts` alongside the existing `/api` proxy.
 - [ ] **Step 5:** Run `pnpm test && pnpm typecheck` in `apps/dashboard`.
-- [ ] **Step 6:** Commit — `feat(dashboard): live run view over the agent socket`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(dashboard): live run view over the agent socket`
 
 ### Task 24: The chat page
 
@@ -2174,7 +2298,7 @@ Viewers (`marcus@`, `nils@`, `eric@`) reach the chat page with no OAuth; only th
 - [ ] **Step 3:** Run both; expect FAIL.
 - [ ] **Step 4:** Implement the two routes and the page.
 - [ ] **Step 5:** Run the full gate in both packages.
-- [ ] **Step 6:** Commit — `feat(dashboard): chat page and the run-creation routes`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(dashboard): chat page and the run-creation routes`
 
 ---
 
@@ -2194,7 +2318,7 @@ What goes in: what the run was asked to do, what it did, what it drafted, and ev
 - [ ] **Step 2:** Run it; expect FAIL.
 - [ ] **Step 3:** Implement, reusing `enqueueEpisode` from `src/memory/outbox.ts`.
 - [ ] **Step 4:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 5:** Commit — `feat(run): write run episodes to the memory outbox`
+- [ ] **Step 5:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(run): write run episodes to the memory outbox`
 
 ### Task 26: The LangSmith tracer
 
@@ -2221,7 +2345,7 @@ LANGSMITH_API_KEY=… pnpm exec tsx scripts/langsmith-trace-smoke.mts fire-fight
 ```
 
 - [ ] **Step 5:** Run `pnpm test && pnpm typecheck`.
-- [ ] **Step 6:** Commit — `feat(langsmith): restore the agent's own trace writer`
+- [ ] **Step 6:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `feat(langsmith): restore the agent's own trace writer`
 
 ### Task 27: The invariant-39 canary sweep
 
@@ -2234,7 +2358,7 @@ Plant a canary value in every secret-shaped binding, drive one full run end to e
 
 - [ ] **Step 1:** Write the sweep test.
 - [ ] **Step 2:** Run it. If it fails, that is a real finding — fix the leak, do not weaken the sweep.
-- [ ] **Step 3:** Commit — `test(security): canary sweep over agent SQLite and the execution log`
+- [ ] **Step 3:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `test(security): canary sweep over agent SQLite and the execution log`
 
 ### Task 28: Documentation and the drill dry run
 
@@ -2249,7 +2373,7 @@ The removal commit touched zero `.md` files, so every doc still describes `RunDO
 - [ ] **Step 4:** Update the architecture diagram and the cost breakdown.
 - [ ] **Step 5:** Add a `## Phase 26` section to `docs/superpowers/plans/00-roadmap.md` so the roadmap does not end at 23. Correct CLAUDE.md's final bullet too: it claims `.claude/worktrees/phase-24` and `.claude/worktrees/think-chassis` exist, and `git worktree list` shows neither does.
 - [ ] **Step 6:** Run the drill dry run: all four scenarios in `#test-firedrill` against the deployed Worker (how-to question, small feature request, planted bug, large feature request). Record the outcomes in `phase-26-notes.md`. Note that the untracked drill scripts CLAUDE.md describes (`apps/worker/scripts/live-drill-readonly.mjs`, `undo-drill-pr.mjs`) no longer exist in the tree — either rewrite `live-drill-readonly.mjs` as a read-only live check of the applier against `MONOREPO_PAT`, or drive the ship path through the drill itself and say so.
-- [ ] **Step 7:** Commit — `docs: rewrite the architecture and security model for the rebuilt agent layer`
+- [ ] **Step 7:** STOP for review — do not commit. Report the diff and the gate result, then wait. Suggested message: `docs: rewrite the architecture and security model for the rebuilt agent layer`
 
 ---
 
@@ -2288,5 +2412,6 @@ Checked against the spec, 2026-08-23:
   2. Spec §7's "strip the `cf_agent_identity` frame in the Worker" is unnecessary — `static options = { sendIdentityOnConnect: false }` is the SDK's own opt-out (Task 22).
   3. The D1 table keeps its existing name `codemode_effects` even though the module moves to `src/capabilities/` — migrations are append-only.
 - **Deferred deliberately.** `slack.searchMessages`'s customer-reference argument and the provenance sink are introduced in Task 9 with the memory namespace rather than in Task 8, because invariant 36 is a memory-scoped rule and splitting it across two tasks would leave a half-enforced guard in between.
+- **Found while executing Task 1 (2026-08-24).** `createExecuteTool` throws on an empty connector list, so Task 1 carries a temporary `boot-probe.ts` connector that Task 8 deletes; and `sendIdentityOnConnect: false` moved from Task 22 to Task 1 because it is a class-creation-time security default. Both are written into the tasks themselves.
 - **Gap found by the coverage check and closed.** Nothing built the production `CapabilityDependencies` from `Env` — the namespaces had only test doubles through W2. `src/run/dependencies.ts` is now Task 12, ported from the deleted `src/agent/dependencies.ts`.
 - **Not in this plan.** No new D1 migration: `runs`, `approvals`, `codemode_effects`, `agent_model_calls`, `agent_memory_outbox` and `memory_episode_sources` all survive. The only schema change anywhere is wrangler migration tag `v5`.
