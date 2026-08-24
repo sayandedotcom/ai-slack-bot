@@ -24,6 +24,8 @@ import { type CapabilityLimits, type CodeExecution, withCapabilityAudit } from "
 import { assertEffectPermitted } from "./write-guard";
 
 import { makeFilesTools } from "./namespaces/files";
+import { makeGithubTools } from "./namespaces/github";
+import { makeLinearTools } from "./namespaces/linear";
 import { makeMemoryTools } from "./namespaces/memory";
 import { makeSlackTools } from "./namespaces/slack";
 
@@ -134,7 +136,9 @@ export function buildNamespaces(ctx: BindingContext): CapabilityNamespace[] {
   const namespaces: CapabilityNamespace[] = [
     { name: "slack", tools: makeSlackTools(ctx) },
     { name: "memory", tools: makeMemoryTools(ctx) },
+    { name: "linear", tools: makeLinearTools(ctx) },
     { name: "files", tools: makeFilesTools(ctx) },
+    { name: "github", tools: makeGithubTools(ctx) },
   ];
 
   for (const namespace of namespaces) {
