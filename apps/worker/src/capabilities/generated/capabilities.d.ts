@@ -158,6 +158,123 @@ declare const linear: {
 	updateIssue: (input: UpdateIssueInput) => Promise<UpdateIssueOutput>;
 }
 
+type SchemaInput = {
+    resource?: string;
+}
+type SchemaOutput = {
+    resource: string;
+    columns: {
+        name: string;
+        type: string;
+    }[];
+}[]
+type SelectInput = {
+    resource: string;
+    columns?: string[];
+    filters?: {
+        column: string;
+        op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "is" | "like";
+        value: string | number | boolean | null | string | number[];
+    }[];
+    order?: {
+        column: string;
+        direction: "asc" | "desc";
+    };
+    limit?: number;
+}
+type SelectOutput = {
+    [key: string]: string | number | boolean | null;
+}[]
+
+declare const supabase: {
+	/**
+	 * List the readable resources and their columns. Call this before select to learn what exists.
+	 */
+	schema: (input: SchemaInput) => Promise<SchemaOutput>;
+
+	/**
+	 * Read rows from one allowed resource. Filters are structured; free-form query text is not accepted.
+	 */
+	select: (input: SelectInput) => Promise<SelectOutput>;
+}
+
+type TraceInput = {
+    traceId: string;
+}
+type TraceOutput = {
+    traceId: string;
+    name: string;
+    startedAt: string;
+    status: string;
+    nodes: {
+        id: string;
+        parentId: string | null;
+        name: string;
+        runType: string;
+        status: string;
+        startedAt: string;
+        durationMs: number;
+        inputPreview: string;
+        outputPreview: string;
+        error: string | null;
+    }[];
+    truncated: boolean;
+}
+type SearchTracesInput = {
+    query?: string;
+    since?: string;
+    limit?: number;
+}
+type SearchTracesOutput = {
+    traceId: string;
+    name: string;
+    startedAt: string;
+    status: string;
+}[]
+
+declare const langsmith: {
+	/**
+	 * Fetch one recorded run by its identifier. Steps come back as a flat list; rebuild the tree from parentId if you need it.
+	 */
+	trace: (input: TraceInput) => Promise<TraceOutput>;
+
+	/**
+	 * Find recorded runs in the configured project. Use ISO-8601 for 'since'.
+	 */
+	searchTraces: (input: SearchTracesInput) => Promise<SearchTracesOutput>;
+}
+
+type LogsInput = {
+    query: string;
+    since: string;
+    until?: string;
+    limit?: number;
+}
+type LogsOutput = {
+    at: string;
+    level: string;
+    message: string;
+}[]
+type MonitorsInput = {}
+type MonitorsOutput = {
+    id: string;
+    name: string;
+    status: string;
+    lastCheckedAt: string | null;
+}[]
+
+declare const betterstack: {
+	/**
+	 * Search collected production logs over a time window. 'since' and 'until' are ISO-8601 instants.
+	 */
+	logs: (input: LogsInput) => Promise<LogsOutput>;
+
+	/**
+	 * List the current up/down state of the configured monitors.
+	 */
+	monitors: (input: MonitorsInput) => Promise<MonitorsOutput>;
+}
+
 type PublishInput = {
     bytes: Uint8Array;
     contentType: string;

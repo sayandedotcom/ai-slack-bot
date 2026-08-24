@@ -27,7 +27,10 @@ import { makeFilesTools } from "./namespaces/files";
 import { makeGithubTools } from "./namespaces/github";
 import { makeLinearTools } from "./namespaces/linear";
 import { makeMemoryTools } from "./namespaces/memory";
+import { makeBetterStackTools } from "./namespaces/betterstack";
+import { makeLangSmithTools } from "./namespaces/langsmith";
 import { makeSlackTools } from "./namespaces/slack";
+import { makeSupabaseTools } from "./namespaces/supabase";
 
 /**
  * The namespace order, frozen.
@@ -137,6 +140,9 @@ export function buildNamespaces(ctx: BindingContext): CapabilityNamespace[] {
     { name: "slack", tools: makeSlackTools(ctx) },
     { name: "memory", tools: makeMemoryTools(ctx) },
     { name: "linear", tools: makeLinearTools(ctx) },
+    { name: "supabase", tools: makeSupabaseTools(ctx) },
+    { name: "langsmith", tools: makeLangSmithTools(ctx) },
+    { name: "betterstack", tools: makeBetterStackTools(ctx) },
     { name: "files", tools: makeFilesTools(ctx) },
     { name: "github", tools: makeGithubTools(ctx) },
   ];
