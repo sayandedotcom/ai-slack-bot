@@ -52,3 +52,23 @@ export function resolveCustomerScope(
       : "this run has no customer, so there is no customer scope to search. Ask which customer this concerns.",
   );
 }
+
+/**
+ * Discovery is Chat-only, and the origin comes from the trusted scope — which
+ * the composer builds from the PERSISTED run descriptor, never from turn or
+ * tool metadata. A forged `origin: "chat"` in a message payload cannot reach
+ * this field, so it cannot reach this check.
+ *
+ * The capability is still DECLARED for every run. That is deliberate: the
+ * registry's namespaces do not vary by run, because a surface that changed
+ * shape would leak the host's classification of the run into the model's
+ * context and would make the committed `.d.ts` unrenderable. It refuses at call
+ * time with a code the model can read instead.
+ */
+export function assertDiscoveryAllowed(ctx: BindingContext): void {
+  if (ctx.scope.origin === "chat") return;
+  throw new CapabilityError(
+    "capability_unavailable",
+    "customer lookup is only available in an internal chat. This conversation is already scoped to one customer.",
+  );
+}

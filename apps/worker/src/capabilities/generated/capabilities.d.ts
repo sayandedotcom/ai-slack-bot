@@ -56,3 +56,66 @@ declare const slack: {
 	 */
 	reply: (input: ReplyInput) => Promise<ReplyOutput>;
 }
+
+type FindCustomersInput = {
+    query: string;
+    limit?: number;
+}
+type FindCustomersOutput = {
+    customerRef: string;
+    label: string;
+}[]
+type RecallInput = {
+    query: string;
+    scope?: "customer" | "org";
+    customerRef?: string;
+    limit?: number;
+}
+type RecallOutput = {
+    factId: string;
+    fact: string;
+}[]
+type CiteInput = {
+    factIds: string[];
+}
+type CiteOutput = {
+    factId: string;
+    fact: string;
+    permalink: string;
+    ts: string;
+}[]
+
+declare const memory: {
+	/**
+	 * Look up which customer an internal question is about. Returns opaque references usable only in this execution; pass one as customerRef to recall or slack.searchMessages. Unavailable in a customer conversation, which is already scoped.
+	 */
+	findCustomers: (input: FindCustomersInput) => Promise<FindCustomersOutput>;
+
+	/**
+	 * Recall previously recorded facts. Scope 'customer' stays within this conversation's customer, or the one named by customerRef in an internal chat; 'org' covers shared engineering knowledge.
+	 */
+	recall: (input: RecallInput) => Promise<RecallOutput>;
+
+	/**
+	 * Turn recalled facts into quotable citations. Only identifiers returned by recall in this same execution are accepted.
+	 */
+	cite: (input: CiteInput) => Promise<CiteOutput>;
+}
+
+type PublishInput = {
+    bytes: Uint8Array;
+    contentType: string;
+    filename: string;
+}
+type PublishOutput = {
+    url: string;
+    size: number;
+    sha256: string;
+}
+
+declare const files: {
+	/**
+	 * Publish bytes as a retrievable artifact and get back its address. This is the only way to return binary content.
+	 */
+	publish: (input: PublishInput) => Promise<PublishOutput>;
+}

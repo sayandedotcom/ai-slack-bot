@@ -23,6 +23,8 @@ import type { EffectDeps } from "./effects";
 import { type CapabilityLimits, type CodeExecution, withCapabilityAudit } from "./execution";
 import { assertEffectPermitted } from "./write-guard";
 
+import { makeFilesTools } from "./namespaces/files";
+import { makeMemoryTools } from "./namespaces/memory";
 import { makeSlackTools } from "./namespaces/slack";
 
 /**
@@ -129,7 +131,11 @@ function auditArgs(input: unknown): Record<string, unknown> | undefined {
  * four, so `execution` is a required argument rather than something built here.
  */
 export function buildNamespaces(ctx: BindingContext): CapabilityNamespace[] {
-  const namespaces: CapabilityNamespace[] = [{ name: "slack", tools: makeSlackTools(ctx) }];
+  const namespaces: CapabilityNamespace[] = [
+    { name: "slack", tools: makeSlackTools(ctx) },
+    { name: "memory", tools: makeMemoryTools(ctx) },
+    { name: "files", tools: makeFilesTools(ctx) },
+  ];
 
   for (const namespace of namespaces) {
     // Checks the BRAND, not the label. A hand-rolled tool that helpfully

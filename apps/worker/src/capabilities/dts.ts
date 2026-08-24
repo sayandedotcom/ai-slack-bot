@@ -4,6 +4,7 @@ import {
   type JsonSchemaToolDescriptors,
 } from "@cloudflare/codemode";
 import type { CapabilityNamespace } from "./connector";
+import { FILES_DECLARATIONS } from "./namespaces/files";
 import { toJsonSchema } from "./schema";
 
 /**
@@ -43,9 +44,7 @@ const HEADER = `// GENERATED FILE — DO NOT EDIT BY HAND.
  * they agree byte for byte.
  */
 const DECLARATION_OVERRIDES: Record<string, string | undefined> = {
-  // `files` lands here when that namespace is ported: files.publish takes
-  // bytes: z.instanceof(Uint8Array), which has no JSON Schema, and neither
-  // render path produces something good enough to show the model.
+  files: FILES_DECLARATIONS,
 };
 
 /**
