@@ -64,6 +64,23 @@ export type ClassifiedTool = {
   readonly [AUDITED]: true;
 };
 
+/**
+ * Name the offending paths and rules, never the offending values.
+ *
+ * The model needs to know WHICH field is wrong; echoing what it sent would put
+ * arbitrary model output into an error string that also reaches the audit log.
+ */
+export function formatZodIssues(error: z.ZodError): string {
+  const issues = error.issues
+    .slice(0, 6)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+      return `${path}: ${issue.code}`;
+    })
+    .join("; ");
+  return `the arguments are not valid (${issues})`;
+}
+
 export function defineCapability<I, O>(spec: CapabilitySpec<I, O>): ClassifiedTool {
   if (!isCapabilityEffect(spec.effect)) {
     // Reachable from JavaScript callers and from a bad cast, so it is a runtime
@@ -83,7 +100,13 @@ export function defineCapability<I, O>(spec: CapabilitySpec<I, O>): ClassifiedTo
     // The runtime parse lives here rather than in the connector: the connector
     // hands the model a JSON Schema for typing, but JSON Schema is not what
     // validates the call.
-    run: async (input: unknown) => spec.run(spec.input.parse(input)),
+    run: async (input: unknown) => {
+      const parsed = spec.input.safeParse(input);
+      if (!parsed.success) {
+        throw new CapabilityError("invalid_input", formatZodIssues(parsed.error));
+      }
+      return spec.run(parsed.data);
+    },
   };
 }
 

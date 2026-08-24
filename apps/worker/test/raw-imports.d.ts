@@ -6,3 +6,12 @@ declare module "*.sql?raw" {
   const text: string;
   export default text;
 }
+
+// The committed capability declarations, read as text so `capabilities-dts`
+// can compare them against a fresh render from inside the pool. Importing the
+// .d.ts as a MODULE would give its declarations, not its bytes, and the drift
+// check needs the bytes.
+declare module "*.d.ts?raw" {
+  const text: string;
+  export default text;
+}
