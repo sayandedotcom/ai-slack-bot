@@ -17,6 +17,7 @@ import {
   type OutboxClaim,
 } from "./outbox";
 import { parseSourceDescriptors, resolveSources } from "./sources";
+import type { MessagesRow } from "../db/schema";
 
 /**
  * Two projections, one queue.
@@ -179,12 +180,7 @@ async function projectOne(eventId: string, env: Env, store: MemoryStore): Promis
     .run();
 }
 
-type MessageRow = {
-  event_id: string;
-  channel_id: string;
-  user_id: string | null;
-  text: string;
-};
+type MessageRow = Pick<MessagesRow, "event_id" | "channel_id" | "user_id" | "text">;
 
 /* ------------------------------------------------- the agent projector -- */
 

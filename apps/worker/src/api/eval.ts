@@ -3,6 +3,7 @@ import type { Env } from "../index";
 import { requireTeamMember } from "./identity";
 import { detectAiTells, type AiTell } from "../eval/ai-tells";
 import { scoreTriage, type TriageOutcomeRow, type TriageScore } from "../eval/triage-eval";
+import type { ApprovalsRow, MessagesRow, TriageDecisionsRow } from "../db/schema";
 
 /**
  * The eval API: how good was the triage decision, and how close was the shadow
@@ -172,18 +173,11 @@ async function batched<T>(
   return out;
 }
 
-type DecisionRow = {
-  event_id: string;
-  wake: number;
-  why: string;
-  text: string;
-  permalink: string | null;
-  channel_id: string;
-  ts: string;
-  thread_ts: string | null;
-  user_id: string | null;
-  received_at: number;
-};
+type DecisionRow = Pick<TriageDecisionsRow, "event_id" | "wake" | "why"> &
+  Pick<
+    MessagesRow,
+    "text" | "permalink" | "channel_id" | "ts" | "thread_ts" | "user_id" | "received_at"
+  >;
 
 /* ---------------------------------------------------------------- routes --- */
 
@@ -278,17 +272,12 @@ evalApi.get("/eval/shadow", async (c) => {
 
   const limit = clampInt(c.req.query("limit"), 20, 1, 50);
 
-  const suppressed = await c.env.DB.prepare(SUPPRESSED_SQL).bind(limit).all<{
-    id: string;
-    draft: string;
-    why: string;
-    created_at: number;
-    channel_id: string;
-    thread_ts: string;
-  }>();
+  const suppressed = await c.env.DB.prepare(SUPPRESSED_SQL).bind(limit).all<
+    Pick<ApprovalsRow, "id" | "draft" | "why" | "created_at" | "channel_id" | "thread_ts">
+  >();
   const rows = suppressed.results ?? [];
 
-  const replies = await batched<{ text: string; permalink: string | null; ts: string }>(
+  const replies = await batched<Pick<MessagesRow, "text" | "permalink" | "ts">>(
     c.env.DB,
     rows.map((row) =>
       c.env.DB.prepare(HUMAN_REPLY_SQL).bind(row.channel_id, row.thread_ts, row.created_at),

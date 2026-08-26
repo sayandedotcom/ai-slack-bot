@@ -1,4 +1,5 @@
 import { ZEP_REQUEST_TIMEOUT_SECONDS } from "./zep";
+import type { AgentMemoryOutboxRow } from "../db/schema";
 
 /**
  * The D1 side of agent-memory projection: the claim protocol, its fence, and
@@ -85,16 +86,17 @@ export type OutboxClaimOutcome =
   | { outcome: "not_claimable" }
   | { outcome: "unknown_row" };
 
-type ClaimRow = {
-  id: string;
-  run_id: string;
-  generation_id: string;
-  graph_id: string;
-  episode_json: string;
-  source_json: string;
-  attempts: number;
-  episode_uuid: string | null;
-};
+type ClaimRow = Pick<
+  AgentMemoryOutboxRow,
+  | "id"
+  | "run_id"
+  | "generation_id"
+  | "graph_id"
+  | "episode_json"
+  | "source_json"
+  | "attempts"
+  | "episode_uuid"
+>;
 
 /**
  * Create the row if it is not there, and never touch it if it is.
@@ -337,6 +339,6 @@ export async function listDueOutboxRows(
         LIMIT ?`,
     )
     .bind(input.now, input.now, Math.max(1, Math.min(input.limit, 200)))
-    .all<{ id: string; state: string; attempts: number }>();
+    .all<Pick<AgentMemoryOutboxRow, "id" | "state" | "attempts">>();
   return results ?? [];
 }

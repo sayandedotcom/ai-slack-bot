@@ -5,6 +5,7 @@ import type { TriageRunner } from "./run";
 import { getChannelPolicy, shouldTriage } from "../db/channels";
 import { graphIdFor } from "../memory/graphs";
 import type { SlackRunMessage } from "./contracts";
+import type { MessagesRow, RunsRow, TriageDecisionsRow } from "../db/schema";
 
 export type TriageJob = { event_id: string };
 
@@ -34,15 +35,10 @@ export type TriageDeps = {
   }) => Promise<void>;
 };
 
-type MessageRow = {
-  event_id: string;
-  channel_id: string;
-  ts: string;
-  thread_ts: string | null;
-  user_id: string | null;
-  text: string;
-  permalink: string | null;
-};
+type MessageRow = Pick<
+  MessagesRow,
+  "event_id" | "channel_id" | "ts" | "thread_ts" | "user_id" | "text" | "permalink"
+>;
 
 export async function handleTriageBatch(
   batch: MessageBatch<TriageJob>,
@@ -88,7 +84,7 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
     "SELECT wake, opening_prompt FROM triage_decisions WHERE event_id = ?",
   )
     .bind(eventId)
-    .first<{ wake: number; opening_prompt: string }>();
+    .first<Pick<TriageDecisionsRow, "wake" | "opening_prompt">>();
 
   if (decided) {
     if (decided.wake !== 1) return;
@@ -138,7 +134,7 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
      ORDER BY ts ASC LIMIT 30`,
   )
     .bind(row.channel_id, threadTs, threadTs, eventId)
-    .all<{ user_id: string | null; text: string }>();
+    .all<Pick<MessagesRow, "user_id" | "text">>();
 
   // Recall is best-effort: triage must keep working when Zep is down.
   let recall: TriageInput["recall"] = [];
@@ -247,6 +243,6 @@ async function threadRunFailed(
       LIMIT 1`,
   )
     .bind(channelId, threadTs)
-    .first<{ status: string }>();
+    .first<Pick<RunsRow, "status">>();
   return run?.status === "failed";
 }

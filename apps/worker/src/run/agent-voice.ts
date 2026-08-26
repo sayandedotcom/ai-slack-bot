@@ -38,6 +38,7 @@
  */
 import { listConnected } from "../db/identities";
 import { pickSpeaker } from "../identity/speaker";
+import type { MessagesRow } from "../db/schema";
 
 /** At most twenty messages: enough to carry a register, few enough to bound. */
 export const ENGINEER_VOICE_MAX_COUNT = 20;
@@ -141,7 +142,7 @@ export async function resolveEngineerVoice(
     const { results } = await db
       .prepare(SAMPLE_SQL)
       .bind(externalId, frozenBound)
-      .all<{ text: string; ts: string }>();
+      .all<Pick<MessagesRow, "text" | "ts">>();
 
     let total = 0;
     for (const row of results ?? []) {

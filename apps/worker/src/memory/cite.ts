@@ -1,4 +1,5 @@
 import type { MemoryFact } from "./store";
+import type { MessagesRow } from "../db/schema";
 
 export type Citation = {
   factId: string;
@@ -8,11 +9,7 @@ export type Citation = {
   ts: string;
 };
 
-type CitationRow = {
-  permalink: string | null;
-  channel_id: string;
-  ts: string;
-};
+type CitationRow = Pick<MessagesRow, "permalink" | "channel_id" | "ts">;
 
 /**
  * Facts are probabilistic; citations must be exact.

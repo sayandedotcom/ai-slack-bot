@@ -18,6 +18,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import type { Env } from "../index";
 import { TERMINAL_RUN_STATUSES } from "../run/protocol";
 import { MONOREPO_SLUG, PLACEHOLDER_CREDENTIAL, assertGitSentinel } from "./class";
+import type { RunsRow } from "../db/schema";
 
 export type BootState = "provisioning" | "ready" | "failed";
 
@@ -492,7 +493,7 @@ export async function sweepSandboxes(
       LIMIT ?`,
   )
     .bind(...TERMINAL_RUN_STATUSES, Date.now() - SWEEP_WINDOW_MS, SWEEP_MAX_RUNS)
-    .all<{ id: string }>();
+    .all<Pick<RunsRow, "id">>();
 
   let destroyed = 0;
   for (const row of results ?? []) {

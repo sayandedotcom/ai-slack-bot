@@ -1,4 +1,5 @@
 import type { EpisodeSourceDescriptor } from "./episode";
+import type { MessagesRow } from "../db/schema";
 
 /**
  * Turning a bounded source DESCRIPTOR into an exact D1 provenance row.
@@ -20,7 +21,7 @@ export type ResolvedSource = {
   permalink: string | null;
 };
 
-type MessageRow = { event_id: string; permalink: string | null };
+type MessageRow = Pick<MessagesRow, "event_id" | "permalink">;
 
 /**
  * Resolve one descriptor against D1's system of record.
