@@ -1719,6 +1719,22 @@ Then complete the agent wiring: the `BindingContext` — and therefore `newCodeE
 
 ## Wave 3 — Turn lifecycle
 
+**IMPLEMENTED 2026-08-27** (Tasks 13–18), gate 64 files / 936 tests, `tsc`
+clean, `.d.ts` in sync. Four corrections the implementation forced, all recorded
+in `phase-26-notes.md` §"Wave 3 implementation notes" with the evidence:
+
+1. **`beforeTurn`'s `instructions` REPLACES the prompt, it does not extend it.**
+   Every task below that says "return `{ instructions: … }`" means *append to
+   `ctx.system`*. Returning bare per-turn text drops all three context blocks.
+2. **Decision A changed shape.** `createExecuteRuntime` does not forward
+   `connectorHints`, so the tool is built with NO `description` (which is what
+   keeps Code Mode's discovery text) and the namespace hints live in
+   `CAPABILITY_RULES_BLOCK` instead.
+3. **`steer` submits through `schedule(0, …)`.** `runTurn` inline from the
+   callable deadlocks the object, confirmed by a killed test run.
+4. **One extra file:** `src/run/agent-voice.ts`, the day-frozen engineer-voice
+   block, split out of `agent-prompt.ts`.
+
 **Rewritten 2026-08-24 after the docs audit** — read `phase-26-notes.md`
 §"Docs audit before Wave 3" first; every task below cites it. Summary of what
 changed versus the first draft: per-turn facts go through `beforeTurn →

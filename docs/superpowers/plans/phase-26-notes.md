@@ -346,3 +346,94 @@ move the parked step out of the DO/D1 CAS model.
 | Container + Playwright proofs | `createSandboxTools`, Browser Rendering | §14. |
 | `model.ts` (BYO `LanguageModel` via gateway URL) | `"anthropic/…"` slug over `env.AI` | Documented BYO path; keeps `AGENT_MODEL_DISABLED` and the `vi.mock` seam. Did not verify how the slug path picks a gateway id — do not switch on the docs alone. |
 | `memory` namespace over Zep + D1 outbox | Session memory, `Agent.queue()` | Session memory is per-DO, no org scope, no citations. `queue()` would duplicate the outbox. |
+
+
+## Wave 3 implementation notes (2026-08-27)
+
+Tasks 13–18 landed. Gate at the end: **64 files / 936 tests passed**, `tsc
+--noEmit` clean, `capabilities:dts:check` in sync. Baseline before the wave was
+58 files / 862.
+
+### Invented or corrected APIs (continued from §1–18)
+
+**19. `TurnConfig.instructions` REPLACES the assembled system prompt.**
+`think.js:2678` is `config.instructions ?? config.system ?? …`, so returning the
+per-turn text alone from `beforeTurn` silently drops every context block AND
+Think's own capability preamble. The plan said "beforeTurn returns
+`{ instructions: turnInstructions(...) }`", which would have shipped a run with
+no policy, no voice and no capability rules. The agent appends to `ctx.system`
+(`composeInstructions`). Same for `StepConfig.instructions` in `beforeStep`,
+which is why the turn's composed text is cached on the instance.
+
+**20. `createExecuteRuntime` does not forward `connectorHints`.** Decision A
+was "pass hints, no description". The option does not exist on Think's wrapper:
+`think/dist/tools/execute.js:113` derives hints only for the namespaces it
+wires itself (`tools`, `state`, `cdp`), all of which this agent passes as
+`undefined`, and `CreateExecuteToolOptions` has no hints field to pass through.
+So the tool is built with NO `description` (keeping Code Mode's workflow and
+discovery text, per §13) and the eleven one-line namespace hints moved into
+`CAPABILITY_RULES_BLOCK` in the system prompt. Same tokens, stable across turns.
+
+**21. Anthropic caching on this chassis is REQUEST-level, not per block.** Think
+hands `streamText` a single `system` STRING, so the old two-breakpoint layout
+(`SystemModelMessage[]` with `providerOptions` per block) has nowhere to live.
+`@ai-sdk/anthropic` accepts a call-level `providerOptions.anthropic.cacheControl`
+and puts it at the top of the request body (`dist/index.js:3954`). Anthropic
+builds its prefix tools → system → messages, so the `run_code` description stays
+cached across turns even though the per-turn instructions change, and within one
+turn every step after the first reuses the whole system prefix.
+
+**22. `runTurn` from a scheduled callback is fine; from an RPC it deadlocks.**
+The Phase 25 note said "never call `runTurn` from inside a DO RPC method — it
+deadlocks even unawaited". Confirmed the hard way: `steer()` is reached as an
+RPC from every caller, and calling `runTurn` inline wedged the object with no
+error (the test run had to be killed). `this.schedule(0, "startSteerTurn", …)`
+runs the submit from the alarm instead and returns immediately.
+
+**23. `activeTurnMetadata` is NOT an AsyncLocalStorage read.** The Task 15
+caveat asked whether it survives the connector's RPC boundary. It does:
+`think.js:1754` is a plain getter over `this.messages`, reading the metadata
+stamped on the turn's user message. The revision is still snapshotted into an
+instance field in `beforeTurn`, because a RECOVERED turn must be judged against
+the revision it was started for, not the current one.
+
+### Harness limits found, not defects
+
+**A turn with no model wedges the object.** The pool binds
+`AGENT_MODEL_DISABLED=true`, so any real `runTurn` fails inside Think's fiber
+and the DO stops answering RPC. `test/run-agent-steering.test.ts` therefore
+asserts only `steer`'s return value on the wake path and nothing after it. The
+wake path's own behaviour is Task 19's, against a model seam it can control —
+worth planning a fake `LanguageModel` there rather than relying on the disable
+flag.
+
+**A throw crossing an RPC stub is logged as an uncaught exception** even when the
+caller handles the rejection, which turns one deliberate assertion into
+permanent suite noise. Two places now keep the throw inside the object:
+`stepEndOutcomeForTest` (invariant 17) and `steerText` (extracted to
+`agent-steering.ts` so the refusal is a pure unit test). The two
+"Network connection lost" lines at pool boot are the pre-existing noise recorded
+above and are unchanged.
+
+### Files added
+
+`src/run/agent-prompt.ts`, `agent-voice.ts`, `agent-channels.ts`,
+`agent-spend.ts`, `agent-projection.ts`, `agent-steering.ts`; tests
+`test/run-agent-{prompt,spend,freshness,projection,outcome,steering}.test.ts`.
+`agent-voice.ts` is one file beyond the plan's list for Task 13: the frozen
+engineer-voice resolution is 180 lines with its own D1 query and freeze
+reasoning, and folding it into `agent-prompt.ts` would have buried it.
+
+`casRunStatus` was added to `src/run/repository.ts` rather than reusing
+`setRunStatus`: the unconditional version cannot be safe on the projection path
+(two racing projections would both validate against `live` and the loser would
+overwrite the winner).
+
+### Still open
+
+- The wake path (Task 19) has to bind `runId` via `bindRun` and stamp
+  `{ inputRevision, turnId, thread, recall }` as submit metadata — `beforeTurn`
+  already reads all four.
+- `approval.escalate` is still the refusing placeholder; `setOpenApproval` is the
+  method Task 20's port and Task 21's notifier call.
+- Tracing (Task 26) is still an open decision.
