@@ -1,4 +1,10 @@
-import type { DecideAction, DecideResult, Decision, OpenApproval } from "../api/approvals";
+import type {
+  ApprovalDetail,
+  DecideAction,
+  DecideResult,
+  Decision,
+  OpenApproval,
+} from "../api/approvals";
 
 /**
  * Demo approvals are the one fixture that has to be MUTABLE: the queue is the
@@ -42,6 +48,33 @@ export function listDemoApprovals(): OpenApproval[] {
   return rows
     .filter((row) => row.decision === "pending")
     .map(({ decision: _decision, ...card }) => card);
+}
+
+/**
+ * The detail read. In demo mode a decided card names its decider, which is the
+ * one thing the worker's 409 body cannot tell a losing card — this is what
+ * makes "Zurab approved this before you" reachable in a demo at all.
+ */
+export function getDemoApproval(id: string): ApprovalDetail {
+  const row = rows.find((candidate) => candidate.id === id);
+  const base: DemoRow = row ?? {
+    ...(rows[0] as DemoRow),
+    id,
+    decision: "withdrawn",
+  };
+  const decided = base.decision !== "pending";
+  const { decision, ...card } = base;
+
+  return {
+    ...card,
+    updatedAt: decided ? Date.now() : base.createdAt,
+    decision,
+    decidedBy: decided ? "zurab@zellify.app" : null,
+    decidedAt: decided ? Date.now() : null,
+    editedText: null,
+    rejectReason: null,
+    delivery: decided ? "sent" : "none",
+  };
 }
 
 /**

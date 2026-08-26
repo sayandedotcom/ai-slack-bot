@@ -1,6 +1,6 @@
 import { fixture, getJson, isDemo, patchJson } from "./client";
 import { ApiError, kindFor } from "./errors";
-import { decideDemoApproval, listDemoApprovals } from "../fixtures/approvals";
+import { decideDemoApproval, getDemoApproval, listDemoApprovals } from "../fixtures/approvals";
 
 /** A row in the open-approvals list, exactly as the worker's summary select returns it. */
 export type OpenApproval = {
@@ -40,6 +40,20 @@ export async function getOpenApprovals(): Promise<OpenApproval[]> {
   if (isDemo()) return fixture(listDemoApprovals());
   const body = await getJson<{ approvals: OpenApproval[] }>("/api/approvals?state=open");
   return body.approvals;
+}
+
+/**
+ * The full card for one approval. This is the ONLY place `decidedBy` can be
+ * learned: the worker's 409 conflict body carries the winning decision but not
+ * the winner's name, so a card that lost a race needs this second read to say
+ * who won.
+ */
+export async function getApproval(id: string): Promise<ApprovalDetail> {
+  if (isDemo()) return fixture(getDemoApproval(id));
+  const body = await getJson<{ approval: ApprovalDetail }>(
+    `/api/approvals/${encodeURIComponent(id)}`,
+  );
+  return body.approval;
 }
 
 /**
