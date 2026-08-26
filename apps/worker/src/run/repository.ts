@@ -400,6 +400,33 @@ export async function setRunStatus(
     .run();
 }
 
+/**
+ * Move a run's status only if it is still in the state the caller validated
+ * against.
+ *
+ * The twin of `setRunStatus`, and the one the agent's projection uses. The
+ * unconditional version cannot be safe on that path: two projections racing
+ * would both read `live`, both find their own transition legal, and the loser
+ * would overwrite the winner — writing a change that was legal only against a
+ * row that no longer exists. Comparing on `status` makes the loser a no-op,
+ * which `projectStatus` reports rather than swallowing.
+ */
+export async function casRunStatus(
+  db: D1Database,
+  id: string,
+  from: RunStatus,
+  to: RunStatus,
+  at = Date.now(),
+): Promise<{ applied: boolean }> {
+  const result = await db
+    .prepare(
+      "UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ? AND status = ?",
+    )
+    .bind(to, at, id, from)
+    .run();
+  return { applied: (result.meta.changes ?? 0) > 0 };
+}
+
 export async function setRunSummary(db: D1Database, id: string, summary: string): Promise<void> {
   await db.prepare("UPDATE runs SET summary = ? WHERE id = ?").bind(summary, id).run();
 }
