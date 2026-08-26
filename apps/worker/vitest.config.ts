@@ -178,5 +178,21 @@ export default defineConfig({
   ],
   test: {
     setupFiles: ["./test/setup.ts"],
+    // ONE FILE AT A TIME, and it is a correctness setting rather than a
+    // performance one.
+    //
+    // This pool has no `isolatedStorage`: every test file shares one D1 and one
+    // Durable Object namespace. That was survivable while nothing held a row
+    // across an await — but a wake now runs a REAL turn on the object's own
+    // alarm, so a suite polling for its usage row or its resolution turn stays
+    // live for hundreds of milliseconds, and `test/approval-api.test.ts` wipes
+    // `runs` and `approvals` wholesale in its `beforeEach`. Run in parallel,
+    // that wipe lands inside another file's run and takes its rows with it:
+    // observed once as seven failures across six files, green on the immediate
+    // re-run, which is exactly the shape of a shared-storage race.
+    //
+    // The cost is small — this pool's wall clock is dominated by per-file
+    // setup, which was already serialised through one runtime.
+    fileParallelism: false,
   },
 });
