@@ -15,6 +15,7 @@ import { CopyId } from "@/components/common/copy-id";
 import { OriginBadge, ShadowBadge, StatusChip } from "@/components/common/status-chip";
 import { ago, usd } from "@/lib/format";
 import { useRunUsage, useRuns } from "@/lib/hooks/use-dashboard-data";
+import { useNow } from "@/lib/hooks/use-now";
 import { useSelectedRun } from "@/lib/hooks/use-selected-run";
 
 /**
@@ -29,6 +30,7 @@ import { useSelectedRun } from "@/lib/hooks/use-selected-run";
 export function RunSheet() {
   const [selected, selectRun] = useSelectedRun();
   const runs = useRuns();
+  const now = useNow();
   const usage = useRunUsage(selected);
 
   const run =
@@ -88,12 +90,12 @@ export function RunSheet() {
                 ) : null}
                 <Row label="Started">
                   <span className="machine text-xs text-muted-foreground">
-                    {ago(run.createdAt, Date.now())}
+                    {ago(run.createdAt, now)}
                   </span>
                 </Row>
                 <Row label="Last activity">
                   <span className="machine text-xs text-muted-foreground">
-                    {ago(run.updatedAt, Date.now())}
+                    {ago(run.updatedAt, now)}
                   </span>
                 </Row>
                 <Row label="Spend">

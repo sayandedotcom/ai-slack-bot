@@ -1,7 +1,6 @@
 "use client";
 
 import { Activity, Hash } from "lucide-react";
-import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { cn } from "@workspace/ui/lib/utils";
@@ -11,6 +10,7 @@ import { OriginBadge, ShadowBadge, StatusChip } from "@/components/common/status
 import type { RunSummary } from "@/lib/api/runs";
 import { ago } from "@/lib/format";
 import { useRuns } from "@/lib/hooks/use-dashboard-data";
+import { useNow } from "@/lib/hooks/use-now";
 import { useSelectedRun } from "@/lib/hooks/use-selected-run";
 
 /**
@@ -93,22 +93,4 @@ function RunRow({
       </button>
     </li>
   );
-}
-
-/**
- * A clock the list can re-render against.
- *
- * `Date.now()` inside render would differ between the server pass and
- * hydration; starting at the row's own timestamp and ticking from an effect
- * keeps the first paint deterministic. A minute is as precise as the labels
- * this feeds.
- */
-function useNow(): number {
-  const [now, setNow] = useState(0);
-  useEffect(() => {
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  return now === 0 ? Date.now() : now;
 }

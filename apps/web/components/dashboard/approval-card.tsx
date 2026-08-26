@@ -11,6 +11,7 @@ import { cn } from "@workspace/ui/lib/utils";
 
 import type { Decision, DecideAction, OpenApproval } from "@/lib/api/approvals";
 import { ago, shortThread } from "@/lib/format";
+import { useNow } from "@/lib/hooks/use-now";
 import type { CardState } from "@/lib/store/approvals-overlay";
 
 /**
@@ -35,14 +36,14 @@ export type ApprovalCardProps = {
   onDecide: (action: DecideAction) => void;
 };
 
+/** The affirmative action's tone, used by both send buttons. */
+const APPROVE = "bg-success text-success-foreground hover:bg-success/85";
+
 /**
  * Past-tense verb per terminal decision. `pending` cannot reach a resolved
  * card, but the map is total so a new `Decision` member fails the typecheck
  * here instead of rendering an empty banner in production.
  */
-/** The affirmative action's tone, used by both send buttons. */
-const APPROVE = "bg-success text-success-foreground hover:bg-success/85";
-
 const VERB: Record<Decision, string> = {
   pending: "left this open",
   approved: "approved",
@@ -99,7 +100,7 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
   const [editText, setEditText] = useState(card.draft);
   const [reason, setReason] = useState("");
 
-  const now = Date.now();
+  const now = useNow();
 
   if (state.kind === "resolved") {
     return (

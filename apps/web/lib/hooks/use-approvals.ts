@@ -169,18 +169,21 @@ export function useApprovals(): {
     return [...merged.values()].sort((a, b) => b.card.createdAt - a.card.createdAt);
   }, [rows, overlay]);
 
-  const cardsRef = useRef(cards);
-  cardsRef.current = cards;
-
+  /**
+   * `cards` is a dependency rather than a ref read during render. Writing a ref
+   * in the render body is the shape that makes a component miss an update, and
+   * there is nothing to gain from it here: this callback is handed to a button,
+   * so a fresh identity per render costs nothing.
+   */
   const decideCard = useCallback(
     (id: string, action: DecideAction) => {
-      const current = cardsRef.current.find((entry) => entry.card.id === id);
+      const current = cards.find((entry) => entry.card.id === id);
       // Anything not `open` is locked: a decision in flight must not be
       // submitted twice, and a resolved card is finished.
       if (current === undefined || current.kind !== "open") return;
       mutation.mutate({ card: current.card, action });
     },
-    [mutation],
+    [cards, mutation],
   );
 
   /**

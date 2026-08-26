@@ -32,7 +32,10 @@ export function SiteHeader() {
           `aria-live` so a screen reader hears it arrive during an incident
           instead of on the next manual sweep of the page.
         */}
-        <span aria-live="polite" className="text-xs text-muted-foreground">
+        {/* The words are the first thing to go when the bar is narrow: the
+            pulsing count already carries the signal, and a two-line header is
+            worse than a terse one. */}
+        <span aria-live="polite" className="text-xs whitespace-nowrap text-muted-foreground">
           {openCount > 0 ? (
             <span className="inline-flex items-center gap-1.5">
               <span className="relative flex size-1.5" aria-hidden="true">
@@ -40,10 +43,11 @@ export function SiteHeader() {
                 <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
               </span>
               <span className="machine text-primary">{openCount}</span>
-              waiting on you
+              <span className="hidden sm:inline">waiting on you</span>
+              <span className="sr-only sm:hidden">waiting on you</span>
             </span>
           ) : (
-            "nothing waiting on you"
+            <span className="hidden sm:inline">nothing waiting on you</span>
           )}
         </span>
 
@@ -51,11 +55,12 @@ export function SiteHeader() {
           <Tooltip>
             <TooltipTrigger
               render={
-                <span className="eyebrow flex cursor-default items-center gap-1.5 rounded-full border border-dashed px-2 py-1" />
+                <span className="eyebrow flex cursor-default items-center gap-1.5 rounded-full border border-dashed px-2 py-1 whitespace-nowrap" />
               }
             >
               <FlaskConical className="size-3" aria-hidden="true" />
-              Demo data
+              <span className="hidden sm:inline">Demo data</span>
+              <span className="sr-only sm:hidden">Demo data</span>
             </TooltipTrigger>
             <TooltipContent>
               Nothing on this page reached the network. Every number, run and draft is a fixture.

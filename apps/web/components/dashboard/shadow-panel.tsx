@@ -8,6 +8,7 @@ import { Panel } from "@/components/common/panel";
 import { TELL_MEANING, type AiTell, type ShadowPair } from "@/lib/api/shadow";
 import { ago, shortThread } from "@/lib/format";
 import { useShadowPairs } from "@/lib/hooks/use-dashboard-data";
+import { useNow } from "@/lib/hooks/use-now";
 
 /**
  * What the agent would have said, beside what a person actually said.
@@ -19,7 +20,7 @@ import { useShadowPairs } from "@/lib/hooks/use-dashboard-data";
  */
 export function ShadowPanel() {
   const state = useShadowPairs();
-  const now = Date.now();
+  const now = useNow();
 
   return (
     <Panel

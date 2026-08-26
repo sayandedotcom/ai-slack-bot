@@ -47,7 +47,13 @@ const rows: DemoRow[] = [
 export function listDemoApprovals(): OpenApproval[] {
   return rows
     .filter((row) => row.decision === "pending")
-    .map(({ decision: _decision, ...card }) => card);
+    .map((row): OpenApproval => {
+      // Spread-and-drop rather than destructuring the field away: an unused
+      // binding is exactly the thing lint is right to complain about.
+      const card = { ...row } as Partial<DemoRow>;
+      delete card.decision;
+      return card as OpenApproval;
+    });
 }
 
 /**
