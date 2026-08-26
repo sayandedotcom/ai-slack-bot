@@ -1,0 +1,68 @@
+"use client";
+
+import { FlaskConical } from "lucide-react";
+import { usePathname } from "next/navigation";
+
+import { Separator } from "@workspace/ui/components/separator";
+import { SidebarTrigger } from "@workspace/ui/components/sidebar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
+
+import { isDemo } from "@/lib/api/client";
+import { useApprovals } from "@/lib/hooks/use-approvals";
+
+const TITLE: Record<string, string> = {
+  "/": "Dashboard",
+  "/chat": "Chat",
+};
+
+export function SiteHeader() {
+  const pathname = usePathname();
+  const { openCount } = useApprovals();
+
+  return (
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur-sm">
+      <SidebarTrigger className="-ml-1" />
+      <Separator orientation="vertical" className="mr-1 h-4" />
+      <span className="text-sm font-medium">{TITLE[pathname] ?? "Fire-Fighter"}</span>
+
+      <div className="ml-auto flex items-center gap-3">
+        {/*
+          The count is here rather than only on the dashboard because it is the
+          one fact that should reach you from any page: someone is waiting.
+          `aria-live` so a screen reader hears it arrive during an incident
+          instead of on the next manual sweep of the page.
+        */}
+        <span aria-live="polite" className="text-xs text-muted-foreground">
+          {openCount > 0 ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="relative flex size-1.5" aria-hidden="true">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-70" />
+                <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
+              </span>
+              <span className="machine text-primary">{openCount}</span>
+              waiting on you
+            </span>
+          ) : (
+            "nothing waiting on you"
+          )}
+        </span>
+
+        {isDemo() ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="eyebrow flex cursor-default items-center gap-1.5 rounded-full border border-dashed px-2 py-1" />
+              }
+            >
+              <FlaskConical className="size-3" aria-hidden="true" />
+              Demo data
+            </TooltipTrigger>
+            <TooltipContent>
+              Nothing on this page reached the network. Every number, run and draft is a fixture.
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+      </div>
+    </header>
+  );
+}

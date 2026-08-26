@@ -3,6 +3,7 @@ import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 
 import "./globals.css";
 
+import { AppShell } from "@/components/shell/app-shell";
 import { Providers } from "@/components/shell/providers";
 
 /**
@@ -44,7 +45,9 @@ export default function RootLayout({
     // without it the first paint is the wrong theme.
     <html lang="en" suppressHydrationWarning>
       <body className={`${plexSans.variable} ${plexMono.variable} antialiased`}>
-        <Providers>{children}</Providers>
+        <Providers>
+          <AppShell>{children}</AppShell>
+        </Providers>
       </body>
     </html>
   );
