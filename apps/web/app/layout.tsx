@@ -1,19 +1,31 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 
 import "./globals.css";
 
 import { Providers } from "@/components/shell/providers";
 
-const inter = Inter({
+/**
+ * One family, two voices, and the split carries meaning rather than taste.
+ *
+ * Half of what this page shows is machine output — channel ids, thread
+ * timestamps, run uuids, capability calls, counts — and half is what a person
+ * typed. Plex Mono is used for the first, Plex Sans for the second, and the
+ * rule holds everywhere including the approval card, where the agent's DRAFT is
+ * deliberately set in sans: the entire claim of the product is that the reply
+ * will read as though Luka wrote it, so it must not look machine-made here.
+ */
+const plexSans = IBM_Plex_Sans({
   subsets: ["latin"],
-  variable: "--font-inter",
+  weight: ["400", "500", "600"],
+  variable: "--font-plex-sans",
   display: "swap",
 });
 
-const jetbrainsMono = JetBrains_Mono({
+const plexMono = IBM_Plex_Mono({
   subsets: ["latin"],
-  variable: "--font-jetbrains-mono",
+  weight: ["400", "500"],
+  variable: "--font-plex-mono",
   display: "swap",
 });
 
@@ -31,7 +43,7 @@ export default function RootLayout({
     // theme class onto <html> before React hydrates, which is the whole point —
     // without it the first paint is the wrong theme.
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}>
+      <body className={`${plexSans.variable} ${plexMono.variable} antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>

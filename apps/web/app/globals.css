@@ -26,8 +26,8 @@
 }
 
 :root {
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", monospace;
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
 
   /* Ember. The agent is a fire-fighter; the accent is the fire, used sparingly
      — the speaker hero's edge, the primary action, the section eyebrow. */
@@ -96,5 +96,42 @@
      sit in. Every counter, cost and timestamp is tabular. */
   .tabular-nums {
     font-variant-numeric: tabular-nums;
+  }
+
+  /* The only motion in the app is the live-run pulse, and it exists to draw an
+     eye across a list. Somebody who has asked their OS to stop moving things
+     still gets the steady dot underneath it. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /*
+   * The machine's voice. Eyebrows, section labels, channel names, thread
+   * timestamps, run ids, capability calls — everything the system produced
+   * rather than a person. Applied as one class so the rule is enforceable by
+   * reading the markup rather than by remembering it.
+   */
+  .machine {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    line-height: 1;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
   }
 }
