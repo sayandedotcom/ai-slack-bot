@@ -185,7 +185,7 @@ export class RunAgent extends Think<Env> {
         // A PROVIDER, not a context: the connectors rebuild each namespace
         // against a fresh BindingContext on every call, so no two executions
         // share a call budget, an audit stream or a customer reference map.
-        connectors: buildConnectors(ctx, env, () => this.#bindingContext()),
+        connectors: buildConnectors(ctx, env, (executionId) => this.#bindingContext(executionId)),
         // Invariant 24: the generated declarations have ONE home, and it is
         // the tool description. They are guidance, not a boundary — the
         // sandbox runs JavaScript and nothing stops model code calling a
@@ -261,7 +261,7 @@ export class RunAgent extends Think<Env> {
    * not churn) and refuses at call time with a code the model can read, which
    * is the same shape every other unusable-in-this-context capability takes.
    */
-  async #bindingContext(outerToolCallId = crypto.randomUUID()): Promise<BindingContext> {
+  async #bindingContext(outerToolCallId: string): Promise<BindingContext> {
     const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
     return {
       scope,

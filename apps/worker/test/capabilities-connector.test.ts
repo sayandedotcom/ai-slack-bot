@@ -133,29 +133,47 @@ describe("toJsonSchema", () => {
 });
 
 describe("FirefighterConnector — per-execution isolation", () => {
-  it("rebuilds the namespace against a FRESH context on every call", async () => {
-    // CodemodeConnector.resolvedTools() caches tools() per connector instance
-    // (`#toolsPromise ??=`), so the connector cannot be where per-execution
-    // state refreshes. If it were, two executions would share one call budget,
-    // one audit stream and one customer-reference map.
-    let contexts = 0;
+  function counting() {
+    const built: string[] = [];
     const connector = new FirefighterConnector(
       {} as ExecutionContext,
       env,
-      {
-        name: "demo",
-        build: () => {
-          contexts += 1;
-          return namespace.tools;
-        },
+      { name: "demo", build: () => namespace.tools },
+      async (executionId) => {
+        built.push(executionId);
+        return undefined;
       },
-      async () => undefined,
     );
+    return { built, connector };
+  }
 
+  it("builds ONE context per execution, shared by every call in it", async () => {
+    // Before the 2026-08-24 fix the context was rebuilt per CALL, so the
+    // per-execution call budget could never trip and a customer reference
+    // minted by one call was unknown to the next.
+    const { built, connector } = counting();
     await connector.executeTool("echo", { text: "a" }, { executionId: "e1" });
-    const afterFirst = contexts;
-    await connector.executeTool("echo", { text: "b" }, { executionId: "e2" });
+    await connector.executeTool("echo", { text: "b" }, { executionId: "e1" });
+    await connector.executeTool("ping", undefined, { executionId: "e1" });
+    expect(built.filter((id) => id === "e1")).toHaveLength(1);
+  });
 
-    expect(contexts).toBeGreaterThan(afterFirst);
+  it("gives a different execution its own context", async () => {
+    // CodemodeConnector.resolvedTools() memoises tools() per INSTANCE, so the
+    // connector cannot be where per-execution state refreshes; the map keyed
+    // by executionId is.
+    const { built, connector } = counting();
+    await connector.executeTool("echo", { text: "a" }, { executionId: "e1" });
+    await connector.executeTool("echo", { text: "a" }, { executionId: "e2" });
+    expect(built.filter((id) => id !== "render")).toEqual(["e1", "e2"]);
+  });
+
+  it("refuses a call that did not come through the runtime", async () => {
+    // No executionId means no execution to charge a budget to. Refuse rather
+    // than silently hand the call a private one.
+    const { connector } = counting();
+    await expect(
+      connector.executeTool("echo", { text: "a" }, undefined as never),
+    ).rejects.toMatchObject({ code: "invalid_context" });
   });
 });

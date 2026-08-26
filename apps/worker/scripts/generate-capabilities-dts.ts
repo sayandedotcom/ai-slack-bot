@@ -135,7 +135,7 @@ async function main(): Promise<void> {
   // call the codemode runtime makes, so the committed artifact is what the
   // model is actually handed. Both build over the same `buildNamespaces`
   // descriptors, so this is a change of vantage point, not of content.
-  const connectors = buildConnectors(renderContext(), unreachableEnv(), async () => ({
+  const connectors = buildConnectors(renderContext(), unreachableEnv(), async (_executionId) => ({
     scope: RENDER_SCOPE,
     deps: unreachableDependencies(),
     limits: PRODUCTION_LIMITS,
