@@ -27,7 +27,7 @@ export function TokenExplainer() {
       <h2 id="tokens-heading" className="eyebrow">
         One Slack app, two tokens
       </h2>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3">
         {TOKENS.map((token) => (
           <Card key={token.title}>
             <CardContent className="flex items-start gap-3">

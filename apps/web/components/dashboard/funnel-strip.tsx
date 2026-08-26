@@ -94,25 +94,27 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
               <div key={stage.key} className="flex flex-1 items-end gap-1">
                 <Tooltip>
                   <TooltipTrigger
-                    render={<div className="min-w-0 flex-1 cursor-default space-y-1.5" />}
+                    render={<div className="min-w-0 flex-1 cursor-default space-y-1" />}
                   >
-                    <div className="flex items-baseline gap-1.5">
-                      <span
-                        className={cn(
-                          "machine text-xl font-medium tabular-nums",
-                          stage.accent && "text-primary",
-                        )}
-                      >
-                        {value}
-                      </span>
-                      <span
-                        className={cn(
-                          "truncate text-xs",
-                          stage.derived ? "text-muted-foreground/70 italic" : "text-muted-foreground",
-                        )}
-                      >
-                        {stage.label}
-                      </span>
+                    {/* Number over label, not beside it: at five stages across
+                        one row, sharing a line clips the longer labels. */}
+                    <div
+                      className={cn(
+                        "machine text-2xl leading-none font-medium tabular-nums",
+                        stage.accent && "text-primary",
+                      )}
+                    >
+                      {value}
+                    </div>
+                    <div
+                      className={cn(
+                        "pb-1 text-xs",
+                        stage.derived
+                          ? "text-muted-foreground/70 italic"
+                          : "text-muted-foreground",
+                      )}
+                    >
+                      {stage.label}
                     </div>
                     {/*
                       The bar is the argument. `min-w` keeps a stage of 1 out of
@@ -138,7 +140,7 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
 
                 {index < STAGES.length - 1 ? (
                   <ChevronRight
-                    className="mb-1.5 hidden size-3.5 shrink-0 text-muted-foreground/40 sm:block"
+                    className="mb-0.5 hidden size-3.5 shrink-0 text-muted-foreground/40 sm:block"
                     aria-hidden="true"
                   />
                 ) : null}

@@ -22,13 +22,21 @@ export function isDemo(): boolean {
 }
 
 /**
- * Resolve a fixture. It goes through a real promise rather than returning
- * synchronously so that demo mode exercises the same loading states a live
- * deployment does — a panel that never renders its skeleton is a panel whose
- * skeleton nobody has ever seen.
+ * How long a fixture takes to "arrive". Two reasons it is not zero:
+ *
+ * 1. A panel that never renders its skeleton is a panel whose skeleton nobody
+ *    has ever seen. Demo mode should exercise the same four states a live
+ *    deployment does.
+ * 2. `Promise.resolve()` settles in a microtask, which can land in the middle
+ *    of React's hydration pass — the query flips to `ready` between the server
+ *    HTML and the client's hydration render, and React reports a mismatch.
+ *    A real tick puts the resolution safely after hydration.
  */
+const FIXTURE_LATENCY_MS = 220;
+
+/** Resolve a fixture as though it had crossed a network. */
 export function fixture<T>(value: T): Promise<T> {
-  return Promise.resolve(value);
+  return new Promise((resolve) => setTimeout(() => resolve(value), FIXTURE_LATENCY_MS));
 }
 
 /** GET a relative JSON endpoint. Throws `ApiError` for anything that is not a parsed 2xx. */

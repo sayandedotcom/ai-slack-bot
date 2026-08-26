@@ -40,6 +40,9 @@ export type ApprovalCardProps = {
  * card, but the map is total so a new `Decision` member fails the typecheck
  * here instead of rendering an empty banner in production.
  */
+/** The affirmative action's tone, used by both send buttons. */
+const APPROVE = "bg-success text-success-foreground hover:bg-success/85";
+
 const VERB: Record<Decision, string> = {
   pending: "left this open",
   approved: "approved",
@@ -176,6 +179,7 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
           <>
             <Button
               size="sm"
+              className={APPROVE}
               disabled={locked || editText.trim().length === 0}
               onClick={() => onDecide({ action: "edit", text: editText })}
             >
@@ -207,7 +211,16 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
           </p>
         ) : (
           <>
-            <Button size="sm" disabled={locked} onClick={() => onDecide({ action: "approve" })}>
+            <Button
+              size="sm"
+              disabled={locked}
+              onClick={() => onDecide({ action: "approve" })}
+              // Not the ember primary. Ember is this page's attention colour —
+              // the escalated stage, the waiting count — and a red-filled
+              // button next to a Reject reads as "stop", which is the opposite
+              // of what this one does. Approve is the safe, common, green path.
+              className={APPROVE}
+            >
               <Check data-icon="inline-start" />
               {deciding ? "Sending…" : "Approve & send"}
             </Button>

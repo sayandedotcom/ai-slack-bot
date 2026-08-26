@@ -56,13 +56,22 @@ export default function DashboardPage() {
           is long and worth scrolling, and the thing with a human waiting on the
           other end of it should not scroll away while you do.
         */}
-        <div className="space-y-6 lg:col-span-5 lg:sticky lg:top-20">
+        <div className="lg:sticky lg:top-20 lg:col-span-5">
           <ApprovalsQueue role={role} />
-          <NudgePreview />
         </div>
       </div>
 
-      <TokenExplainer />
+      {/* The nudge and the two tokens are one idea — how a decision reaches a
+          human and comes back — so they sit together rather than the nudge
+          floating beside the queue it describes. */}
+      <div className="grid items-start gap-4 lg:grid-cols-12">
+        <div className="lg:col-span-5">
+          <NudgePreview />
+        </div>
+        <div className="lg:col-span-7">
+          <TokenExplainer />
+        </div>
+      </div>
 
       <TeamTable state={roster} identity={identity} />
 
