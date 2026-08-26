@@ -122,6 +122,17 @@
     // prose reaches a second vendor. Recorded in the README security model,
     // swept by test/agent-canaries.test.ts, and never reasoning (invariant 18).
     "LANGSMITH_TRACE_PAYLOADS": "redacted",
+    // What one agent turn may spend, in nano-USD ($5.00). The MONEY is the
+    // binding authority on how long a turn runs (invariant 28), not the 40-step
+    // ceiling, which at the ~$0.068 per step these runs bill would cost ~$2.70
+    // and so can never be the thing that stops an expensive turn first.
+    //
+    // Enforced twice: `beforeTurn`'s stopWhen ends the turn once cumulative
+    // usage crosses this, and `beforeStep` takes the tools away one step
+    // earlier so the model writes a closing message instead of being cut off.
+    // Absent or unparseable falls back to this same default; an explicit "0" is
+    // unbounded, and is deliberately something someone has to type.
+    "RUN_SPEND_CEILING_NANO_USD": "5000000000",
     // Supabase PostgREST origin (Task 9). Fixed server-side so the reader can
     // never be pointed at another project. Credential is SUPABASE_KEY.
     "SUPABASE_URL": "https://uahmoigkzsuwhheohitz.supabase.co",

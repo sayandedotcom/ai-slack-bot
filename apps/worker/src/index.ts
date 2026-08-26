@@ -124,6 +124,17 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    */
   LANGSMITH_TRACING?: string;
   LANGSMITH_TRACE_PROJECT?: string;
+  /**
+   * What one agent turn may spend, in nano-USD. A NON-SECRET `var`, declared
+   * here for the same reason as the ones above.
+   *
+   * Optional, and absence means the reviewed default ($5.00), not unbounded —
+   * `spendCeilingFrom` treats an unparseable or missing value as the default so
+   * an operator typo cannot remove the money bound. An explicit `"0"` IS
+   * unbounded, which is the only way to turn the ceiling off and is deliberately
+   * something someone has to type.
+   */
+  RUN_SPEND_CEILING_NANO_USD?: string;
   /** `"none"` or `"redacted"`. Anything else is refused by name. */
   LANGSMITH_TRACE_PAYLOADS?: string;
   /**
