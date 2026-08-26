@@ -3,8 +3,15 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
-@source "../../../apps/**/*.{ts,tsx}";
-@source "../../../components/**/*.{ts,tsx}";
+/* `@source` is resolved relative to THIS file, and this file is four levels
+   down from the repo root (packages/ui/src/styles). The globs used to start at
+   `../../../`, which lands on `packages/`, so `packages/apps/**` and
+   `packages/components/**` were scanned — neither exists, and neither has ever
+   matched a file. The Vite dashboard never noticed because `@tailwindcss/vite`
+   detects its own sources; Next's PostCSS pipeline does not, so the paths are
+   corrected here rather than worked around downstream. */
+@source "../../../../apps/**/*.{ts,tsx}";
+@source "../../../../packages/*/src/**/*.{ts,tsx}";
 @source "../**/*.{ts,tsx}";
 
 @theme inline {
