@@ -406,11 +406,14 @@ describe("sweepNudges", () => {
 
 
 // The `approval_card` projection-hook cases lived here. They drove
-// `makeApprovalCardRunner`, which was part of the agent layer removed on
-// 2026-08-23 — the projection job that turned an escalation into a D1 card and
-// then nudged once. What they pinned is still true of the pieces that remain
-// and is worth re-pinning when the new chassis lands: the card is committed
-// BEFORE the DM is attempted, a failed nudge still reports the card delivered
-// and leaves the claim free for the sweeper, and a redelivered job never DMs
-// the engineer twice. `sendNudge`, `updateNudge` and `sweepNudges` — all
-// covered above — are the halves that survived.
+// `makeApprovalCardRunner`, part of the agent layer removed on 2026-08-23: the
+// projection job that turned an escalation into a D1 card and then nudged once.
+//
+// RESTORED, against the chassis that replaced it, in
+// `test/approval-port.test.ts` > "nudging the engineer about a fresh card".
+// There is no projection job any more — `ApprovalPort.open` writes the card
+// itself and schedules `RunAgent.nudgeApproval` — so the three properties moved
+// with the code: the card is committed before the DM is attempted, a failed
+// nudge leaves the claim free for the sweeper, and a decided card is not nudged
+// at all. `sendNudge`, `updateNudge` and `sweepNudges` — all covered above —
+// are the halves that never moved.

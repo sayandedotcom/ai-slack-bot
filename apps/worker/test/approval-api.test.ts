@@ -1,4 +1,5 @@
 import { SELF, createScheduledController, env } from "cloudflare:test";
+import { getAgentByName } from "agents";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
@@ -184,14 +185,19 @@ describe("GET /api/approvals", () => {
     expect(body.approvals).toHaveLength(1);
     expect(body.approvals[0]).toMatchObject({ id, runId, draft: "We can refund the last invoice." });
 
-    // The route never wakes a run session, and with the agent layer removed
-    // there is no session to wake — the claim now rests entirely on the route
-    // file, which references no Durable Object binding at all. That is
-    // greppable, and it is the only form of proof available from outside.
-    // Restore the "no run_state row was written" half against whatever the new
-    // chassis stores, rather than letting this read as a stronger claim than it
-    // is: an assertion described as more than it is, is how a green suite ends
-    // up standing for a property nobody checks.
+    // THE OTHER HALF, restored against the chassis that replaced the RunDO
+    // (invariant 7): the route wrote nothing into the run's session. Reading it
+    // here is what wakes the object for the first time, so an untouched state
+    // and an empty transcript are only possible if the request itself never
+    // reached it — a list of N open approvals must not cost N wakes.
+    const stub = await getAgentByName(env.RUN_AGENTS, runKey);
+    expect(await stub.runStateForTest()).toMatchObject({
+      status: "idle",
+      turnId: null,
+      openApprovalId: null,
+      inputRevision: 0,
+    });
+    expect(await stub.getMessages()).toEqual([]);
   });
 
   it("rejects a state value other than 'open'", async () => {
