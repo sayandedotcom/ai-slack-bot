@@ -31,8 +31,9 @@ import { callable } from "agents";
 import type { ContextProvider } from "agents/experimental/memory/session";
 import type { LanguageModel, ModelMessage, PrepareStepResult, Tool, ToolSet } from "ai";
 
-import { getApproval } from "../approval/repository";
 import type { ApprovalPort } from "../approval/contracts";
+import { makeApprovalPort } from "../approval/port";
+import { getApproval } from "../approval/repository";
 import {
   type AgentExecutionGuard,
   newCodeExecution,
@@ -47,8 +48,10 @@ import {
   NAMESPACE_FACTORIES,
 } from "../capabilities/registry";
 import { CapabilityError } from "../gateways/errors";
+import type { RunScope } from "../gateways/scope";
 import type { Env } from "../index";
 import { redact } from "../redact";
+import { sendNudge } from "../notify/nudge";
 import { makeSandboxLifecycle, sandboxContainersAvailable } from "../sandbox/lifecycle";
 import {
   channelForOrigin,
@@ -56,6 +59,7 @@ import {
   RUN_CHANNELS,
   type RunChannelId,
 } from "./agent-channels";
+import { runOriginOf } from "./keys";
 import {
   ANTHROPIC_PROVIDER_OPTIONS,
   composeInstructions,
@@ -89,7 +93,7 @@ import {
 import { renderEngineerVoice, resolveEngineerVoice, voiceWindowIndex } from "./agent-voice";
 import { productionDependencies } from "./dependencies";
 import { isRunStatus, isTerminalRunStatus, type RunStatus } from "./protocol";
-import { readRunUsage } from "./repository";
+import { getRunByKey, readRunUsage } from "./repository";
 import { resolveRunScope } from "./scope";
 
 /** The one outer tool. Named in the prompt, the tests and the README. */
@@ -144,24 +148,15 @@ export function assertThinkingOmitted(reasoning: ReadonlyArray<unknown> | undefi
 }
 
 /**
- * Approval's real port lands in Task 20. Refusing with a readable code is the
- * honest placeholder: the namespace is declared so the model's API is stable,
- * and calling it says plainly that it is not available rather than pretending
- * to succeed.
+ * How long a run waits for a human before it stops waiting.
+ *
+ * A REVIEWED DEFAULT, not a vendor constant. An escalation nobody answers must
+ * not park a run forever: the thread would stay owned by a session that will
+ * never speak again, and every later customer message would be absorbed into
+ * silence. Six hours is long enough to cover a meeting or a handover and short
+ * enough that a stranded thread is released the same day.
  */
-function notYetWiredApprovalPort(): ApprovalPort {
-  const refuse = () => {
-    throw new CapabilityError(
-      "capability_unavailable",
-      "approval is not wired on this build yet.",
-    );
-  };
-  return {
-    open: async () => refuse(),
-    openApprovalId: () => null,
-    withdraw: async () => refuse(),
-  };
-}
+export const APPROVAL_TTL_SECONDS = 6 * 60 * 60;
 
 /**
  * Run-scoped state that must survive hibernation.
@@ -179,6 +174,19 @@ function notYetWiredApprovalPort(): ApprovalPort {
  *
  * D1 `runs` stays the system of record; this is the live mirror.
  */
+/**
+ * The approval id off a scheduled payload, or null.
+ *
+ * Validated rather than trusted: a schedule row round-trips through JSON in DO
+ * SQLite and can outlive a deploy, so one written by an older build is a thing
+ * to drop rather than to crash on.
+ */
+function readApprovalId(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const raw = (payload as { approvalId?: unknown }).approvalId;
+  return typeof raw === "string" && raw !== "" ? raw : null;
+}
+
 export type RunAgentState = {
   /** The public runs.id, bound by the wake path from the D1 row keyed by this.name. */
   runId: string | null;
@@ -186,6 +194,15 @@ export type RunAgentState = {
   turnId: string | null;
   status: RunStatus;
   openApprovalId: string | null;
+  /**
+   * The last approval this run opened, decided or not, and never cleared.
+   *
+   * `openApprovalId` alone cannot answer a withdraw that arrives just after a
+   * human decided: the resolution clears the flag, and a port with nothing open
+   * would report a clean withdrawal for a message that may already have gone to
+   * the customer. This is what lets it look the decision up instead.
+   */
+  lastApprovalId: string | null;
   /** Which surface this run speaks on. Decides the delivery label. */
   channel: RunChannelId;
   /** Bumped by every submit; a turn whose revision is older is stale. */
@@ -198,6 +215,7 @@ export class RunAgent extends Think<Env, RunAgentState> {
     turnId: null,
     status: "idle",
     openApprovalId: null,
+    lastApprovalId: null,
     channel: "web",
     inputRevision: 0,
   };
@@ -305,6 +323,35 @@ export class RunAgent extends Think<Env, RunAgentState> {
     });
   }
 
+  /**
+   * Resolve this object's own public run id, on every wake.
+   *
+   * The DO's NAME is the private run key and the public `runs.id` is a separate
+   * UUID (invariant 10), so the agent cannot derive one from the other — it has
+   * to ask D1. `bindRun` is the explicit half, called by whoever woke the run;
+   * this is the self-healing half, and it is what makes a run reachable through
+   * a path that never went through a wake: a dashboard socket, an approval
+   * resolution, a scheduled callback after an eviction.
+   *
+   * `this.configure()` — which the Think docs describe — DOES NOT EXIST on
+   * 0.15.1 (2026-08-24 docs audit). `this.state` is the durable carrier.
+   *
+   * Best effort, deliberately. A throw out of `onStart` is terminal: partyserver
+   * resets its init state and the next request re-runs the same failing start,
+   * so a D1 blip would make the object permanently unreachable rather than
+   * temporarily unbound. `#runId()` refuses honestly while it is null.
+   */
+  override async onStart(): Promise<void> {
+    if (this.state.runId !== null) return;
+    try {
+      const run = await getRunByKey(this.env.DB, this.name);
+      if (run === null) return;
+      await this.bindRun({ runId: run.id, channel: channelForOrigin(runOriginOf(run.key)) });
+    } catch (err) {
+      console.warn("run id not resolved on start", err instanceof Error ? err.message : err);
+    }
+  }
+
   override getModel(): LanguageModel {
     if (this.#model === null) {
       throw new Error("model construction is disabled (AGENT_MODEL_DISABLED)");
@@ -345,6 +392,7 @@ export class RunAgent extends Think<Env, RunAgentState> {
    */
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig> {
     await this.#refreshVoiceIfDayChanged();
+    await this.#adoptTurnId();
 
     const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
     const perTurn = turnInstructions({
@@ -497,6 +545,31 @@ export class RunAgent extends Think<Env, RunAgentState> {
     };
   }
 
+  /**
+   * Adopt the turn id the submission stamped, so everything this turn writes is
+   * attributable to it.
+   *
+   * Every entry point mints one id and passes it as both the submission's
+   * `idempotencyKey` and its `turnId` metadata, so a redelivery that is refused
+   * as a duplicate was never given a second identity. It reaches the run scope,
+   * the usage rows and the capability audit from here.
+   *
+   * Falls back to keeping whatever is set: a turn started by a path that
+   * stamped nothing is still a turn, and "boot" is a truthful label for one
+   * nobody named.
+   */
+  async #adoptTurnId(): Promise<void> {
+    const turnId = this.#metadataTurnId();
+    if (turnId === null || this.state.turnId === turnId) return;
+    this.setState({ ...this.state, turnId });
+  }
+
+  /** The turn id stamped on this turn's user message, if it carries one. */
+  #metadataTurnId(): string | null {
+    const raw = this.activeTurnMetadata?.turnId;
+    return typeof raw === "string" && raw !== "" ? raw : null;
+  }
+
   /** The revision stamped on this turn's user message, if it carries one. */
   #metadataRevision(): number | null {
     const raw = this.activeTurnMetadata?.inputRevision;
@@ -574,6 +647,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
     this.#refusalSeen = false;
     this.#turnRevision = null;
     this.#recoveryAttempt = 0;
+    // The turn is over, so the id it stamped on scopes and usage rows is over
+    // with it. Left set, the next path that reaches `#turnId()` without a turn
+    // — an approval expiry, a projection — would attribute itself to a turn
+    // that has already finished.
+    if (this.state.turnId !== null) this.setState({ ...this.state, turnId: null });
     await this.setStatus(terminal);
     if (isTerminalRunStatus(terminal)) await this.#teardownSandbox();
   }
@@ -902,7 +980,13 @@ export class RunAgent extends Think<Env, RunAgentState> {
    */
   async setOpenApproval(approvalId: string | null): Promise<void> {
     if (this.state.openApprovalId === approvalId) return;
-    this.setState({ ...this.state, openApprovalId: approvalId });
+    this.setState({
+      ...this.state,
+      openApprovalId: approvalId,
+      // Never cleared. `withdraw` consults it when nothing is open, to tell a
+      // redelivered withdrawal apart from one that lost a race to a human.
+      lastApprovalId: approvalId ?? this.state.lastApprovalId,
+    });
   }
 
   // --- test surface -------------------------------------------------------
@@ -1014,16 +1098,17 @@ export class RunAgent extends Think<Env, RunAgentState> {
   /**
    * The capability surface for one execution.
    *
-   * Approval is not wired yet — Task 20 builds the real port. Until then the
-   * namespace is DECLARED (so the model sees a stable API and the .d.ts does
-   * not churn) and refuses at call time with a code the model can read, which
-   * is the same shape every other unusable-in-this-context capability takes.
+   * The approval port is built HERE rather than in `dependencies.ts` because it
+   * is the only capability that reads and writes this object's own durable
+   * state. Everything it needs from the run — the pinned thread, the shadow
+   * flag, the turn that is escalating — comes from the host-resolved scope, and
+   * nothing on it can be chosen by the model.
    */
   async #bindingContext(outerToolCallId: string): Promise<BindingContext> {
     const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
     return {
       scope,
-      deps: productionDependencies(this.env, scope, notYetWiredApprovalPort()),
+      deps: productionDependencies(this.env, scope, this.#approvalPort(scope)),
       limits: PRODUCTION_LIMITS,
       execution: newCodeExecution({
         outerToolCallId,
@@ -1033,6 +1118,81 @@ export class RunAgent extends Think<Env, RunAgentState> {
         clock: () => Date.now(),
       }),
     };
+  }
+
+  #approvalPort(scope: RunScope): ApprovalPort {
+    return makeApprovalPort({
+      db: this.env.DB,
+      env: this.env,
+      runId: scope.runId,
+      generationId: scope.turnId,
+      slackThread: scope.slackThread,
+      shadow: scope.shadow,
+      now: () => Date.now(),
+      openApprovalId: () => this.state.openApprovalId,
+      lastApprovalId: () => this.state.lastApprovalId,
+      setOpenApproval: (approvalId) => this.setOpenApproval(approvalId),
+      // Both are scheduled rather than awaited: a Slack call on the tool-call
+      // path would put an eight-second timeout inside the model's own run_code
+      // execution, and the alarm cannot run until this turn ends — which is
+      // exactly when the human needs the DM, because that is when the run
+      // actually parks.
+      scheduleNudge: async (approvalId) => {
+        await this.schedule(0, "nudgeApproval", { approvalId });
+      },
+      scheduleExpiry: async (approvalId) => {
+        await this.schedule(APPROVAL_TTL_SECONDS, "approvalExpired", { approvalId });
+      },
+    });
+  }
+
+  /**
+   * Ask the engineer. Public because `schedule()` resolves the callback by name
+   * off the instance.
+   *
+   * Best effort by design: `sendNudge` claims the row's one nudge slot by CAS
+   * and hands it back on failure, and the Worker's one-minute sweep re-attempts
+   * every pending card that has sat unnudged. A Slack outage delays the DM; it
+   * does not lose the approval.
+   */
+  async nudgeApproval(payload: unknown): Promise<void> {
+    const approvalId = readApprovalId(payload);
+    if (approvalId === null) return;
+    try {
+      const card = await getApproval(this.env.DB, approvalId);
+      if (card === null || card.decision !== "pending") return;
+      await sendNudge(this.env, card);
+    } catch (err) {
+      console.warn("approval nudge failed", err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * The run stops waiting.
+   *
+   * It does NOT decide for the human — nothing here writes `approved` or
+   * `rejected`. It withdraws the escalation, which loses gracefully to a
+   * decision that landed first, and fails the run.
+   *
+   * `failed` rather than `idle`, and that is the point: a failed run releases
+   * its Slack thread, and triage's abandoned-thread override reads exactly that
+   * status to re-wake a thread whose run died. So a customer who follows up
+   * after a timeout is answered instead of reasoned into silence — which is the
+   * live failure that override exists for.
+   */
+  async approvalExpired(payload: unknown): Promise<void> {
+    const approvalId = readApprovalId(payload);
+    if (approvalId === null || this.state.openApprovalId !== approvalId) return;
+
+    const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
+    const outcome = await this.#approvalPort(scope).withdraw();
+    if (!outcome.withdrawn) {
+      // A human decided in the race. Their resolution turn carries the decision
+      // in and unparks the run; there is nothing here to fail.
+      return;
+    }
+    await this.setStatus("failed");
+    await this.#teardownSandbox();
   }
 
   /**
