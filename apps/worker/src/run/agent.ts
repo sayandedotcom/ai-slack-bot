@@ -33,6 +33,7 @@ import {
 import { CapabilityError } from "../gateways/errors";
 import type { Env } from "../index";
 import { productionDependencies } from "./dependencies";
+import type { RunStatus } from "./protocol";
 import { resolveRunScope } from "./scope";
 
 /** The one outer tool. Named in the prompt, the tests and the README. */
@@ -122,7 +123,37 @@ function runCodeDescription(): string {
   ].join("\n");
 }
 
-export class RunAgent extends Think<Env> {
+/**
+ * Run-scoped state that must survive hibernation.
+ *
+ * `this.state` is SQLite-backed and broadcast to every connection on
+ * `setState`, which is exactly what the dashboard's live view wants. An
+ * in-memory private field is neither: it dies on the next eviction and the
+ * constructor re-runs. `this.configure()` — which the Think docs describe —
+ * does not exist on 0.15.1. Found by the 2026-08-24 docs audit.
+ *
+ * D1 `runs` stays the system of record; this is the live mirror.
+ */
+export type RunAgentState = {
+  /** The public runs.id, resolved from this.name (the private key) via D1 in onStart. */
+  runId: string | null;
+  /** The turn currently being served, from submit metadata. Null when idle. */
+  turnId: string | null;
+  status: RunStatus;
+  openApprovalId: string | null;
+  /** Bumped by every submit; a turn whose revision is older is stale. */
+  inputRevision: number;
+};
+
+export class RunAgent extends Think<Env, RunAgentState> {
+  override initialState: RunAgentState = {
+    runId: null,
+    turnId: null,
+    status: "idle",
+    openApprovalId: null,
+    inputRevision: 0,
+  };
+
   /**
    * The DO name is the private run key. The browser addresses runs by their
    * public UUID and the Worker resolves the key server-side, so the name must
@@ -150,8 +181,6 @@ export class RunAgent extends Think<Env> {
 
   #model: LanguageModel | null = null;
   #runCode: Tool | undefined;
-  #cachedRunId: string | undefined;
-  #cachedTurnId: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -278,19 +307,20 @@ export class RunAgent extends Think<Env> {
   }
 
   /**
-   * The public run id. Resolved from D1 by key rather than parsed out of the
-   * DO name: the name is the private key and the two are deliberately
-   * different values.
+   * The public run id, from durable state. Resolved into `this.state` by
+   * `onStart` (Task 19) from the D1 row whose key is `this.name`; the name is
+   * the private key and the two are deliberately different values.
    */
   #runId(): string {
-    if (this.#cachedRunId === undefined) {
-      throw new CapabilityError("invalid_context", "this agent has no resolved run id yet");
+    const runId = this.state.runId;
+    if (runId === null) {
+      throw new CapabilityError("invalid_context", "this run has not been woken yet");
     }
-    return this.#cachedRunId;
+    return runId;
   }
 
   #turnId(): string {
-    return this.#cachedTurnId ?? "boot";
+    return this.state.turnId ?? "boot";
   }
 
   /** Pins the identity opt-out above against an SDK default change. */
