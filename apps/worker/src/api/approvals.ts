@@ -11,6 +11,7 @@ import {
   markResolutionDelivered,
 } from "../approval/repository";
 import { DecisionInputError, outboundText, type ApprovalRow, type DecisionInput } from "../approval/contracts";
+import { makeRunAgentResolutionNotifier } from "../approval/notifier";
 
 /**
  * One human decision on one proposed customer Slack reply, over HTTP. This is
@@ -97,17 +98,9 @@ function resolvePorts(env: Env): Partial<ApprovalApiPorts> & { verifier: AccessV
       verifier: makeAccessVerifier({ teamDomain: env.ACCESS_TEAM_DOMAIN, aud: env.ACCESS_APP_AUD }),
     };
   }
-  // NO PRODUCTION NOTIFIER. The agent layer was removed on 2026-08-23 to be
-  // rebuilt on the Agents SDK / Project Think / Code Mode, so there is no run
-  // session to deliver a decision TO.
-  //
-  // Nothing else about this route changes, and that is the point: the Access
-  // JWT, the roster check and the D1 CAS all still run, so a human's decision
-  // is still committed exactly once and is never lost. With no notifier the
-  // handler reports `resolutionDelivered: false` and the one-minute sweep keeps
-  // re-driving the row — which is invariant 9's designed behaviour for an
-  // unreachable run, not a new failure mode. Install one here when the new
-  // chassis lands.
+  if (GLOBAL_PORTS.notifier === undefined) {
+    GLOBAL_PORTS = { ...GLOBAL_PORTS, notifier: makeRunAgentResolutionNotifier({ env }) };
+  }
   return GLOBAL_PORTS as Partial<ApprovalApiPorts> & { verifier: AccessVerifier };
 }
 
