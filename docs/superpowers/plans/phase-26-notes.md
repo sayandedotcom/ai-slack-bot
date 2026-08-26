@@ -431,9 +431,118 @@ overwrite the winner).
 
 ### Still open
 
-- The wake path (Task 19) has to bind `runId` via `bindRun` and stamp
-  `{ inputRevision, turnId, thread, recall }` as submit metadata — `beforeTurn`
-  already reads all four.
-- `approval.escalate` is still the refusing placeholder; `setOpenApproval` is the
-  method Task 20's port and Task 21's notifier call.
 - Tracing (Task 26) is still an open decision.
+- Tasks 2 and 28 are blocked on the first deploy (0 Workers on the account).
+
+## Wave 4 implementation notes (2026-08-27)
+
+Gate before: 64 files / 936 tests. After: **67 files / 986 tests**, `tsc
+--noEmit` clean, `capabilities:dts:check` in sync.
+
+**24. THE HARNESS LIMIT FROM WAVE 3 IS GONE, and it was the biggest single
+unlock in this wave.** `src/run/model.ts` now carries `installTestModel` /
+`resetTestModel` — one nullable module variable, the same shape as
+`installApprovalApiPorts`, read at the top of `buildModel` so it takes
+precedence over `AGENT_MODEL_DISABLED`. `test/helpers/canned-model.ts` builds a
+`MockLanguageModelV4` from `ai/test` that emits one text step and a `finish`,
+never touching the network. With it a submitted turn actually completes: submit
+→ alarm drain → `beforeTurn` → model → `onStepEnd` → usage row in D1, all
+assertable from a test. Everything Wave 3 could only assert up to the submit is
+now asserted past it.
+
+Two details the mock had to get right against the installed spec: `ai` 7's
+`LanguageModelV4FinishReason` is an OBJECT (`{ unified, raw }`), not a string;
+and `@ai-sdk/provider` has no direct dependency entry, so the stream-part type
+is derived from `MockLanguageModelV4["doStream"]` rather than imported.
+
+**25. `runTurn({ mode: "submit" })` returns before the turn runs.**
+`think.js:5429` inserts the `cf_think_submissions` row, emits, and calls
+`schedule(0, "_drainThinkSubmissions")` — so a wake from the Worker is three
+fast RPCs and the model work happens on the object's own alarm. That is why the
+new suites poll (`test/helpers/wait.ts`) rather than awaiting the wake: the
+usage row, the projected status and the resolution turn all land after the call
+the test awaited. It is also why `wakeRun` is safe to call from a queue
+consumer.
+
+**26. Idempotency is `accepted: false`, and it is exact.** A repeat
+`idempotencyKey` returns the EXISTING submission's inspection with
+`accepted: false` and schedules a drain if it is still pending
+(`think.js:5443-5451`). So the D1 `triage_decisions` belt upstream and the
+submission row downstream are two independent guarantees, and the wake path
+needs no delivered-CAS of its own. Task 21's notifier relies on the same thing:
+the cron re-submits `approval:{id}` unconditionally.
+
+**27. `onStart` is the self-healing half of `bindRun`, not a replacement.**
+The wake path binds the run id explicitly, but a dashboard socket, an approval
+resolution and a scheduled callback after an eviction all reach the object
+without going through a wake. `onStart` resolves `runs.key === this.name`
+through D1 and binds. It is deliberately caught rather than thrown: a throw out
+of `onStart` is terminal (partyserver resets its init state and the next
+request re-runs the same failing start), so a D1 blip would make the object
+permanently unreachable rather than temporarily unbound.
+
+**28. The turn id was stamped and never read.** `#turnId()` returned `"boot"`
+for every run, so every `RunScope`, usage row and capability audit was
+attributed to a turn that does not exist. `beforeTurn` now adopts
+`activeTurnMetadata.turnId` into `this.state.turnId` and `onChatResponse`
+clears it. Every entry point mints ONE id and passes it as both the
+`idempotencyKey` and the `turnId`, so a redelivery refused as a duplicate was
+never given a second identity.
+
+**29. `state.lastApprovalId` is new, and `withdraw` needs it.** The resolution
+clears `openApprovalId` to unpark the run, which leaves a withdraw arriving
+microseconds later with nothing to look at — and the old stub answered
+`withdrawn: true` unconditionally, telling the model it had retracted a message
+that may already have gone to the customer (defects 4-6). The last id is never
+cleared, so the port can ask D1 what actually happened.
+
+**30. Delivery moved out of the DO and into the notifier.** In the deleted
+build `RunDO.resolveApproval` ran the delivery sub-machine because the
+destination came from DO run state. It now comes from the D1 `runs` row, which
+is host state either way (invariant 10), so the whole machine — the shadow OR,
+the `none -> sending` CAS that is the only guard against a second send, the
+re-read on a refused CAS — lives in `src/approval/notifier.ts`. The order is
+unchanged and still load-bearing: settle delivery, unpark, submit.
+
+### Decisions made here, not in the plan
+
+**An expiry does not decide for the human.** The plan said to schedule
+`approvalExpired` and did not say what it should do. It withdraws the card —
+losing gracefully to a decision that landed first — and sets the run `failed`.
+`failed` rather than `idle` on purpose: a failed run releases its Slack thread,
+and triage's abandoned-thread override reads exactly that status to re-wake a
+thread whose run died, so a customer who follows up after a timeout is answered
+instead of reasoned into silence. `APPROVAL_TTL_SECONDS` is 6 hours, a reviewed
+default and not a vendor constant.
+
+**The nudge is scheduled, not awaited.** `open()` writes the card and then
+schedules `nudgeApproval`; awaiting `sendNudge` would put its eight-second
+Slack timeout inside the model's own `run_code` execution. The alarm cannot run
+until the turn ends, which is exactly when the run actually parks.
+
+**`makeProductionSender` has one implementation.** `makeUserTokenSender`
+already answers `blocked: no fire-fighter has connected Slack` without making a
+request, so an unconfigured deployment and a configured one take the same path
+and the same code decides. Composing `makeIdentityRefusingSender` behind an env
+check would have been a second way to reach the same answer.
+
+### Files added
+
+`src/run/wake.ts`, `src/approval/port.ts`, `src/approval/notifier.ts`; tests
+`test/run-wake.test.ts`, `test/approval-port.test.ts`,
+`test/approval-resolution.test.ts`; helpers `test/helpers/canned-model.ts`,
+`test/helpers/wait.ts`.
+
+Two re-pins the plan asked for are restored: the "no run session state was
+written" half of `test/approval-api.test.ts`'s D1-only claim (now assertable —
+reading the state is what wakes the object for the first time), and the three
+`approval_card` projection properties from `test/notify-nudge.test.ts`, which
+moved to `test/approval-port.test.ts` because the projection job is gone and
+`ApprovalPort.open` writes the card itself.
+
+### Noise, not failures
+
+A completed suite now logs `disconnected: pump canceled` and
+`fixed-length pipe ended prematurely` from workerd. They appear only since real
+turns run under the pool — Think's UI stream is torn down when a turn ends —
+and no test fails on them. Worth a look if they ever coincide with a failure.

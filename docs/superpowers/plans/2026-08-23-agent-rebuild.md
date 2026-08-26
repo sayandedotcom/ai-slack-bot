@@ -1970,6 +1970,35 @@ Never `mode: "wait"` from the callable — it deadlocks the turn queue (document
 
 ## Wave 4 — Wake paths and approval
 
+**IMPLEMENTED 2026-08-27** (Tasks 19–21), gate 67 files / 986 tests, `tsc`
+clean, `.d.ts` in sync. Everything the tasks below specify is in, plus five
+things the implementation forced or decided; all are recorded in
+`phase-26-notes.md` §"Wave 4 implementation notes" with the evidence.
+
+1. **The Wave 3 harness limit is removed.** `src/run/model.ts` gained
+   `installTestModel` / `resetTestModel` and `test/helpers/canned-model.ts`
+   builds a `MockLanguageModelV4` that never leaves the isolate. A submitted
+   turn now completes under the pool, so every path below is asserted PAST the
+   submit rather than up to it.
+2. **`submit` returns before the turn runs** (`think.js:5429` writes the row and
+   schedules a drain), so the new suites poll through `test/helpers/wait.ts`.
+3. **`beforeTurn` now adopts `metadata.turnId`.** It was stamped and never read:
+   `#turnId()` returned `"boot"` for every run, mis-attributing every scope,
+   usage row and audit entry.
+4. **`RunAgentState` gained `lastApprovalId`.** `withdraw` cannot answer
+   honestly without it once the resolution has cleared `openApprovalId`.
+5. **Delivery lives in the notifier, not the object.** The destination comes
+   from the D1 `runs` row, which is host state either way, so the shadow OR, the
+   `none -> sending` CAS and the re-read on a refused CAS all moved to
+   `src/approval/notifier.ts`. The order — settle delivery, unpark, submit — is
+   unchanged and still load-bearing.
+
+Two things the tasks left open were decided here and are argued in the notes:
+an expiry withdraws the card and fails the run (it never decides for the human,
+and `failed` is what triage's abandoned-thread override reads), and the nudge is
+scheduled rather than awaited so a Slack timeout cannot land inside the model's
+own `run_code` execution.
+
 ### Task 19: The wake path
 
 **Files:**
