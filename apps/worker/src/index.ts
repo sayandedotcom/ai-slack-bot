@@ -11,6 +11,7 @@ import { evalApi } from "./api/eval";
 import { slackOAuth } from "./oauth/slack";
 import { githubOAuth } from "./oauth/github";
 import { slackRunKey } from "./run/keys";
+import { routeToOwnedRun, wakeRun } from "./run/wake";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
@@ -303,17 +304,16 @@ export default {
           memory: new ZepMemory(env.ZEP_API_KEY),
           // No HTTP self-call and no extra queue: the consumer and the
           // coordinator both run in the trusted parent Worker.
-          // NO WAKE. The agent layer was removed on 2026-08-23 to be rebuilt
-          // on the Agents SDK / Project Think / Code Mode. Triage still runs,
-          // still classifies with the cheap model, and still writes its
-          // decision to `triage_decisions` — so the corpus, the counters and
-          // the eval routes keep working — but there is nothing to wake yet.
           //
-          // Restore both deps when the new chassis lands: `routeToOwnedRun`
-          // absorbs a reply into the run that already owns the thread, and
-          // `wakeRun` starts one. `slackRunKey(channelId, threadTs)` is the
-          // run key both of them address, and the Slack `event_id` is the
-          // idempotency token on either path.
+          // `routeToOwnedRun` absorbs a reply into the run that already owns
+          // the thread — no triage call, no second model spend — and `wakeRun`
+          // starts one. Both re-read the channel policy and apply the shadow
+          // ratchet before any turn exists, and both are idempotent on the
+          // Slack `event_id`, so a redelivered queue message submits nothing.
+          routeToOwnedRun: (message) => routeToOwnedRun(env, message),
+          wakeRun: async (input) => {
+            await wakeRun(env, input);
+          },
         });
     }
   },
