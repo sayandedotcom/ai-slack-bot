@@ -1,0 +1,68 @@
+# Git hooks. Installed by the root `prepare` script (`lefthook install`), which
+# pnpm 10 still runs for the root project — only DEPENDENCY lifecycle scripts
+# are gated behind pnpm-workspace.yaml's allowBuilds.
+#
+# Escape hatches, for when skipping is the right call:
+#   LEFTHOOK=0 git commit ...
+#   git push --no-verify
+
+# Only surface output from jobs that fail. A clean run should be quiet.
+output:
+  - failure
+  - execution_info
+
+pre-commit:
+  parallel: true
+  jobs:
+    # Biome over STAGED files only. `--staged` reads the index rather than
+    # the working tree, and exists on `biome check` but NOT on `biome ci`
+    # (ci offers only --changed/--since). Biome's own help calls --staged
+    # "intended for local use", which is exactly this.
+    #
+    # CHECK-ONLY, deliberately not `--write` plus lefthook's stage_fixed.
+    # That combination has a real footgun: when a file has both staged and
+    # unstaged changes, re-staging after a fix sweeps the unstaged half into
+    # the commit silently. In a codebase where a lot of the value is in
+    # long explanatory comments being edited in place, that is a bad trade.
+    # A failure here prints exactly what to run.
+    - name: biome
+      glob: "*.{js,mjs,cjs,ts,tsx,json,jsonc,css}"
+      run: pnpm exec biome check --staged --no-errors-on-unmatched .
+      fail_text: "Biome found issues. Run `pnpm format`, then re-stage."
+
+    # THE CONTROL-BYTE GUARD. Around 50ms over the whole tracked tree.
+    #
+    # No {staged_files} interpolation: the script enumerates git ls-files
+    # itself and reads from the working tree, so a newly staged file is
+    # covered. Whole-tree is the point — this guards a mistake that recurred
+    # four times in one phase and twice hid roughly 19KB of security tests
+    # behind "Binary files differ".
+    - name: control-bytes
+      run: node apps/worker/scripts/check-text-files.mjs
+      fail_text: "A control byte reached a source file. Use an escape sequence."
+
+pre-push:
+  parallel: false
+  jobs:
+    # tsc is the ONLY thing that checks types here — vitest strips them.
+    - name: typecheck
+      run: pnpm run typecheck
+
+    # Byte-compares the generated capability declarations against what the Zod
+    # schemas render. Seconds, and it catches a drift class that CI would
+    # otherwise report minutes later.
+    - name: capabilities-dts
+      run: pnpm run capabilities:dts:check
+
+# NOTE ON WHAT IS *NOT* IN pre-push.
+#
+# The worker suite is deliberately absent. It was measured on this machine at
+# 205-306 seconds — 58 files, 860 tests in workerd against real D1, queues and
+# Durable Objects, plus a dashboard build on a cold turbo cache. A hook that
+# costs five minutes is a hook people learn to pass --no-verify to, which
+# would cost the two fast checks above as well.
+#
+# typecheck and capabilities:dts:check are the high-yield half: together they
+# run in seconds and catch the failures most likely to reach a push. The suite
+# runs in CI on every push and pull request, which is where a five-minute job
+# belongs.
