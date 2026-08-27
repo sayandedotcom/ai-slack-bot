@@ -8,9 +8,11 @@ front-end already does, what is missing, and the exact contract that would
 close it.
 
 First written against `apps/worker/src` at `a4faa2d` on 2026-08-26. **Re-checked
-on 2026-08-27** against the Worker as it stands in the main working tree, which
-carries the Agents-SDK run chassis — including work not yet committed to `main`
-at `508fda7`. That pass closed §3, §4 and §5, and opened §13.
+on 2026-08-27** against the Agents-SDK run chassis, which has since been
+committed to `main` (`ebb1fb4`…`10bc64c`, Phase 26). That pass closed §3, §4 and
+§5, and opened §13 and §14. The three route files it depends on —
+`src/api/agents.ts`, `src/api/runs.ts`, `src/run/transport.ts` — were re-read at
+`df5e4e8` and are byte-identical to what this app was written against.
 
 Ordered by what blocks what. §1 blocks every live request, §2 blocks one way of
 answering it, and everything from §6 on is a degradation the UI already handles
@@ -390,13 +392,37 @@ single highest-value thing the backend could do for either dashboard.
 
 ---
 
+## 14. Nothing behind Access can be exercised on localhost
+
+**Status: not a gap in the Worker — a fact about the gate, worth writing down.**
+
+`requireTeamMember` verifies a real Access JWT off `Cf-Access-Jwt-Assertion`
+(`src/api/identity.ts`), and `wrangler dev` has no Cloudflare Access in front of
+it. So `POST /api/runs`, `GET /api/runs/:id` and the run socket all answer 401
+against a local Worker. The runs list, counters, roster and approvals are
+reachable; starting a run and opening a transcript are not.
+
+This is not new and it is not this app's doing — `apps/dashboard/dev-stubs.ts`
+stubs identity, roster and approvals for exactly this reason, and deliberately
+**refuses** to stub these three. Its argument is worth repeating: a faked create
+hands back an id whose socket then refuses, which reads as a bug in the run view
+rather than as the absence of Access, and a stubbed socket would be a fiction of
+a live transcript.
+
+**What it means here.** `WORKER_ORIGIN=http://localhost:8787 pnpm dev` is still
+the right way to develop the dashboard against real D1 data. It is *not* a way
+to develop the run surfaces. Those are `NEXT_PUBLIC_DEMO=1`, or a deployed
+Worker behind the real Access application.
+
+---
+
 ## What was verified, and how
 
 Every claim above was checked against the tree rather than against `CLAUDE.md`.
 
-The 2026-08-27 pass read the Worker in the **main working tree**, not at `main`
-`508fda7`: `src/api/agents.ts` and the `POST /api/runs` handler are present on
-disk and not in that commit. Anything below that names a file is a file that was
+The 2026-08-27 pass first read the Worker in the main working tree, before that
+work was committed; it was re-checked at `main` `df5e4e8` and the three files it
+turns on had not moved. Anything below that names a file is a file that was
 read, not a route inferred from a description.
 
 - Route inventory: `apps/worker/src/index.ts` mounts, plus `.get(`/`.post(`/
@@ -406,6 +432,9 @@ read, not a route inferred from a description.
 - `POST /api/runs`: `src/api/runs.ts`, `parseChatCreate` and the handler.
 - The empty summary (§13): `createOrGetRunUnderPolicy`'s INSERT and the absent
   callers of `setRunSummary`, both in `src/run/repository.ts`.
+- The localhost gate (§14): `requireTeamMember` in `src/api/identity.ts`, and
+  the comment block in `apps/dashboard/dev-stubs.ts` that names the same three
+  routes and says why it will not stub them.
 - That a Next rewrite cannot carry a WebSocket upgrade: `next.config.ts`
   rewrites are HTTP proxies, and the `host` option this app passes instead is
   `PartySocketOptions.host`, resolved in

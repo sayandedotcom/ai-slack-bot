@@ -37,6 +37,18 @@ pnpm build              # next build
 `pnpm dev` with neither variable set starts with no rewrite target, so every
 `/api` call 404s against Next itself. Pick one.
 
+**Three routes do not work against `wrangler dev`, and cannot be made to.**
+`POST /api/runs`, `GET /api/runs/:id` and the run socket all sit behind
+`requireTeamMember`, which verifies a real Access JWT — and `wrangler dev` has
+no Cloudflare Access in front of it, so all three answer 401 locally. The runs
+list, counters, roster and approvals are fine; starting a run and opening a
+transcript are not. The Vite dashboard has the same hole and says so in
+`apps/dashboard/dev-stubs.ts`, which deliberately does **not** stub them: a
+faked create hands back an id whose socket then refuses, which reads as a bug
+in the run view rather than as the absence of Access. Exercise those three
+against a deployed Worker behind the real Access application, or use
+`NEXT_PUBLIC_DEMO=1`.
+
 ## Environment
 
 Three variables, all in `.env.example`.
