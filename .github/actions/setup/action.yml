@@ -1,0 +1,28 @@
+name: "Setup pnpm and Node"
+description: >
+  Shared toolchain bootstrap. The Node version comes from .nvmrc so that the
+  runner, .nvmrc, docs/tech-stack.md and package.json#engines cannot drift
+  apart. The pnpm version comes from package.json#packageManager, which
+  pnpm/action-setup reads automatically when given no version input.
+
+runs:
+  using: composite
+  steps:
+    # MUST come before setup-node: `cache: "pnpm"` asks the pnpm binary for
+    # its store path, so pnpm has to exist first. Getting this order wrong is
+    # the single most common failure in pnpm CI setups.
+    - name: Install pnpm
+      uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+    - name: Install Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version-file: ".nvmrc"
+        cache: "pnpm"
+
+    - name: Install dependencies
+      shell: bash
+      # --frozen-lockfile is the point: it fails when pnpm-lock.yaml does not
+      # match the package.json files, which is exactly the failure mode of
+      # changing a dependency without committing the regenerated lockfile.
+      run: pnpm install --frozen-lockfile

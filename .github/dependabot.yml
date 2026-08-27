@@ -1,0 +1,109 @@
+version: 2
+
+updates:
+  # ------------------------------------------------------------- npm / pnpm
+  #
+  # Directory "/" only. Dependabot's npm ecosystem reads pnpm-lock.yaml and
+  # pnpm-workspace.yaml from the root and covers every workspace, so there is
+  # no per-app entry.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    # Bump the declared range, not just the lockfile: this is a private
+    # application, not a published library, so a widening range buys nothing.
+    versioning-strategy: "increase"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels: ["dependencies"]
+    groups:
+      production-minor-patch:
+        applies-to: version-updates
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
+      development:
+        applies-to: version-updates
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+    ignore:
+      # =====================================================================
+      # EXACT-PINNED BY POLICY. CLAUDE.md requires these to carry no caret.
+      # A Dependabot pull request would rewrite the pin, which is the one
+      # thing the pin exists to prevent. Bump them by hand, deliberately,
+      # with the suite re-run.
+      # =====================================================================
+      - dependency-name: "@cloudflare/think" # 0.15.1, preview release
+      - dependency-name: "agents" # 0.20.1, RunAgent's base class
+      - dependency-name: "@cloudflare/codemode" # 0.5.1, renders the capability .d.ts
+      - dependency-name: "@ai-sdk/react" # 4.0.62, pairs with `agents`
+
+      # =====================================================================
+      # THE VERSION IS ALSO A DOCKER TAG.
+      #
+      # apps/worker/sandbox/Dockerfile begins
+      # `FROM docker.io/cloudflare/sandbox:0.12.5`, and its own comment
+      # explains why that tag must equal the installed package version
+      # exactly: "the SDK speaks to the /container-server/sandbox binary
+      # baked into this image, so a mismatched tag is a silent protocol skew
+      # rather than a build error — it fails later, at a call, looking like a
+      # bug in our code."
+      #
+      # Bumping this is not a lockfile pull request. It is: edit
+      # package.json, edit the Dockerfile FROM, rebuild through
+      # sandbox/build.sh with the BuildKit secrets, `wrangler containers
+      # push`, then update the digest in wrangler.jsonc.
+      # =====================================================================
+      - dependency-name: "@cloudflare/sandbox"
+
+      # =====================================================================
+      # Exact-pinned at 19.2.4 in BOTH packages/ui and apps/dashboard (and in
+      # apps/web once worktree-next-frontend lands). Dependabot opens one
+      # pull request per manifest for a workspace-duplicated dependency, so a
+      # React bump would arrive as two or three independent PRs that can be
+      # merged out of order — and a react/react-dom skew is a runtime
+      # hook-dispatcher crash, not a compile error.
+      # =====================================================================
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "@types/react"
+      - dependency-name: "@types/react-dom"
+
+      # =====================================================================
+      # Pinned so that nursery/useSortedClasses cannot change its class
+      # ordering under a routine bump and produce a repository-wide diff on an
+      # unrelated pull request. See biome.jsonc.
+      # =====================================================================
+      - dependency-name: "@biomejs/biome"
+
+  # ---------------------------------------------------------- GitHub Actions
+  #
+  # This is what makes the SHA-pinning policy in ci.yml sustainable:
+  # Dependabot rewrites the SHA *and* the trailing version comment.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"
+    labels: ["dependencies", "github-actions"]
+    groups:
+      actions:
+        patterns: ["*"]
+
+# ---------------------------------------------------------------------------
+# NO `docker` ecosystem, deliberately.
+#
+# The sandbox Dockerfile has exactly one FROM, and bumping it WITHOUT bumping
+# @cloudflare/sandbox in lockstep is precisely the silent skew described
+# above. With one base image, that ecosystem could only contribute harmful
+# pull requests. Container rebuilds stay a manual, secret-bearing operation.
+# ---------------------------------------------------------------------------

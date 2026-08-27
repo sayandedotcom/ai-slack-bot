@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets the gate be re-run by hand without pushing — useful when a flake is
+  # suspected, and it mirrors what deploy-worker.yml's own gate job does.
+  workflow_dispatch:
+
+# Read-only by default. Nothing here writes to the repository, comments on a
+# pull request, or publishes anything. The deploy workflow is a separate file
+# with its own narrower grant.
+permissions:
+  contents: read
+
+# Cancel superseded runs on a branch, but NEVER on main: a cancelled run on
+# the default branch leaves it with no recorded status, and that status is
+# what branch protection reads.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  TURBO_UI: "false"
+  CI: "true"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Everything fast and deterministic, so a formatting slip does not sit in a
+  # queue behind 860 tests running in workerd.
+  # ---------------------------------------------------------------------------
+  gate-fast:
+    name: format, lint, control bytes, generated declarations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # check-text-files.mjs shells out to `git ls-files`, so it needs a
+          # real git directory — but it enumerates the INDEX, not history, so
+          # depth 1 is enough.
+          fetch-depth: 1
+
+      - uses: ./.github/actions/setup
+
+      # THE CONTROL-BYTE GUARD, AT REPOSITORY SCOPE.
+      #
+      # First, and outside turbo, on purpose. The script enumerates
+      # `git ls-files` across the WHOLE repository, but its only other caller
+      # is @workspace/worker's test script — and turbo hashes only that
+      # package, so a control byte introduced in README.md or docs/*.md rides
+      # a cache hit unnoticed. Four such bytes reached this repository in one
+      # phase; twice they hid roughly 19KB of security tests from review.
+      - name: Control bytes in tracked source
+        run: pnpm run check:text
+
+      # Formatter, linter and assist in one pass over the whole repository.
+      # `biome ci` writes nothing and exits non-zero on ERRORS only, so the
+      # warn-level rules in biome.jsonc stay visible without blocking.
+      # --reporter=github turns findings into inline annotations.
+      - name: Biome
+        run: pnpm exec biome ci . --reporter=github
+
+      # Byte-compares the model-visible capability declarations against what
+      # the Zod schemas render — which is why that path is excluded from
+      # Biome in biome.jsonc. Needs no bindings and no secrets: the generator
+      # replaces every gateway with a Proxy that throws.
+      - name: Generated capability declarations are in sync
+        run: pnpm run capabilities:dts:check
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      # tsc is the ONLY type check in this repository — vitest strips types.
+      # No build dependency: each workspace runs a standalone `tsc --noEmit`,
+      # and apps/worker's runtime types come from the tracked
+      # worker-configuration.d.ts.
+      - run: pnpm run typecheck
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    # 860 assertions in workerd against real D1, queues and Durable Objects.
+    # Measured at 205-306s locally; generous but bounded, so a hung workerd
+    # fails rather than burning an hour.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+
+      # `turbo test` carries dependsOn: ["^build"], and @workspace/dashboard is
+      # a devDependency of @workspace/worker, so this one command builds
+      # apps/dashboard/dist BEFORE the worker pool boots. That ordering is
+      # mandatory: wrangler.jsonc's assets.directory is ../dashboard/dist and
+      # dist/ is gitignored.
+      #
+      # No secrets are needed and none are provided. The pool binds every
+      # vendor credential to a synthetic not-a-real-* fixture and sets
+      # AGENT_MODEL_DISABLED and SANDBOX_DISABLED. .dev.vars does not exist on
+      # a runner, which is the SAFE state — those fixtures exist precisely to
+      # override a developer's live keys.
+      - name: turbo test (builds the dashboard first)
+        run: pnpm run test
+
+      # Fails loudly if turbo's build outputs ever regress to the stale
+      # .next/** set. An empty output set caches as a hit and silently leaves
+      # apps/dashboard/dist absent, which only surfaces much later.
+      - name: Assert the dashboard actually built
+        run: test -f apps/dashboard/dist/index.html
+
+  secrets:
+    name: secret scan
+    uses: ./.github/workflows/secret-scan.yml
+    permissions:
+      contents: read
