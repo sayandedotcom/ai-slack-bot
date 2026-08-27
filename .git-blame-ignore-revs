@@ -1,0 +1,19 @@
+# Revisions that are pure formatting. `git blame` skips these when told to,
+# and GitHub reads this file automatically.
+#
+# Locally, enable it once with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: format the repository with biome
+# The one-time Biome adoption pass: 219 of 263 files, re-wrapping to
+# lineWidth 80 and adding semicolons to packages/ui. No linting, no import
+# reordering, no behaviour change - see the commit message for the evidence.
+4be761a4c6ae1c5a4bc62851bcc9b2642d66a48d
+
+# style: sort imports with biome
+# Import organization plus Biome's safe fixes across 122 files. Listed here
+# too because the reorder is mechanical, but note it is NOT purely inert: it
+# carries two deliberate hand fixes (a biome-ignore in src/files/r2.ts and a
+# narrowing in test/github-gateway.test.ts). Those two are the only lines in
+# it worth blaming, and both are explained in the commit message.
+d9a9b3c101237560c6d5352e38e63fae80cc6d62
