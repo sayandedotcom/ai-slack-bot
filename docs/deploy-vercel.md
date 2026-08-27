@@ -1,33 +1,35 @@
 # Deploying the Next.js front-end to Vercel
 
-**Status: `apps/web` is on `main` as of 2026-08-27. The Vercel project is still
-not created — everything below is now safe to do, and none of it has been done.**
-
-The blocker this document was written under is gone: `worktree-next-frontend`
-fast-forwarded into `main`, so a Vercel project whose Root Directory is
-`apps/web` will build. What has NOT happened is the project itself, the
-environment variables, or the Ignored Build Step.
+**Status: live at `https://firefighter.sayande.xyz` as of 2026-08-28, in real
+mode, not demo.** The repository-side configuration below is committed; the
+dashboard-side steps (Cloudflare zone and Access, the Vercel project, the DNS
+records, the OAuth callbacks) are done by hand and are recorded here so they can
+be repeated.
 
 ## Read this before wiring anything
 
 Two facts that a Vercel deployment does not change:
 
-1. **`docs/tech-stack.md` lists "Vercel + Next 16" under _Deliberately not
-   used_, and that rejection still stands for the product surface.** Every
-   pixel of the dashboard is live socket state, so SSR earns nothing; two
-   origins means cross-origin WebSocket auth against Cloudflare Access and a
-   second deploy target. `apps/worker` keeps serving `apps/dashboard` from one
-   origin. When `apps/web` ships, amend that table row — do not delete it — to
-   record that an additive marketing/demo surface was adopted while the
-   single-origin decision holds for the product.
+1. **The single-origin decision did not get abandoned — it got kept, on a
+   different hostname.** `docs/tech-stack.md`'s objection to Vercel was that
+   "two origins means cross-origin WebSocket auth against Cloudflare Access".
+   There are not two origins. `firefighter.sayande.xyz` is a Cloudflare-proxied
+   CNAME to Vercel, and `apps/worker/wrangler.jsonc` holds one route,
+   `firefighter.sayande.xyz/api/*`, so the app and the API answer on the same
+   host. Access issues one cookie for it and the run socket is first-party.
 
-2. **Cross-origin Access authentication is unsolved.** The spec on that branch
-   is explicit: the Access cookie is issued for
-   `firefighter.sayandeten.workers.dev` and is not sent to a `*.vercel.app`
-   origin, and a `next.config` rewrite does not help — a rewrite proxies the
-   *request*, and the request never carried the cookie. So **live mode 401s,
-   and demo mode is what renders on Vercel.** Deploying is fine; claiming the
-   dashboard is on Vercel is not.
+2. **The Access application is the load-bearing part, and there is one trap.**
+   `firefighter.sayande.xyz` was added as an ADDITIONAL HOSTNAME on the existing
+   `firefighter — Dashboard` application. A separate application would have a
+   different AUD, and `src/access/jwt.ts` verifies `aud` against
+   `ACCESS_APP_AUD` — every request would 401 with `wrong_audience` and no
+   obvious cause. Never create a second application for this.
+
+3. **The workers.dev origin still answers, and must keep doing so.**
+   `wrangler.jsonc` sets `workers_dev: true` explicitly. It serves the Vite SPA
+   (`apps/dashboard`, the rollback), `/proofs/*` — whose Access-bypassed links
+   are already pasted into customer Slack threads — and `/slack/events`. None of
+   those moved, and `PROOFS_BASE_URL` still points at it.
 
 ## Why the native Git integration, not a GitHub Action
 
@@ -40,12 +42,11 @@ Recommended: connect the repository in Vercel's dashboard.
 | Skip when `apps/web` untouched | first-class Ignored Build Step | hand-rolled `git diff` |
 | Gate behind this repo's CI | no — builds independently | yes |
 
-The gating advantage is the only real argument for the Action, and it does not
-apply while the surface renders in demo mode. Adding a fourth long-lived
-credential to a repository that already holds a Worker-deploying Cloudflare
-token is the larger risk.
+The gating advantage is the only real argument for the Action. Adding a fourth
+long-lived credential to a repository that already holds a Worker-deploying
+Cloudflare token is the larger risk.
 
-## Project settings, for when the branch merges
+## Project settings
 
 | Setting | Value | Why |
 |---|---|---|
@@ -55,6 +56,22 @@ token is the larger risk.
 | Node.js Version | 22.x | matches `.nvmrc` (22.20.0) |
 | Install Command | *default* | Vercel reads `packageManager` and installs from the repo root |
 | Production Branch | `main` | |
+| Custom domain | `firefighter.sayande.xyz` | verified by `_vercel` TXT, because the record is Cloudflare-proxied |
+| Environment variables | **none** | see below — every absence is deliberate |
+
+**No environment variable is set in production, and that is the configuration,
+not an oversight:**
+
+- `NEXT_PUBLIC_DEMO` — unset. The deployment is live.
+- `WORKER_ORIGIN` — unset. A Worker route claims `/api/*` on this hostname at
+  the edge, so those requests never reach Vercel and the `next.config.ts`
+  rewrite has nothing to forward.
+- `NEXT_PUBLIC_WORKER_ORIGIN` — unset, so `socketHost()` returns `undefined`
+  and the run socket resolves against `window.location`. Setting it would
+  point the socket at a second origin and break the handshake.
+- `CF_ACCESS_TOKEN` — **never.** It is a bearer credential for one person's
+  Access session; a deployment holding one lets every visitor act as them.
+  `apps/web/proxy.ts` is a local dev bridge and is inert without it.
 
 **Ignored Build Step** (Settings → Git):
 
@@ -66,6 +83,52 @@ npx turbo-ignore @workspace/web --fallback=HEAD^
 rebuilds when **`packages/ui`** changes and correctly skips when only
 `apps/worker` does. A hand-rolled `git diff --quiet HEAD^ -- apps/web` would
 miss that transitive edge. `--fallback=HEAD^` covers the shallow-clone case.
+
+## The dashboard-side steps, in order
+
+None of this is in the repository, so it is written down here instead. The
+ordering is load-bearing: each step's prerequisite is the one above it.
+
+1. **Cloudflare zone.** `sayande.xyz` (registrar GoDaddy, unchanged — no
+   registrar transfer was needed) had its nameservers repointed to
+   `ashton.ns.cloudflare.com` / `jade.ns.cloudflare.com`. It had previously been
+   delegated to a Route 53 hosted zone that no longer existed, so the domain
+   resolved nothing and there were no records to migrate. Zone SSL/TLS mode is
+   **Full (Strict)** — anything less weakens the Cloudflare→Vercel hop.
+2. **Vercel project**, with the settings above, and `firefighter.sayande.xyz`
+   added as a custom domain. Verified with a `_vercel` TXT record, because a
+   Cloudflare-proxied record cannot be verified over HTTP.
+3. **DNS**, in the `sayande.xyz` zone:
+   `CNAME firefighter → cname.vercel-dns.com`, **Proxied**. Proxying is not
+   optional: Access only protects hostnames that pass through Cloudflare.
+4. **Access.** `firefighter.sayande.xyz` added as an additional hostname on the
+   **existing** `firefighter — Dashboard` application. See the trap in item 2 of
+   the preamble. No bypass application is needed on this hostname — `/proofs/*`
+   and `/slack/events` did not move.
+5. **Worker route**, committed: `firefighter.sayande.xyz/api/*` in
+   `wrangler.jsonc`, plus an explicit `workers_dev: true`. Deploying before the
+   zone is Active fails, which is why this is step 5 and not step 1.
+6. **OAuth callbacks.** `redirectUri` is derived from the request's own origin
+   (`src/oauth/slack.ts`, `github.ts`), not from a var, so each origin needs its
+   callback registered. Slack allows several redirect URLs, so
+   `https://firefighter.sayande.xyz/api/oauth/slack/callback` was **added**
+   alongside the workers.dev one. A GitHub OAuth app allows exactly one, so that
+   is a **move**, and it is why it belongs to the cutover rather than to the
+   additive phase.
+
+## The cutover, and how to undo it
+
+Everything except the two switches below is additive: while only those are
+outstanding, both dashboards are live and the Vite SPA is untouched.
+
+| Switch | What it does | Reverting it |
+| --- | --- | --- |
+| `DASHBOARD_BASE_URL` → `https://firefighter.sayande.xyz` | points every approval DM's Review button at the new dashboard | one var, then `pnpm run deploy` |
+| GitHub OAuth callback → the new host | moves Connect-GitHub; existing stored connections are unaffected | repoint it back |
+
+Reverting both restores the Vite SPA as the front door without undoing anything
+else. Retiring `apps/dashboard` is a separate, deliberate change — and
+`BACKEND-GAPS.md` §12 is blunt that two dashboards should not be permanent.
 
 ## Was required at merge time — all four are done
 

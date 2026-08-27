@@ -48,6 +48,37 @@
   // slightly busier cron. The sweep is one indexed SELECT and at most a page of
   // queue sends, and it never touches a customer-facing answer.
   "triggers": { "crons": ["* * * * *"] },
+  // The custom hostname, added 2026-08-28. `apps/web` (Next, on Vercel) serves
+  // `firefighter.sayande.xyz`; this route claims `/api/*` on that same hostname
+  // so the dashboard and the API share ONE origin.
+  //
+  // That single origin is the whole point, and it is an AUTH mechanism, not a
+  // tidiness one. Cloudflare Access issues `CF_Authorization` per hostname, so
+  // a browser on a different origin carries no credential and `src/access/jwt.ts`
+  // — which verifies signature, issuer, audience and expiry with no bypass —
+  // correctly refuses it. Same origin, and the cookie is already the right
+  // cookie. It is also the only arrangement in which the run socket can connect
+  // at all: a WebSocket handshake is a subresource request, so a `SameSite=Lax`
+  // cookie is withheld from a cross-origin upgrade even when the reader is
+  // signed in in another tab. See apps/web/BACKEND-GAPS.md §1.
+  //
+  // `firefighter.sayande.xyz` must be an additional hostname on the EXISTING
+  // "firefighter - Dashboard" Access application, never a new one: a new
+  // application would mint a different AUD and ACCESS_APP_AUD below would
+  // reject every token with `wrong_audience`.
+  //
+  // Only `/api/*`. Everything else on that hostname has no route here and goes
+  // to Vercel — `/`, `/chat`, `/runs/:id`, `/_next/*`. The run transport is
+  // covered because `src/api/agents.ts` mounts it under `/api`.
+  "routes": [
+    { "pattern": "firefighter.sayande.xyz/api/*", "zone_name": "sayande.xyz" }
+  ],
+  // Explicit, because adding `routes` above is exactly the change that would
+  // otherwise be assumed to retire the workers.dev origin. It must keep
+  // answering: it serves the Vite SPA (`apps/dashboard`, the rollback), the
+  // Access-bypassed `/proofs/*` recordings already pasted into Slack threads,
+  // and `/slack/events`, none of which moved.
+  "workers_dev": true,
   // Non-secret pins for Phase 09 capabilities. These are IDs and hostnames, not
   // credentials — they live here rather than in .dev.vars so that a reviewer can
   // confirm what the capability layer is scoped to by reading the diff.

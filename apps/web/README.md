@@ -8,11 +8,14 @@ builds and serves the Vite SPA as its `ASSETS` bundle, and `pnpm run deploy` in
 Three surfaces: `/` the dashboard, `/chat` to start a run, `/runs/[id]` for one
 run live over its own socket.
 
-Read `BACKEND-GAPS.md` before deploying it live. The short version: Cloudflare
-Access issues its cookie for the Worker's hostname, so a browser on a Vercel
-origin carries no credential and every live request 401s — and the run socket
-fails for the same reason, harder. Until that is answered,
-`NEXT_PUBLIC_DEMO=1` is what you deploy.
+**It is live at `https://firefighter.sayande.xyz`.** That hostname is a
+Cloudflare-proxied CNAME to Vercel, added to the same Access application that
+gates the Worker, and `apps/worker` holds one route —
+`firefighter.sayande.xyz/api/*` — so the app and the API share one origin.
+That is what makes Access work here at all, and it is why no origin variable is
+set in production: the socket resolves against `window.location`. See
+`BACKEND-GAPS.md` §1 for the problem it solves and the options that were not
+taken.
 
 ## Running it
 
@@ -81,9 +84,15 @@ Durable Object.
   field. No override needed.
 - **Build command:** the default `next build` is correct. Vercel installs from
   the workspace root, so `@workspace/ui` resolves.
-- **Environment:** `NEXT_PUBLIC_DEMO=1` for now. Add `WORKER_ORIGIN` and
-  `NEXT_PUBLIC_WORKER_ORIGIN` and drop the demo flag once BACKEND-GAPS.md §1
-  has an answer.
+- **Environment:** none of the four are set in production, and each absence is
+  deliberate. `NEXT_PUBLIC_DEMO` unset because this is live. `WORKER_ORIGIN`
+  unset because `/api/*` is claimed by a Worker route at the edge and never
+  reaches Vercel, so the rewrite has nothing to do. `NEXT_PUBLIC_WORKER_ORIGIN`
+  unset so the socket dials this same origin. `CF_ACCESS_TOKEN` **never** — it
+  is one person's Access session as a bearer credential.
+- **Custom domain:** `firefighter.sayande.xyz`. Because the record is
+  Cloudflare-proxied, Vercel verifies it with a `_vercel` TXT record rather than
+  over HTTP.
 
 `transpilePackages: ["@workspace/ui"]` in `next.config.ts` is load-bearing:
 `@workspace/ui` ships raw `.tsx` from `src/` with no build step of its own.

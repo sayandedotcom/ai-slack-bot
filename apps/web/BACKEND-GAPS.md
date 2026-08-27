@@ -14,74 +14,76 @@ committed to `main` (`ebb1fb4`…`10bc64c`, Phase 26). That pass closed §3, §4
 `src/api/agents.ts`, `src/api/runs.ts`, `src/run/transport.ts` — were re-read at
 `df5e4e8` and are byte-identical to what this app was written against.
 
-Ordered by what blocks what. §1 blocks every live request, §2 blocks one way of
-answering it, and everything from §6 on is a degradation the UI already handles
-honestly. §3–§5 are kept rather than deleted: what closed them, and what the
-front-end now does about it, is the useful record.
+Ordered by what blocks what, which is how it read while §1 was still open.
+**§1 was answered on 2026-08-28** and took §2 and §4's caveat with it, so
+nothing here blocks a live deployment any more; everything from §6 on is a
+degradation the UI already handles honestly. Closed sections are kept rather
+than deleted: what closed them, and what the front-end now does about it, is
+the useful record.
 
 ---
 
-## 1. The Access cookie does not cross origins — this blocks everything
+## 1. The Access cookie does not cross origins — RESOLVED 2026-08-28
 
-**Status: blocking. Demo mode is what renders on Vercel until this is answered.**
+**Status: closed, by option 1 below. `apps/web` is served from
+`firefighter.sayande.xyz` and is no longer in demo mode.**
 
-Cloudflare Access gates `firefighter.sayandeten.workers.dev` and sets
-`CF_Authorization` scoped to that hostname. `apps/worker/src/access/jwt.ts`
-verifies a real JWT against Cloudflare's JWKS and has no dev bypass and no
-alternative credential: an unauthenticated `/api/identity` is a 401, always.
+The problem, kept because it is the reason the whole app was built the way it
+was. Cloudflare Access gates a hostname and sets `CF_Authorization` scoped to
+it. `apps/worker/src/access/jwt.ts` verifies a real JWT against Cloudflare's
+JWKS — signature, issuer, audience and expiry, with no dev bypass and no
+alternative credential — so a browser on an origin Access never issued a cookie
+for is a 401, always. And `next.config.ts`'s rewrite was never a fix for it: a
+rewrite proxies the *request*, and the request never carried the cookie.
 
-A browser loading `firefighter.vercel.app` holds no cookie for the Worker's
-hostname. It never did, so there is nothing for the request to carry.
+**What was done.** Option 1, unchanged from how it was written here:
+`firefighter.sayande.xyz` is a Cloudflare-proxied CNAME to Vercel, added as an
+additional hostname on the **existing** `firefighter — Dashboard` Access
+application — so the AUD is the same one `ACCESS_APP_AUD` already pins, and no
+Worker code and no var changed. `apps/worker/wrangler.jsonc` gained one route,
+`firefighter.sayande.xyz/api/*`, which puts the dashboard and the API on one
+origin. Everything else on that hostname has no route and is served by Vercel.
 
-**`next.config.ts`'s rewrite does not fix this and is not meant to.** A rewrite
-proxies the *request* — it keeps CORS out of the bundle and keeps every path in
-`lib/api` relative, which is worth having on its own. But the request it
-forwards has no Access cookie in it, so the Worker answers 401 exactly as it
-should.
+Three consequences, and they are the reason this option was preferred:
 
-**The run socket makes this worse, not merely equal.** A WebSocket handshake is
-a subresource request, so a `SameSite=Lax` cookie is withheld from it even in
-the case where a same-site fetch would carry one. Option 1 below is the only
-one of the three that fixes the socket as a side effect; see §4.
+- **§2 (CORS) never has to be answered.** The browser makes same-origin
+  requests, exactly as it does for the Vite SPA.
+- **§4's socket caveat closes.** The run socket resolves against
+  `window.location`, so `NEXT_PUBLIC_WORKER_ORIGIN` stays empty and the
+  handshake is first-party. This is the only one of the three options that
+  achieved that.
+- **`GET /api/counters`, `GET /api/runs` and `GET /api/runs/:id/usage` stay
+  protected.** Those three have no in-code auth and are gated by Access alone;
+  an answer that weakened Access would have exposed them.
 
-**What the front-end does today.** `AppShell` reads `/api/identity` once. On
-401 it replaces the entire page with "Signed out — Access didn't recognise this
-session", rather than rendering eight panels that each fail the same way.
-That is the correct behaviour and it is what a live Vercel deployment will show
-right now.
+**A fourth option was considered and rejected**, because at the time this was
+answered there was no Cloudflare zone: having the Worker itself reverse-proxy to
+Vercel on the `*.workers.dev` host. It works, but it needs a file whose job is
+to strip `Cf-Access-Jwt-Assertion` and the `CF_Authorization` cookie before
+forwarding to a third party, and a missed strip leaks a live Access credential
+with nothing failing loudly. A domain removed the need for it.
 
-**Three ways out, in the order I would consider them.** None is mine to pick.
+**What did NOT move**, deliberately: `/proofs/*` and `/slack/events` stay on
+`firefighter.sayandeten.workers.dev` with their existing bypass applications,
+and so does the Vite SPA (`apps/dashboard`), which is the rollback.
+`wrangler.jsonc` sets `workers_dev: true` explicitly so that origin keeps
+answering.
 
-1. **Put the Vercel hostname behind the same Access application.** Point a
-   Cloudflare-proxied CNAME at Vercel and add the hostname to the existing
-   "firefighter — Dashboard" application. The cookie is then issued for the
-   host the browser is actually on, every existing route works unchanged, and
-   no Worker code changes at all. Cheapest, the only option that keeps
-   `src/access/jwt.ts` as the single authority on identity, and the only one
-   that also lets the run socket connect.
-2. **A session exchange.** Add `POST /api/session` on the Worker: presented with
-   a valid Access JWT it mints a short-lived, `SameSite=None; Secure` cookie or
-   a bearer token scoped to the roster email. The front-end would need a
-   sign-in step, the Worker a second credential path, and `requireIdentity`
-   would stop being one function with one input. More moving parts, and a new
-   thing to get wrong.
-3. **Do not deploy the front-end separately.** Keep serving it from the Worker
-   (`next build` → static export → `ASSETS`), which is what `apps/dashboard`
-   does today. This forfeits the reason for the move but is free, and it also
-   makes `NEXT_PUBLIC_WORKER_ORIGIN` unnecessary — the socket resolves against
-   `window.location` like everything else. Note that `/runs/[id]` is a dynamic
-   route today; a static export would need `generateStaticParams` or a rewrite
-   to a single shell, the same way the Worker's
-   `not_found_handling: "single-page-application"` serves the Vite SPA.
-
-**Until then:** set `NEXT_PUBLIC_DEMO=1` on the Vercel project. The app renders
-completely from fixtures and labels itself "Demo data" in the header.
+The two remaining options are recorded for the same reason the problem is —
+option 2 was a session exchange (`POST /api/session`, a second credential path
+on the Worker, and CORS with it); option 3 was static-exporting the app into the
+Worker's `ASSETS`, which would have forfeited Vercel and needed
+`generateStaticParams` for `/runs/[id]`.
 
 ---
 
-## 2. There is no CORS on `/api/*`
+## 2. There is no CORS on `/api/*` — MOOT 2026-08-28
 
-**Status: blocking, if §1 is answered by anything other than option 1 or 3.**
+**Status: closed by §1's answer, not by a change. §1 was answered by option
+1, so the browser is same-origin with the Worker and no CORS is reachable.**
+
+Still true, and still worth knowing if anything ever puts a browser on a
+different origin from `/api/*`: the Worker has no CORS of any kind.
 
 `grep -rn "cors\|Access-Control" apps/worker/src` returns nothing. The Worker
 has never needed CORS because the SPA it serves shares its origin.
@@ -139,9 +141,10 @@ purpose and both are pinned in `test/run-idempotency.test.ts`.
 
 ---
 
-## 4. The run transcript — RESOLVED, with one caveat this app has to carry
+## 4. The run transcript — RESOLVED 2026-08-27, its caveat RESOLVED 2026-08-28
 
-**Status: closed on the Worker. The caveat is a Vercel deployment concern.**
+**Status: closed on the Worker, and the deployment caveat below is closed too —
+see §1.**
 
 This section previously read *"there is no run transcript"*. There is one now,
 and it is a live WebSocket rather than a poll:
@@ -185,8 +188,10 @@ credential and the Worker still gates the socket, so publishing it is safe.
 What it does **not** fix is §1, and here §1 bites harder: a WebSocket handshake
 is a subresource request, so a `SameSite=Lax` `CF_Authorization` cookie is not
 attached to it even when the reader is signed in on that hostname in another
-tab. **Until §1 is answered, the run socket cannot connect from a Vercel
-origin.** The view says so — `RunView` renders "the run socket was refused"
+tab. That was the blocker, and **it closed on 2026-08-28**: §1 was answered by
+option 1, so the app is served from the same hostname the Worker answers on,
+`NEXT_PUBLIC_WORKER_ORIGIN` is empty, the socket resolves against
+`window.location`, and the handshake is first-party. The view says so — `RunView` renders "the run socket was refused"
 rather than spinning — and demo mode renders a fixture transcript in the
 socket's own wire shape.
 
@@ -332,9 +337,11 @@ would make it a read rather than a re-render.
 
 ---
 
-## 12. Deployment overlap, once §1 is answered
+## 12. Deployment overlap — now live, and still a decision to make
 
 Not a missing endpoint — a decision that has to be made once, and is not mine.
+§1 is answered, so this is no longer hypothetical: **both front-ends are
+deployed.**
 
 The Worker still serves `apps/dashboard/dist` as its `ASSETS` bundle, with
 `not_found_handling: "single-page-application"` in `wrangler.jsonc`. Nothing in
@@ -366,9 +373,17 @@ are unnecessary when the app is served from the Worker's own host.
 
 ---
 
-## 13. `runs.summary` is never written
+## 13. `runs.summary` is never written — RESOLVED 2026-08-27
 
-**Status: degradation, already handled. Newly found on 2026-08-27.**
+**Status: closed the same day this section was written, by a change this
+document then failed to record. Everything below describes the old state.**
+
+`beforeTurn` now queues `applySummaryProjection`, which writes the turn's own
+`asked` text through `projectSummary` (`src/run/agent-projection.ts`) —
+redacted BEFORE it is truncated, whitespace collapsed to one line, bounded at
+`RUN_SUMMARY_LIMIT`. The first turn's question wins permanently, because
+`setRunSummaryIfAbsent` carries `AND summary IS NULL`: a list whose rows rewrite
+themselves every turn cannot be scanned.
 
 `runs` has a `summary` column, `GET /api/runs` and `GET /api/runs/:id` both
 return it, and the runs list and the run header are built to show it. Nothing

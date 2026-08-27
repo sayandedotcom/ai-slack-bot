@@ -73,7 +73,7 @@
       // fresh checkout starts wrangler against a missing assets directory.
       "dependsOn": ["^build"],
       // CF_ACCESS_TOKEN is dev-only and deliberately absent from `build`: it is
-      // read at request time by apps/web/middleware.ts, never inlined, and a
+      // read at request time by apps/web/proxy.ts, never inlined, and a
       // build that varied on it would be a build carrying a credential.
       "env": [
         "NEXT_PUBLIC_DEMO",
