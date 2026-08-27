@@ -63,6 +63,7 @@ async function seedScope(options: {
     origin: run.origin,
     shadow: run.shadow,
     customerSlug: null,
+    customerSlugTrusted: false,
     slackThread:
       run.channelId && run.threadTs
         ? { channelId: run.channelId, threadTs: run.threadTs }

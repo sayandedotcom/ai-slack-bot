@@ -16,6 +16,7 @@ const scope: RunScope = {
   origin: "chat",
   shadow: false,
   customerSlug: null,
+  customerSlugTrusted: false,
   slackThread: null,
   actor: null,
 };

@@ -156,6 +156,24 @@ export function makeSupabaseReader(
             `reads from ${entry.resource} are per-customer and this run has no customer. Ask which customer this concerns.`
           );
         }
+        // HAVING a slug is not the same as being ALLOWED to spend it here.
+        //
+        // Since channels auto-register, an unconfirmed slug is slugified from
+        // the Slack channel name — a guess. The predicate below is appended
+        // unconditionally and a model filter on this column is refused, so the
+        // slug is the entire tenant boundary. A guess that happens to match a
+        // real tenant returns THAT customer's rows and looks like a successful
+        // read, which is the one failure mode here with no symptom.
+        //
+        // Refusing is narrow on purpose: Slack, memory, Linear and the sandbox
+        // all keep working on a derived slug, because a wrong Zep graph id
+        // reads back nothing and is recoverable. This is not.
+        if (!scope.customerSlugTrusted) {
+          throw new CapabilityError(
+            "customer_scope_unverified",
+            `reads from ${entry.resource} are scoped by customer, and this channel's customer was inferred from its Slack channel name rather than confirmed. Ask a fire-fighter to confirm the customer for this channel on the dashboard, then try again. Everything else about this run works normally.`
+          );
+        }
         params.append(entry.tenantColumn, `eq.${scope.customerSlug}`);
       }
 

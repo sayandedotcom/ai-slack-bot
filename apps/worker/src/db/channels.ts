@@ -2,11 +2,27 @@ import type { ChannelsRow } from "./schema";
 
 export type ChannelMode = "observe" | "live" | "internal";
 
+/**
+ * Where `customer_slug` came from, and therefore what it may be trusted for.
+ *
+ * `derived` — the auto-registrar slugified the Slack channel name. Good enough
+ * to be a Zep graph id, which is ours and self-consistent. NOT good enough to
+ * be a tenant key: `#ext-acme` derives `ext-acme`, which can collide with a
+ * real Supabase tenant that is not this customer.
+ *
+ * `human` — someone confirmed it through `PATCH /api/channels/:id`. That route
+ * is the only writer of this value.
+ *
+ * See `migrations/0010_channel_slug_source.sql` and `isTenantKeyTrusted`.
+ */
+export type SlugSource = "derived" | "human";
+
 export type ChannelPolicy = {
   channel_id: string;
   name: string;
   customer_slug: string | null;
   mode: ChannelMode;
+  slug_source: SlugSource;
   /** False when the channel is absent from the table. Drives the fail-closed rule. */
   known: boolean;
 };
@@ -22,7 +38,7 @@ export async function getChannelPolicy(
 ): Promise<ChannelPolicy> {
   const row = await db
     .prepare(
-      "SELECT channel_id, name, customer_slug, mode FROM channels WHERE channel_id = ?"
+      "SELECT channel_id, name, customer_slug, mode, slug_source FROM channels WHERE channel_id = ?"
     )
     .bind(channelId)
     .first<ChannelsRow>();
@@ -33,6 +49,9 @@ export async function getChannelPolicy(
       name: channelId,
       customer_slug: null,
       mode: "observe",
+      // Unreachable as a tenant key anyway, since `customer_slug` is null and
+      // `isTenantKeyTrusted` requires both. Stated rather than left implicit.
+      slug_source: "derived",
       known: false,
     };
   }
@@ -42,6 +61,27 @@ export async function getChannelPolicy(
 /** Only `live` channels accept outbound messages. Everything else refuses. */
 export function canPost(policy: ChannelPolicy): boolean {
   return policy.known && policy.mode === "live";
+}
+
+/**
+ * May this channel's `customer_slug` be used as a TENANT KEY?
+ *
+ * Deliberately narrower than "is there a slug". A slug is a fine Zep graph id
+ * the moment it exists, because that graph is ours and a wrong one is
+ * recoverable — we would be reading memory nobody wrote. A tenant key is
+ * different: `src/supabase/reader.ts` appends it as an unconditional predicate
+ * and refuses a model filter on that column, so a slug that happens to match
+ * another customer's tenant returns THEIR rows, with no error to notice.
+ *
+ * A derived slug is a guess made from a Slack channel name. This is the
+ * function that stops a guess being spent as a credential.
+ */
+export function isTenantKeyTrusted(policy: ChannelPolicy): boolean {
+  return (
+    policy.known &&
+    policy.customer_slug !== null &&
+    policy.slug_source === "human"
+  );
 }
 
 /**

@@ -123,7 +123,9 @@ describe("registerChannel", () => {
     // The human's decision wins. A channel demoted to observe must not be
     // silently promoted back to live by the next message that arrives in it.
     const id = freshChannelId();
-    await env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)")
+    await env.DB.prepare(
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, ?)"
+    )
       .bind(id, "renamed-since", "the-real-tenant", "observe")
       .run();
     stubSlack({ info: { name: "brand-new-name" } });
@@ -183,7 +185,9 @@ describe("sweepChannelMembership", () => {
 
   it("leaves an already-registered channel untouched", async () => {
     const id = freshChannelId();
-    await env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)")
+    await env.DB.prepare(
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, ?)"
+    )
       .bind(id, "already-here", "pinned-slug", "observe")
       .run();
     stubSlack({ conversations: [{ id, name: "already-here" }] });

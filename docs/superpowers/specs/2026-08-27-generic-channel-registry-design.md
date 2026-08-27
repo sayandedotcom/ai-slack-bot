@@ -250,3 +250,50 @@ in `apps/worker`, plus the dashboard's own `pnpm test`/`pnpm typecheck`.
    automatically and keeps `postable = 0`.
 5. Verification: invite the bot to a fresh channel, post one message, confirm
    a row appears in the dashboard and a run wakes without any manual step.
+
+---
+
+## Implementation log — 2026-08-27
+
+What shipped, and where it departs from the design above.
+
+**Shipped in full.** Auto-registration (C1): lazy on first ingest plus the cron
+sweep, no new Slack event subscription, `registerChannel` the only writer.
+Proven in production — the only `channels` row was deleted and the sweep
+restored it within 45 s, and a second channel registered itself and produced a
+full run.
+
+**Shipped, in the narrower form.** The `slug_source` guard (C4). This is the
+half that mattered: `customer_slug` is spent as an unconditional Supabase
+tenant predicate, so a slug derived from a channel name can collide with a real
+tenant and return that customer's rows with no error to notice. Implemented as
+`slug_source TEXT NOT NULL DEFAULT 'derived'` (migration `0010`),
+`isTenantKeyTrusted()`, `RunScope.customerSlugTrusted`, and a distinct
+`customer_scope_unverified` capability error. The chosen policy — "refuse
+Supabase, everything else works" — is enforced at exactly one point, the tenant
+predicate in `src/supabase/reader.ts`, and the refusal happens BEFORE the
+request so the tenant value is never sent upstream.
+
+`DEFAULT 'derived'` applies to every pre-existing row. That is deliberate and
+fails closed: the rows in production today were written by the auto-registrar,
+so 'derived' is also the truth.
+
+**NOT shipped, deliberately deferred.** The `mode` -> `postable`/`triaged`/
+`active` boolean split (C2). It is a table rebuild plus a wider dashboard
+surface, and since the design defaults all three booleans to on, it changes NO
+behaviour today — it is ergonomics, not safety. `mode` is unchanged, and
+`PATCH /api/channels/:id` sets it directly, which is enough to demote a channel
+without SQL. Revisit when someone actually wants "triaged but never postable"
+as a standing state rather than as `observe`.
+
+**Added, not in the design.** `GET /api/channels` and the dashboard
+`ChannelsPanel`. The design assumed the dashboard owned the toggles (C5) but
+did not specify the surface. Reading is any rostered member; writing is
+fire-fighters only, checked before the body is parsed or D1 is touched — the
+same ordering as `PATCH /api/approvals/:id`. The route deliberately cannot
+create or delete a channel: registration derives the name from Slack, and an
+upsert here would mint a row whose name nobody has confirmed exists.
+
+Covered by `test/channels-slug-source.test.ts` (17 cases), including the two
+that matter most: the refusal fires before any outbound fetch, and a read whose
+allowlist entry has no `tenantColumn` is left alone.

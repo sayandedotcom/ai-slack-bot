@@ -3,6 +3,7 @@ import type { DecideAction } from "./approvals/api";
 import { ApprovalsPanel } from "./approvals/approvals-panel";
 import { RunApprovals } from "./approvals/run-approvals";
 import { useApprovals } from "./approvals/use-approvals";
+import { ChannelsPanel } from "./channels/channels-panel";
 import { ChatStarter } from "./chat/chat-page";
 import { ConnectPanel } from "./components/connect-panel";
 import { CountersPanel } from "./components/counters-panel";
@@ -136,6 +137,12 @@ export function App() {
             />
           </section>
         )}
+        {/* The registry a human corrects. Above the shadow corpus because a
+            channel whose customer is still a guess is a live constraint on
+            what the agent can read, not an after-the-fact review. */}
+        <div data-slot="channels-panel" className="md:col-span-2">
+          <ChannelsPanel role={identity?.role ?? null} />
+        </div>
         {/* Below the fold, deliberately: this is an eval corpus for
             reviewing after the fact, not something waiting on a human
             the way the approvals queue is. */}

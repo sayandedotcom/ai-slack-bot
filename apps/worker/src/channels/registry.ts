@@ -118,8 +118,11 @@ async function insertChannel(
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO channels (channel_id, name, customer_slug, mode)
-            VALUES (?, ?, ?, ?)
+      // `slug_source` is written explicitly rather than left to the column
+      // default. This is the ONLY writer of 'derived', and saying so here is
+      // what makes `PATCH /api/channels/:id` the only writer of 'human'.
+      `INSERT INTO channels (channel_id, name, customer_slug, mode, slug_source)
+            VALUES (?, ?, ?, ?, 'derived')
        ON CONFLICT(channel_id) DO NOTHING`
     )
     .bind(channelId, name, deriveSlug(name, channelId), DEFAULT_MODE)

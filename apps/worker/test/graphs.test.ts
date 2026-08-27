@@ -7,6 +7,7 @@ const base: ChannelPolicy = {
   name: "ext-pulsefit",
   customer_slug: "pulsefit",
   mode: "live",
+  slug_source: "human",
   known: true,
 };
 

@@ -1,0 +1,25 @@
+-- Where a channel's `customer_slug` came from.
+--
+-- WHY THIS EXISTS. `customer_slug` is not a label. It is injected as an
+-- unconditional tenant predicate on every allowlisted Supabase read
+-- (src/supabase/reader.ts), and a model-supplied filter on that column is
+-- REFUSED rather than honoured -- so the slug is the only thing standing
+-- between one customer's rows and another's.
+--
+-- Since the generic channel registry landed, that value is DERIVED from the
+-- Slack channel name: `#ext-acme` becomes `ext-acme`. That is fine for the Zep
+-- graph id, which is ours and self-consistent. It is not fine as a tenant key,
+-- because the derivation can collide with a real tenant that is not this
+-- customer -- a cross-tenant read, silently, with no error to notice.
+--
+-- So the slug now carries its provenance, and the Supabase reader refuses a
+-- derived one. Everything else -- Slack, memory, Linear, the sandbox -- keeps
+-- working on it, because a wrong Zep graph id is recoverable and a wrong
+-- tenant read is not.
+--
+-- DEFAULT 'derived' is deliberate and applies to every existing row. It fails
+-- CLOSED: the rows in this table today were written by the auto-registrar, so
+-- 'derived' is also the truth. A human confirms a slug through
+-- PATCH /api/channels/:id, which is the only writer of 'human'.
+ALTER TABLE channels ADD COLUMN slug_source TEXT NOT NULL
+  DEFAULT 'derived' CHECK (slug_source IN ('derived', 'human'));

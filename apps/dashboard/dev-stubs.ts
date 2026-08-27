@@ -132,6 +132,44 @@ export function devAccessStubs(): Plugin {
         seedApprovals(bootedAt).map((row) => [row.id, row])
       );
       /**
+       * The channel registry. Two rows on purpose: one whose customer a human
+       * has confirmed, and one still carrying the registrar's guess, because
+       * the difference between them is the only thing the panel exists to
+       * show. Mutable, so confirming a slug here actually flips `slugSource`.
+       */
+      const channels = new Map<string, Record<string, unknown>>([
+        [
+          "C0DEV000001",
+          {
+            channelId: "C0DEV000001",
+            name: "ext-pulsefit",
+            customerSlug: "pulsefit",
+            mode: "live",
+            slugSource: "human",
+          },
+        ],
+        [
+          "C0DEV000002",
+          {
+            channelId: "C0DEV000002",
+            name: "ext-acme-corp",
+            customerSlug: "ext-acme-corp",
+            mode: "live",
+            slugSource: "derived",
+          },
+        ],
+        [
+          "C0DEV000003",
+          {
+            channelId: "C0DEV000003",
+            name: "eng-internal",
+            customerSlug: null,
+            mode: "internal",
+            slugSource: "derived",
+          },
+        ],
+      ]);
+      /**
        * The agent's retraction. Armed by the FIRST list request rather than by
        * server boot, so it fires 45s after someone actually opens the page —
        * a timer counting from `vite dev` would usually have expired before the
@@ -191,6 +229,53 @@ export function devAccessStubs(): Plugin {
               },
             ],
           });
+        }
+
+        // The channel registry. Stateful across a session so that confirming
+        // a slug actually flips `slugSource` in the panel -- the whole point
+        // of the control is that a derived slug becomes a confirmed one, and a
+        // stub that always replayed "derived" would hide the only state change
+        // worth looking at.
+        if (path.startsWith("/api/channels")) {
+          if (request.method === "GET") {
+            return send(response, 200, {
+              channels: [...channels.values()],
+            });
+          }
+          if (request.method === "PATCH") {
+            const id = decodeURIComponent(path.slice("/api/channels/".length));
+            const row = channels.get(id);
+            if (row === undefined) {
+              return send(response, 404, {
+                code: "unknown_channel",
+                message: "no such channel",
+              });
+            }
+            void readBody(request).then((body) => {
+              const patch =
+                (body as { mode?: string; customerSlug?: string | null }) ?? {};
+
+              if (patch.customerSlug !== undefined) {
+                if (
+                  patch.customerSlug !== null &&
+                  !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(patch.customerSlug)
+                ) {
+                  return send(response, 422, {
+                    code: "invalid_patch",
+                    message: "malformed slug",
+                  });
+                }
+                row.customerSlug = patch.customerSlug;
+                // The provenance moves WITH the slug, exactly as the worker
+                // does it -- clearing the customer sends it back to derived.
+                row.slugSource =
+                  patch.customerSlug === null ? "derived" : "human";
+              }
+              if (patch.mode !== undefined) row.mode = patch.mode;
+              return send(response, 200, row);
+            });
+            return;
+          }
         }
 
         if (path === "/api/approvals" && request.method === "GET") {
