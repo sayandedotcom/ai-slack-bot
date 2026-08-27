@@ -27,7 +27,7 @@ import {
   type TurnContext,
 } from "@cloudflare/think";
 import { createExecuteRuntime } from "@cloudflare/think/tools/execute";
-import { callable } from "agents";
+import { callable, type Connection, type ConnectionContext } from "agents";
 import type { ContextProvider } from "agents/experimental/memory/session";
 import type { LanguageModel, ModelMessage, PrepareStepResult, Tool, ToolSet } from "ai";
 
@@ -60,6 +60,7 @@ import {
   type RunChannelId,
 } from "./agent-channels";
 import { runOriginOf } from "./keys";
+import { identityFromRequest, isBlockedClientFrame } from "./transport";
 import {
   ANTHROPIC_PROVIDER_OPTIONS,
   composeInstructions,
@@ -323,6 +324,67 @@ export class RunAgent extends Think<Env, RunAgentState> {
     });
   }
 
+  /** Whether this wake has already put the frame filter in front of Think's. */
+  #framesFiltered = false;
+
+  /**
+   * Drop the frames a browser must not be able to send, in front of the handler
+   * that would act on them.
+   *
+   * INSTALLED IN `onStart`, NOT THE CONSTRUCTOR, and the difference is the
+   * whole control. Think installs its own protocol `onMessage` wrapper from
+   * `_setupProtocolHandlers()` (`think.js:1036`), which runs DURING `onStart` —
+   * after every constructor in the chain. A filter wrapped around
+   * `this.onMessage` in the constructor therefore sits UNDERNEATH Think's and
+   * never sees a protocol frame at all: Think handles `chat-request` and
+   * returns without delegating. Measured, not assumed — a chat-request frame
+   * started a real turn with the filter in the constructor.
+   *
+   * This override runs at `think.js:1039`, three lines after that setup, so
+   * wrapping here puts it outermost. It is re-applied per wake because Think
+   * re-installs its wrapper per wake; the flag stops a second `onStart` on one
+   * object from nesting it twice.
+   */
+  #filterClientFrames(): void {
+    if (this.#framesFiltered) return;
+    this.#framesFiltered = true;
+    const deliver = this.onMessage.bind(this);
+    this.onMessage = async (connection, message) => {
+      if (isBlockedClientFrame(message)) return;
+      return deliver(connection, message);
+    };
+  }
+
+  /**
+   * EVERY connection is readonly, with no exception and no per-viewer branch.
+   *
+   * `this.state` carries the run id, the status and the parked-approval flag,
+   * and a client state frame REPLACES it wholesale. A browser writing
+   * `openApprovalId: null` would unpark a run a human still has open for
+   * decision; one writing `runId` would point the object's projections and
+   * usage rows at another customer's run. Nothing a browser does needs to write
+   * this state, so nothing may.
+   *
+   * It gates state frames ONLY (`agents/dist/index.js:865`), which is why the
+   * frame filter in the constructor exists beside it rather than instead of it.
+   */
+  override shouldConnectionBeReadonly(): boolean {
+    return true;
+  }
+
+  /**
+   * Who is watching, from the header the agent route stamped.
+   *
+   * Recorded on the CONNECTION rather than on `this.state`: it is one viewer's
+   * own email, it must not be broadcast to the other tabs watching the same
+   * run, and it must not survive the socket. The route deletes any inbound copy
+   * before setting its own, because nothing on this side can verify an identity
+   * that has already crossed a Durable Object boundary.
+   */
+  override async onConnect(connection: Connection, ctx: ConnectionContext): Promise<void> {
+    connection.setState({ email: identityFromRequest(ctx.request) });
+  }
+
   /**
    * Resolve this object's own public run id, on every wake.
    *
@@ -342,6 +404,8 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * temporarily unbound. `#runId()` refuses honestly while it is null.
    */
   override async onStart(): Promise<void> {
+    this.#filterClientFrames();
+
     if (this.state.runId !== null) return;
     try {
       const run = await getRunByKey(this.env.DB, this.name);
@@ -888,8 +952,14 @@ export class RunAgent extends Think<Env, RunAgentState> {
     // Durable Object RPC method deadlocks — even unawaited — and this method is
     // reached as one from every caller it has. The zero-delay schedule runs the
     // submit from the alarm instead, which is outside the RPC's invocation.
-    const inputRevision = await this.noteInput();
-    await this.schedule(0, "startSteerTurn", { messageId, text: body, inputRevision });
+    // `noteInput` is NOT called here, and that is not a style choice.
+    // `setState` throws "Connection is readonly" when it runs inside a
+    // connection-scoped invocation (`agents/dist/index.js:1133`), and every
+    // caller of this method reaches it as `@callable` RPC over a socket this
+    // agent marks readonly. The scheduled callback runs from the alarm, outside
+    // any connection, which is also the more honest place to mint the revision:
+    // it belongs to the turn that actually starts.
+    await this.schedule(0, "startSteerTurn", { messageId, text: body });
     return { queued: false, woke: true };
   }
 
@@ -903,12 +973,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
    */
   async startSteerTurn(payload: unknown): Promise<void> {
     if (typeof payload !== "object" || payload === null) return;
-    const { messageId, text, inputRevision } = payload as {
-      messageId?: unknown;
-      text?: unknown;
-      inputRevision?: unknown;
-    };
+    const { messageId, text } = payload as { messageId?: unknown; text?: unknown };
     if (typeof messageId !== "string" || typeof text !== "string") return;
+
+    const inputRevision = await this.noteInput();
 
     await this.runTurn({
       mode: "submit",
@@ -926,10 +994,7 @@ export class RunAgent extends Think<Env, RunAgentState> {
       ],
       idempotencyKey: messageId,
       channel: this.state.channel,
-      metadata: {
-        inputRevision: typeof inputRevision === "number" ? inputRevision : this.state.inputRevision,
-        turnId: messageId,
-      },
+      metadata: { inputRevision, turnId: messageId },
     });
   }
 
