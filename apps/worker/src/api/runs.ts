@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
+import { requireTeamMember } from "./identity";
+import { createRunFromChat } from "../run/wake";
 import { getRunById, listRuns, readRunUsage, RUN_LIST_MAX_LIMIT } from "../run/repository";
 import { decimalNanoUsd } from "../run/money";
 import { isRunStatus, type RunStatus } from "../run/protocol";
@@ -99,3 +101,96 @@ runsApi.get("/runs/:id/usage", async (c) => {
 });
 
 
+
+
+/* ------------------------------------------------------------- writes --- */
+
+/** Bounds on what a browser may open a run with. */
+export const CHAT_FIRST_MESSAGE_MAX_CHARS = 4_000;
+export const CLIENT_REQUEST_ID_MAX_CHARS = 200;
+
+type ChatCreateInput = { firstMessage: string; clientRequestId: string | undefined };
+
+/**
+ * Parse the create body, or `null` for any shape this route refuses.
+ *
+ * Bounded here rather than at the model: a create is the one entry point a
+ * browser reaches with no prior run to charge against, so the cheapest place to
+ * refuse an oversized opening is before anything is written.
+ */
+function parseChatCreate(body: unknown): ChatCreateInput | null {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
+  const record = body as Record<string, unknown>;
+
+  const firstMessage = record.firstMessage;
+  if (typeof firstMessage !== "string") return null;
+  const trimmed = firstMessage.trim();
+  if (trimmed === "" || trimmed.length > CHAT_FIRST_MESSAGE_MAX_CHARS) return null;
+
+  const clientRequestId = record.clientRequestId;
+  if (clientRequestId !== undefined) {
+    if (typeof clientRequestId !== "string") return null;
+    if (clientRequestId === "" || clientRequestId.length > CLIENT_REQUEST_ID_MAX_CHARS) return null;
+  }
+
+  return { firstMessage: trimmed, clientRequestId: clientRequestId as string | undefined };
+}
+
+/**
+ * Start a run from the dashboard's chat page.
+ *
+ * Viewers reach this: a chat run has no customer thread, nothing it says goes
+ * out under anyone's name, and every committal write is still gated by the
+ * approval route. What a viewer must not do is decide an approval, and that is
+ * enforced where it belongs (`PATCH /api/approvals/:id`).
+ *
+ * `clientRequestId` is carried all the way through: it derives the run's key,
+ * so a retried create resolves to the SAME run, and it is the submission's
+ * idempotency key, so the opening turn is admitted once. The response is the
+ * public id and nothing else — never the `chat:{uuid}` key (invariant 10).
+ */
+runsApi.post("/runs", async (c) => {
+  const member = await requireTeamMember(c);
+  if (member instanceof Response) return member;
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(fail("invalid_body", "body must be JSON"), 422);
+  }
+
+  const input = parseChatCreate(body);
+  if (input === null) {
+    return c.json(
+      fail("invalid_body", "firstMessage must be a non-empty string within the size limit"),
+      422,
+    );
+  }
+
+  const { runId } = await createRunFromChat(c.env, {
+    firstMessage: input.firstMessage,
+    // Recorded on the submission's metadata and nowhere else. Which engineer
+    // opened a chat must not change what the model answers (invariant 12).
+    actorEmail: member.email,
+    requestId: input.clientRequestId,
+  });
+
+  return c.json({ id: runId }, 201);
+});
+
+/**
+ * One run, by its public id. D1 only — rendering a run must not wake it.
+ *
+ * `publicRun` omits `key`, which is the whole reason it exists: the dashboard
+ * addresses runs by UUID and the Worker resolves the Durable Object name
+ * server-side.
+ */
+runsApi.get("/runs/:id", async (c) => {
+  const member = await requireTeamMember(c);
+  if (member instanceof Response) return member;
+
+  const run = await getRunById(c.env.DB, c.req.param("id"));
+  if (!run) return c.json(fail("not_found", "no such run"), 404);
+  return c.json({ run: publicRun(run) });
+});
