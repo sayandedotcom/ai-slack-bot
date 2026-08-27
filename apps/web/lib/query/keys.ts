@@ -12,6 +12,7 @@ export const queryKeys = {
   runUsage: (id: string) => ["runs", id, "usage"] as const,
   openApprovals: ["approvals", "open"] as const,
   approval: (id: string) => ["approvals", id] as const,
+  channels: ["channels"] as const,
   shadow: ["eval", "shadow"] as const,
 };
 
@@ -26,4 +27,5 @@ export const POLL_MS = {
   counters: 10_000,
   shadow: 60_000,
   roster: 60_000,
+  channels: 60_000,
 } as const;

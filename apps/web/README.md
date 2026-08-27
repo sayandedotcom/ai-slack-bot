@@ -30,8 +30,12 @@ NEXT_PUBLIC_WORKER_ORIGIN=http://localhost:8787 pnpm dev
 
 pnpm typecheck          # tsc --noEmit
 pnpm test               # vitest
-pnpm lint
 pnpm build              # next build
+
+# Lint and format are Biome, run ONCE at the repository root — there is no
+# per-workspace lint script here or in any other workspace.
+pnpm lint               # from the repo root: biome ci .
+pnpm format             # from the repo root: biome check --write .
 ```
 
 `pnpm dev` with neither variable set starts with no rewrite target, so every
@@ -118,6 +122,16 @@ channel ids, thread keys, run uuids, counts, capability calls — and Plex Sans
 for anything a person wrote. The agent's draft reply is set in sans on purpose:
 the product's whole claim is that it will read as though the fire-fighter wrote
 it, so it must not look machine-made on the page where somebody approves it.
+
+**Two write surfaces, and both are gated twice.** Approvals go out over
+`PATCH /api/approvals/:id`; channel policy over `PATCH /api/channels/:id`,
+which is fire-fighters only. In both cases the UI hides the controls a viewer
+cannot use, and in both cases that is a courtesy rather than the enforcement —
+the Worker refuses either write before it touches D1.
+
+The channel panel never predicts `slugSource`. Confirming a customer promotes
+it to `human` and clearing it drops back to `derived`, both inside the Worker's
+one UPDATE, so the row it returns is what goes into the cache.
 
 **A run has one write, and it is `steer`.** The Worker drops five client frames
 from every socket connection (`src/run/transport.ts`), so a "send a message"

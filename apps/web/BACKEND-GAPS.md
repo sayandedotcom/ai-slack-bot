@@ -398,9 +398,10 @@ single highest-value thing the backend could do for either dashboard.
 
 `requireTeamMember` verifies a real Access JWT off `Cf-Access-Jwt-Assertion`
 (`src/api/identity.ts`), and `wrangler dev` has no Cloudflare Access in front of
-it. So `POST /api/runs`, `GET /api/runs/:id` and the run socket all answer 401
-against a local Worker. The runs list, counters, roster and approvals are
-reachable; starting a run and opening a transcript are not.
+it. So `POST /api/runs`, `GET /api/runs/:id`, the run socket and **both channel
+routes** answer 401 against a local Worker. The runs list, counters, roster and
+approvals are reachable; starting a run, opening a transcript and correcting a
+channel are not.
 
 This is not new and it is not this app's doing — `apps/dashboard/dev-stubs.ts`
 stubs identity, roster and approvals for exactly this reason, and deliberately
@@ -413,6 +414,42 @@ a live transcript.
 the right way to develop the dashboard against real D1 data. It is *not* a way
 to develop the run surfaces. Those are `NEXT_PUBLIC_DEMO=1`, or a deployed
 Worker behind the real Access application.
+
+---
+
+## 15. The channel registry — RESOLVED on arrival
+
+**Status: closed. It landed with a control surface already attached.**
+
+Never a gap: `GET /api/channels` and `PATCH /api/channels/:id` arrived on the
+Worker (`src/api/channels.ts`) at the same time as the auto-registration that
+made them necessary, and this app consumes both. Recorded here because the
+authorization split is unusual and easy to get wrong from the front-end side:
+
+```
+GET   /api/channels        -> 200 { channels: Channel[] }   any rostered member
+PATCH /api/channels/:id    -> 200 Channel                   FIRE-FIGHTERS ONLY
+                              422 invalid_patch · 404 unknown_channel
+```
+
+The read is any team member; the write is fire-fighters, checked **before** the
+body is parsed or D1 is touched — the same ordering as
+`PATCH /api/approvals/:id`, and for the same reason: `mode` decides what the
+agent may say and `customerSlug` decides whose data it may read.
+
+**What the front-end does.** `ChannelsPanel` renders the table for everyone and
+the controls for fire-fighters only. Hiding the controls is not the enforcement
+— the Worker refuses a viewer's write regardless — it just avoids offering an
+action that will 403.
+
+Two things it deliberately does not do. It never predicts `slugSource`:
+confirming a slug promotes it to `human` and clearing it drops back to
+`derived`, and both happen in the Worker's single statement, so the row it
+returns is what gets written into the cache. And it offers no create and no
+delete, because the route has neither — registration is the registrar's job,
+and a channel the bot was removed from keeps its row (Slack refuses the post
+with `not_in_channel`, which is a better enforcement point than a row somebody
+has to keep in sync).
 
 ---
 
@@ -433,8 +470,12 @@ read, not a route inferred from a description.
 - The empty summary (§13): `createOrGetRunUnderPolicy`'s INSERT and the absent
   callers of `setRunSummary`, both in `src/run/repository.ts`.
 - The localhost gate (§14): `requireTeamMember` in `src/api/identity.ts`, and
-  the comment block in `apps/dashboard/dev-stubs.ts` that names the same three
+  the comment block in `apps/dashboard/dev-stubs.ts` that names the same
   routes and says why it will not stub them.
+- The channel routes and their split authorization (§15): `src/api/channels.ts`
+  in full — the `member.role !== "firefighter"` check on the PATCH, the slug
+  regex, and the single UPDATE that moves `customer_slug` and `slug_source`
+  together.
 - That a Next rewrite cannot carry a WebSocket upgrade: `next.config.ts`
   rewrites are HTTP proxies, and the `host` option this app passes instead is
   `PartySocketOptions.host`, resolved in

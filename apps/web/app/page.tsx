@@ -1,6 +1,7 @@
 "use client";
 
 import { ApprovalsQueue } from "@/components/dashboard/approvals-queue";
+import { ChannelsPanel } from "@/components/dashboard/channels-panel";
 import { FunnelStrip } from "@/components/dashboard/funnel-strip";
 import { NudgePreview } from "@/components/dashboard/nudge-preview";
 import { RosterCard } from "@/components/dashboard/roster-card";
@@ -79,6 +80,11 @@ export default function DashboardPage() {
       </div>
 
       <TeamTable state={roster} identity={identity} />
+
+      {/* Above the shadow corpus, because a channel whose customer is still a
+          guess is a live constraint on what the agent may read — not an
+          after-the-fact review. */}
+      <ChannelsPanel role={identity?.role ?? null} />
 
       <ShadowPanel />
 
