@@ -214,4 +214,28 @@ env -u CF_API_TOKEN pnpm run deploy   # builds the dashboard, then wrangler depl
 
 Production secrets go in with `wrangler secret bulk` — never bare `wrangler secret put` from a non-interactive shell (uploads an empty string and reports success). Non-secret pins (`GITHUB_REPO`, `GITHUB_BASE`, vendor ids, mode flags) live in `wrangler.jsonc` `vars` on purpose. Never deploy with `AGENT_MODEL_DISABLED` or `SANDBOX_DISABLED` set. Firing a drill posts to a real Slack channel and opens a real PR — read `docs/drill.md` first.
 
+### Pointing it at a different org
+
+Config that varies by tenant lives in three unrelated places — `.dev.vars`, the `vars` block of `wrangler.jsonc`, and Cloudflare's secret store — about 39 values in all. Nothing else checks the three agree, so a half-finished switch looks exactly like a finished one.
+
+```bash
+pnpm run profile capture personal    # snapshot what is live NOW — do this FIRST
+pnpm run profile apply zellify       # .dev.vars + wrangler.jsonc vars + one secret bulk
+pnpm run deploy                      # secrets are already live; patched vars need this
+```
+
+`capture` before switching, or the setup you are leaving is gone — `apply` overwrites `.dev.vars`. Profiles are written to `apps/worker/config/profiles/*.json` at `0600` and are gitignored: they hold real credentials. `pnpm run profile show <name>` prints vars and secret *names*, never secret values. (`pnpm run` — bare `pnpm profile` is an npm builtin, same trap as `pnpm deploy`.)
+
+`apply` runs `verify` first and refuses if it fails. The check that earns the tool:
+
+```
+[ FAIL ] SLACK_BOT_USER_ID is U0WRONGUSER but this token's bot is U0BT3PMMCEN.
+         THIS IS THE LOOP GUARD: with it wrong, the agent re-ingests its own
+         replies as customer messages and answers itself.
+```
+
+`SLACK_APP_ID` and `SLACK_BOT_USER_ID` are how ingest recognises this app's own user-token posts and keeps them out of triage (`src/ingest/rules.ts`). Point the Worker at a new Slack app and forget them, and every reply the agent sends comes back as customer input and routes into its own run. It is invisible in review, costs real money, and only shows up live. `verify` catches it against `auth.test` on that profile's own bot token, and also probes the AI Gateway with an empty body — gateway auth is checked before forwarding, so `401` means a bad token and `400` means a good one, with no model run and nothing billed. `SLACK_APP_ID` is shape-checked only and *says so*: no Slack API returns an app id for a bot token.
+
+Deliberately out of scope: D1/R2/queue/DO bindings (swapping those swaps **data**, which should never be one command away from a typo), `src/access/roster.ts` (who may approve is code, reviewed as code), and deploying — `apply` prepares, a human deploys, so the ordering stays visible.
+
 The long-form README (security model with per-invariant mechanisms, spec-vs-build differences, AI-tool notes on Worker Loader / Sandbox / Think / Zep, Access setup, channel policy, what the sandbox may know) is in git history: `git show d2d794f:README.md`.
