@@ -90,9 +90,11 @@ Durable Object.
   reaches Vercel, so the rewrite has nothing to do. `NEXT_PUBLIC_WORKER_ORIGIN`
   unset so the socket dials this same origin. `CF_ACCESS_TOKEN` **never** — it
   is one person's Access session as a bearer credential.
-- **Custom domain:** `firefighter.sayande.xyz`. Because the record is
-  Cloudflare-proxied, Vercel verifies it with a `_vercel` TXT record rather than
-  over HTTP.
+- **Custom domain:** `firefighter.sayande.xyz`. Create the CNAME **DNS-only
+  first** so Vercel can complete its ACME challenge and issue a certificate —
+  Cloudflare's proxy intercepts that challenge — and only then flip the record
+  to Proxied. `docs/deploy-vercel.md` has the full as-built sequence and the
+  two traps in it.
 
 `transpilePackages: ["@workspace/ui"]` in `next.config.ts` is load-bearing:
 `@workspace/ui` ships raw `.tsx` from `src/` with no build step of its own.

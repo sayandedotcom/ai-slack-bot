@@ -84,37 +84,88 @@ rebuilds when **`packages/ui`** changes and correctly skips when only
 `apps/worker` does. A hand-rolled `git diff --quiet HEAD^ -- apps/web` would
 miss that transitive edge. `--fallback=HEAD^` covers the shallow-clone case.
 
-## The dashboard-side steps, in order
+## The dashboard-side steps, as built
 
-None of this is in the repository, so it is written down here instead. The
-ordering is load-bearing: each step's prerequisite is the one above it.
+None of this is in the repository, so it is written down here instead. Done
+2026-08-28; the ordering is load-bearing and two steps are traps.
 
 1. **Cloudflare zone.** `sayande.xyz` (registrar GoDaddy, unchanged — no
    registrar transfer was needed) had its nameservers repointed to
    `ashton.ns.cloudflare.com` / `jade.ns.cloudflare.com`. It had previously been
    delegated to a Route 53 hosted zone that no longer existed, so the domain
-   resolved nothing and there were no records to migrate. Zone SSL/TLS mode is
-   **Full (Strict)** — anything less weakens the Cloudflare→Vercel hop.
-2. **Vercel project**, with the settings above, and `firefighter.sayande.xyz`
-   added as a custom domain. Verified with a `_vercel` TXT record, because a
-   Cloudflare-proxied record cannot be verified over HTTP.
-3. **DNS**, in the `sayande.xyz` zone:
-   `CNAME firefighter → cname.vercel-dns.com`, **Proxied**. Proxying is not
-   optional: Access only protects hostnames that pass through Cloudflare.
-4. **Access.** `firefighter.sayande.xyz` added as an additional hostname on the
-   **existing** `firefighter — Dashboard` application. See the trap in item 2 of
+   resolved nothing and there were no records to migrate. Zone SSL/TLS mode was
+   `full` and was changed to **Full (Strict)**.
+
+2. **Vercel project.** There was already one: **`slack-bot-web`**
+   (`prj_llB4V6pLyf3O4x0W6yg6WGmrc68C`, team `sayande2002s-projects`), linked to
+   `sayandedotcom/ai-slack-bot` with Root Directory `apps/web` and a green
+   production build — so it was reused rather than duplicated. `firefighter.sayande.xyz`
+   was added to it and came back **`verified: true` immediately**: the account
+   already owns `sayande.xyz`, so **no `_vercel` TXT record was needed**. Add
+   one only if Vercel reports the domain as unverified.
+
+3. **DNS, and this is the first trap.** Create the CNAME **DNS-only (grey
+   cloud) first**:
+   `CNAME firefighter → cname.vercel-dns.com`, TTL 60.
+   Vercel has to issue its own TLS certificate for the hostname, and it does
+   that with an ACME challenge against the public record — **which Cloudflare's
+   proxy intercepts**. Proxy first and the certificate never issues. This is the
+   "cert-issuance friction" `docs/tech-stack.md` refers to. Wait until Vercel
+   reports `misconfigured: false` and the host serves a certificate whose CN is
+   the hostname, **then** flip the record to **Proxied**.
+   (A stale, expired `*.sayande.xyz` Let's Encrypt certificate was being served
+   at first — renewal had been failing since April because of the dead Route 53
+   delegation. It cleared once DNS resolved again.)
+
+4. **Access.** `firefighter.sayande.xyz` was added as an additional destination
+   on the **existing** `firefighter — Dashboard` application
+   (`689056b1-33a4-402b-ae15-ae80716948d7`), so the AUD is still
+   `1adc17dd…` and `ACCESS_APP_AUD` did not change. See the trap in item 2 of
    the preamble. No bypass application is needed on this hostname — `/proofs/*`
    and `/slack/events` did not move.
-5. **Worker route**, committed: `firefighter.sayande.xyz/api/*` in
+
+   **API note:** `PATCH /accounts/{id}/access/apps/{app}` is refused with
+   `10405: Method not allowed for this authentication scheme`. Use `PUT` with
+   the full object. `PUT` replaces the application, so **verify afterwards that
+   the policy survived** — an application with no policy is an outage. It did
+   survive here, but check rather than assume.
+
+5. **Cloudflare's own edge certificate, the second trap.** On a zone activated
+   the same day, Universal SSL sits at `pending_validation` and **every TLS
+   handshake to the proxied hostname fails** (`sslv3 alert handshake failure`)
+   until it issues. Nothing is misconfigured; it took about eight minutes here.
+   `GET /zones/{id}/ssl/verification` is where to watch it.
+
+6. **Worker route**, committed: `firefighter.sayande.xyz/api/*` in
    `wrangler.jsonc`, plus an explicit `workers_dev: true`. Deploying before the
-   zone is Active fails, which is why this is step 5 and not step 1.
-6. **OAuth callbacks.** `redirectUri` is derived from the request's own origin
+   zone is Active fails, which is why this is last and not first.
+
+7. **OAuth callbacks.** `redirectUri` is derived from the request's own origin
    (`src/oauth/slack.ts`, `github.ts`), not from a var, so each origin needs its
    callback registered. Slack allows several redirect URLs, so
-   `https://firefighter.sayande.xyz/api/oauth/slack/callback` was **added**
+   `https://firefighter.sayande.xyz/api/oauth/slack/callback` is **added**
    alongside the workers.dev one. A GitHub OAuth app allows exactly one, so that
-   is a **move**, and it is why it belongs to the cutover rather than to the
+   is a **move**, and it is why it belongs to the cutover rather than the
    additive phase.
+
+### Verified after the fact
+
+```
+NEW  /              302 -> …/cdn-cgi/access/login/…?kid=1adc17dd…   (right app)
+NEW  /api/identity  302 -> same AUD
+OLD  /              302 -> same AUD                                 (unchanged)
+OLD  /proofs/x      404 from the Worker, NOT a redirect             (bypass intact)
+OLD  /slack/events  200,                 NOT a redirect             (bypass intact)
+```
+
+### Known deviations from this document
+
+- Project **node version is 24.x**, not the 22.x in the table above. `engines`
+  is `>=22.20.0`, so it satisfies it and the build is green; left alone rather
+  than changed under a working deployment.
+- The project is named `slack-bot-web` and is linked to
+  `sayandedotcom/ai-slack-bot`, not `Zellify/firefighter`. That is what this
+  checkout's `origin` points at.
 
 ## The cutover, and how to undo it
 
