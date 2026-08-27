@@ -78,7 +78,7 @@ import {
   newTurnRecord,
   type TurnRecord,
 } from "./agent-memory";
-import { projectStatus, recordUsage } from "./agent-projection";
+import { projectStatus, projectSummary, recordUsage } from "./agent-projection";
 import {
   ANTHROPIC_PROVIDER_OPTIONS,
   composeInstructions,
@@ -362,6 +362,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
    */
   #turn: TurnRecord = newTurnRecord();
 
+  /** Whether this instance has already queued the run's one-time summary. */
+  #summaryProjected = false;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
@@ -557,6 +560,7 @@ export class RunAgent extends Think<Env, RunAgentState> {
     // by `onChatResponse` the assistant's reply is on the end of it.
     this.#turn = newTurnRecord();
     this.#turn.asked = askedFrom(this.messages);
+    await this.#queueSummaryProjection();
     this.#budgetExhausted = false;
 
     const scope = await resolveRunScope(
@@ -1014,6 +1018,48 @@ export class RunAgent extends Think<Env, RunAgentState> {
       { to, at: Date.now() },
       { retry: { maxAttempts: 5 } }
     );
+  }
+
+  /**
+   * Queue the run's summary, at most once per instance lifetime.
+   *
+   * The flag is an optimisation and NOT the correctness boundary — that is
+   * `setRunSummaryIfAbsent`'s `AND summary IS NULL`, which is authoritative
+   * because it is the database. This only stops a long conversation queueing a
+   * storage write per turn to discover the same no-op. An evicted object
+   * re-queues once and the predicate refuses it, which is the correct cost of
+   * not keeping the value in memory.
+   *
+   * Not in `this.state`: state is broadcast to every connected browser, and
+   * this is customer text. The dashboard already reads the summary from D1
+   * through `GET /api/runs`, where the Access gate applies.
+   */
+  async #queueSummaryProjection(): Promise<void> {
+    if (this.#summaryProjected) return;
+    if (this.#turn.asked === "") return;
+    this.#summaryProjected = true;
+    await this.queue(
+      "applySummaryProjection",
+      { asked: this.#turn.asked },
+      { retry: { maxAttempts: 5 } }
+    );
+  }
+
+  /**
+   * The queued summary's callback. Public for the same reason as
+   * `applyStatusProjection`: `queue()` resolves it by name off the instance.
+   *
+   * `summary_present` is silent. It is the expected answer for every turn after
+   * the first, and for a redelivery, and warning on it would put a line in the
+   * log for the normal case.
+   */
+  async applySummaryProjection(payload: unknown): Promise<void> {
+    if (typeof payload !== "object" || payload === null) return;
+    const { asked } = payload as { asked?: unknown };
+    if (typeof asked !== "string") return;
+    const runId = this.state.runId;
+    if (runId === null) return;
+    await projectSummary(this.env.DB, runId, asked);
   }
 
   /**

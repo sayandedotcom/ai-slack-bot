@@ -458,13 +458,32 @@ export async function casRunStatus(
   return { applied: (result.meta.changes ?? 0) > 0 };
 }
 
-export async function setRunSummary(
+/**
+ * Write the run's one-line summary, ONCE.
+ *
+ * `AND summary IS NULL` is the whole design, not a guard against a race. A
+ * summary is what makes one row in the dashboard's run list distinguishable
+ * from the next, and a list whose rows rewrite themselves every turn cannot be
+ * scanned: the operator re-reads the same five rows looking for the one they
+ * were watching. So the FIRST thing a run was asked wins, permanently, and
+ * every later turn is a no-op at the database rather than a decision in the
+ * caller.
+ *
+ * It replaced an unconditional `UPDATE runs SET summary = ?` that had no
+ * callers at all — the predicate is the difference between the two, and it is
+ * why this one is safe to put on the per-turn path.
+ *
+ * A missing row is `applied: false`, never a throw. The Durable Object owns the
+ * session; it must not fail a customer's answer because the index lagged.
+ */
+export async function setRunSummaryIfAbsent(
   db: D1Database,
   id: string,
   summary: string
-): Promise<void> {
-  await db
-    .prepare("UPDATE runs SET summary = ? WHERE id = ?")
+): Promise<{ applied: boolean }> {
+  const result = await db
+    .prepare("UPDATE runs SET summary = ? WHERE id = ? AND summary IS NULL")
     .bind(summary, id)
     .run();
+  return { applied: (result.meta.changes ?? 0) > 0 };
 }

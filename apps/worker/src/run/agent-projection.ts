@@ -7,8 +7,9 @@
  * are conditional, and neither may fail a turn: a run that cannot update its
  * index row is still a run.
  */
+import { redact } from "../redact";
 import { evaluateTransition, type RunStatus } from "./protocol";
-import { casRunStatus, getRunById } from "./repository";
+import { casRunStatus, getRunById, setRunSummaryIfAbsent } from "./repository";
 
 export type ProjectionOutcome = { applied: boolean; reason?: string };
 
@@ -152,4 +153,83 @@ export function usageRowId(
   row: Pick<UsageRow, "generationId" | "attempt" | "stepIndex">
 ): string {
   return `usage:${row.generationId}:${row.attempt}:${row.stepIndex}`;
+}
+
+/* ------------------------------------------------------------- summary -- */
+
+/**
+ * How much of the opening question survives into the run list.
+ *
+ * 120 characters is a line, not a paragraph. The column sits in a table beside
+ * a status and a timestamp, and anything longer either wraps — turning a
+ * scannable list into a wall — or is clipped by CSS, which is the same
+ * truncation done later and worse, because the browser cannot put the ellipsis
+ * on a word boundary.
+ */
+export const RUN_SUMMARY_LIMIT = 120;
+
+/**
+ * Turn what a turn was asked into the run's one-line summary.
+ *
+ * Three things happen here and the ORDER of the first is load-bearing.
+ *
+ * `redact` runs FIRST, on the raw text, because this string is customer bytes
+ * that reach D1 and then every dashboard tab. A customer who pastes a token
+ * into a Slack thread — which is exactly what someone reporting a broken
+ * webhook does — would otherwise have it copied out of `messages` into
+ * `runs.summary`, a column no one thinks of as holding secrets. Truncating
+ * first would be worse than not redacting at all: a half-token no pattern
+ * matches any more is a secret that has been laundered past the sweep in
+ * `test/canary-secrets.test.ts` rather than removed (invariant 39).
+ *
+ * Then whitespace collapses, because a pasted stack trace is one row in a
+ * table, not twelve.
+ *
+ * Then it is bounded. `null` for a turn with nothing in it — an empty string
+ * would be a summary that exists and says nothing, which the dashboard cannot
+ * tell apart from a real one and so cannot fall back for.
+ */
+export function summaryFrom(asked: string): string | null {
+  const line = redact(asked).replace(/\s+/g, " ").trim();
+  if (line === "") return null;
+  if (line.length <= RUN_SUMMARY_LIMIT) return line;
+  return `${line.slice(0, RUN_SUMMARY_LIMIT - 1).trimEnd()}\u2026`;
+}
+
+/**
+ * Project the opening question onto the run index, if the run has no summary.
+ *
+ * Deliberately NOT the model's job. Asking the agent to name its own thread
+ * costs a turn, can be skipped, and produces nothing at all for the runs that
+ * most need a label — the ones that failed on their first step. The text a
+ * human actually typed is available before the model is called, is free, and is
+ * the thing an operator scanning the list is looking for.
+ *
+ * Returns the outcome instead of throwing. `run_not_found` and
+ * `summary_present` are both ordinary: the first is an index that has not
+ * caught up, the second is every turn after the first.
+ *
+ * The `getRunById` read exists ONLY to tell those two apart. A conditional
+ * UPDATE reports both as zero rows changed, and reporting "already has a
+ * summary" for a run that has no row at all would hide a real disagreement
+ * between the object and the index behind the most ordinary message there is.
+ * `projectStatus` above reads for the same reason. The cost is one read on the
+ * first turn of a run, because `#queueSummaryProjection` fires once per
+ * instance — not one per turn.
+ */
+export async function projectSummary(
+  db: D1Database,
+  runId: string,
+  asked: string
+): Promise<ProjectionOutcome> {
+  const summary = summaryFrom(asked);
+  if (summary === null) return { applied: false, reason: "nothing_asked" };
+
+  const run = await getRunById(db, runId);
+  if (run === null) return { applied: false, reason: "run_not_found" };
+
+  const { applied } = await setRunSummaryIfAbsent(db, runId, summary);
+  return applied
+    ? { applied: true }
+    : { applied: false, reason: "summary_present" };
 }
