@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@workspace/ui/components/tooltip";
 import { describe, expect, it, vi } from "vitest";
@@ -19,17 +19,23 @@ const card: OpenApproval = {
 
 function renderCard(
   state: CardState,
-  role: "firefighter" | "viewer" = "firefighter"
+  role: "firefighter" | "viewer" = "firefighter",
+  highlighted = false
 ) {
   const onDecide = vi.fn();
-  render(
+  const { container } = render(
     <TooltipProvider>
       <ul>
-        <ApprovalCard state={state} role={role} onDecide={onDecide} />
+        <ApprovalCard
+          state={state}
+          role={role}
+          highlighted={highlighted}
+          onDecide={onDecide}
+        />
       </ul>
     </TooltipProvider>
   );
-  return { onDecide };
+  return { onDecide, container };
 }
 
 describe("ApprovalCard", () => {
@@ -149,5 +155,40 @@ describe("ApprovalCard", () => {
       mine: false,
     });
     expect(screen.getByText(/the agent withdrew this/i)).toBeInTheDocument();
+  });
+
+  /*
+   * The Slack nudge's Review button is `?approval=<id>`, and the queue turns
+   * that into a scroll plus a ring. Both halves live here: the card owns the
+   * DOM id the queue looks up, and the ring is a prop so the card stays inert.
+   */
+  it("carries the DOM id a Slack deep link resolves to", () => {
+    const { container } = renderCard({ kind: "open", card });
+    expect(container.querySelector("#approval-apr-1")).not.toBeNull();
+  });
+
+  it("keeps that id once resolved, so a nudge for a decided card still lands", () => {
+    const { container } = renderCard({
+      kind: "resolved",
+      card,
+      decision: "approved",
+      decidedBy: null,
+      mine: true,
+    });
+    expect(container.querySelector("#approval-apr-1")).not.toBeNull();
+  });
+
+  it("rings only when the deep link pointed at it", () => {
+    const plain = renderCard({ kind: "open", card });
+    expect(
+      plain.container.querySelector("#approval-apr-1")?.className
+    ).not.toContain("ring-2");
+
+    cleanup();
+
+    const linked = renderCard({ kind: "open", card }, "firefighter", true);
+    expect(
+      linked.container.querySelector("#approval-apr-1")?.className
+    ).toContain("ring-2");
   });
 });

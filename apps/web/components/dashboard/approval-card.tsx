@@ -15,6 +15,7 @@ import { useState } from "react";
 import type { DecideAction, Decision, OpenApproval } from "@/lib/api/approvals";
 import { ago, shortThread } from "@/lib/format";
 import { useNow } from "@/lib/hooks/use-now";
+import { approvalDomId } from "@/lib/hooks/use-selected-approval";
 import type { CardState } from "@/lib/store/approvals-overlay";
 
 /**
@@ -36,8 +37,17 @@ import type { CardState } from "@/lib/store/approvals-overlay";
 export type ApprovalCardProps = {
   state: CardState;
   role: "firefighter" | "viewer";
+  /** Ringed because a Slack nudge deep-linked here. Transient; see the queue. */
+  highlighted?: boolean;
   onDecide: (action: DecideAction) => void;
 };
+
+/**
+ * The deep-link ring. Applied to the card itself rather than an overlay so it
+ * survives both card shapes, and so it cannot cover the buttons it is pointing
+ * the reader at.
+ */
+const HIGHLIGHT = "ring-2 ring-primary ring-offset-2 ring-offset-background";
 
 /** The affirmative action's tone, used by both send buttons. */
 const APPROVE = "bg-success text-success-foreground hover:bg-success/85";
@@ -102,6 +112,7 @@ function Meta({ card, now }: { card: OpenApproval; now: number }): ReactNode {
 export function ApprovalCard({
   state,
   role,
+  highlighted = false,
   onDecide,
 }: ApprovalCardProps): ReactNode {
   const card = state.card;
@@ -117,7 +128,13 @@ export function ApprovalCard({
 
   if (state.kind === "resolved") {
     return (
-      <li className="rounded-lg border bg-card px-3 py-2.5">
+      <li
+        id={approvalDomId(card.id)}
+        className={cn(
+          "rounded-lg border bg-card px-3 py-2.5",
+          highlighted && HIGHLIGHT
+        )}
+      >
         <p className="flex items-center gap-2 text-muted-foreground text-sm">
           <Check
             className="size-3.5 shrink-0 text-success"
@@ -140,7 +157,13 @@ export function ApprovalCard({
   const rejecting = composer === "reject" && !locked;
 
   return (
-    <li className="flex flex-col gap-2.5 rounded-lg border bg-card px-3 py-3">
+    <li
+      id={approvalDomId(card.id)}
+      className={cn(
+        "flex flex-col gap-2.5 rounded-lg border bg-card px-3 py-3",
+        highlighted && HIGHLIGHT
+      )}
+    >
       <Meta card={card} now={now} />
 
       {/* The `why` leads. It is the answer to "why am I being interrupted?",
