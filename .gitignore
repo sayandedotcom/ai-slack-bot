@@ -67,3 +67,7 @@ next-env.d.ts
 
 # personal working notes — deliberately never committed
 docs/things-to-remember.md
+
+# Deployment profiles hold real credentials for every tenant this Worker has
+# been pointed at. Never committed.
+apps/worker/config/profiles/

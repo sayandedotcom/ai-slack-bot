@@ -38,6 +38,9 @@ pnpm test:watch
 pnpm dev                              # wrangler dev on :8787 (needs ../dashboard/dist — build it first)
 pnpm run deploy                       # builds the dashboard, then wrangler deploy (`run` — bare `pnpm deploy` is a pnpm builtin)
 pnpm cf-typegen                       # regenerate worker-configuration.d.ts after any wrangler.jsonc binding change
+pnpm run profile capture <name>       # snapshot every tenant-varying value (`run` — bare `pnpm profile` is an npm builtin)
+pnpm run profile verify [<name>]      # check the loop-guard pins against the live bot token, and the AI Gateway
+pnpm run profile apply <name>         # .dev.vars + wrangler.jsonc vars + `wrangler secret bulk`, in one step
 pnpm capabilities:dts                 # regenerate src/capabilities/generated/capabilities.d.ts after any capability change
 ```
 
@@ -76,6 +79,7 @@ The LangSmith **READ** pin is a different thing entirely and must not be confuse
 
 ## Conventions and traps
 
+- **Deployment profiles** (`apps/worker/scripts/profile.mjs`, `config/profiles/*.json`, gitignored): pointing this Worker at a different org's Slack/GitHub/Linear/Supabase means moving ~39 values across three unrelated places — `.dev.vars`, the `vars` block of `wrangler.jsonc`, and Cloudflare's secret store — and nothing else checks the three agree. `apply` refuses a profile whose `SLACK_BOT_USER_ID` does not match `auth.test` on that profile's own bot token: that pin is the loop guard, and getting it wrong makes the agent re-ingest its own replies and answer itself, invisibly, until it is live. **`capture` before switching** or the setup being left behind is gone. It deliberately does NOT touch D1/R2/queue/DO bindings (swapping those swaps data), `src/access/roster.ts` (who may approve is code), or deploy for you.
 - **Generated files — never hand-edit:** `apps/worker/worker-configuration.d.ts` (`pnpm cf-typegen`; only commit it from a real regeneration — it is machine-dependent on `.dev.vars` names, and running it **without** `.dev.vars` deletes every secret from `Cloudflare.Env` and breaks `tsc` in twenty places) and `apps/worker/src/capabilities/generated/capabilities.d.ts` (`pnpm capabilities:dts`).
 - **`Env` type** lives in `src/index.ts`: `Cloudflare.Env` plus optional declarations for secrets and test opt-outs `wrangler types` cannot see. `wrangler.jsonc` `vars` are non-secret pins (vendor IDs, hosts, mode flags) deliberately kept in the repo; everything credential-shaped is a `wrangler secret`. Code names variables, never values, in errors/logs/health.
 - **Adding a capability:** define it with `auditedCapability(...)` (a bare descriptor throws at registry construction), `effect` is required, append namespaces to the registry order (order = rendered `.d.ts` order), keep method names globally unique (generator emits un-namespaced `XInput`), regenerate the `.d.ts`, add `test/capabilities-<ns>.test.ts`. Zero-arg methods need `z.object({}).default({})`. Connectors pick it up automatically (`buildConnectors` maps the registry), but `test/capabilities-connector.test.ts` pins the surface count and sweeps every method for `requiresApproval` — never set it (spec D4: approval is a model-called capability, not a harness gate). Never hand a raw Zod schema to a connector: `toolInputSchema` accepts it silently and the model-facing type degrades to `unknown`.
