@@ -2161,6 +2161,25 @@ const { messages, status, isServerStreaming, isRecovering, connectionError } = u
 
 ## Wave 6 — Memory, tracing, proof and docs
 
+**IMPLEMENTED 2026-08-27** (Tasks 25–28, except Task 28 step 6). Gate: worker 72
+files / 1036 tests, dashboard 6 / 59, `tsc` clean in both, `.d.ts` in sync.
+Recorded in `phase-26-notes.md` §"Wave 6 implementation notes" (items 36–40).
+
+**Task 26 was decided: branch (a), SDK-native OTLP.** `storeTools = true`,
+`storeMessages = false`, `beforeTurn` stamps `telemetry.metadata` — and
+**overrides `agentId`**, which the plan did not anticipate: Think's default is
+`this.name`, the private run key, so the plan's "note it in Task 27" became a
+fix instead. The three now-dead vars are removed.
+
+**Task 27 marks every `read` capability `replay: "reexecute"`**, by the effect
+classification rather than a per-method judgement. The sweep drives a genuinely
+full run — wake, `run_code` in a loader isolate, a capability call through the
+connector, an escalation, a human decision, the resolution turn — and its
+canaries are the pool's OWN bindings enumerated off `env`, not planted values.
+
+**Task 28 step 6 (the drill dry run) is NOT done and cannot be**: it needs the
+deploy, which is the human's. Everything else in Task 28 is.
+
 ### Task 25: Memory episodes from the loop
 
 **Files:**

@@ -662,3 +662,117 @@ would have been untestable in this package.
   run detail and the socket all answer 401 on localhost. A fake create would
   hand back an id whose socket then refuses; a stubbed socket would be a fiction
   of a live transcript. They are exercised against a deployed Worker.
+
+
+## Wave 6 implementation notes (2026-08-27)
+
+Gate before: worker 69 files / 1014 tests, dashboard 6 / 59. After: worker
+**72 / 1036**, dashboard unchanged, `tsc` clean in both,
+`capabilities:dts:check` in sync.
+
+**36. `agentId` on a trace span defaults to the PRIVATE run key.** Think's
+`_turnTelemetry` stamps `agentId: this.name` (`think.js:2548`), and on `ai` 7
+the v7 path spreads caller `metadata` into the runtime context before deleting
+the key from the forwarded options (`think.js:2569, 2593`). Left alone, every
+customer conversation would put `slack:{channel}:{thread_ts}` into a
+third-party trace store — invariant 10 broken somewhere nobody greps.
+`beforeTurn` overrides it with the public `runs.id`.
+
+**37. `TurnConfig.telemetry` does not type the shape Think honours.** It is
+`streamText`'s `experimental_telemetry`, which on `ai` 7 is `TelemetryOptions`
+— and that type has no `metadata` (v7 replaced it with `runtimeContext`). Think
+reads `settings.metadata` at runtime regardless. `turnTelemetry()` carries the
+cast and the reason, rather than the field being dropped silently.
+
+**38. `storeMessages` / `storeTools` are the whole payload policy, and it is
+all-or-nothing.** Both go straight to `wrapAISDK` (`think.js:2827`). There is no
+per-field switch, which is what settled Task 26's trade-off: tool payloads on
+(our program, our results), messages off (the customer's thread, the triage
+briefing, recalled memory).
+
+**39. Codemode's `cm_log` stores a call's args AND its result verbatim**, for
+replay to return on a resume pass. `replay: "reexecute"` marks a call ephemeral
+so its result is never stored (`codemode/dist/base-BqhlNCSH.js:80`). The rule
+adopted is the effect classification rather than a per-method judgement: EVERY
+`read` is ephemeral, because a read's result is the one unbounded thing in this
+system made entirely of other people's data. Writes stay logged — re-executing
+one would do it twice. The runtime refuses `requiresApproval` combined with
+`reexecute`, which this repo never sets anyway.
+
+**40. `_cf_KV` and `_cf_METADATA` refuse SQL with `SQLITE_AUTH`.** The canary
+sweep enumerates `sqlite_master` and would otherwise die on the first one. The
+DO's key-value surface is where `this.state` and every scheduled payload live,
+so it is swept through `ctx.storage.list()` instead — the hole is covered, not
+excused. D1's `_cf_METADATA` is its own bookkeeping and is skipped by an
+explicit rule, with an assertion that every application table this run wrote to
+was actually read, so that rule cannot quietly grow.
+
+### The canary sweep drives a real run
+
+`test/canary-secrets.test.ts` is not a unit test with a mock. It wakes a Slack
+run, has the model call `run_code`, executes the model-authored program in a
+Worker Loader isolate, calls `approval.escalate` through the connector, writes
+the D1 card, decides it as a human, delivers the resolution — and then sweeps
+every table in D1 and in the agent's own SQLite for every secret-shaped binding
+on `env`.
+
+Two properties of it are the point:
+
+- **The canaries are the pool's OWN bindings**, enumerated off `env` by a NAME
+  pattern at runtime — the synthetic `not-a-real-*` fixtures and whatever a
+  developer's `.dev.vars` supplies. A planted value would only prove the planted
+  value did not leak; this covers the credentials the code actually holds,
+  including ones added after the file was written.
+- **Failures name the binding, never the value.** The subject of the file is
+  that credential values do not belong in durable places, and a test report is
+  one of those places.
+
+`toolCallingModel` in `test/helpers/canned-model.ts` is what made this possible:
+two passes, the first ending in a `run_code` tool call with
+`finishReason: "tool-calls"`, the second the answer.
+
+### Decisions made here, not in the plan
+
+**The memory episode is built from four host-held values, not filtered out of
+the transcript.** `asked` is read in `beforeTurn` (the transcript ends with this
+turn's user message there, and by `onChatResponse` the reply is on the end of
+it); `draft` is the selected final assistant text the hook hands over; `actions`
+are capability names and error codes off the audit sink; sources are
+host-produced ids. Reasoning is absent because no field reads a reasoning part
+at all — the exclusion list is structural rather than a filter.
+
+**`Agent.queue()` is deliberately not used for memory.** The D1 outbox already
+owns cross-DO durability and has a one-minute cron sweep behind it. A second
+durable queue for the same job would be two protocols that only work if there is
+one.
+
+**A turn with nothing asked, nothing done and nothing drafted writes no
+episode.** That is what a failure before the model looks like, and an episode of
+it is noise a future recall has to read past.
+
+**One `subscribe("chat", …)` at module scope**, logging event types only.
+`subscribe` registers a process-wide listener, so a per-request call would
+attach a new one every time; and the payload of a chat event can carry request
+metadata, so nothing but the type is logged — Workers Logs is a durable sink and
+invariant 39 applies to it exactly as it applies to a D1 row.
+
+### Files added
+
+`apps/worker/src/run/agent-memory.ts`; tests `test/run-agent-memory.test.ts`,
+`test/run-agent-tracing.test.ts`, `test/canary-secrets.test.ts`.
+
+Removed: `LANGSMITH_TRACING`, `LANGSMITH_TRACE_PROJECT` and
+`LANGSMITH_TRACE_PAYLOADS` from `wrangler.jsonc`, `src/index.ts` and
+`vitest.config.ts` — the writer that read them is gone.
+
+### Still open
+
+- **`worker-configuration.d.ts` still declares `LANGSMITH_TRACE_PAYLOADS`.** It
+  is generated by `pnpm cf-typegen`, which is machine-dependent on the local
+  `.dev.vars`, so it was NOT regenerated here — that belongs to whoever next
+  runs it legitimately. Nothing reads the field, so the staleness is cosmetic.
+- **The drill dry run needs the deploy**, which is the human's. Four scenarios
+  in `#test-firedrill` per `docs/drill.md`; record the outcomes here.
+- **`GET /api/runs` and `/runs/:id/usage` are gated by Access alone**, while
+  every route Phase 26 added also takes the inner roster check. Worth settling
+  one way or the other.

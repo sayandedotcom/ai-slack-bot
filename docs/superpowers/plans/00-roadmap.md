@@ -649,3 +649,64 @@ repo decision.
 6. **Cost reconciliation** against the $500 ceiling, with receipts.
 
 **Exit criteria:** All four scenarios pass in a dry run. The README's security claims are each traceable to a test.
+
+---
+
+## Phase 26 — Agent layer rebuilt on Think + Code Mode ✅ CODE DONE (2026-08-27), drill pending a deploy
+
+The agent layer built in Phases 08–11 (`RunDO`, the hand-rolled `streamText` loop,
+the `src/codemode/` bindings, the module-scope port registry, the hand-written
+LangSmith writer) was **deleted** on 2026-08-23 and rebuilt on
+`@cloudflare/think` + `@cloudflare/codemode`. Phase 25's `RUN_CHASSIS` flag went
+with it: there is one chassis and nothing branches on one.
+
+**Spec:** `docs/superpowers/specs/2026-08-23-agent-rebuild-think-codemode-design.md`
+**Plan:** `docs/superpowers/plans/2026-08-23-agent-rebuild.md` (28 tasks in six waves)
+**Notes:** `phase-26-notes.md` — 35 measured SDK behaviours with file:line evidence, and every decision the plan left open
+
+**What changed, by wave:**
+
+| Wave | Tasks | What it built |
+|---|---|---|
+| 0 | 1–2 | The `RunAgent` shell, the `v5` migration, the startup gate |
+| 1 | 3–8 | `src/capabilities/` — effects, the write guard, the ledger, audit + budget + freshness, the guarded loader, the connector, the registry and the generated `.d.ts` |
+| 2 | 9–12 | The remaining ten namespaces and the per-execution context |
+| 3 | 13–18 | The turn lifecycle: prompt blocks, the frozen engineer voice, the money ceiling, the freshness guard, projection and usage, terminal status and refusals, steering |
+| 4 | 19–21 | The wake paths, the real approval port, the resolution notifier |
+| 5 | 22–24 | The run transport, the live run view, the chat page |
+| 6 | 25–28 | Memory episodes, SDK-native tracing, the invariant-39 canary sweep, the docs |
+
+**Gate at completion:** worker **72 files / 1036 tests**, `tsc` clean, capability
+`.d.ts` in sync; dashboard **6 files / 59 tests**, `tsc` clean. No `it.fails`, no
+skips.
+
+**The decisions worth re-reading before changing any of this:**
+
+- **Tracing went SDK-native** (Task 26, branch (a)). Think's GenAI OTLP spans
+  replace ~600 lines of hand-written writer, the `dotted_order` trap and the
+  `waitUntil` flush. The cost, taken knowingly: `storeMessages` is
+  all-or-nothing, so there is no `redacted` payload mode any more — messages are
+  off entirely and tool payloads are on. The destination is a dashboard-side
+  OTLP setting, not a var.
+- **An approval expiry does not decide for the human.** It withdraws the card
+  and fails the run, because a failed run releases its Slack thread and triage's
+  abandoned-thread override re-wakes it. Six hours, a reviewed default.
+- **Chat-run creation is idempotent at the RUN level**, not only the turn level:
+  the `chat:{uuid}` key is derived from the actor plus the client request id.
+- **Test files run serially.** Shared storage plus real turns made cross-file
+  interference reachable; it was observed once as seven failures across six
+  files.
+
+**Still open, and both are the human's:**
+
+1. **The first deploy.** Nothing here has run in production — the account has 0
+   Workers and D1 has 0 tables. Task 2's startup-time and webhook-p95 half is
+   blocked on it, as is the drill.
+2. **The drill dry run** — all four scenarios in `#test-firedrill` against the
+   deployed Worker, per `docs/drill.md`. Record the outcomes in
+   `phase-26-notes.md`.
+
+**Also worth doing when the docs are next touched:** `GET /api/runs` and
+`GET /api/runs/:id/usage` are still gated by Cloudflare Access alone, while
+every route added in Phase 26 takes the inner `requireTeamMember` roster check
+as well. A half-gated router is worth settling one way or the other.
