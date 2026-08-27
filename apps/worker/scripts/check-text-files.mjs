@@ -23,7 +23,7 @@
  * Node script, not a vitest test, because the worker test pool runs in
  * workerd and has no filesystem.
  *
- * WHERE IT RUNS. Four places now: the root `check:text` script, the lefthook
+ * WHERE IT RUNS. Four places now: the root `check:text` script, the husky
  * pre-commit hook, the `gate-fast` job in .github/workflows/ci.yml, and
  * `pnpm test` / `pnpm capabilities:dts:check` in this package.
  *

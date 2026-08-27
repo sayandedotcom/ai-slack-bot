@@ -14,12 +14,12 @@
     "check:text": "node apps/worker/scripts/check-text-files.mjs",
     "capabilities:dts:check": "pnpm --filter @workspace/worker capabilities:dts:check",
     "check": "pnpm run check:text && pnpm run lint && pnpm run typecheck && pnpm run capabilities:dts:check && pnpm run test",
-    "prepare": "lefthook install || true"
+    "prepare": "husky || true"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "@workspace/typescript-config": "workspace:*",
-    "lefthook": "^2.1.10",
+    "husky": "^9.1.7",
     "turbo": "^2.9.18",
     "typescript": "^5"
   },

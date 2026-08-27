@@ -6,8 +6,7 @@ allowBuilds:
   sharp: true
   unrs-resolver: true
   msw: false
-  # lefthook's postinstall links the Go binary from its platform-specific
-  # optionalDependency and installs the git hooks. `pnpm exec lefthook` works
-  # without it, since its bin is a JS shim, but the root `prepare` script is
-  # what actually guarantees the hooks exist after a clone.
-  lefthook: true
+  # No entry for husky: it ships no install lifecycle script at all. The git
+  # hooks come from the root `prepare` script (`husky`), which pnpm 10 still
+  # runs for the root project — only DEPENDENCY lifecycle scripts are gated
+  # behind this allowBuilds list.

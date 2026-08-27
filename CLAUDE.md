@@ -56,7 +56,7 @@ Next.js front-end (`apps/web`, added 2026-08-26): the second front-end, App Rout
 
 **The gate is `pnpm check` at the repository root** — control bytes, Biome, `tsc --noEmit`, generated declarations, then the suite, in that order (cheapest first). `.github/workflows/ci.yml` runs the same four jobs on every push and pull request. Run it yourself and establish the baseline before judging a change — do not trust a stated pass count. Commit after every task, conventional prefixes (`feat(scope):`, `fix(scope):`, `docs:`).
 
-Git hooks are lefthook (`lefthook.yml`), installed by the root `prepare` script. **pre-commit**: Biome over staged files + the control-byte guard. **pre-push**: `typecheck` + `capabilities:dts:check`. The worker suite is deliberately NOT in a hook — 205–306s is a hook people learn to `--no-verify` past, which would cost the two fast checks as well. Escape hatches: `LEFTHOOK=0 git commit`, `git push --no-verify`.
+Git hooks are husky (`.husky/pre-commit`, `.husky/pre-push`), installed by the root `prepare` script (`husky`), which points `core.hooksPath` at `.husky/_`. **pre-commit**: Biome over staged files + the control-byte guard. **pre-push**: `typecheck` + `capabilities:dts:check`. The worker suite is deliberately NOT in a hook — 205–306s is a hook people learn to `--no-verify` past, which would cost the two fast checks as well. Escape hatches: `HUSKY=0 git commit`, `git push --no-verify`.
 
 Deploying is `workflow_dispatch` only (`.github/workflows/deploy-worker.yml`), behind a `production` environment and four preflight guards. **Never add a push trigger**: `wrangler.jsonc` runs a one-minute cron, so a deploy swaps the Worker under anything in flight.
 

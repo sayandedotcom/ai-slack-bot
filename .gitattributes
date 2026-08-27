@@ -15,7 +15,7 @@
 # The matching machine guard that FAILS on the byte, rather than merely
 # rendering it, is apps/worker/scripts/check-text-files.mjs, wired into the
 # `capabilities:dts:check` script, the root `check:text` script, CI
-# (.github/workflows/ci.yml) and the lefthook pre-commit hook.
+# (.github/workflows/ci.yml) and the husky pre-commit hook.
 
 *.ts    text diff
 *.tsx   text diff

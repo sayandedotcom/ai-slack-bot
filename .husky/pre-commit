@@ -1,0 +1,33 @@
+# THE FAST HALF of the gate. Runs on every commit; see .husky/pre-push for the
+# rest and for the note on what is deliberately not hooked at all.
+#
+# Escape hatches, for when skipping is the right call:
+#   HUSKY=0 git commit ...
+#   git commit --no-verify
+
+# Biome over STAGED files only. `--staged` reads the index rather than the
+# working tree, and exists on `biome check` but NOT on `biome ci` (ci offers
+# only --changed/--since). Biome's own help calls --staged "intended for local
+# use", which is exactly this. `--no-errors-on-unmatched` is what makes a
+# commit touching only, say, .md files a no-op here rather than an error.
+#
+# CHECK-ONLY, deliberately not `--write` plus a re-stage. That combination has
+# a real footgun: when a file has both staged and unstaged changes, re-staging
+# after a fix sweeps the unstaged half into the commit silently. In a codebase
+# where a lot of the value is in long explanatory comments being edited in
+# place, that is a bad trade. A failure here prints exactly what to run.
+if ! pnpm exec biome check --staged --no-errors-on-unmatched .; then
+  echo "Biome found issues. Run \`pnpm format\`, then re-stage."
+  exit 1
+fi
+
+# THE CONTROL-BYTE GUARD. Around 50ms over the whole tracked tree.
+#
+# No staged-file interpolation: the script enumerates git ls-files itself and
+# reads from the working tree, so a newly staged file is covered. Whole-tree is
+# the point — this guards a mistake that recurred four times in one phase and
+# twice hid roughly 19KB of security tests behind "Binary files differ".
+if ! node apps/worker/scripts/check-text-files.mjs; then
+  echo "A control byte reached a source file. Use an escape sequence."
+  exit 1
+fi

@@ -10,7 +10,7 @@
   // Every exclusion below is load-bearing, not tidiness.
   "files": {
     // A staged .md or .sql handed to `biome check --staged` is a file type
-    // Biome cannot parse. Without this, the lefthook pre-commit job errors on
+    // Biome cannot parse. Without this, the husky pre-commit hook errors on
     // every commit that touches a doc.
     "ignoreUnknown": true,
     "includes": [

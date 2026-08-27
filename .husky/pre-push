@@ -1,0 +1,23 @@
+# Escape hatch:
+#   git push --no-verify
+
+# tsc is the ONLY thing that checks types here — vitest strips them.
+pnpm run typecheck || exit 1
+
+# Byte-compares the generated capability declarations against what the Zod
+# schemas render. Seconds, and it catches a drift class that CI would otherwise
+# report minutes later.
+pnpm run capabilities:dts:check || exit 1
+
+# NOTE ON WHAT IS *NOT* IN pre-push.
+#
+# The worker suite is deliberately absent. It was measured on this machine at
+# 205-306 seconds — 58 files, 860 tests in workerd against real D1, queues and
+# Durable Objects, plus a dashboard build on a cold turbo cache. A hook that
+# costs five minutes is a hook people learn to pass --no-verify to, which would
+# cost the two fast checks above as well.
+#
+# typecheck and capabilities:dts:check are the high-yield half: together they
+# run in seconds and catch the failures most likely to reach a push. The suite
+# runs in CI on every push and pull request, which is where a five-minute job
+# belongs.

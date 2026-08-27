@@ -19,7 +19,7 @@ The customer never sees a bot: replies go out under a fire-fighter's own Slack u
 
 - **Stack:** Cloudflare Workers · Durable Objects · D1 · Queues · R2 · Workers Assets · Worker Loader (Dynamic Workers) · Cloudflare Sandbox (containers) · AI Gateway · Access · Hono · Vitest (`@cloudflare/vitest-pool-workers`) · Zep V3 · LangSmith
 - **Docs:** spec `docs/superpowers/specs/2026-08-10-firefighter-agent-design.md` · phase plans + verification logs `docs/superpowers/plans/` · drill runbook `docs/drill.md`
-- **Tooling:** Biome (format + lint + import sort, once at the root — no ESLint, no Prettier) · lefthook git hooks · GitHub Actions (gate on every push, gitleaks secret scan, `workflow_dispatch`-only deploy) · Dependabot
+- **Tooling:** Biome (format + lint + import sort, once at the root — no ESLint, no Prettier) · husky git hooks · GitHub Actions (gate on every push, gitleaks secret scan, `workflow_dispatch`-only deploy) · Dependabot
 - **Gate:** `pnpm check` at the root — control bytes, Biome, `tsc --noEmit`, generated declarations, then the suite. **73 files / 1048 passed, 0 expected-fail, 0 skipped; tsc clean; capability `.d.ts` in sync** (2026-08-27), plus `cd apps/dashboard && pnpm test && pnpm typecheck` — **6 files / 59 passed**. There are no `it.fails`: the second run chassis those pins belonged to was deleted, and the agent layer rebuilt on `@cloudflare/think` + Code Mode as the only one. `.github/workflows/ci.yml` runs the same four jobs on every push and pull request.
 
 ---
@@ -204,7 +204,7 @@ Zep, Better Stack, LangSmith and Supabase are on free tiers; Slack, GitHub and L
 pnpm 10.33.4 + Turborepo, Node ≥ 20. `apps/worker` is the product; `apps/dashboard` is the SPA the Worker serves.
 
 ```bash
-pnpm install                         # Node 22.20.0 (.nvmrc); also installs the lefthook git hooks
+pnpm install                         # Node 22.20.0 (.nvmrc); also installs the husky git hooks
 pnpm check                           # THE GATE: control bytes, Biome, tsc, generated .d.ts, suite
 pnpm format                          # biome check --write . — formats and sorts imports
 

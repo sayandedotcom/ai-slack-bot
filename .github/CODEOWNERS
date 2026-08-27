@@ -16,4 +16,4 @@
 /apps/worker/sandbox/               @sayandedotcom
 /.github/                           @sayandedotcom
 /biome.jsonc                        @sayandedotcom
-/lefthook.yml                       @sayandedotcom
+/.husky/                            @sayandedotcom
