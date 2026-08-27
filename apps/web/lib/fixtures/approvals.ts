@@ -59,7 +59,7 @@ export function listDemoApprovals(): OpenApproval[] {
 /**
  * The detail read. In demo mode a decided card names its decider, which is the
  * one thing the worker's 409 body cannot tell a losing card — this is what
- * makes "Zurab approved this before you" reachable in a demo at all.
+ * makes "Devon approved this before you" reachable in a demo at all.
  */
 export function getDemoApproval(id: string): ApprovalDetail {
   const row = rows.find((candidate) => candidate.id === id);
@@ -75,7 +75,7 @@ export function getDemoApproval(id: string): ApprovalDetail {
     ...card,
     updatedAt: decided ? Date.now() : base.createdAt,
     decision,
-    decidedBy: decided ? "zurab@zellify.app" : null,
+    decidedBy: decided ? "devon@example.com" : null,
     decidedAt: decided ? Date.now() : null,
     editedText: null,
     rejectReason: null,

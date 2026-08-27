@@ -6,6 +6,6 @@ import type { Identity } from "../api/identity";
  * read-only rendering is exercised by the tests, not by the fixture.
  */
 export const demoIdentity: Identity = {
-  email: "luka@zellify.app",
+  email: "blake@example.com",
   role: "firefighter",
 };

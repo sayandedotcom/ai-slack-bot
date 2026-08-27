@@ -1,57 +1,71 @@
 import type { Roster } from "../api/roster";
 
 /**
- * The roster as `src/access/roster.ts` actually declares it: four
- * fire-fighters in that file's order, three viewers.
+ * The roster's SHAPE as `src/access/roster.ts` declares it — four fire-fighters
+ * in that file's order, then three viewers — with invented people in it.
  *
- * The connect flags are chosen so the fixture is internally consistent with
- * how `src/identity/speaker.ts` picks — first in `pool` order who has
- * connected. Ronit is first in the pool but has not connected Slack, so Luka
- * speaks; Ronit HAS connected GitHub, so PRs are authored as Ronit. That
- * divergence is real behaviour and worth seeing on screen. Mikheil has
- * connected neither, which is what an unconnected row looks like.
+ * THE NAMES ARE FICTIONAL ON PURPOSE, and must stay that way. Demo mode is what
+ * a public Vercel deployment renders, `NEXT_PUBLIC_` constants are inlined into
+ * the client bundle at build time, and a fixture is therefore published to
+ * anyone who opens the page. This file previously carried the seven real
+ * `@zellify.app` addresses, which is how they ended up readable in a JS chunk
+ * on a public URL. `example.com` is reserved by IANA and cannot be registered,
+ * so nothing here can ever address a mailbox.
+ *
+ * Structure is preserved exactly, because the structure is what the screen is
+ * demonstrating. The connect flags keep the fixture consistent with how
+ * `src/identity/speaker.ts` picks — first in `pool` order who has connected.
+ * Avery is first in the pool but has not connected Slack, so Blake speaks;
+ * Avery HAS connected GitHub, so PRs are authored as Avery. That divergence is
+ * real behaviour and worth seeing on screen. Cameron has connected neither,
+ * which is what an unconnected row looks like.
  */
 export const demoRoster: Roster = {
-  speaker: { email: "luka@zellify.app" },
-  githubSpeaker: { email: "ronit@zellify.app" },
+  speaker: { email: "blake@example.com" },
+  githubSpeaker: { email: "avery@example.com" },
   pool: [
-    "ronit@zellify.app",
-    "luka@zellify.app",
-    "mikheil@zellify.app",
-    "zurab@zellify.app",
+    "avery@example.com",
+    "blake@example.com",
+    "cameron@example.com",
+    "devon@example.com",
   ],
   engineers: [
     {
-      email: "ronit@zellify.app",
+      email: "avery@example.com",
       role: "firefighter",
       slack: false,
       github: true,
     },
     {
-      email: "luka@zellify.app",
+      email: "blake@example.com",
       role: "firefighter",
       slack: true,
       github: true,
     },
     {
-      email: "mikheil@zellify.app",
+      email: "cameron@example.com",
       role: "firefighter",
       slack: false,
       github: false,
     },
     {
-      email: "zurab@zellify.app",
+      email: "devon@example.com",
       role: "firefighter",
       slack: true,
       github: true,
     },
     {
-      email: "marcus@zellify.app",
+      email: "ellis@example.com",
       role: "viewer",
       slack: false,
       github: false,
     },
-    { email: "nils@zellify.app", role: "viewer", slack: false, github: false },
-    { email: "eric@zellify.app", role: "viewer", slack: false, github: false },
+    {
+      email: "frankie@example.com",
+      role: "viewer",
+      slack: false,
+      github: false,
+    },
+    { email: "gray@example.com", role: "viewer", slack: false, github: false },
   ],
 };

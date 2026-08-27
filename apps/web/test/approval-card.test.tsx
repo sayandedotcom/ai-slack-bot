@@ -117,11 +117,11 @@ describe("ApprovalCard", () => {
       kind: "resolved",
       card,
       decision: "approved",
-      decidedBy: "zurab@zellify.app",
+      decidedBy: "devon@example.com",
       mine: false,
     });
     expect(
-      screen.getByText(/zurab@zellify\.app approved this before you/i)
+      screen.getByText(/devon@example\.com approved this before you/i)
     ).toBeInTheDocument();
   });
 

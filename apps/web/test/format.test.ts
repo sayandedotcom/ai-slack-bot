@@ -28,12 +28,12 @@ describe("ago", () => {
 
 describe("nameOf / initialOf", () => {
   it("keeps the local part and falls back to the whole string", () => {
-    expect(nameOf("luka@zellify.app")).toBe("luka");
-    expect(nameOf("luka")).toBe("luka");
+    expect(nameOf("blake@example.com")).toBe("blake");
+    expect(nameOf("blake")).toBe("blake");
   });
 
   it("gives an uppercase initial, and a question mark for nothing", () => {
-    expect(initialOf("luka@zellify.app")).toBe("L");
+    expect(initialOf("blake@example.com")).toBe("B");
     expect(initialOf("   ")).toBe("?");
     expect(initialOf("")).toBe("?");
   });

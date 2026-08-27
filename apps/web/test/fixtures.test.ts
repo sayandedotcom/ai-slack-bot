@@ -42,7 +42,7 @@ describe("the demo transport switch", () => {
     const result = await roster.getRoster();
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.speaker?.email).toBe("luka@zellify.app");
+    expect(result.speaker?.email).toBe("blake@example.com");
   });
 
   it("calls the relative path when demo is off", async () => {
