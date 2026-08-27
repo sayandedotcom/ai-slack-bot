@@ -1,8 +1,15 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
+import {
+  type AccessIdentity,
+  AccessJwtError,
+  type AccessVerifier,
+} from "../src/access/jwt";
+import {
+  installIdentityApiPorts,
+  resetIdentityApiPorts,
+} from "../src/api/identity";
 import { githubOAuth } from "../src/oauth/github";
-import { installIdentityApiPorts, resetIdentityApiPorts } from "../src/api/identity";
 import { importStateKey, mintState, verifyState } from "../src/oauth/state";
 
 /**
@@ -16,7 +23,9 @@ import { importStateKey, mintState, verifyState } from "../src/oauth/state";
  * and the cases below assert on the pair.
  */
 
-const IDENTITY_KEY = btoa(String.fromCharCode(...new Uint8Array(32).map((_, i) => (i * 11 + 5) & 0xff)));
+const IDENTITY_KEY = btoa(
+  String.fromCharCode(...new Uint8Array(32).map((_, i) => (i * 11 + 5) & 0xff))
+);
 const ORIGIN = "https://firefighter.test";
 const CALLBACK_URI = `${ORIGIN}/api/oauth/github/callback`;
 
@@ -43,18 +52,25 @@ function fakeVerifier(): AccessVerifier {
   return {
     async verify(jwt: string): Promise<AccessIdentity> {
       if (!jwt) throw new AccessJwtError("missing", "no token was supplied");
-      if (!jwt.includes("@")) throw new AccessJwtError("malformed", "not an email-shaped fake token");
+      if (!jwt.includes("@"))
+        throw new AccessJwtError("malformed", "not an email-shaped fake token");
       return { email: jwt };
     },
   };
 }
 
-type GithubCall = { url: string; body: URLSearchParams; headers: Record<string, string> };
+type GithubCall = {
+  url: string;
+  body: URLSearchParams;
+  headers: Record<string, string>;
+};
 let calls: GithubCall[] = [];
 
 function headersOf(init: RequestInit | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [name, value] of Object.entries((init?.headers ?? {}) as Record<string, string>)) {
+  for (const [name, value] of Object.entries(
+    (init?.headers ?? {}) as Record<string, string>
+  )) {
     out[name.toLowerCase()] = value;
   }
   return out;
@@ -66,7 +82,9 @@ function headersOf(init: RequestInit | undefined): Record<string, string> {
  */
 function stubGithub(
   exchange: { payload: unknown; status?: number },
-  user: { payload: unknown; status?: number } = { payload: { login: "octo-ronit" } },
+  user: { payload: unknown; status?: number } = {
+    payload: { login: "octo-ronit" },
+  }
 ) {
   calls = [];
   vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
@@ -77,14 +95,26 @@ function stubGithub(
       headers: headersOf(init),
     });
     const leg = target === USER_URL ? user : exchange;
-    return new Response(JSON.stringify(leg.payload), { status: leg.status ?? 200 });
+    return new Response(JSON.stringify(leg.payload), {
+      status: leg.status ?? 200,
+    });
   });
 }
 
-const okExchange = { payload: { access_token: TOKEN, scope: "repo", token_type: "bearer" } };
+const okExchange = {
+  payload: { access_token: TOKEN, scope: "repo", token_type: "bearer" },
+};
 
-function get(path: string, headers: Record<string, string> = {}, envOverrides = {}) {
-  return githubOAuth.request(`${ORIGIN}${path}`, { headers }, testEnv(envOverrides));
+function get(
+  path: string,
+  headers: Record<string, string> = {},
+  envOverrides = {}
+) {
+  return githubOAuth.request(
+    `${ORIGIN}${path}`,
+    { headers },
+    testEnv(envOverrides)
+  );
 }
 
 beforeEach(async () => {
@@ -104,11 +134,15 @@ describe("GET /oauth/github/start", () => {
   it("401s with no Access JWT", async () => {
     const res = await get("/oauth/github/start");
     expect(res.status).toBe(401);
-    expect((await res.json<{ code: string }>()).code).toBe("access_jwt_invalid");
+    expect((await res.json<{ code: string }>()).code).toBe(
+      "access_jwt_invalid"
+    );
   });
 
   it("403s a viewer", async () => {
-    const res = await get("/oauth/github/start", { "Cf-Access-Jwt-Assertion": VIEWER });
+    const res = await get("/oauth/github/start", {
+      "Cf-Access-Jwt-Assertion": VIEWER,
+    });
     expect(res.status).toBe(403);
     expect((await res.json<{ code: string }>()).code).toBe("not_a_firefighter");
   });
@@ -117,7 +151,7 @@ describe("GET /oauth/github/start", () => {
     const res = await get(
       "/oauth/github/start",
       { "Cf-Access-Jwt-Assertion": FIREFIGHTER },
-      { IDENTITY_KEY: undefined },
+      { IDENTITY_KEY: undefined }
     );
     expect(res.status).toBe(503);
     const body = await res.json<{ message: string }>();
@@ -126,39 +160,57 @@ describe("GET /oauth/github/start", () => {
   });
 
   it("redirects a fire-fighter to GitHub with repo scope, derived redirect_uri, and a verifiable state", async () => {
-    const res = await get("/oauth/github/start", { "Cf-Access-Jwt-Assertion": FIREFIGHTER });
+    const res = await get("/oauth/github/start", {
+      "Cf-Access-Jwt-Assertion": FIREFIGHTER,
+    });
     expect(res.status).toBe(302);
 
     const location = new URL(res.headers.get("location")!);
-    expect(location.origin + location.pathname).toBe("https://github.com/login/oauth/authorize");
+    expect(location.origin + location.pathname).toBe(
+      "https://github.com/login/oauth/authorize"
+    );
     expect(location.searchParams.get("scope")).toBe("repo");
     expect(location.searchParams.get("client_id")).toBe("cid");
     expect(location.searchParams.get("redirect_uri")).toBe(CALLBACK_URI);
 
     const state = location.searchParams.get("state")!;
     const key = await importStateKey(IDENTITY_KEY);
-    expect(await verifyState(key, state, "github", Date.now())).toEqual({ email: FIREFIGHTER });
+    expect(await verifyState(key, state, "github", Date.now())).toEqual({
+      email: FIREFIGHTER,
+    });
   });
 });
 
 /* ----------------------------------------------------------- callback --- */
 
 async function goodState(email = FIREFIGHTER): Promise<string> {
-  return mintState(await importStateKey(IDENTITY_KEY), email, "github", Date.now());
+  return mintState(
+    await importStateKey(IDENTITY_KEY),
+    email,
+    "github",
+    Date.now()
+  );
 }
 
 async function storedRow(email: string) {
   return env.DB.prepare(
-    "SELECT email, external_id, scopes, token_ciphertext FROM identities WHERE email = ? AND provider = 'github'",
+    "SELECT email, external_id, scopes, token_ciphertext FROM identities WHERE email = ? AND provider = 'github'"
   )
     .bind(email)
-    .first<{ email: string; external_id: string; scopes: string; token_ciphertext: string }>();
+    .first<{
+      email: string;
+      external_id: string;
+      scopes: string;
+      token_ciphertext: string;
+    }>();
 }
 
 describe("GET /oauth/github/callback", () => {
   it("403s a forged state and makes NO exchange call", async () => {
     stubGithub(okExchange);
-    const res = await get("/oauth/github/callback?code=abc&state=forged.nonsense");
+    const res = await get(
+      "/oauth/github/callback?code=abc&state=forged.nonsense"
+    );
     expect(res.status).toBe(403);
     expect((await res.json<{ code: string }>()).code).toBe("invalid_state");
     expect(calls).toEqual([]);
@@ -166,8 +218,15 @@ describe("GET /oauth/github/callback", () => {
 
   it("403s a state minted for slack, and makes NO exchange call", async () => {
     stubGithub(okExchange);
-    const foreign = await mintState(await importStateKey(IDENTITY_KEY), FIREFIGHTER, "slack", Date.now());
-    const res = await get(`/oauth/github/callback?code=abc&state=${encodeURIComponent(foreign)}`);
+    const foreign = await mintState(
+      await importStateKey(IDENTITY_KEY),
+      FIREFIGHTER,
+      "slack",
+      Date.now()
+    );
+    const res = await get(
+      `/oauth/github/callback?code=abc&state=${encodeURIComponent(foreign)}`
+    );
     expect(res.status).toBe(403);
     expect(calls).toEqual([]);
   });
@@ -178,9 +237,11 @@ describe("GET /oauth/github/callback", () => {
       await importStateKey(IDENTITY_KEY),
       FIREFIGHTER,
       "github",
-      Date.now() - 11 * 60_000,
+      Date.now() - 11 * 60_000
     );
-    const res = await get(`/oauth/github/callback?code=abc&state=${encodeURIComponent(stale)}`);
+    const res = await get(
+      `/oauth/github/callback?code=abc&state=${encodeURIComponent(stale)}`
+    );
     expect(res.status).toBe(403);
     expect(calls).toEqual([]);
   });
@@ -195,7 +256,9 @@ describe("GET /oauth/github/callback", () => {
   it("exchanges as JSON, reads the login from /user, seals the token, then 302s home", async () => {
     stubGithub(okExchange);
     const state = await goodState();
-    const res = await get(`/oauth/github/callback?code=thecode&state=${encodeURIComponent(state)}`);
+    const res = await get(
+      `/oauth/github/callback?code=thecode&state=${encodeURIComponent(state)}`
+    );
 
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/");
@@ -226,7 +289,7 @@ describe("GET /oauth/github/callback", () => {
     stubGithub(okExchange);
     const state = await goodState(FIREFIGHTER);
     const res = await get(
-      `/oauth/github/callback?code=thecode&email=${encodeURIComponent(VIEWER)}&state=${encodeURIComponent(state)}`,
+      `/oauth/github/callback?code=thecode&email=${encodeURIComponent(VIEWER)}&state=${encodeURIComponent(state)}`
     );
     expect(res.status).toBe(302);
     expect(await storedRow(FIREFIGHTER)).not.toBeNull();
@@ -236,7 +299,9 @@ describe("GET /oauth/github/callback", () => {
   it("502s a GitHub error body without echoing it", async () => {
     stubGithub({ payload: { error: "bad_verification_code" } });
     const state = await goodState();
-    const res = await get(`/oauth/github/callback?code=thecode&state=${encodeURIComponent(state)}`);
+    const res = await get(
+      `/oauth/github/callback?code=thecode&state=${encodeURIComponent(state)}`
+    );
     expect(res.status).toBe(502);
     const text = await res.text();
     expect(text).not.toContain("bad_verification_code");
@@ -245,9 +310,14 @@ describe("GET /oauth/github/callback", () => {
   });
 
   it("502s generically when GET /user fails, and stores nothing", async () => {
-    stubGithub(okExchange, { payload: { message: "Bad credentials" }, status: 401 });
+    stubGithub(okExchange, {
+      payload: { message: "Bad credentials" },
+      status: 401,
+    });
     const state = await goodState();
-    const res = await get(`/oauth/github/callback?code=thecode&state=${encodeURIComponent(state)}`);
+    const res = await get(
+      `/oauth/github/callback?code=thecode&state=${encodeURIComponent(state)}`
+    );
     expect(res.status).toBe(502);
     const text = await res.text();
     expect(text).not.toContain("Bad credentials");
@@ -261,10 +331,12 @@ describe("GET /oauth/github/callback", () => {
     const res = await get(
       `/oauth/github/callback?code=thecode&state=${encodeURIComponent(state)}`,
       {},
-      { GITHUB_CLIENT_SECRET: undefined },
+      { GITHUB_CLIENT_SECRET: undefined }
     );
     expect(res.status).toBe(503);
-    expect((await res.json<{ message: string }>()).message).toBe("missing configuration: GITHUB_CLIENT_SECRET");
+    expect((await res.json<{ message: string }>()).message).toBe(
+      "missing configuration: GITHUB_CLIENT_SECRET"
+    );
     expect(calls).toEqual([]);
   });
 });

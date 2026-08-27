@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-
-import { ApprovalsPanel } from "./approvals/approvals-panel";
-import { useApprovals } from "./approvals/use-approvals";
 import type { DecideAction } from "./approvals/api";
+import { ApprovalsPanel } from "./approvals/approvals-panel";
+import { RunApprovals } from "./approvals/run-approvals";
+import { useApprovals } from "./approvals/use-approvals";
+import { ChatStarter } from "./chat/chat-page";
 import { ConnectPanel } from "./components/connect-panel";
 import { CountersPanel } from "./components/counters-panel";
 import { Header, SignedOutPage, useIdentity } from "./components/header";
@@ -11,8 +12,6 @@ import { getRoster, type Role } from "./lib/api";
 import { usePoll } from "./lib/use-poll";
 import { RunList } from "./runs/run-list";
 import { RunSession } from "./runs/run-view";
-import { RunApprovals } from "./approvals/run-approvals";
-import { ChatStarter } from "./chat/chat-page";
 import { ShadowPanel } from "./shadow/shadow-panel";
 
 /**
@@ -33,7 +32,9 @@ function routeToHash(runId: string | null): string {
 /** The hash is the state; back, forward and a hand-edited hash are all the
  * same event to us. */
 function useSelectedRun(): [string | null, (runId: string | null) => void] {
-  const [runId, setRunId] = useState<string | null>(() => parseHash(location.hash));
+  const [runId, setRunId] = useState<string | null>(() =>
+    parseHash(location.hash)
+  );
 
   useEffect(() => {
     const onHashChange = () => setRunId(parseHash(location.hash));
@@ -92,7 +93,10 @@ export function App() {
         {/* One create form, above the list it feeds. A chat run is the same
             object a Slack wake produces, so there is no second session shape
             here — starting one selects it and the run view below takes over. */}
-        <div data-slot="chat-panel" className="md:col-span-2 rounded-lg border p-3">
+        <div
+          data-slot="chat-panel"
+          className="rounded-lg border p-3 md:col-span-2"
+        >
           <ChatStarter onStarted={selectRun} />
         </div>
         <div data-slot="runs-panel" className="md:col-span-2">
@@ -106,14 +110,14 @@ export function App() {
           <section
             data-slot="run-session"
             aria-label="Selected run"
-            className="md:col-span-2 h-[32rem] rounded-lg border p-3"
+            className="h-[32rem] rounded-lg border p-3 md:col-span-2"
           >
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-medium">Run</h2>
+              <h2 className="font-medium text-sm">Run</h2>
               <button
                 type="button"
                 onClick={() => selectRun(null)}
-                className="text-xs text-muted-foreground underline"
+                className="text-muted-foreground text-xs underline"
               >
                 Close
               </button>

@@ -1,5 +1,5 @@
-import { ZEP_REQUEST_TIMEOUT_SECONDS } from "./zep";
 import type { AgentMemoryOutboxRow } from "../db/schema";
+import { ZEP_REQUEST_TIMEOUT_SECONDS } from "./zep";
 
 /**
  * The D1 side of agent-memory projection: the claim protocol, its fence, and
@@ -42,7 +42,7 @@ if (OUTBOX_LEASE_MS <= ZEP_REQUEST_TIMEOUT_MS) {
   // Module load, not a test: this is an invariant of the protocol, and a build
   // that violates it should not start.
   throw new Error(
-    `the outbox lease (${OUTBOX_LEASE_MS}ms) must exceed the Zep request timeout (${ZEP_REQUEST_TIMEOUT_MS}ms)`,
+    `the outbox lease (${OUTBOX_LEASE_MS}ms) must exceed the Zep request timeout (${ZEP_REQUEST_TIMEOUT_MS}ms)`
   );
 }
 
@@ -118,7 +118,7 @@ export async function ensureOutboxRow(
     episodeJson: string;
     sourceJson: string;
     now: number;
-  },
+  }
 ): Promise<{ created: boolean }> {
   const result = await db
     .prepare(
@@ -126,7 +126,7 @@ export async function ensureOutboxRow(
          (id, run_id, generation_id, graph_id, episode_json, source_json,
           state, attempts, next_attempt_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING`
     )
     .bind(
       row.id,
@@ -137,7 +137,7 @@ export async function ensureOutboxRow(
       row.sourceJson,
       row.now,
       row.now,
-      row.now,
+      row.now
     )
     .run();
   return { created: (result.meta.changes ?? 0) > 0 };
@@ -158,7 +158,7 @@ export async function ensureOutboxRow(
  */
 export async function claimOutboxRow(
   db: D1Database,
-  input: { id: string; now: number; leaseMs?: number },
+  input: { id: string; now: number; leaseMs?: number }
 ): Promise<OutboxClaimOutcome> {
   const claimToken = crypto.randomUUID();
   const leaseExpiresAt = input.now + (input.leaseMs ?? OUTBOX_LEASE_MS);
@@ -178,7 +178,7 @@ export async function claimOutboxRow(
              OR (state = 'projecting'
                   AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
               )
-        RETURNING id, run_id, generation_id, graph_id, episode_json, source_json, attempts, episode_uuid`,
+        RETURNING id, run_id, generation_id, graph_id, episode_json, source_json, attempts, episode_uuid`
     )
     .bind(claimToken, leaseExpiresAt, input.now, input.id, input.now, input.now)
     .first<ClaimRow>();
@@ -232,13 +232,13 @@ export type FencedOutcome = { outcome: "applied" } | { outcome: "stale_claim" };
  */
 export async function recordEpisodeUuid(
   db: D1Database,
-  input: { id: string; claimToken: string; episodeUuid: string; now: number },
+  input: { id: string; claimToken: string; episodeUuid: string; now: number }
 ): Promise<FencedOutcome> {
   const result = await db
     .prepare(
       `UPDATE agent_memory_outbox
           SET episode_uuid = ?, updated_at = ?
-        WHERE id = ? AND claim_token = ? AND state = 'projecting'`,
+        WHERE id = ? AND claim_token = ? AND state = 'projecting'`
     )
     .bind(input.episodeUuid, input.now, input.id, input.claimToken)
     .run();
@@ -266,7 +266,7 @@ export async function retryOutboxRow(
     attempts: number;
     now: number;
     backoffMs?: number;
-  },
+  }
 ): Promise<FencedOutcome> {
   const nextAttemptAt =
     input.now + (input.backoffMs ?? outboxRetryBackoffMs(input.attempts));
@@ -279,9 +279,15 @@ export async function retryOutboxRow(
               next_attempt_at = ?,
               last_error = ?,
               updated_at = ?
-        WHERE id = ? AND claim_token = ? AND state = 'projecting'`,
+        WHERE id = ? AND claim_token = ? AND state = 'projecting'`
     )
-    .bind(nextAttemptAt, sterileError(input.error), input.now, input.id, input.claimToken)
+    .bind(
+      nextAttemptAt,
+      sterileError(input.error),
+      input.now,
+      input.id,
+      input.claimToken
+    )
     .run();
   return (result.meta.changes ?? 0) > 0
     ? { outcome: "applied" }
@@ -296,7 +302,7 @@ export async function retryOutboxRow(
  */
 export async function poisonOutboxRow(
   db: D1Database,
-  input: { id: string; claimToken: string; error: string; now: number },
+  input: { id: string; claimToken: string; error: string; now: number }
 ): Promise<FencedOutcome> {
   const result = await db
     .prepare(
@@ -307,7 +313,7 @@ export async function poisonOutboxRow(
               next_attempt_at = NULL,
               last_error = ?,
               updated_at = ?
-        WHERE id = ? AND claim_token = ? AND state = 'projecting'`,
+        WHERE id = ? AND claim_token = ? AND state = 'projecting'`
     )
     .bind(sterileError(input.error), input.now, input.id, input.claimToken)
     .run();
@@ -325,7 +331,7 @@ export async function poisonOutboxRow(
  */
 export async function listDueOutboxRows(
   db: D1Database,
-  input: { now: number; limit: number },
+  input: { now: number; limit: number }
 ): Promise<{ id: string; state: string; attempts: number }[]> {
   const { results } = await db
     .prepare(
@@ -336,7 +342,7 @@ export async function listDueOutboxRows(
            OR (state = 'projecting'
                 AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
         ORDER BY COALESCE(next_attempt_at, created_at) ASC
-        LIMIT ?`,
+        LIMIT ?`
     )
     .bind(input.now, input.now, Math.max(1, Math.min(input.limit, 200)))
     .all<Pick<AgentMemoryOutboxRow, "id" | "state" | "attempts">>();

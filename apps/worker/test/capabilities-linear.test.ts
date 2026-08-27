@@ -18,7 +18,11 @@ async function actingScope() {
 
 function linear(overrides: Partial<LinearGateway> = {}): LinearGateway {
   return {
-    createIssue: vi.fn(async () => ({ id: "iss-1", identifier: "FF-1", url: "https://l/FF-1" })),
+    createIssue: vi.fn(async () => ({
+      id: "iss-1",
+      identifier: "FF-1",
+      url: "https://l/FF-1",
+    })),
     findIssue: vi.fn(async () => null),
     updateIssue: vi.fn(async () => ({ id: "iss-1", url: "https://l/FF-1" })),
     resolveLinkTargets: vi.fn(async () => []),
@@ -31,7 +35,9 @@ describe("linear.createIssue", () => {
   it("files once for two identical calls in one turn", async () => {
     const scope = await actingScope();
     const gateway = linear();
-    const tools = makeLinearTools(testBindingContext({ scope, deps: { linear: gateway } }));
+    const tools = makeLinearTools(
+      testBindingContext({ scope, deps: { linear: gateway } })
+    );
     const args = {
       title: "Copy ID button",
       description: "d",
@@ -52,7 +58,9 @@ describe("linear.createIssue", () => {
 
   it("refuses from a run that cannot be confirmed", async () => {
     const gateway = linear();
-    const tools = makeLinearTools(testBindingContext({ deps: { linear: gateway } }));
+    const tools = makeLinearTools(
+      testBindingContext({ deps: { linear: gateway } })
+    );
     await expect(
       tools.createIssue.run({
         title: "t",
@@ -64,7 +72,7 @@ describe("linear.createIssue", () => {
           evidence: "e",
         },
         labels: [],
-      }),
+      })
     ).rejects.toMatchObject({ code: "shadow_write_denied" });
     expect(gateway.createIssue).not.toHaveBeenCalled();
   });
@@ -82,18 +90,26 @@ describe("linear.createIssue — the assessment", () => {
     // quietly filing an unscored one.
     const scope = await actingScope();
     const gateway = linear();
-    const tools = makeLinearTools(testBindingContext({ scope, deps: { linear: gateway } }));
+    const tools = makeLinearTools(
+      testBindingContext({ scope, deps: { linear: gateway } })
+    );
     await expect(
-      tools.createIssue.run({ title: "t", description: "d", labels: [] }),
+      tools.createIssue.run({ title: "t", description: "d", labels: [] })
     ).rejects.toMatchObject({ code: "invalid_input" });
     expect(gateway.createIssue).not.toHaveBeenCalled();
   });
 
   it("names the offending path without echoing what the model sent", async () => {
     const scope = await actingScope();
-    const tools = makeLinearTools(testBindingContext({ scope, deps: { linear: linear() } }));
+    const tools = makeLinearTools(
+      testBindingContext({ scope, deps: { linear: linear() } })
+    );
     try {
-      await tools.createIssue.run({ title: "t", description: "SECRET-DRAFT-TEXT", labels: [] });
+      await tools.createIssue.run({
+        title: "t",
+        description: "SECRET-DRAFT-TEXT",
+        labels: [],
+      });
       throw new Error("expected a refusal");
     } catch (err) {
       expect((err as Error).message).toContain("assessment");

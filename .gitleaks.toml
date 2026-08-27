@@ -1,0 +1,78 @@
+# gitleaks configuration.
+#
+# Extends the default ruleset rather than replacing it — every provider
+# specific rule (Slack tokens, GitHub PATs, AWS keys, private keys and the
+# rest) stays active EVERYWHERE, including in tests. Only the entropy-based
+# `generic-api-key` catch-all is narrowed, and only where this repository's
+# conventions make a match meaningless.
+#
+# Verified against the full history on 2026-08-26: 445 commits, 8 findings,
+# all `generic-api-key`, all false positives. Each allowlist below names the
+# findings it accounts for.
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# 1. Test fixtures.
+#
+# The vitest pool binds every vendor credential to a synthetic value and the
+# suite asserts EQUALITY against those fixtures, not merely that they are
+# falsy — so the fake values have to be committed. Two of the historical
+# findings are `CANARY_GATEWAY_TOKEN`, which exist precisely to prove a token
+# does NOT reach somewhere it shouldn't; flagging them is backwards.
+#
+# Scoped to generic-api-key: a real Slack or GitHub token pasted into a test
+# is still caught, by the rule that recognises its shape.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "synthetic fixtures and leak canaries in the test suites"
+paths = [
+  '''apps/worker/test/.*''',
+  '''apps/dashboard/test/.*''',
+  '''apps/worker/vitest\.config\.ts''',
+]
+
+# ---------------------------------------------------------------------------
+# 2. Documentation.
+#
+# The phase plans quote test code verbatim, which is how Slack's own published
+# example signing secret (8f742231b10e8888abcd99yyyzzz85a5, straight out of
+# their request-verification docs) ended up flagged twice — once in
+# verify.test.ts and once in the plan that specified it.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "phase plans and specs quoting test code"
+paths = [
+  '''docs/.*\.md''',
+  '''.*\.example''',
+  '''\.dev\.vars\.example''',
+]
+
+# ---------------------------------------------------------------------------
+# 3. Cloudflare Access application audience tag.
+#
+# ACCESS_APP_AUD is a 64-hex PUBLIC identifier, not a credential: it is the
+# `aud` claim every Access JWT carries, and verifying a token means comparing
+# against it. It lives in wrangler.jsonc `vars` deliberately — that file's
+# vars are non-secret pins kept in the repository on purpose, while anything
+# credential-shaped is a wrangler secret.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Cloudflare Access AUD tag — a public identifier"
+regexTarget = "line"
+regexes = ['''ACCESS_APP_AUD''']
+
+# ---------------------------------------------------------------------------
+# NOT allowlisted, deliberately:
+#
+#   .dev.vars, apps/worker/sandbox/.build-secrets, *.env
+#
+# Those hold real credentials. They are gitignored, so `gitleaks git` never
+# sees them — which is exactly why CI also runs `gitleaks dir` over the
+# working tree. If one of them is ever force-added, this config must not be
+# the reason it slips through.
+# ---------------------------------------------------------------------------

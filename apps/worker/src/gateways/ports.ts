@@ -1,5 +1,5 @@
-import type { MemoryStore } from "../memory/store";
 import type { ApprovalPort } from "../approval/contracts";
+import type { MemoryStore } from "../memory/store";
 import type { DiffResult } from "../sandbox/diff";
 import type { BootStatus } from "../sandbox/lifecycle";
 
@@ -148,12 +148,14 @@ export interface SlackGateway {
   searchMessages(
     query: string,
     limit: number,
-    customerSlug: string,
+    customerSlug: string
   ): Promise<SlackMessage[]>;
   /** Post into the current run only. Targeting is not a parameter. */
-  reply(text: string, idempotencyKey: string): Promise<{ ts: string; permalink: string | null }>;
+  reply(
+    text: string,
+    idempotencyKey: string
+  ): Promise<{ ts: string; permalink: string | null }>;
 }
-
 
 export interface LinearGateway {
   createIssue(input: {
@@ -176,7 +178,9 @@ export interface LinearGateway {
     description?: string;
     state?: string;
   }): Promise<{ id: string; url: string }>;
-  resolveLinkTargets(issueIds: string[]): Promise<Array<{ id: string; identifier: string }>>;
+  resolveLinkTargets(
+    issueIds: string[]
+  ): Promise<Array<{ id: string; identifier: string }>>;
   /**
    * Phase 20's answer to "I did not create this issue, but I need to link
    * it": a READ, not a mutation, so it is classified `read` in the binding
@@ -334,7 +338,9 @@ export interface SandboxGateway {
    * widening it was a review finding rather than a judgment call; this is that
    * finding, taken.
    */
-  readBinary(path: string): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
+  readBinary(
+    path: string
+  ): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
   /**
    * Start a Playwright recording — Phase 19's `preview`-shaped counterpart:
    * it does not block past the execution budget, it returns a handle, and

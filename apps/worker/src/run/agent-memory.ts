@@ -26,9 +26,8 @@
  */
 
 import type { UIMessage } from "ai";
-
-import { getChannelPolicy } from "../db/channels";
 import type { CapabilityAuditSink } from "../capabilities/audit";
+import { getChannelPolicy } from "../db/channels";
 import type { Env } from "../index";
 import {
   buildAgentEpisode,
@@ -71,7 +70,10 @@ export function makeTurnAuditSink(record: TurnRecord): CapabilityAuditSink {
     async started() {},
     async completed(event) {
       record.actions.push(
-        describeAction({ name: `${event.namespace}.${event.method}`, state: "completed" }),
+        describeAction({
+          name: `${event.namespace}.${event.method}`,
+          state: "completed",
+        })
       );
     },
     async failed(event) {
@@ -80,7 +82,7 @@ export function makeTurnAuditSink(record: TurnRecord): CapabilityAuditSink {
           name: `${event.namespace}.${event.method}`,
           state: "failed",
           errorCode: event.code,
-        }),
+        })
       );
     },
   };
@@ -125,7 +127,9 @@ export function episodeOutcomeFor(input: {
 export function messageText(message: UIMessage | undefined): string {
   if (message === undefined) return "";
   return message.parts
-    .flatMap((part) => (part.type === "text" && typeof part.text === "string" ? [part.text] : []))
+    .flatMap((part) =>
+      part.type === "text" && typeof part.text === "string" ? [part.text] : []
+    )
     .join("\n")
     .trim();
 }
@@ -171,16 +175,23 @@ export async function enqueueTurnEpisode(
     record: TurnRecord;
     draft: string;
     now: number;
-  },
+  }
 ): Promise<EpisodeHandoff> {
   // Nothing asked and nothing done is not a turn worth remembering. It is what
   // a turn that failed before the model ran looks like, and an episode of it
   // would be noise a future recall has to read past.
-  if (input.record.asked === "" && input.record.actions.length === 0 && input.draft === "") {
+  if (
+    input.record.asked === "" &&
+    input.record.actions.length === 0 &&
+    input.draft === ""
+  ) {
     return { enqueued: false, reason: "empty_turn" };
   }
 
-  const policy = input.channelId === null ? null : await getChannelPolicy(env.DB, input.channelId);
+  const policy =
+    input.channelId === null
+      ? null
+      : await getChannelPolicy(env.DB, input.channelId);
   const graphId = agentGraphIdFor({ origin: input.origin, policy });
 
   const payload = buildAgentEpisode({

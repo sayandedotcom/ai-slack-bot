@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyUnifiedDiff, basePaths } from "../src/git/apply";
 import { CapabilityError } from "../src/gateways/errors";
+import { applyUnifiedDiff, basePaths } from "../src/git/apply";
 
 /**
  * BYTE-EXACT OR REFUSED.
@@ -169,7 +169,12 @@ describe("applyUnifiedDiff — happy paths", () => {
     const base = new Map<string, string>();
     const result = applyUnifiedDiff(NEW_PATCH, base);
     expect(result).toEqual([
-      { kind: "create", path: "new.txt", content: "brand new\n", mode: "100644" },
+      {
+        kind: "create",
+        path: "new.txt",
+        content: "brand new\n",
+        mode: "100644",
+      },
     ]);
   });
 
@@ -183,7 +188,12 @@ describe("applyUnifiedDiff — happy paths", () => {
     const base = new Map<string, string>();
     const result = applyUnifiedDiff(NEWEXEC_PATCH, base);
     expect(result).toEqual([
-      { kind: "create", path: "newexec.sh", content: "exec new\n", mode: "100755" },
+      {
+        kind: "create",
+        path: "newexec.sh",
+        content: "exec new\n",
+        mode: "100755",
+      },
     ]);
   });
 
@@ -250,7 +260,11 @@ describe("applyUnifiedDiff — happy paths", () => {
       ["del.txt", DEL_BASE],
     ]);
     const result = applyUnifiedDiff(patch, base);
-    expect(result.map((r) => r.path)).toEqual(["mod.txt", "new.txt", "del.txt"]);
+    expect(result.map((r) => r.path)).toEqual([
+      "mod.txt",
+      "new.txt",
+      "del.txt",
+    ]);
     expect(result[0]).toMatchObject({ kind: "modify", path: "mod.txt" });
     expect(result[1]).toMatchObject({ kind: "create", path: "new.txt" });
     expect(result[2]).toEqual({ kind: "delete", path: "del.txt" });
@@ -390,7 +404,10 @@ copy to copy.ts
 
   it("refuses a garbage patch", () => {
     try {
-      applyUnifiedDiff("this is not a diff at all\njust some text\n", new Map());
+      applyUnifiedDiff(
+        "this is not a diff at all\njust some text\n",
+        new Map()
+      );
       throw new Error("expected throw");
     } catch (err) {
       expect(err).toBeInstanceOf(CapabilityError);
@@ -536,14 +553,20 @@ describe("applyUnifiedDiff — file modes", () => {
   });
 
   it("carries a chmod +x that accompanies a content change onto the resulting change", () => {
-    const changes = applyUnifiedDiff(CHMOD_WITH_CONTENT_PATCH, new Map([["f.sh", "a\nb\nc\n"]]));
+    const changes = applyUnifiedDiff(
+      CHMOD_WITH_CONTENT_PATCH,
+      new Map([["f.sh", "a\nb\nc\n"]])
+    );
     expect(changes).toEqual([
       { kind: "modify", path: "f.sh", content: "a\nB\nc\n", mode: "100755" },
     ]);
   });
 
   it("carries a chmod-only change (no hunks) with the content left byte-identical", () => {
-    const changes = applyUnifiedDiff(CHMOD_ONLY_PATCH, new Map([["only.sh", "a\nb\n"]]));
+    const changes = applyUnifiedDiff(
+      CHMOD_ONLY_PATCH,
+      new Map([["only.sh", "a\nb\n"]])
+    );
     expect(changes).toEqual([
       { kind: "modify", path: "only.sh", content: "a\nb\n", mode: "100755" },
     ]);
@@ -553,7 +576,10 @@ describe("applyUnifiedDiff — file modes", () => {
   });
 
   it("carries a chmod -x the same way, in the other direction", () => {
-    const changes = applyUnifiedDiff(UNCHMOD_ONLY_PATCH, new Map([["only.sh", "a\nb\n"]]));
+    const changes = applyUnifiedDiff(
+      UNCHMOD_ONLY_PATCH,
+      new Map([["only.sh", "a\nb\n"]])
+    );
     expect(changes).toEqual([
       { kind: "modify", path: "only.sh", content: "a\nb\n", mode: "100644" },
     ]);

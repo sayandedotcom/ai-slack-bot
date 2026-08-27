@@ -1,9 +1,8 @@
+import { env } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
-
 import { makeFilesTools } from "../src/capabilities/namespaces/files";
 import type { ArtifactPublisher } from "../src/gateways/ports";
 import { createOrGetRun } from "../src/run/repository";
-import { env } from "cloudflare:test";
 import { testBindingContext } from "./helpers/capabilities";
 
 async function liveChatScope() {
@@ -63,7 +62,7 @@ describe("files.publish", () => {
         bytes: new Uint8Array([1]),
         contentType: "text/plain",
         filename: "a.txt",
-      }),
+      })
     ).rejects.toMatchObject({ code: "shadow_write_denied" });
     expect(files.publish).not.toHaveBeenCalled();
   });
@@ -71,7 +70,11 @@ describe("files.publish", () => {
   it("keeps the binary out of the audit record", async () => {
     const scope = await liveChatScope();
     const events: import("../src/capabilities/audit").CapabilityEvent[] = [];
-    const ctx = testBindingContext({ scope, deps: { files: publisher() }, events });
+    const ctx = testBindingContext({
+      scope,
+      deps: { files: publisher() },
+      events,
+    });
     await makeFilesTools(ctx).publish.run({
       bytes: new Uint8Array(4096),
       contentType: "image/png",

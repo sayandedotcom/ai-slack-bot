@@ -1,11 +1,17 @@
-import { SELF, env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { getAgentByName } from "agents";
+import type { UIMessage } from "ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { UIMessage } from "ai";
-
-import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
-import { installIdentityApiPorts, resetIdentityApiPorts } from "../src/api/identity";
+import {
+  type AccessIdentity,
+  AccessJwtError,
+  type AccessVerifier,
+} from "../src/access/jwt";
+import {
+  installIdentityApiPorts,
+  resetIdentityApiPorts,
+} from "../src/api/identity";
 import { CHAT_FIRST_MESSAGE_MAX_CHARS } from "../src/api/runs";
 import { installTestModel, resetTestModel } from "../src/run/model";
 import { getRunById } from "../src/run/repository";
@@ -20,7 +26,8 @@ function fakeVerifier(): AccessVerifier {
   return {
     async verify(jwt: string): Promise<AccessIdentity> {
       if (!jwt) throw new AccessJwtError("missing", "no token was supplied");
-      if (!jwt.includes("@")) throw new AccessJwtError("malformed", "not an email-shaped token");
+      if (!jwt.includes("@"))
+        throw new AccessJwtError("malformed", "not an email-shaped token");
       return { email: jwt };
     },
   };
@@ -29,7 +36,10 @@ function fakeVerifier(): AccessVerifier {
 function create(body: unknown, token: string): Promise<Response> {
   return SELF.fetch("https://firefighter.test/api/runs", {
     method: "POST",
-    headers: { "Cf-Access-Jwt-Assertion": token, "content-type": "application/json" },
+    headers: {
+      "Cf-Access-Jwt-Assertion": token,
+      "content-type": "application/json",
+    },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
@@ -40,7 +50,9 @@ function read(runId: string, token: string): Promise<Response> {
   });
 }
 
-function messagesOf(stub: { getMessages(): Promise<UIMessage[]> }): Promise<UIMessage[]> {
+function messagesOf(stub: {
+  getMessages(): Promise<UIMessage[]>;
+}): Promise<UIMessage[]> {
   return stub.getMessages();
 }
 
@@ -62,8 +74,11 @@ afterEach(() => {
 describe("starting a chat run", () => {
   it("creates one run and answers with the public id alone", async () => {
     const res = await create(
-      { firstMessage: "why is the pulsefit exporter stuck?", clientRequestId: crypto.randomUUID() },
-      FIREFIGHTER,
+      {
+        firstMessage: "why is the pulsefit exporter stuck?",
+        clientRequestId: crypto.randomUUID(),
+      },
+      FIREFIGHTER
     );
     expect(res.status).toBe(201);
 
@@ -79,8 +94,11 @@ describe("starting a chat run", () => {
 
   it("submits the first message as the run's opening turn", async () => {
     const res = await create(
-      { firstMessage: "the exporter is stuck", clientRequestId: crypto.randomUUID() },
-      FIREFIGHTER,
+      {
+        firstMessage: "the exporter is stuck",
+        clientRequestId: crypto.randomUUID(),
+      },
+      FIREFIGHTER
     );
     const { id } = await res.json<{ id: string }>();
     const stub = await stubFor(id);
@@ -98,8 +116,14 @@ describe("starting a chat run", () => {
     // idempotency key cannot help, because it dedupes INSIDE a run that has
     // already been created.
     const clientRequestId = crypto.randomUUID();
-    const first = await create({ firstMessage: "same question", clientRequestId }, FIREFIGHTER);
-    const second = await create({ firstMessage: "same question", clientRequestId }, FIREFIGHTER);
+    const first = await create(
+      { firstMessage: "same question", clientRequestId },
+      FIREFIGHTER
+    );
+    const second = await create(
+      { firstMessage: "same question", clientRequestId },
+      FIREFIGHTER
+    );
 
     const a = await first.json<{ id: string }>();
     const b = await second.json<{ id: string }>();
@@ -110,7 +134,9 @@ describe("starting a chat run", () => {
       const messages = await messagesOf(stub);
       return messages.length > 0 ? messages : null;
     });
-    const asked = (await messagesOf(stub)).filter((message) => message.role === "user");
+    const asked = (await messagesOf(stub)).filter(
+      (message) => message.role === "user"
+    );
     expect(asked).toHaveLength(1);
   });
 
@@ -118,16 +144,24 @@ describe("starting a chat run", () => {
     // The derived key covers the ACTOR as well, so a client id two people
     // happen to share cannot put them in one conversation.
     const clientRequestId = crypto.randomUUID();
-    const mine = await create({ firstMessage: "mine", clientRequestId }, FIREFIGHTER);
-    const theirs = await create({ firstMessage: "theirs", clientRequestId }, VIEWER);
+    const mine = await create(
+      { firstMessage: "mine", clientRequestId },
+      FIREFIGHTER
+    );
+    const theirs = await create(
+      { firstMessage: "theirs", clientRequestId },
+      VIEWER
+    );
 
     expect((await mine.json<{ id: string }>()).id).not.toBe(
-      (await theirs.json<{ id: string }>()).id,
+      (await theirs.json<{ id: string }>()).id
     );
   });
 
   it("lets a viewer open one — a chat run says nothing under anyone's name", async () => {
-    expect((await create({ firstMessage: "a question" }, VIEWER)).status).toBe(201);
+    expect((await create({ firstMessage: "a question" }, VIEWER)).status).toBe(
+      201
+    );
   });
 
   it("refuses an unverifiable token and an outsider", async () => {
@@ -175,7 +209,9 @@ describe("reading one run", () => {
     const created = await create({ firstMessage: "a question" }, FIREFIGHTER);
     const { id } = await created.json<{ id: string }>();
     const run = await getRunById(env.DB, id);
-    expect((await read(encodeURIComponent(run?.key ?? "x"), FIREFIGHTER)).status).toBe(404);
+    expect(
+      (await read(encodeURIComponent(run?.key ?? "x"), FIREFIGHTER)).status
+    ).toBe(404);
   });
 
   it("is gated the same way", async () => {

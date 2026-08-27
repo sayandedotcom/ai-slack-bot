@@ -26,11 +26,23 @@ async function clean(): Promise<void> {
 beforeEach(clean);
 afterEach(clean);
 
-async function connect(email: string, provider: "slack" | "github", externalId: string, at = 1_000) {
+async function connect(
+  email: string,
+  provider: "slack" | "github",
+  externalId: string,
+  at = 1_000
+) {
   await upsertIdentity(
     env.DB,
-    { email, provider, externalId, scopes: "chat:write", tokenCiphertext: "sealed", connectedAt: at },
-    at,
+    {
+      email,
+      provider,
+      externalId,
+      scopes: "chat:write",
+      tokenCiphertext: "sealed",
+      connectedAt: at,
+    },
+    at
   );
 }
 
@@ -57,31 +69,47 @@ describe("resolveSpeaker", () => {
     await connect(FIRST, "slack", "U-first");
     expect(await resolveSpeaker(env.DB, "github")).toBeNull();
     await connect(LAST, "github", "gh-last");
-    expect(await resolveSpeaker(env.DB, "github")).toMatchObject({ email: LAST, externalId: "gh-last" });
+    expect(await resolveSpeaker(env.DB, "github")).toMatchObject({
+      email: LAST,
+      externalId: "gh-last",
+    });
   });
 
   it("prefers the named person when they are a connected fire-fighter", async () => {
     await connect(FIRST, "slack", "U-first");
     await connect(LAST, "slack", "U-last");
-    expect(await resolveSpeaker(env.DB, "slack", LAST)).toMatchObject({ email: LAST });
+    expect(await resolveSpeaker(env.DB, "slack", LAST)).toMatchObject({
+      email: LAST,
+    });
   });
 
   it("falls back to roster order when the named person has not connected", async () => {
     await connect(SECOND, "slack", "U-second");
-    expect(await resolveSpeaker(env.DB, "slack", LAST)).toMatchObject({ email: SECOND });
+    expect(await resolveSpeaker(env.DB, "slack", LAST)).toMatchObject({
+      email: SECOND,
+    });
   });
 
   it("never speaks as someone off the fire-fighter roster, even if named and connected", async () => {
     await connect(VIEWERS[0]!, "slack", "U-viewer");
     await connect(FIRST, "slack", "U-first");
-    expect(await resolveSpeaker(env.DB, "slack", VIEWERS[0]!)).toMatchObject({ email: FIRST });
-    expect(await resolveSpeaker(env.DB, "slack", "stranger@example.com")).toMatchObject({ email: FIRST });
+    expect(await resolveSpeaker(env.DB, "slack", VIEWERS[0]!)).toMatchObject({
+      email: FIRST,
+    });
+    expect(
+      await resolveSpeaker(env.DB, "slack", "stranger@example.com")
+    ).toMatchObject({ email: FIRST });
   });
 
   it("carries the connect timestamps and never the token", async () => {
     await connect(FIRST, "slack", "U-first", 4_242);
     const speaker = await resolveSpeaker(env.DB, "slack");
-    expect(speaker).toEqual({ email: FIRST, externalId: "U-first", connectedAt: 4_242, updatedAt: 4_242 });
+    expect(speaker).toEqual({
+      email: FIRST,
+      externalId: "U-first",
+      connectedAt: 4_242,
+      updatedAt: 4_242,
+    });
     expect(JSON.stringify(speaker)).not.toContain("sealed");
   });
 });

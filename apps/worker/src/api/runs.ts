@@ -1,11 +1,16 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { requireTeamMember } from "./identity";
-import { createRunFromChat } from "../run/wake";
-import { getRunById, listRuns, readRunUsage, RUN_LIST_MAX_LIMIT } from "../run/repository";
 import { decimalNanoUsd } from "../run/money";
 import { isRunStatus, type RunStatus } from "../run/protocol";
 import type { RunRecord } from "../run/repository";
+import {
+  getRunById,
+  listRuns,
+  RUN_LIST_MAX_LIMIT,
+  readRunUsage,
+} from "../run/repository";
+import { createRunFromChat } from "../run/wake";
+import { requireTeamMember } from "./identity";
 
 export const runsApi = new Hono<{ Bindings: Env }>();
 
@@ -33,7 +38,6 @@ function fail(code: string, message: string) {
   return { code, message };
 }
 
-
 /** D1 only. This must never wake a Durable Object, or the list costs one wake per row. */
 runsApi.get("/runs", async (c) => {
   const statusParam = c.req.query("status");
@@ -49,16 +53,21 @@ runsApi.get("/runs", async (c) => {
   let limit: number | undefined;
   if (limitParam !== undefined) {
     const parsed = Number(limitParam);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > RUN_LIST_MAX_LIMIT) {
-      return c.json(fail("invalid_limit", `limit must be 1..${RUN_LIST_MAX_LIMIT}`), 400);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < 1 ||
+      parsed > RUN_LIST_MAX_LIMIT
+    ) {
+      return c.json(
+        fail("invalid_limit", `limit must be 1..${RUN_LIST_MAX_LIMIT}`),
+        400
+      );
     }
     limit = parsed;
   }
 
   return c.json({ runs: await listRuns(c.env.DB, { status, limit }) });
 });
-
-
 
 /**
  * What this run has spent, from D1 alone.
@@ -96,12 +105,11 @@ runsApi.get("/runs/:id/usage", async (c) => {
     })),
     // Summed as integers and formatted once, so the total is exact rather than
     // the sum of rounded per-model strings.
-    totalCostUsd: decimalNanoUsd(rows.reduce((sum, row) => sum + row.costNanoUsd, 0)),
+    totalCostUsd: decimalNanoUsd(
+      rows.reduce((sum, row) => sum + row.costNanoUsd, 0)
+    ),
   });
 });
-
-
-
 
 /* ------------------------------------------------------------- writes --- */
 
@@ -109,7 +117,10 @@ runsApi.get("/runs/:id/usage", async (c) => {
 export const CHAT_FIRST_MESSAGE_MAX_CHARS = 4_000;
 export const CLIENT_REQUEST_ID_MAX_CHARS = 200;
 
-type ChatCreateInput = { firstMessage: string; clientRequestId: string | undefined };
+type ChatCreateInput = {
+  firstMessage: string;
+  clientRequestId: string | undefined;
+};
 
 /**
  * Parse the create body, or `null` for any shape this route refuses.
@@ -119,21 +130,30 @@ type ChatCreateInput = { firstMessage: string; clientRequestId: string | undefin
  * refuse an oversized opening is before anything is written.
  */
 function parseChatCreate(body: unknown): ChatCreateInput | null {
-  if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
+  if (body === null || typeof body !== "object" || Array.isArray(body))
+    return null;
   const record = body as Record<string, unknown>;
 
   const firstMessage = record.firstMessage;
   if (typeof firstMessage !== "string") return null;
   const trimmed = firstMessage.trim();
-  if (trimmed === "" || trimmed.length > CHAT_FIRST_MESSAGE_MAX_CHARS) return null;
+  if (trimmed === "" || trimmed.length > CHAT_FIRST_MESSAGE_MAX_CHARS)
+    return null;
 
   const clientRequestId = record.clientRequestId;
   if (clientRequestId !== undefined) {
     if (typeof clientRequestId !== "string") return null;
-    if (clientRequestId === "" || clientRequestId.length > CLIENT_REQUEST_ID_MAX_CHARS) return null;
+    if (
+      clientRequestId === "" ||
+      clientRequestId.length > CLIENT_REQUEST_ID_MAX_CHARS
+    )
+      return null;
   }
 
-  return { firstMessage: trimmed, clientRequestId: clientRequestId as string | undefined };
+  return {
+    firstMessage: trimmed,
+    clientRequestId: clientRequestId as string | undefined,
+  };
 }
 
 /**
@@ -163,8 +183,11 @@ runsApi.post("/runs", async (c) => {
   const input = parseChatCreate(body);
   if (input === null) {
     return c.json(
-      fail("invalid_body", "firstMessage must be a non-empty string within the size limit"),
-      422,
+      fail(
+        "invalid_body",
+        "firstMessage must be a non-empty string within the size limit"
+      ),
+      422
     );
   }
 

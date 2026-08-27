@@ -1,14 +1,18 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/index";
-import { GIT_SENTINEL_HOST, MONOREPO_SLUG, PLACEHOLDER_CREDENTIAL } from "../src/sandbox/class";
+import { createOrGetRun, setRunStatus } from "../src/run/repository";
+import {
+  GIT_SENTINEL_HOST,
+  MONOREPO_SLUG,
+  PLACEHOLDER_CREDENTIAL,
+} from "../src/sandbox/class";
 import {
   makeSandboxLifecycle,
+  type SandboxHandle,
   sandboxIdFor,
   sweepSandboxes,
-  type SandboxHandle,
 } from "../src/sandbox/lifecycle";
-import { createOrGetRun, setRunStatus } from "../src/run/repository";
 
 /**
  * THE PER-RUN CONTAINER LIFECYCLE — Phase 18 Task 4.
@@ -94,7 +98,10 @@ function makeFakeSandbox(options: FakeOptions = {}): Fake {
     tunnels: {
       async get(port) {
         calls.push({ method: "tunnels.get", args: [port] });
-        return { url: options.tunnelUrl ?? "https://spike-listen-auto.trycloudflare.com" };
+        return {
+          url:
+            options.tunnelUrl ?? "https://spike-listen-auto.trycloudflare.com",
+        };
       },
     },
   };
@@ -144,7 +151,9 @@ describe("boot", () => {
     await lifecycleOver(fake).boot(RUN_ID);
 
     const order = fake.calls.map((call) => call.method);
-    expect(order.indexOf("killAllProcesses")).toBeLessThan(order.indexOf("startProcess"));
+    expect(order.indexOf("killAllProcesses")).toBeLessThan(
+      order.indexOf("startProcess")
+    );
 
     // The remote reaches provision.sh as an environment value rather than a
     // separate `git remote set-url` exec, because a cold container has no
@@ -154,7 +163,8 @@ describe("boot", () => {
     const start = fake.calls.find((call) => call.method === "startProcess");
     expect(start).toBeDefined();
     const remote = String(
-      (start?.args[1] as { env?: Record<string, string> } | undefined)?.env?.SANDBOX_GIT_REMOTE,
+      (start?.args[1] as { env?: Record<string, string> } | undefined)?.env
+        ?.SANDBOX_GIT_REMOTE
     );
     expect(remote).toContain(GIT_SENTINEL_HOST);
     expect(remote).toContain(MONOREPO_SLUG);
@@ -165,7 +175,10 @@ describe("boot", () => {
     const fake = makeFakeSandbox();
     const lifecycle = lifecycleOver(fake);
 
-    const [first, second] = await Promise.all([lifecycle.boot(RUN_ID), lifecycle.boot(RUN_ID)]);
+    const [first, second] = await Promise.all([
+      lifecycle.boot(RUN_ID),
+      lifecycle.boot(RUN_ID),
+    ]);
 
     expect(first.state).toBe("provisioning");
     expect(second.state).toBe("provisioning");
@@ -174,7 +187,11 @@ describe("boot", () => {
 
   it("reports the running step in the note while provisioning", async () => {
     const fake = makeFakeSandbox({
-      process: { id: "provision", status: "running", startTime: new Date(Date.now() - 4_000) },
+      process: {
+        id: "provision",
+        status: "running",
+        startTime: new Date(Date.now() - 4_000),
+      },
       stdout: "STEP fetch\nSTEP reset\nSTEP install\n",
     });
 
@@ -231,7 +248,11 @@ describe("boot", () => {
     // code preserved by autoCleanup:false for the new code to poll forever.
     const wedged = () =>
       makeFakeSandbox({
-        process: { id: "provision", status: "running", startTime: new Date(Date.now() - 120_000) },
+        process: {
+          id: "provision",
+          status: "running",
+          startTime: new Date(Date.now() - 120_000),
+        },
         stdout: "",
       });
 
@@ -263,7 +284,11 @@ describe("boot", () => {
     // "installing dependencies" until the run dies at its step ceiling — the
     // polite-poll death with one line of progress as an alibi.
     const fake = makeFakeSandbox({
-      process: { id: "provision", status: "running", startTime: new Date(Date.now() - 660_000) },
+      process: {
+        id: "provision",
+        status: "running",
+        startTime: new Date(Date.now() - 660_000),
+      },
       stdout: "STEP fetch\nSTEP reset\nSTEP install\n",
     });
     const status = await lifecycleOver(fake).boot("run-provision-deadline");
@@ -277,7 +302,11 @@ describe("boot", () => {
 
   it("does not call a young silent process wedged", async () => {
     const fake = makeFakeSandbox({
-      process: { id: "provision", status: "running", startTime: new Date(Date.now() - 20_000) },
+      process: {
+        id: "provision",
+        status: "running",
+        startTime: new Date(Date.now() - 20_000),
+      },
       stdout: "",
     });
     const status = await lifecycleOver(fake).boot("run-wedge-young");
@@ -321,7 +350,9 @@ describe("teardown", () => {
 
   it("is safe for a run that never booted", async () => {
     const fake = makeFakeSandbox();
-    await expect(lifecycleOver(fake).teardown("run-that-never-booted")).resolves.toBeUndefined();
+    await expect(
+      lifecycleOver(fake).teardown("run-that-never-booted")
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -357,7 +388,8 @@ describe("sweepSandboxes", () => {
           destroy: async () => {
             destroyed.push(runId);
             // The bad container. One of these must not stop the sweep.
-            if (runId === failed.id) throw new Error("containers control plane unreachable");
+            if (runId === failed.id)
+              throw new Error("containers control plane unreachable");
           },
         }).handle,
       sleep: async () => {},
@@ -393,38 +425,52 @@ describe("waitForPort", () => {
 
   it("refuses port 3000 with the control-server trap named", async () => {
     const fake = makeFakeSandbox();
-    await expect(lifecycleOver(fake).waitForPort(RUN_ID, 3000, 5_000)).rejects.toThrow(
-      /control server/i,
-    );
+    await expect(
+      lifecycleOver(fake).waitForPort(RUN_ID, 3000, 5_000)
+    ).rejects.toThrow(/control server/i);
     expect(countOf(fake.calls, "exec")).toBe(0);
   });
 
   it("refuses ports outside 1024-65535", async () => {
     const lifecycle = lifecycleOver(makeFakeSandbox());
-    await expect(lifecycle.waitForPort(RUN_ID, 80, 5_000)).rejects.toThrow(/1024/);
-    await expect(lifecycle.waitForPort(RUN_ID, 70_000, 5_000)).rejects.toThrow(/65535/);
+    await expect(lifecycle.waitForPort(RUN_ID, 80, 5_000)).rejects.toThrow(
+      /1024/
+    );
+    await expect(lifecycle.waitForPort(RUN_ID, 70_000, 5_000)).rejects.toThrow(
+      /65535/
+    );
   });
 
   it("probes at the TCP level, not over HTTP", async () => {
     const fake = makeFakeSandbox({ execExitCode: 0 });
-    const listening = await lifecycleOver(fake).waitForPort(RUN_ID, 4100, 5_000);
+    const listening = await lifecycleOver(fake).waitForPort(
+      RUN_ID,
+      4100,
+      5_000
+    );
 
     expect(listening).toBe(true);
-    const probe = String(fake.calls.find((call) => call.method === "exec")?.args[0]);
+    const probe = String(
+      fake.calls.find((call) => call.method === "exec")?.args[0]
+    );
     expect(probe).toContain("/dev/tcp");
     expect(probe).toContain("4100");
   });
 
   it("reports not-listening rather than throwing when the probe times out", async () => {
     const fake = makeFakeSandbox({ execExitCode: 1 });
-    await expect(lifecycleOver(fake).waitForPort(RUN_ID, 4100, 5_000)).resolves.toBe(false);
+    await expect(
+      lifecycleOver(fake).waitForPort(RUN_ID, 4100, 5_000)
+    ).resolves.toBe(false);
   });
 });
 
 describe("preview", () => {
   it("refuses port 3000 and out-of-range ports", async () => {
     const lifecycle = lifecycleOver(makeFakeSandbox());
-    await expect(lifecycle.preview(RUN_ID, 3000)).rejects.toThrow(/control server/i);
+    await expect(lifecycle.preview(RUN_ID, 3000)).rejects.toThrow(
+      /control server/i
+    );
     await expect(lifecycle.preview(RUN_ID, 80)).rejects.toThrow(/1024/);
   });
 
@@ -452,7 +498,9 @@ describe("preview", () => {
       return new Response(null, { status: 500 });
     });
 
-    await expect(lifecycleOver(fake).preview(RUN_ID, 4100)).resolves.toBeDefined();
+    await expect(
+      lifecycleOver(fake).preview(RUN_ID, 4100)
+    ).resolves.toBeDefined();
     expect(probes).toBe(1);
     vi.unstubAllGlobals();
   });
@@ -461,7 +509,9 @@ describe("preview", () => {
     const fake = makeFakeSandbox();
     vi.stubGlobal("fetch", async () => new Response(null, { status: 530 }));
 
-    await expect(lifecycleOver(fake).preview(RUN_ID, 4100)).rejects.toThrow(/530/);
+    await expect(lifecycleOver(fake).preview(RUN_ID, 4100)).rejects.toThrow(
+      /530/
+    );
     vi.unstubAllGlobals();
   });
 });

@@ -28,13 +28,24 @@ async function boundRun() {
 
 /** An in-memory stand-in for `Agent.sql`, good enough for the table helpers. */
 function fakeSql(): SqlTag {
-  const rows = new Map<string, { request_id: string; text: string; created_at: number }>();
-  return ((strings: TemplateStringsArray, ...values: (string | number | boolean | null)[]) => {
+  const rows = new Map<
+    string,
+    { request_id: string; text: string; created_at: number }
+  >();
+  return ((
+    strings: TemplateStringsArray,
+    ...values: (string | number | boolean | null)[]
+  ) => {
     const query = strings.join("?").replace(/\s+/g, " ").trim();
     if (query.startsWith("CREATE TABLE")) return [];
     if (query.startsWith("INSERT OR IGNORE INTO pending_steers")) {
       const [requestId, text, createdAt] = values as [string, string, number];
-      if (!rows.has(requestId)) rows.set(requestId, { request_id: requestId, text, created_at: createdAt });
+      if (!rows.has(requestId))
+        rows.set(requestId, {
+          request_id: requestId,
+          text,
+          created_at: createdAt,
+        });
       return [];
     }
     if (query.startsWith("DELETE FROM pending_steers")) {
@@ -43,7 +54,9 @@ function fakeSql(): SqlTag {
     }
     if (query.startsWith("SELECT request_id")) {
       return [...rows.values()].sort(
-        (a, b) => a.created_at - b.created_at || a.request_id.localeCompare(b.request_id),
+        (a, b) =>
+          a.created_at - b.created_at ||
+          a.request_id.localeCompare(b.request_id)
       );
     }
     throw new Error(`unexpected query: ${query}`);
@@ -55,8 +68,16 @@ describe("the steer table", () => {
     // A reconnecting tab re-sends. Overwriting would silently change what a
     // human asked for.
     const sql = fakeSql();
-    queueSteer(sql, { requestId: "req-1", text: "check the exporter", createdAt: 1 });
-    queueSteer(sql, { requestId: "req-1", text: "something else", createdAt: 2 });
+    queueSteer(sql, {
+      requestId: "req-1",
+      text: "check the exporter",
+      createdAt: 1,
+    });
+    queueSteer(sql, {
+      requestId: "req-1",
+      text: "something else",
+      createdAt: 2,
+    });
     expect(pendingSteers(sql)).toEqual([
       { requestId: "req-1", text: "check the exporter", createdAt: 1 },
     ]);
@@ -67,7 +88,10 @@ describe("the steer table", () => {
     queueSteer(sql, { requestId: "b", text: "second", createdAt: 2 });
     queueSteer(sql, { requestId: "a", text: "first", createdAt: 1 });
 
-    expect(consumeSteers(sql).map((row) => row.text)).toEqual(["first", "second"]);
+    expect(consumeSteers(sql).map((row) => row.text)).toEqual([
+      "first",
+      "second",
+    ]);
     // Read-then-delete in one synchronous call: nothing can interleave, so no
     // steer is delivered twice or dropped.
     expect(consumeSteers(sql)).toEqual([]);
@@ -81,7 +105,11 @@ describe("the steer table", () => {
   it("frames a steer as the operator speaking, not the customer", () => {
     // The model has to tell an instruction from its own operator apart from
     // evidence about the conversation.
-    const text = steerMessageText({ requestId: "r", text: "stop and ask them", createdAt: 1 });
+    const text = steerMessageText({
+      requestId: "r",
+      text: "stop and ask them",
+      createdAt: 1,
+    });
     expect(text).toContain("engineer watching this run");
     expect(text).toContain("not a customer message");
     expect(text).toContain("stop and ask them");
@@ -107,7 +135,10 @@ describe("steering a run", () => {
     await stub.setStatus("live");
 
     await stub.steer("first", "req-b");
-    expect(await stub.steer("first", "req-b")).toEqual({ queued: false, woke: false });
+    expect(await stub.steer("first", "req-b")).toEqual({
+      queued: false,
+      woke: false,
+    });
     expect(await stub.pendingSteersForTest()).toHaveLength(1);
   });
 

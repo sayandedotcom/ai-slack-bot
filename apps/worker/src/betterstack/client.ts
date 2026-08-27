@@ -1,10 +1,6 @@
 import { CapabilityError } from "../gateways/errors";
+import type { BetterStackReader, LogLine, Monitor } from "../gateways/ports";
 import { redact } from "../redact";
-import type {
-  BetterStackReader,
-  LogLine,
-  Monitor,
-} from "../gateways/ports";
 
 const MAX_LINES = 200;
 /** Retention on the configured source is 3 days; asking wider just costs time. */
@@ -17,7 +13,8 @@ const MAX_WINDOW_MS = 7 * 86_400_000;
  * legitimate reason to differ per environment. `BETTERSTACK_SQL_ENDPOINT` is
  * configuration because it is genuinely region-scoped; this is not.
  */
-export const BETTERSTACK_UPTIME_ENDPOINT = "https://uptime.betterstack.com/api/v2";
+export const BETTERSTACK_UPTIME_ENDPOINT =
+  "https://uptime.betterstack.com/api/v2";
 
 export type BetterStackConfig = {
   /** ClickHouse-compatible endpoint. Region-scoped and fixed in configuration. */
@@ -49,7 +46,9 @@ function invalid(reason: string): CapabilityError {
 function parseInstant(label: string, value: string): number {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) {
-    throw invalid(`'${label}' must be an ISO-8601 instant, for example 2026-08-11T00:00:00Z.`);
+    throw invalid(
+      `'${label}' must be an ISO-8601 instant, for example 2026-08-11T00:00:00Z.`
+    );
   }
   return parsed;
 }
@@ -61,10 +60,16 @@ function toClickHouse(ms: number): string {
 
 function upstreamError(status: number, what: string): CapabilityError {
   if (status === 401 || status === 403) {
-    return new CapabilityError("capability_unavailable", `${what} is not authorised right now.`);
+    return new CapabilityError(
+      "capability_unavailable",
+      `${what} is not authorised right now.`
+    );
   }
   if (status === 429) {
-    return new CapabilityError("upstream_unavailable", `${what} is rate limited. Wait before trying again.`);
+    return new CapabilityError(
+      "upstream_unavailable",
+      `${what} is rate limited. Wait before trying again.`
+    );
   }
   return new CapabilityError("upstream_unavailable", `${what} is unavailable.`);
 }
@@ -81,13 +86,14 @@ function levelOf(raw: string, explicit: string | undefined): string {
   } catch {
     // Not JSON; fall through.
   }
-  const match = /\b(trace|debug|info|warn|warning|error|fatal|critical)\b/i.exec(raw);
+  const match =
+    /\b(trace|debug|info|warn|warning|error|fatal|critical)\b/i.exec(raw);
   return match ? match[1].toLowerCase() : "unknown";
 }
 
 export function makeBetterStackReader(
   config: BetterStackConfig,
-  now: () => number,
+  now: () => number
 ): BetterStackReader {
   return {
     async logs(input): Promise<LogLine[]> {
@@ -95,19 +101,24 @@ export function makeBetterStackReader(
       if (collection === undefined) {
         throw new CapabilityError(
           "capability_unavailable",
-          "no log source is configured, so there are no logs to search.",
+          "no log source is configured, so there are no logs to search."
         );
       }
       if (input.query.replace(/[%_*\s]/g, "").length === 0) {
-        throw invalid("the search needs actual terms; a wildcard-only query would return everything.");
+        throw invalid(
+          "the search needs actual terms; a wildcard-only query would return everything."
+        );
       }
 
       const since = parseInstant("since", input.since);
-      const until = input.until === null ? now() : parseInstant("until", input.until);
+      const until =
+        input.until === null ? now() : parseInstant("until", input.until);
       if (until <= since) throw invalid("'until' must be after 'since'.");
       if (since > now()) throw invalid("'since' cannot be in the future.");
       if (until - since > MAX_WINDOW_MS) {
-        throw invalid(`the window is too wide; ask for at most ${MAX_WINDOW_MS / 86_400_000} days at a time.`);
+        throw invalid(
+          `the window is too wide; ask for at most ${MAX_WINDOW_MS / 86_400_000} days at a time.`
+        );
       }
 
       const limit = Math.min(Math.max(input.limit, 1), MAX_LINES);
@@ -149,21 +160,26 @@ export function makeBetterStackReader(
       try {
         payload = (await response.json()) as typeof payload;
       } catch {
-        throw new CapabilityError("upstream_unavailable", "log search returned something unreadable.");
+        throw new CapabilityError(
+          "upstream_unavailable",
+          "log search returned something unreadable."
+        );
       }
       if (payload.exception) {
         // The exception text names internal collections and the connection
         // user, so it is logged here and never handed to the model.
         throw new CapabilityError(
           "upstream_unavailable",
-          "log search could not read the configured source.",
+          "log search could not read the configured source."
         );
       }
 
       return (payload.data ?? []).map((row) => {
         const raw = String(row.raw ?? "");
         return {
-          at: new Date(`${String(row.dt ?? "").replace(" ", "T")}Z`).toISOString(),
+          at: new Date(
+            `${String(row.dt ?? "").replace(" ", "T")}Z`
+          ).toISOString(),
           level: levelOf(raw, row.level),
           message: redact(raw),
         };
@@ -181,11 +197,16 @@ export function makeBetterStackReader(
       }
       if (!response.ok) throw upstreamError(response.status, "uptime state");
 
-      let payload: { data?: Array<{ id?: string; attributes?: Record<string, unknown> }> };
+      let payload: {
+        data?: Array<{ id?: string; attributes?: Record<string, unknown> }>;
+      };
       try {
         payload = (await response.json()) as typeof payload;
       } catch {
-        throw new CapabilityError("upstream_unavailable", "uptime state returned something unreadable.");
+        throw new CapabilityError(
+          "upstream_unavailable",
+          "uptime state returned something unreadable."
+        );
       }
 
       return (payload.data ?? []).map((entry) => {
@@ -193,10 +214,14 @@ export function makeBetterStackReader(
         // Built field by field from MONITOR_FIELDS. Nothing is spread.
         const monitor: Monitor = {
           id: String(entry.id ?? ""),
-          name: String(attributes.pronounceable_name ?? attributes.url ?? "unnamed"),
+          name: String(
+            attributes.pronounceable_name ?? attributes.url ?? "unnamed"
+          ),
           status: String(attributes.status ?? "unknown"),
           lastCheckedAt:
-            typeof attributes.last_checked_at === "string" ? attributes.last_checked_at : null,
+            typeof attributes.last_checked_at === "string"
+              ? attributes.last_checked_at
+              : null,
         };
         return monitor;
       });

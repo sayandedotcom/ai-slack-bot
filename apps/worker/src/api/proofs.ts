@@ -1,7 +1,11 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { isInternalKey } from "../sandbox/diff";
-import { MAX_RECORDING_BYTES, PROOF_KEY_PREFIX, RECORDING_LABEL } from "../sandbox/record";
+import {
+  MAX_RECORDING_BYTES,
+  PROOF_KEY_PREFIX,
+  RECORDING_LABEL,
+} from "../sandbox/record";
 
 /**
  * The read side of a proof recording, and THE ONLY UNAUTHENTICATED SURFACE THIS
@@ -157,16 +161,19 @@ function decideRange(header: string | undefined, size: number): RangeDecision {
  * confirms which 64-character strings name a real recording.
  */
 function missing(): Response {
-  return new Response(JSON.stringify({ code: "not_found", message: "no such recording" }), {
-    status: 404,
-    headers: {
-      "content-type": "application/json",
-      // Costs nothing, and matches the success path. This is the one
-      // unauthenticated surface in the Worker, so every response it can emit
-      // states its own type rather than leaving one to be guessed.
-      "x-content-type-options": "nosniff",
-    },
-  });
+  return new Response(
+    JSON.stringify({ code: "not_found", message: "no such recording" }),
+    {
+      status: 404,
+      headers: {
+        "content-type": "application/json",
+        // Costs nothing, and matches the success path. This is the one
+        // unauthenticated surface in the Worker, so every response it can emit
+        // states its own type rather than leaving one to be guessed.
+        "x-content-type-options": "nosniff",
+      },
+    }
+  );
 }
 
 // GET and HEAD together. Registering only GET would leave HEAD falling through
@@ -196,10 +203,14 @@ proofsApi.on(["GET", "HEAD"], "/proofs/:key", async (c) => {
   const storedKey = `${PROOF_KEY_PREFIX}${key}`;
   const rangeHeader = c.req.header("range");
   const metadata =
-    isHead || rangeHeader !== undefined ? await c.env.ARTIFACTS.head(storedKey) : null;
-  if ((isHead || rangeHeader !== undefined) && metadata === null) return missing();
+    isHead || rangeHeader !== undefined
+      ? await c.env.ARTIFACTS.head(storedKey)
+      : null;
+  if ((isHead || rangeHeader !== undefined) && metadata === null)
+    return missing();
 
-  const range = metadata === null ? null : decideRange(rangeHeader, metadata.size);
+  const range =
+    metadata === null ? null : decideRange(rangeHeader, metadata.size);
   // The SAME 404, not a 416. A distinguishable answer here would confirm that a
   // given 64-character string names a real recording, and the key is the only
   // thing protecting one on an Access-bypassed route.
@@ -210,7 +221,9 @@ proofsApi.on(["GET", "HEAD"], "/proofs/:key", async (c) => {
       ? metadata
       : await c.env.ARTIFACTS.get(
           storedKey,
-          range === null ? undefined : { range: { offset: range.offset, length: range.length } },
+          range === null
+            ? undefined
+            : { range: { offset: range.offset, length: range.length } }
         );
   if (object === null) return missing();
 
@@ -233,7 +246,10 @@ proofsApi.on(["GET", "HEAD"], "/proofs/:key", async (c) => {
   // the quoted disposition parameter, and the object could have been written by
   // an older, laxer version of the publisher.
   const stored = object.customMetadata?.label;
-  const filename = typeof stored === "string" && RECORDING_LABEL.test(stored) ? stored : "proof";
+  const filename =
+    typeof stored === "string" && RECORDING_LABEL.test(stored)
+      ? stored
+      : "proof";
 
   const headers: Record<string, string> = {
     // Re-derived from the validated extension, never echoed from metadata.
@@ -255,7 +271,8 @@ proofsApi.on(["GET", "HEAD"], "/proofs/:key", async (c) => {
     "accept-ranges": "bytes",
   };
   if (range !== null) {
-    headers["content-range"] = `bytes ${range.offset}-${range.offset + range.length - 1}/${object.size}`;
+    headers["content-range"] =
+      `bytes ${range.offset}-${range.offset + range.length - 1}/${object.size}`;
   }
 
   return new Response(hasBody(object) ? object.body : null, {

@@ -19,7 +19,8 @@ The customer never sees a bot: replies go out under a fire-fighter's own Slack u
 
 - **Stack:** Cloudflare Workers · Durable Objects · D1 · Queues · R2 · Workers Assets · Worker Loader (Dynamic Workers) · Cloudflare Sandbox (containers) · AI Gateway · Access · Hono · Vitest (`@cloudflare/vitest-pool-workers`) · Zep V3 · LangSmith
 - **Docs:** spec `docs/superpowers/specs/2026-08-10-firefighter-agent-design.md` · phase plans + verification logs `docs/superpowers/plans/` · drill runbook `docs/drill.md`
-- **Gate (no CI):** `cd apps/worker && pnpm test && pnpm typecheck && pnpm capabilities:dts:check` — **72 files / 1036 passed, 0 expected-fail, 0 skipped; tsc clean; capability `.d.ts` in sync** (2026-08-27), plus `cd apps/dashboard && pnpm test && pnpm typecheck` — **6 files / 59 passed**. There are no `it.fails`: the second run chassis those pins belonged to was deleted, and the agent layer rebuilt on `@cloudflare/think` + Code Mode as the only one.
+- **Tooling:** Biome (format + lint + import sort, once at the root — no ESLint, no Prettier) · lefthook git hooks · GitHub Actions (gate on every push, gitleaks secret scan, `workflow_dispatch`-only deploy) · Dependabot
+- **Gate:** `pnpm check` at the root — control bytes, Biome, `tsc --noEmit`, generated declarations, then the suite. **73 files / 1048 passed, 0 expected-fail, 0 skipped; tsc clean; capability `.d.ts` in sync** (2026-08-27), plus `cd apps/dashboard && pnpm test && pnpm typecheck` — **6 files / 59 passed**. There are no `it.fails`: the second run chassis those pins belonged to was deleted, and the agent layer rebuilt on `@cloudflare/think` + Code Mode as the only one. `.github/workflows/ci.yml` runs the same four jobs on every push and pull request.
 
 ---
 
@@ -199,12 +200,14 @@ Zep, Better Stack, LangSmith and Supabase are on free tiers; Slack, GitHub and L
 pnpm 10.33.4 + Turborepo, Node ≥ 20. `apps/worker` is the product; `apps/dashboard` is the SPA the Worker serves.
 
 ```bash
-pnpm install
+pnpm install                         # Node 22.20.0 (.nvmrc); also installs the lefthook git hooks
+pnpm check                           # THE GATE: control bytes, Biome, tsc, generated .d.ts, suite
+pnpm format                          # biome check --write . — formats and sorts imports
+
 cd apps/dashboard && pnpm build      # dist/ is the Worker's ASSETS dir — build before dev/deploy/tests
 cd ../worker
 cp .dev.vars.example .dev.vars       # local secrets, gitignored; not needed for tests
 
-pnpm test && pnpm typecheck && pnpm capabilities:dts:check   # the gate — there is no CI
 pnpm dev                              # wrangler on :8787; dashboard `pnpm dev` proxies to it
                                       # note: the run socket, POST /api/runs and GET /api/runs/:id
                                       # take an inner roster check, and `wrangler dev` has no Access
@@ -212,7 +215,9 @@ pnpm dev                              # wrangler on :8787; dashboard `pnpm dev` 
 env -u CF_API_TOKEN pnpm run deploy   # builds the dashboard, then wrangler deploy
 ```
 
-Production secrets go in with `wrangler secret bulk` — never bare `wrangler secret put` from a non-interactive shell (uploads an empty string and reports success). Non-secret pins (`GITHUB_REPO`, `GITHUB_BASE`, vendor ids, mode flags) live in `wrangler.jsonc` `vars` on purpose. Never deploy with `AGENT_MODEL_DISABLED` or `SANDBOX_DISABLED` set. Firing a drill posts to a real Slack channel and opens a real PR — read `docs/drill.md` first.
+Shipping is a decision, never a consequence of a push. The `Deploy Worker` workflow is `workflow_dispatch` only, gated on a `production` environment with required reviewers, and it refuses before asking anyone to approve if a drill is in flight, if the DO migrations have not been acknowledged, if `wrangler.jsonc` carries a test opt-out, if `containers[0].image` is a Dockerfile rather than a pinned digest, or if `RunAgent.storeMessages` is not `false`. There is no push trigger and there must not be one: `wrangler.jsonc` runs a one-minute cron, so a deploy swaps the Worker under anything mid-run.
+
+Production secrets go in with `wrangler secret bulk` — never bare `wrangler secret put` from a non-interactive shell (uploads an empty string and reports success). CI never uploads them: the deploy step passes no `secrets:` input, deliberately. Non-secret pins (`GITHUB_REPO`, `GITHUB_BASE`, vendor ids, mode flags) live in `wrangler.jsonc` `vars` on purpose. Never deploy with `AGENT_MODEL_DISABLED` or `SANDBOX_DISABLED` set. Firing a drill posts to a real Slack channel and opens a real PR — read `docs/drill.md` first.
 
 ### Pointing it at a different org
 

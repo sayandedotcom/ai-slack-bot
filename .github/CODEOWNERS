@@ -1,0 +1,19 @@
+# Every path, one owner.
+#
+# This repository currently lives under a personal account
+# (sayandedotcom/ai-slack-bot), where CODEOWNERS has limited effect: GitHub
+# does not request a review from the pull request's own author, so on a
+# single-maintainer repository this file is documentation.
+#
+# It becomes load-bearing the moment the repository is transferred to an
+# organisation and a ruleset enables "Require review from Code Owners".
+# Landing it now means that transfer does not also need a policy decision.
+*                                   @sayandedotcom
+
+# Paths where a mistake is expensive, irreversible, or both.
+/apps/worker/wrangler.jsonc         @sayandedotcom
+/apps/worker/migrations/            @sayandedotcom
+/apps/worker/sandbox/               @sayandedotcom
+/.github/                           @sayandedotcom
+/biome.jsonc                        @sayandedotcom
+/lefthook.yml                       @sayandedotcom

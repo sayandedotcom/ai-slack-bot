@@ -64,14 +64,14 @@ function toRow(db: IdentityRowDb): IdentityRow {
 export async function upsertIdentity(
   db: D1Database,
   row: Omit<IdentityRow, "updatedAt">,
-  now: number,
+  now: number
 ): Promise<void> {
   await db
     .prepare(
       `INSERT INTO identities (${COLUMNS})
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(email, provider) DO UPDATE SET
-         external_id = ?, scopes = ?, token_ciphertext = ?, connected_at = ?, updated_at = ?`,
+         external_id = ?, scopes = ?, token_ciphertext = ?, connected_at = ?, updated_at = ?`
     )
     .bind(
       row.email,
@@ -85,7 +85,7 @@ export async function upsertIdentity(
       row.scopes,
       row.tokenCiphertext,
       row.connectedAt,
-      now,
+      now
     )
     .run();
 }
@@ -93,17 +93,22 @@ export async function upsertIdentity(
 export async function getIdentity(
   db: D1Database,
   email: string,
-  provider: Provider,
+  provider: Provider
 ): Promise<IdentityRow | null> {
   const row = await db
-    .prepare(`SELECT ${COLUMNS} FROM identities WHERE email = ? AND provider = ?`)
+    .prepare(
+      `SELECT ${COLUMNS} FROM identities WHERE email = ? AND provider = ?`
+    )
     .bind(email, provider)
     .first<IdentityRowDb>();
   return row ? toRow(row) : null;
 }
 
 /** One connected identity without its credential. What the speaker rule sees. */
-export type ConnectedIdentity = Pick<IdentityRow, "email" | "externalId" | "connectedAt" | "updatedAt">;
+export type ConnectedIdentity = Pick<
+  IdentityRow,
+  "email" | "externalId" | "connectedAt" | "updatedAt"
+>;
 
 /**
  * Every row for one provider, credential column deliberately NOT selected —
@@ -113,12 +118,19 @@ export type ConnectedIdentity = Pick<IdentityRow, "email" | "externalId" | "conn
  */
 export async function listConnected(
   db: D1Database,
-  provider: Provider,
+  provider: Provider
 ): Promise<ConnectedIdentity[]> {
   const { results } = await db
-    .prepare(`SELECT email, external_id, connected_at, updated_at FROM identities WHERE provider = ?`)
+    .prepare(
+      `SELECT email, external_id, connected_at, updated_at FROM identities WHERE provider = ?`
+    )
     .bind(provider)
-    .all<Pick<IdentitiesRow, "email" | "external_id" | "connected_at" | "updated_at">>();
+    .all<
+      Pick<
+        IdentitiesRow,
+        "email" | "external_id" | "connected_at" | "updated_at"
+      >
+    >();
   return (results ?? []).map((r) => ({
     email: r.email,
     externalId: r.external_id,
@@ -133,7 +145,9 @@ export async function listConnected(
  * query deliberately selects no token column, so there is no ciphertext in this
  * function's reach to leak by accident.
  */
-export async function listConnectStatus(db: D1Database): Promise<ConnectStatus[]> {
+export async function listConnectStatus(
+  db: D1Database
+): Promise<ConnectStatus[]> {
   const { results } = await db
     .prepare(`SELECT email, provider FROM identities`)
     .all<Pick<IdentitiesRow, "email" | "provider">>();
@@ -148,7 +162,10 @@ export async function listConnectStatus(db: D1Database): Promise<ConnectStatus[]
     providers.add(provider);
   }
 
-  const decorate = (email: string, role: ConnectStatus["role"]): ConnectStatus => {
+  const decorate = (
+    email: string,
+    role: ConnectStatus["role"]
+  ): ConnectStatus => {
     const providers = connected.get(email);
     return {
       email,

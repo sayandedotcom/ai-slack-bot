@@ -1,9 +1,7 @@
-import { useEffect, useState } from "react";
-
 import { Button } from "@workspace/ui/components/button";
-
-import { ApiError, getIdentity } from "../lib/api";
+import { useEffect, useState } from "react";
 import type { Identity } from "../lib/api";
+import { ApiError, getIdentity } from "../lib/api";
 
 /**
  * Identity is fetched once, at the shell, and passed down. The header itself
@@ -12,11 +10,11 @@ import type { Identity } from "../lib/api";
 export function Header({ identity }: { identity?: Identity }) {
   return (
     <header className="flex items-center justify-between border-b px-6 py-4">
-      <span className="text-sm font-semibold tracking-tight">Fire-Fighter</span>
+      <span className="font-semibold text-sm tracking-tight">Fire-Fighter</span>
       {identity ? (
-        <span className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span className="flex items-center gap-2 text-muted-foreground text-sm">
           {identity.email}
-          <span className="rounded-full border bg-muted px-2 py-0.5 text-xs font-medium text-foreground">
+          <span className="rounded-full border bg-muted px-2 py-0.5 font-medium text-foreground text-xs">
             {identity.role}
           </span>
         </span>
@@ -60,20 +58,21 @@ export function useIdentity(): { identity?: Identity; error?: ApiError } {
 }
 
 /** Heading and body per failure kind — the whole page, not a per-panel banner. */
-const SIGNED_OUT: Record<ApiError["kind"], { heading: string; body: string }> = {
-  unauthorized: {
-    heading: "Signed out",
-    body: "Reload to re-authenticate with Access.",
-  },
-  forbidden: {
-    heading: "Not on the roster",
-    body: "This account isn't on the fire-fighter roster.",
-  },
-  unavailable: {
-    heading: "Backend unreachable",
-    body: "The API did not answer. Reload to try again.",
-  },
-};
+const SIGNED_OUT: Record<ApiError["kind"], { heading: string; body: string }> =
+  {
+    unauthorized: {
+      heading: "Signed out",
+      body: "Reload to re-authenticate with Access.",
+    },
+    forbidden: {
+      heading: "Not on the roster",
+      body: "This account isn't on the fire-fighter roster.",
+    },
+    unavailable: {
+      heading: "Backend unreachable",
+      body: "The API did not answer. Reload to try again.",
+    },
+  };
 
 /**
  * Rendered by the shell *instead of* the whole panel grid when identity fails.
@@ -90,8 +89,8 @@ export function SignedOutPage({ error }: { error: ApiError }) {
       role="alert"
       className="flex min-h-svh flex-col items-center justify-center gap-3 px-6 text-center"
     >
-      <h1 className="text-lg font-semibold tracking-tight">{heading}</h1>
-      <p className="max-w-sm text-sm text-muted-foreground">{body}</p>
+      <h1 className="font-semibold text-lg tracking-tight">{heading}</h1>
+      <p className="max-w-sm text-muted-foreground text-sm">{body}</p>
       <Button variant="outline" size="sm" onClick={() => location.reload()}>
         Reload
       </Button>

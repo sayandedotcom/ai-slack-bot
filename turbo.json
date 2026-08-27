@@ -1,29 +1,77 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "ui": "tui",
+
+  // turbo parses this file as JSONC. biome.jsonc carries an override so
+  // Biome's JSON formatter accepts the comments too.
+  //
+  // Note what is NOT here: `lint` and `format`. Both used to fan out via
+  // ^lint / ^format to a single consumer, packages/ui, whose eslint could
+  // never fail (eslint-plugin-only-warn downgraded every rule) and whose
+  // prettier covered only its own ts/tsx. Biome now runs once at the
+  // repository root — see the root package.json — which is both faster and
+  // the only shape that can reach the 60 .md files, spikes/ and .github/ that
+  // no workspace owns.
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": [".next/**", "!.next/cache/**"],
+
+      // `outputs` was [".next/**", "!.next/cache/**"], inherited from the
+      // create-turbo starter. NOTHING in this repository is Next.js, so turbo
+      // was caching an EMPTY output set: every cache hit restored zero files
+      // and left apps/dashboard/dist absent. That failure is silent, because
+      // wrangler only complains later — at `dev`, at `deploy`, or when the
+      // vitest pool boots wrangler.jsonc and finds its assets directory
+      // missing.
+      //
+      // dist/** is apps/dashboard's Vite output and the Worker's ASSETS
+      // directory (wrangler.jsonc: assets.directory = "../dashboard/dist").
+      //
+      // .next/** is kept ahead of the worktree-next-frontend merge, which
+      // adds apps/web on Next.js. Harmless until then: no package here
+      // produces a .next directory.
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
+
+      // apps/web reads all three at BUILD time — the two NEXT_PUBLIC_ ones are
+      // inlined into the client bundle by Next, WORKER_ORIGIN is read by
+      // next.config.ts when it builds the /api rewrite. Unlisted, turbo would
+      // hand back a cached build made under different values, which for a
+      // NEXT_PUBLIC_ variable means shipping the wrong constant.
       "env": ["NEXT_PUBLIC_DEMO", "NEXT_PUBLIC_WORKER_ORIGIN", "WORKER_ORIGIN"]
     },
-    "lint": {
-      "dependsOn": ["^lint"]
-    },
-    "format": {
-      "dependsOn": ["^format"]
-    },
+
     "typecheck": {
-      "dependsOn": ["^typecheck"]
-    },
-    "test": {
-      "dependsOn": ["^build"],
+      // No dependsOn, deliberately. Every workspace runs a standalone
+      // `tsc --noEmit`; there are no TypeScript project references, and
+      // apps/dashboard path-maps straight into packages/ui/src rather than
+      // consuming built declarations. Dropping the old ["^typecheck"] lets
+      // them run in parallel.
+      "inputs": ["$TURBO_DEFAULT$", "!**/*.md"],
       "outputs": []
     },
+
+    "test": {
+      // LOAD-BEARING. apps/worker's vitest pool boots wrangler.jsonc, whose
+      // assets.directory is ../dashboard/dist, and dist/ is gitignored — so
+      // on a fresh checkout the pool fails unless the dashboard is built
+      // first. @workspace/dashboard is a devDependency of @workspace/worker
+      // for exactly this reason: it is what makes ^build order the two.
+      "dependsOn": ["^build"],
+
+      // apps/worker/vitest.config.ts calls readD1Migrations("./migrations")
+      // at CONFIG LOAD time, so a new migration has to invalidate the test
+      // cache. .dev.vars is listed because the pool reads it when present.
+      "inputs": ["$TURBO_DEFAULT$", "migrations/**", ".dev.vars*"],
+      "outputs": []
+    },
+
     "dev": {
       "cache": false,
       "persistent": true,
+      // `wrangler dev` needs ../dashboard/dist to exist. Without this, a
+      // fresh checkout starts wrangler against a missing assets directory.
+      "dependsOn": ["^build"],
       "env": ["NEXT_PUBLIC_DEMO", "NEXT_PUBLIC_WORKER_ORIGIN", "WORKER_ORIGIN"]
     }
   }

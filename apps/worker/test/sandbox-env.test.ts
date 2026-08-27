@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { CapabilityError } from "../src/gateways/errors";
 import type { Env } from "../src/index";
-import { devEnvFor, devEnvForProcess, devEnvKeyNames } from "../src/sandbox/env";
+import {
+  devEnvFor,
+  devEnvForProcess,
+  devEnvKeyNames,
+} from "../src/sandbox/env";
 
 /**
  * THE MODEL NEVER SEES, TYPES, CHOOSES OR PRINTS A DEV-ENV VALUE.
@@ -185,7 +189,7 @@ describe("devEnvFor", () => {
           if (typeof key === "string") read.push(key);
           return target[key as string];
         },
-      },
+      }
     ) as unknown as Env;
 
     devEnvForProcess(spy, true);
@@ -217,7 +221,9 @@ describe("devEnvForProcess", () => {
     expect(devEnvForProcess(VALID)).toEqual({});
     expect(devEnvForProcess(VALID, false)).toEqual({});
     // A run that never asks for dev env must not be broken by a bad secret.
-    expect(devEnvForProcess(withSecret(MALFORMED[0].secret), false)).toEqual({});
+    expect(devEnvForProcess(withSecret(MALFORMED[0].secret), false)).toEqual(
+      {}
+    );
   });
 
   it("round-trips every key and value when the flag is set", () => {
@@ -244,11 +250,15 @@ describe("devEnvForProcess", () => {
     // that needs it. Nothing in this module has a sandbox to mutate, and the
     // spy proves the caller's shape keeps it that way.
     const setEnvVars = vi.fn();
-    const exec = vi.fn(async (_cmd: string, _opts: { env?: Record<string, string> }) => ({
-      exitCode: 0,
-    }));
+    const exec = vi.fn(
+      async (_cmd: string, _opts: { env?: Record<string, string> }) => ({
+        exitCode: 0,
+      })
+    );
 
-    await exec("pnpm exec next dev --port 4100", { env: devEnvForProcess(VALID, true) });
+    await exec("pnpm exec next dev --port 4100", {
+      env: devEnvForProcess(VALID, true),
+    });
 
     expect(setEnvVars).not.toHaveBeenCalled();
     expect(exec.mock.calls[0][1].env).toEqual(DEV_ENV);

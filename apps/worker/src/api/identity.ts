@@ -1,10 +1,14 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import type { Env } from "../index";
-import { AccessJwtError, makeAccessVerifier, type AccessVerifier } from "../access/jwt";
+import {
+  AccessJwtError,
+  type AccessVerifier,
+  makeAccessVerifier,
+} from "../access/jwt";
 import { isFirefighter, isTeamMember } from "../access/roster";
 import { listConnectStatus } from "../db/identities";
 import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
+import type { Env } from "../index";
 
 /**
  * Who am I, and who is on duty — the two read-only questions the dashboard asks
@@ -37,7 +41,9 @@ type IdentityApiPorts = {
 let GLOBAL_PORTS: Partial<IdentityApiPorts> = {};
 
 /** Test seam. */
-export function installIdentityApiPorts(ports: Partial<IdentityApiPorts>): void {
+export function installIdentityApiPorts(
+  ports: Partial<IdentityApiPorts>
+): void {
   GLOBAL_PORTS = { ...GLOBAL_PORTS, ...ports };
 }
 
@@ -59,7 +65,10 @@ function resolvePorts(env: Env): { verifier: AccessVerifier } {
   if (GLOBAL_PORTS.verifier === undefined) {
     GLOBAL_PORTS = {
       ...GLOBAL_PORTS,
-      verifier: makeAccessVerifier({ teamDomain: env.ACCESS_TEAM_DOMAIN, aud: env.ACCESS_APP_AUD }),
+      verifier: makeAccessVerifier({
+        teamDomain: env.ACCESS_TEAM_DOMAIN,
+        aud: env.ACCESS_APP_AUD,
+      }),
     };
   }
   return GLOBAL_PORTS as { verifier: AccessVerifier };
@@ -91,7 +100,7 @@ export type TeamMember = {
  * reads `Cf-Access-Jwt-Assertion` for itself.
  */
 export async function requireTeamMember(
-  c: Context<{ Bindings: Env }>,
+  c: Context<{ Bindings: Env }>
 ): Promise<TeamMember | Response> {
   const { verifier } = resolvePorts(c.env);
   const jwt = c.req.header("Cf-Access-Jwt-Assertion") ?? "";
@@ -101,7 +110,10 @@ export async function requireTeamMember(
     ({ email } = await verifier.verify(jwt));
   } catch (err) {
     const reason = err instanceof AccessJwtError ? err.code : "invalid";
-    return c.json(fail("access_jwt_invalid", `token failed verification: ${reason}`), 401);
+    return c.json(
+      fail("access_jwt_invalid", `token failed verification: ${reason}`),
+      401
+    );
   }
 
   if (isFirefighter(email)) return { email, role: "firefighter" };

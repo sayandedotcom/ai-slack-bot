@@ -24,20 +24,23 @@ import {
   defineCapability,
 } from "./define";
 import type { EffectDeps } from "./effects";
-import { type CapabilityLimits, type CodeExecution, withCapabilityAudit } from "./execution";
-import { assertEffectPermitted } from "./write-guard";
-
-import { makeFilesTools } from "./namespaces/files";
-import { makeGithubTools } from "./namespaces/github";
-import { makeLinearTools } from "./namespaces/linear";
-import { makeMemoryTools } from "./namespaces/memory";
+import {
+  type CapabilityLimits,
+  type CodeExecution,
+  withCapabilityAudit,
+} from "./execution";
 import { makeApprovalTools } from "./namespaces/approval";
 import { makeBetterStackTools } from "./namespaces/betterstack";
 import { makeBrowserTools } from "./namespaces/browser";
+import { makeFilesTools } from "./namespaces/files";
+import { makeGithubTools } from "./namespaces/github";
 import { makeLangSmithTools } from "./namespaces/langsmith";
+import { makeLinearTools } from "./namespaces/linear";
+import { makeMemoryTools } from "./namespaces/memory";
 import { makeSandboxTools } from "./namespaces/sandbox";
 import { makeSlackTools } from "./namespaces/slack";
 import { makeSupabaseTools } from "./namespaces/supabase";
+import { assertEffectPermitted } from "./write-guard";
 
 /**
  * The namespace order, frozen.
@@ -103,7 +106,7 @@ export function auditedCapability<I, O>(
   ctx: BindingContext,
   namespace: string,
   method: string,
-  spec: CapabilitySpec<I, O>,
+  spec: CapabilitySpec<I, O>
 ): ClassifiedTool {
   return defineCapability({
     ...spec,
@@ -117,13 +120,14 @@ export function auditedCapability<I, O>(
           await assertEffectPermitted(ctx.deps, ctx.scope, spec.effect);
           return spec.run(input);
         },
-        auditArgs(input),
+        auditArgs(input)
       ),
   });
 }
 
 function auditArgs(input: unknown): Record<string, unknown> | undefined {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) return undefined;
+  if (input === null || typeof input !== "object" || Array.isArray(input))
+    return undefined;
   return input as Record<string, unknown>;
 }
 
@@ -149,19 +153,20 @@ function auditArgs(input: unknown): Record<string, unknown> | undefined {
  * a namespace against a FRESH context on every call — see
  * `CapabilityNamespaceFactory`.
  */
-export const NAMESPACE_FACTORIES: CapabilityNamespaceFactory<BindingContext>[] = [
-  { name: "slack", build: makeSlackTools },
-  { name: "memory", build: makeMemoryTools },
-  { name: "linear", build: makeLinearTools },
-  { name: "supabase", build: makeSupabaseTools },
-  { name: "langsmith", build: makeLangSmithTools },
-  { name: "betterstack", build: makeBetterStackTools },
-  { name: "files", build: makeFilesTools },
-  { name: "approval", build: makeApprovalTools },
-  { name: "sandbox", build: makeSandboxTools },
-  { name: "browser", build: makeBrowserTools },
-  { name: "github", build: makeGithubTools },
-];
+export const NAMESPACE_FACTORIES: CapabilityNamespaceFactory<BindingContext>[] =
+  [
+    { name: "slack", build: makeSlackTools },
+    { name: "memory", build: makeMemoryTools },
+    { name: "linear", build: makeLinearTools },
+    { name: "supabase", build: makeSupabaseTools },
+    { name: "langsmith", build: makeLangSmithTools },
+    { name: "betterstack", build: makeBetterStackTools },
+    { name: "files", build: makeFilesTools },
+    { name: "approval", build: makeApprovalTools },
+    { name: "sandbox", build: makeSandboxTools },
+    { name: "browser", build: makeBrowserTools },
+    { name: "github", build: makeGithubTools },
+  ];
 
 export function buildNamespaces(ctx: BindingContext): CapabilityNamespace[] {
   const namespaces = NAMESPACE_FACTORIES.map((factory) => ({
@@ -203,10 +208,10 @@ export function buildConnectors(
    * `run_code` shares a budget, an audit stream and a customer-reference map,
    * and no two executions do.
    */
-  getContext: (executionId: string) => Promise<BindingContext>,
+  getContext: (executionId: string) => Promise<BindingContext>
 ): CodemodeConnector[] {
   return NAMESPACE_FACTORIES.map(
-    (factory) => new FirefighterConnector(doCtx, env, factory, getContext),
+    (factory) => new FirefighterConnector(doCtx, env, factory, getContext)
   );
 }
 

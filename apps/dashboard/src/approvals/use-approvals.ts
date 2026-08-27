@@ -15,17 +15,16 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
+import type { PanelState } from "../components/panel";
+import { usePoll } from "../lib/use-poll";
 import {
+  type DecideAction,
+  type Decision,
   decide,
   fetchApproval,
   fetchOpenApprovals,
-  type DecideAction,
-  type Decision,
   type OpenApproval,
 } from "./api";
-import { usePoll } from "../lib/use-poll";
-import type { PanelState } from "../components/panel";
 
 /** How often the open list is re-read. */
 const POLL_MS = 3_000;
@@ -55,7 +54,7 @@ export function useApprovals(): {
    * about live here; everything else comes straight from the poll.
    */
   const [local, setLocal] = useState<ReadonlyMap<string, CardState>>(
-    () => new Map(),
+    () => new Map()
   );
 
   // Mirrors of state and poll data for the async callbacks below, which run
@@ -90,11 +89,17 @@ export function useApprovals(): {
       card: OpenApproval,
       decision: Decision,
       decidedBy: string | null,
-      mine: boolean,
+      mine: boolean
     ) => {
       if (!aliveRef.current) return;
       setLocal((previous) =>
-        new Map(previous).set(id, { kind: "resolved", card, decision, decidedBy, mine }),
+        new Map(previous).set(id, {
+          kind: "resolved",
+          card,
+          decision,
+          decidedBy,
+          mine,
+        })
       );
 
       const existing = expiryRef.current.get(id);
@@ -110,10 +115,10 @@ export function useApprovals(): {
             next.delete(id);
             return next;
           });
-        }, RESOLVED_TTL_MS),
+        }, RESOLVED_TTL_MS)
       );
     },
-    [],
+    []
   );
 
   const rows = poll.kind === "ready" ? poll.data : null;
@@ -152,7 +157,9 @@ export function useApprovals(): {
       // Hold the card visible (as the last row the poll gave us) for the round
       // trip, so it does not flicker out and back in.
       setLocal((previous) =>
-        previous.has(id) ? previous : new Map(previous).set(id, { kind: "open", card: row }),
+        previous.has(id)
+          ? previous
+          : new Map(previous).set(id, { kind: "open", card: row })
       );
 
       void fetchApproval(id)
@@ -184,7 +191,9 @@ export function useApprovals(): {
     for (const [id, state] of local) {
       if (!merged.has(id)) merged.set(id, state);
     }
-    return [...merged.values()].sort((a, b) => b.card.createdAt - a.card.createdAt);
+    return [...merged.values()].sort(
+      (a, b) => b.card.createdAt - a.card.createdAt
+    );
   }, [rows, local]);
 
   const cardsRef = useRef(cards);
@@ -199,7 +208,7 @@ export function useApprovals(): {
       const card = current.card;
 
       setLocal((previous) =>
-        new Map(previous).set(id, { kind: "deciding", card, action }),
+        new Map(previous).set(id, { kind: "deciding", card, action })
       );
 
       void decide(id, action).then((result) => {
@@ -216,7 +225,7 @@ export function useApprovals(): {
                   : result.error.kind === "forbidden"
                     ? "You're not on the roster."
                     : "Could not send that decision. Try again.",
-            }),
+            })
           );
           return;
         }
@@ -242,15 +251,19 @@ export function useApprovals(): {
             if (!aliveRef.current || detail.decidedBy === null) return;
             setLocal((previous) => {
               const entry = previous.get(id);
-              if (entry === undefined || entry.kind !== "resolved") return previous;
+              if (entry === undefined || entry.kind !== "resolved")
+                return previous;
               if (entry.decidedBy !== null) return previous;
-              return new Map(previous).set(id, { ...entry, decidedBy: detail.decidedBy });
+              return new Map(previous).set(id, {
+                ...entry,
+                decidedBy: detail.decidedBy,
+              });
             });
           })
           .catch(() => {});
       });
     },
-    [resolveCard],
+    [resolveCard]
   );
 
   const state: PanelState<CardState[]> =

@@ -31,7 +31,11 @@
  * trusted moment (`getDecryptedToken`) by the one port allowed to hold it.
  */
 import { FIREFIGHTERS, isFirefighter } from "../access/roster";
-import { listConnected, type ConnectedIdentity, type Provider } from "../db/identities";
+import {
+  type ConnectedIdentity,
+  listConnected,
+  type Provider,
+} from "../db/identities";
 
 /** The eligible pool, in the order ties break. */
 export const SPEAKER_POOL: readonly string[] = FIREFIGHTERS;
@@ -46,7 +50,7 @@ export type Speaker = ConnectedIdentity;
  */
 export function pickSpeaker(
   rows: readonly ConnectedIdentity[],
-  preferredEmail?: string | null,
+  preferredEmail?: string | null
 ): Speaker | null {
   const byEmail = new Map(rows.map((r) => [r.email, r] as const));
 
@@ -64,7 +68,7 @@ export function pickSpeaker(
 export async function resolveSpeaker(
   db: D1Database,
   provider: Provider,
-  preferredEmail?: string | null,
+  preferredEmail?: string | null
 ): Promise<Speaker | null> {
   return pickSpeaker(await listConnected(db, provider), preferredEmail);
 }

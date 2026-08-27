@@ -11,10 +11,9 @@
  * a package with no DOM.
  */
 
-import { useMemo, useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
+import type { KeyboardEvent, ReactNode } from "react";
+import { useMemo, useState } from "react";
 
 import { makeChatStarter, startChatRun } from "./api";
 
@@ -26,7 +25,11 @@ export type ChatPageProps = {
   onStart: (text: string) => void;
 };
 
-export function ChatPage({ starting, error, onStart }: ChatPageProps): ReactNode {
+export function ChatPage({
+  starting,
+  error,
+  onStart,
+}: ChatPageProps): ReactNode {
   const [draft, setDraft] = useState("");
 
   const start = () => {
@@ -43,10 +46,15 @@ export function ChatPage({ starting, error, onStart }: ChatPageProps): ReactNode
   };
 
   return (
-    <section data-slot="chat-page" aria-label="Ask the agent" className="space-y-3">
-      <p className="text-sm text-muted-foreground">
-        Ask about a customer, a deploy, a trace or a table. This opens a run — the same kind of run
-        a Slack thread opens — and everything committal still needs a human.
+    <section
+      data-slot="chat-page"
+      aria-label="Ask the agent"
+      className="space-y-3"
+    >
+      <p className="text-muted-foreground text-sm">
+        Ask about a customer, a deploy, a trace or a table. This opens a run —
+        the same kind of run a Slack thread opens — and everything committal
+        still needs a human.
       </p>
 
       {error === null ? null : (
@@ -69,7 +77,11 @@ export function ChatPage({ starting, error, onStart }: ChatPageProps): ReactNode
           aria-label="Ask the agent"
           className="min-h-0 flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-60"
         />
-        <Button type="button" onClick={start} disabled={starting || draft.trim() === ""}>
+        <Button
+          type="button"
+          onClick={start}
+          disabled={starting || draft.trim() === ""}
+        >
           {starting ? "Starting…" : "Ask"}
         </Button>
       </div>
@@ -78,7 +90,11 @@ export function ChatPage({ starting, error, onStart }: ChatPageProps): ReactNode
 }
 
 /** The wired version: creates the run, then hands the id to the caller. */
-export function ChatStarter({ onStarted }: { onStarted: (runId: string) => void }): ReactNode {
+export function ChatStarter({
+  onStarted,
+}: {
+  onStarted: (runId: string) => void;
+}): ReactNode {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const starter = useMemo(() => makeChatStarter(startChatRun), []);

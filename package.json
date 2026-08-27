@@ -2,23 +2,29 @@
   "name": "firefighter",
   "version": "0.0.1",
   "private": true,
+  "license": "UNLICENSED",
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
-    "lint": "turbo lint",
-    "format": "turbo format",
-    "typecheck": "turbo typecheck"
+    "test": "turbo test",
+    "typecheck": "turbo typecheck",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "format:check": "biome ci .",
+    "check:text": "node apps/worker/scripts/check-text-files.mjs",
+    "capabilities:dts:check": "pnpm --filter @workspace/worker capabilities:dts:check",
+    "check": "pnpm run check:text && pnpm run lint && pnpm run typecheck && pnpm run capabilities:dts:check && pnpm run test",
+    "prepare": "lefthook install || true"
   },
   "devDependencies": {
-    "@workspace/eslint-config": "workspace:*",
+    "@biomejs/biome": "2.5.10",
     "@workspace/typescript-config": "workspace:*",
-    "prettier": "^3.8.3",
-    "prettier-plugin-tailwindcss": "^0.8.0",
+    "lefthook": "^2.1.10",
     "turbo": "^2.9.18",
     "typescript": "^5"
   },
   "packageManager": "pnpm@10.33.4",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.20.0"
   }
 }

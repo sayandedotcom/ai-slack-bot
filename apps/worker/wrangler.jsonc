@@ -382,7 +382,10 @@
   // is reached only through its host DO's own `facets` map, where it gets an
   // isolated SQLite database of its own.
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["Sandbox", "RunAgent", "CodemodeRuntime"] }
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Sandbox", "RunAgent", "CodemodeRuntime"]
+    }
   ],
   "d1_databases": [
     {

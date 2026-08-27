@@ -26,7 +26,11 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
  * agent instead of triage. `done` and `failed` are absent on purpose: they
  * release the thread back to triage, which may then reopen the same run.
  */
-export const ACTIVE_RUN_STATUSES = ["live", "awaiting_approval", "idle"] as const;
+export const ACTIVE_RUN_STATUSES = [
+  "live",
+  "awaiting_approval",
+  "idle",
+] as const;
 
 export type ActiveRunStatus = (typeof ACTIVE_RUN_STATUSES)[number];
 
@@ -41,12 +45,17 @@ export const TERMINAL_RUN_STATUSES = ["done", "failed"] as const;
 
 export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
 
-export function isTerminalRunStatus(status: RunStatus): status is TerminalRunStatus {
+export function isTerminalRunStatus(
+  status: RunStatus
+): status is TerminalRunStatus {
   return (TERMINAL_RUN_STATUSES as readonly RunStatus[]).includes(status);
 }
 
 export function isRunStatus(value: unknown): value is RunStatus {
-  return typeof value === "string" && (RUN_STATUSES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (RUN_STATUSES as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -72,9 +81,14 @@ export type TransitionResult =
  * status event for it — a re-delivered queue message setting `live -> live`
  * would otherwise burn a `seq` and show up as a phantom event in every tab.
  */
-export function evaluateTransition(from: RunStatus, to: RunStatus): TransitionResult {
-  if (!isRunStatus(from)) return { ok: false, reason: `unknown current status: ${String(from)}` };
-  if (!isRunStatus(to)) return { ok: false, reason: `unknown target status: ${String(to)}` };
+export function evaluateTransition(
+  from: RunStatus,
+  to: RunStatus
+): TransitionResult {
+  if (!isRunStatus(from))
+    return { ok: false, reason: `unknown current status: ${String(from)}` };
+  if (!isRunStatus(to))
+    return { ok: false, reason: `unknown target status: ${String(to)}` };
   if (from === to) return { ok: true, changed: false };
   if (TRANSITIONS[from].includes(to)) return { ok: true, changed: true };
   return { ok: false, reason: `illegal transition ${from} -> ${to}` };
@@ -192,9 +206,12 @@ export const ASSISTANT_UPDATE_STATES = [
 
 export type AssistantUpdateState = (typeof ASSISTANT_UPDATE_STATES)[number];
 
-export function isAssistantUpdateState(value: unknown): value is AssistantUpdateState {
+export function isAssistantUpdateState(
+  value: unknown
+): value is AssistantUpdateState {
   return (
-    typeof value === "string" && (ASSISTANT_UPDATE_STATES as readonly string[]).includes(value)
+    typeof value === "string" &&
+    (ASSISTANT_UPDATE_STATES as readonly string[]).includes(value)
   );
 }
 
@@ -290,7 +307,14 @@ export type ParseResult =
  * to be lenient with — accepting and ignoring them invites a later refactor to
  * start reading them. Reject loudly instead.
  */
-const SERVER_OWNED_FIELDS = ["role", "source", "id", "seq", "createdAt", "metadata"] as const;
+const SERVER_OWNED_FIELDS = [
+  "role",
+  "source",
+  "id",
+  "seq",
+  "createdAt",
+  "metadata",
+] as const;
 
 function reject(code: string, message: string): ParseResult {
   return { ok: false, code, message };
@@ -315,7 +339,10 @@ export function parseClientMessage(raw: string | ArrayBuffer): ParseResult {
   const body = parsed as Record<string, unknown>;
 
   if (body.type !== "steer") {
-    return reject("unknown_type", `unsupported message type: ${String(body.type)}`);
+    return reject(
+      "unknown_type",
+      `unsupported message type: ${String(body.type)}`
+    );
   }
 
   for (const field of SERVER_OWNED_FIELDS) {
@@ -337,8 +364,14 @@ export function parseClientMessage(raw: string | ArrayBuffer): ParseResult {
     return reject("empty_content", "content must not be blank");
   }
   if (content.length > STEER_MAX_CONTENT) {
-    return reject("content_too_long", `content exceeds ${STEER_MAX_CONTENT} characters`);
+    return reject(
+      "content_too_long",
+      `content exceeds ${STEER_MAX_CONTENT} characters`
+    );
   }
 
-  return { ok: true, message: { type: "steer", requestId: body.requestId, content } };
+  return {
+    ok: true,
+    message: { type: "steer", requestId: body.requestId, content },
+  };
 }

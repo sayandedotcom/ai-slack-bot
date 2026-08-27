@@ -50,7 +50,10 @@ export type CapabilityFailed = CapabilityEventBase & {
   retryable: boolean;
 };
 
-export type CapabilityEvent = CapabilityStarted | CapabilityCompleted | CapabilityFailed;
+export type CapabilityEvent =
+  | CapabilityStarted
+  | CapabilityCompleted
+  | CapabilityFailed;
 
 /** Where capability activity is recorded. */
 export interface CapabilityAuditSink {
@@ -60,9 +63,11 @@ export interface CapabilityAuditSink {
 }
 
 /** Names whose *values* are redacted before they reach an audit record. */
-const SECRET_KEY = /token|secret|password|passwd|api[_-]?key|authorization|cookie|credential/i;
+const SECRET_KEY =
+  /token|secret|password|passwd|api[_-]?key|authorization|cookie|credential/i;
 /** Values that look like a credential regardless of what they are called. */
-const SECRET_VALUE = /xox[baprs]-|^Bearer\s|^sk-|^lin_api_|^lsv2_|^sb_(secret|publishable)_/i;
+const SECRET_VALUE =
+  /xox[baprs]-|^Bearer\s|^sk-|^lin_api_|^lsv2_|^sb_(secret|publishable)_/i;
 
 /**
  * Strip credential-shaped arguments before they are recorded.
@@ -79,7 +84,9 @@ const SECRET_VALUE = /xox[baprs]-|^Bearer\s|^sk-|^lin_api_|^lsv2_|^sb_(secret|pu
  * getting that wrong leaves a redaction count rather than a durable plaintext
  * copy of a token.
  */
-export function redactArgs(args: Record<string, unknown> | undefined): JsonObject | null {
+export function redactArgs(
+  args: Record<string, unknown> | undefined
+): JsonObject | null {
   if (args === undefined) return null;
 
   const out: Record<string, unknown> = {};
@@ -123,7 +130,8 @@ export function summarizeNonData(value: unknown): unknown {
   if (typeof value !== "object") return value;
 
   if (ArrayBuffer.isView(value)) return `<binary: ${value.byteLength} bytes>`;
-  if (value instanceof ArrayBuffer) return `<binary: ${value.byteLength} bytes>`;
+  if (value instanceof ArrayBuffer)
+    return `<binary: ${value.byteLength} bytes>`;
   if (Array.isArray(value)) return value.map(summarizeNonData);
 
   // A class instance is not data. Naming its constructor is enough for an audit
@@ -135,7 +143,8 @@ export function summarizeNonData(value: unknown): unknown {
   }
 
   const out: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) out[key] = summarizeNonData(item);
+  for (const [key, item] of Object.entries(value))
+    out[key] = summarizeNonData(item);
   return out;
 }
 

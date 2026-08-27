@@ -65,7 +65,9 @@ function durationMs(run: RawRun): number {
   if (!run.start_time || !run.end_time) return 0;
   const started = Date.parse(run.start_time);
   const ended = Date.parse(run.end_time);
-  return Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : 0;
+  return Number.isFinite(started) && Number.isFinite(ended)
+    ? Math.max(0, ended - started)
+    : 0;
 }
 
 function toNode(run: RawRun): TraceNode {
@@ -90,11 +92,14 @@ function parseSince(since: string | null, now: number): string | null {
   if (!Number.isFinite(parsed)) {
     throw new CapabilityError(
       "invalid_input",
-      "'since' must be an ISO-8601 instant, for example 2026-08-11T00:00:00Z.",
+      "'since' must be an ISO-8601 instant, for example 2026-08-11T00:00:00Z."
     );
   }
   if (parsed > now) {
-    throw new CapabilityError("invalid_input", "'since' cannot be in the future.");
+    throw new CapabilityError(
+      "invalid_input",
+      "'since' cannot be in the future."
+    );
   }
   const earliest = now - MAX_LOOKBACK_DAYS * 86_400_000;
   return new Date(Math.max(parsed, earliest)).toISOString();
@@ -104,24 +109,24 @@ function upstreamError(status: number): CapabilityError {
   if (status === 401 || status === 403) {
     return new CapabilityError(
       "capability_unavailable",
-      "trace history is not authorised right now.",
+      "trace history is not authorised right now."
     );
   }
   if (status === 429) {
     return new CapabilityError(
       "upstream_unavailable",
-      "trace history is rate limited. Wait before trying again.",
+      "trace history is rate limited. Wait before trying again."
     );
   }
   return new CapabilityError(
     "upstream_unavailable",
-    "trace history is unavailable.",
+    "trace history is unavailable."
   );
 }
 
 export function makeLangSmithReader(
   config: LangSmithConfig,
-  now: () => number,
+  now: () => number
 ): LangSmithReader {
   async function queryRuns(body: Record<string, unknown>): Promise<RawRun[]> {
     let response: Response;
@@ -144,7 +149,7 @@ export function makeLangSmithReader(
     } catch {
       throw new CapabilityError(
         "upstream_unavailable",
-        "trace history returned something unreadable.",
+        "trace history returned something unreadable."
       );
     }
     const runs = (payload as { runs?: unknown })?.runs;
@@ -156,7 +161,7 @@ export function makeLangSmithReader(
       if (!/^[0-9a-fA-F-]{8,64}$/.test(traceId)) {
         throw new CapabilityError(
           "invalid_input",
-          "that does not look like a trace identifier.",
+          "that does not look like a trace identifier."
         );
       }
 
@@ -165,7 +170,7 @@ export function makeLangSmithReader(
       if (runs.length === 0) {
         throw new CapabilityError(
           "invalid_input",
-          "no trace with that identifier exists in the configured project.",
+          "no trace with that identifier exists in the configured project."
         );
       }
 
@@ -205,7 +210,9 @@ export function makeLangSmithReader(
         term === ""
           ? fetched
           : fetched.filter((run) =>
-              String(run.name ?? "").toLowerCase().includes(term),
+              String(run.name ?? "")
+                .toLowerCase()
+                .includes(term)
             );
 
       return runs.map((run) => ({

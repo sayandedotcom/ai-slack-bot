@@ -25,27 +25,28 @@
  * gap is closable from this side of the container, and both are written down
  * rather than claimed away.
  */
+
+import { getSandbox } from "@cloudflare/sandbox";
+import { CapabilityError } from "../gateways/errors";
 import type {
   SandboxCommandResult,
   SandboxGateway,
   SandboxProcessState,
 } from "../gateways/ports";
-import { CapabilityError } from "../gateways/errors";
 import type { Env } from "../index";
 import { captureDiff, type DiffResult } from "./diff";
 import { devEnvFor, devEnvForProcess } from "./env";
 import {
   makeSandboxLifecycle,
-  sandboxIdFor,
   type ProcessSnapshot,
   type SandboxLifecycleDeps,
+  sandboxIdFor,
 } from "./lifecycle";
 import {
-  startRecording,
-  checkRecording as runCheckRecording,
   type RecordDeps,
+  checkRecording as runCheckRecording,
+  startRecording,
 } from "./record";
-import { getSandbox } from "@cloudflare/sandbox";
 
 /**
  * Everything this module and the lifecycle together ask of a container.
@@ -71,7 +72,7 @@ export type SandboxOpsHandle = {
       cwd?: string;
       /** Per-invocation, and the reason this type exists separately at all. */
       env?: Record<string, string | undefined>;
-    },
+    }
   ): Promise<{ exitCode: number; stdout: string; stderr: string }>;
   killAllProcesses(): Promise<number>;
   startProcess(
@@ -81,7 +82,7 @@ export type SandboxOpsHandle = {
       autoCleanup?: boolean;
       cwd?: string;
       env?: Record<string, string | undefined>;
-    },
+    }
   ): Promise<{ id: string }>;
   getProcess(id: string): Promise<ProcessSnapshot | null>;
   getProcessLogs(id: string): Promise<{ stdout: string; stderr: string }>;
@@ -96,9 +97,12 @@ export type SandboxOpsHandle = {
    */
   readFile(
     path: string,
-    options: { encoding: "none" },
+    options: { encoding: "none" }
   ): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
-  readFile(path: string, options?: { encoding?: string }): Promise<{ content: string }>;
+  readFile(
+    path: string,
+    options?: { encoding?: string }
+  ): Promise<{ content: string }>;
   writeFile(path: string, content: string): Promise<{ success: boolean }>;
   /**
    * `mkdir -p`. Present because `writeFile` does NOT create missing parents —
@@ -106,7 +110,10 @@ export type SandboxOpsHandle = {
    * and the SDK's own mount path calls this first. `record.ts` needs the
    * recording's working directory to exist before it writes a script into it.
    */
-  mkdir(path: string, options?: { recursive?: boolean }): Promise<{ success: boolean }>;
+  mkdir(
+    path: string,
+    options?: { recursive?: boolean }
+  ): Promise<{ success: boolean }>;
   destroy(): Promise<void>;
   tunnels: { get(port: number): Promise<{ url: string }> };
 };
@@ -183,7 +190,9 @@ function defaultResolve(env: Env, runId: string): SandboxOpsHandle {
  * credential, and a mistake there is a crash whose message quotes the thing it
  * was protecting.
  */
-export function makeRedactor(devEnv: Record<string, string>): (text: string) => string {
+export function makeRedactor(
+  devEnv: Record<string, string>
+): (text: string) => string {
   const replacements = Object.entries(devEnv)
     .filter(([, value]) => value.length >= MIN_REDACTABLE_LENGTH)
     .sort((a, b) => b[1].length - a[1].length);
@@ -212,7 +221,7 @@ const defaultGatewaySleep = (ms: number): Promise<void> =>
 export function makeSandboxGateway(
   env: Env,
   runId: string,
-  deps: SandboxGatewayDeps = {},
+  deps: SandboxGatewayDeps = {}
 ): SandboxGateway {
   // Assignable because `SandboxOpsHandle` is a superset of the lifecycle's
   // handle. Named as the lifecycle's own type at the call so a future widening
@@ -258,7 +267,7 @@ export function makeSandboxGateway(
       "sandbox_not_ready",
       status.state === "failed"
         ? `the container for this run failed to provision (${status.note}), so nothing was run on it. Do not retry in a loop; report what failed.`
-        : `the container for this run is still provisioning (${status.note}), so nothing was run on it. Call sandbox.boot() and check its state again on your next turn — boot is a poll, not a wait.`,
+        : `the container for this run is still provisioning (${status.note}), so nothing was run on it. Call sandbox.boot() and check its state again on your next turn — boot is a poll, not a wait.`
     );
   }
 
@@ -287,7 +296,7 @@ export function makeSandboxGateway(
    * video in 8MiB parts to reach R2 at all.
    */
   async function readBinaryFile(
-    path: string,
+    path: string
   ): Promise<{ content: ReadableStream<Uint8Array>; size: number }> {
     await assertReady();
     const result = await sandbox().readFile(path, { encoding: "none" });
@@ -305,7 +314,7 @@ export function makeSandboxGateway(
     if (!proofsBaseUrl) {
       throw new CapabilityError(
         "upstream_unavailable",
-        "this deployment has no PROOFS_BASE_URL configured, so a recording could not be started or published.",
+        "this deployment has no PROOFS_BASE_URL configured, so a recording could not be started or published."
       );
     }
     return {
@@ -389,7 +398,7 @@ export function makeSandboxGateway(
       if (process === null) {
         throw new CapabilityError(
           "invalid_input",
-          `no process with that id is known to this run's container. Use the processId sandbox.spawn returned; a container that was torn down forgets every process it had.`,
+          `no process with that id is known to this run's container. Use the processId sandbox.spawn returned; a container that was torn down forgets every process it had.`
         );
       }
       const logs = await handle.getProcessLogs(processId);
@@ -407,7 +416,8 @@ export function makeSandboxGateway(
       // Asked first, so "there was nothing to kill" is a fact the model gets
       // rather than an upstream error it has to interpret. A process that is
       // already gone is not a failure — it is the state the caller wanted.
-      if ((await handle.getProcess(processId)) === null) return { killed: false };
+      if ((await handle.getProcess(processId)) === null)
+        return { killed: false };
       await handle.killProcess(processId);
       return { killed: true };
     },
@@ -440,8 +450,10 @@ export function makeSandboxGateway(
         // "the upstream service failed".
         throw new CapabilityError(
           "upstream_unavailable",
-          error instanceof Error ? error.message : "the preview tunnel could not be reached.",
-          { retryable: true },
+          error instanceof Error
+            ? error.message
+            : "the preview tunnel could not be reached.",
+          { retryable: true }
         );
       }
     },
@@ -467,7 +479,7 @@ export function makeSandboxGateway(
       if (head.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(baseSha)) {
         throw new CapabilityError(
           "upstream_unavailable",
-          `could not resolve the checkout's HEAD commit (exit ${head.exitCode}). ${redact(head.stderr).slice(0, 400)}`,
+          `could not resolve the checkout's HEAD commit (exit ${head.exitCode}). ${redact(head.stderr).slice(0, 400)}`
         );
       }
 
@@ -478,7 +490,7 @@ export function makeSandboxGateway(
       if (result.exitCode !== 0) {
         throw new CapabilityError(
           "upstream_unavailable",
-          `the working tree could not be diffed (exit ${result.exitCode}). ${redact(result.stderr).slice(0, 400)}`,
+          `the working tree could not be diffed (exit ${result.exitCode}). ${redact(result.stderr).slice(0, 400)}`
         );
       }
 

@@ -24,7 +24,9 @@ afterEach(() => {
 
 describe("getJson", () => {
   it("parses a 200 body", async () => {
-    const fetchSpy = stubFetch(() => jsonResponse(200, { email: "a@b.c", role: "viewer" }));
+    const fetchSpy = stubFetch(() =>
+      jsonResponse(200, { email: "a@b.c", role: "viewer" })
+    );
 
     await expect(getJson<{ email: string }>("/api/identity")).resolves.toEqual({
       email: "a@b.c",
@@ -56,7 +58,9 @@ describe("getJson", () => {
   it("maps 403 to forbidden", async () => {
     stubFetch(() => new Response(BODY, { status: 403 }));
 
-    const error = (await getJson("/api/roster").catch((e: unknown) => e)) as ApiError;
+    const error = (await getJson("/api/roster").catch(
+      (e: unknown) => e
+    )) as ApiError;
     expect(error).toBeInstanceOf(ApiError);
     expect(error.kind).toBe("forbidden");
     expect(error.status).toBe(403);
@@ -65,7 +69,9 @@ describe("getJson", () => {
   it("maps 500 to unavailable", async () => {
     stubFetch(() => new Response(BODY, { status: 500 }));
 
-    const error = (await getJson("/api/counters").catch((e: unknown) => e)) as ApiError;
+    const error = (await getJson("/api/counters").catch(
+      (e: unknown) => e
+    )) as ApiError;
     expect(error).toBeInstanceOf(ApiError);
     expect(error.kind).toBe("unavailable");
     expect(error.status).toBe(500);
@@ -74,7 +80,9 @@ describe("getJson", () => {
   it("maps any other non-2xx to unavailable", async () => {
     stubFetch(() => new Response(BODY, { status: 404 }));
 
-    const error = (await getJson("/api/nope").catch((e: unknown) => e)) as ApiError;
+    const error = (await getJson("/api/nope").catch(
+      (e: unknown) => e
+    )) as ApiError;
     expect(error.kind).toBe("unavailable");
     expect(error.status).toBe(404);
   });
@@ -84,7 +92,9 @@ describe("getJson", () => {
       throw new TypeError("Failed to fetch");
     });
 
-    const error = (await getJson("/api/roster").catch((e: unknown) => e)) as ApiError;
+    const error = (await getJson("/api/roster").catch(
+      (e: unknown) => e
+    )) as ApiError;
     expect(error).toBeInstanceOf(ApiError);
     expect(error.kind).toBe("unavailable");
     expect(error.status).toBe(0);
@@ -93,7 +103,9 @@ describe("getJson", () => {
   it("maps unparseable JSON on a 200 to unavailable", async () => {
     stubFetch(() => new Response("<html>not json</html>", { status: 200 }));
 
-    const error = (await getJson("/api/roster").catch((e: unknown) => e)) as ApiError;
+    const error = (await getJson("/api/roster").catch(
+      (e: unknown) => e
+    )) as ApiError;
     expect(error).toBeInstanceOf(ApiError);
     expect(error.kind).toBe("unavailable");
   });
@@ -101,7 +113,9 @@ describe("getJson", () => {
   it("names the path in the message and never the response body", async () => {
     stubFetch(() => new Response(BODY, { status: 500 }));
 
-    const error = (await getJson("/api/counters").catch((e: unknown) => e)) as ApiError;
+    const error = (await getJson("/api/counters").catch(
+      (e: unknown) => e
+    )) as ApiError;
     expect(error.message).toContain("/api/counters");
     expect(error.message).not.toContain("s3cret-token");
     expect(error.message).not.toContain(BODY);
@@ -112,7 +126,9 @@ describe("getJson", () => {
       throw new Error(BODY);
     });
 
-    const error = (await getJson("/api/identity").catch((e: unknown) => e)) as ApiError;
+    const error = (await getJson("/api/identity").catch(
+      (e: unknown) => e
+    )) as ApiError;
     expect(error.message).toContain("/api/identity");
     expect(error.message).not.toContain("s3cret-token");
   });

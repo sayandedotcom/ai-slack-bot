@@ -1,7 +1,11 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { deriveSlug, registerChannel, sweepChannelMembership } from "../src/channels/registry";
+import {
+  deriveSlug,
+  registerChannel,
+  sweepChannelMembership,
+} from "../src/channels/registry";
 import { getChannelPolicy } from "../src/db/channels";
 import { handleIngestBatch } from "../src/ingest/consumer";
 import type { QueuedEvent } from "../src/slack/types";
@@ -30,8 +34,10 @@ function stubSlack(routes: {
     const url = String(input instanceof Request ? input.url : input);
 
     if (url.includes("conversations.info")) {
-      if (routes.infoHttpError === true) return new Response("nope", { status: 500 });
-      if (!routes.info) return Response.json({ ok: false, error: "channel_not_found" });
+      if (routes.infoHttpError === true)
+        return new Response("nope", { status: 500 });
+      if (!routes.info)
+        return Response.json({ ok: false, error: "channel_not_found" });
       const id = new URL(url).searchParams.get("channel");
       return Response.json({ ok: true, channel: { id, ...routes.info } });
     }
@@ -61,7 +67,10 @@ function batchOf(events: QueuedEvent[]) {
   } as unknown as MessageBatch<QueuedEvent>;
 }
 
-function ev(channel: string, overrides: Partial<QueuedEvent["event"]> = {}): QueuedEvent {
+function ev(
+  channel: string,
+  overrides: Partial<QueuedEvent["event"]> = {}
+): QueuedEvent {
   return {
     event_id: `Ev${crypto.randomUUID().slice(0, 12)}`,
     received_at: 1_700_000_000_000,
@@ -150,7 +159,9 @@ describe("registerChannel", () => {
     await registerChannel(env, id);
     await registerChannel(env, id);
 
-    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM channels WHERE channel_id = ?")
+    const rows = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM channels WHERE channel_id = ?"
+    )
       .bind(id)
       .first<{ n: number }>();
     expect(rows?.n).toBe(1);
@@ -213,7 +224,9 @@ describe("ingest registers an unknown channel", () => {
     // the lazy path over waiting for the sweep.
     expect(sent).toHaveLength(1);
 
-    const msg = await env.DB.prepare("SELECT customer_slug FROM messages WHERE channel_id = ?")
+    const msg = await env.DB.prepare(
+      "SELECT customer_slug FROM messages WHERE channel_id = ?"
+    )
       .bind(id)
       .first<{ customer_slug: string }>();
     expect(msg?.customer_slug).toBe("new-customer");

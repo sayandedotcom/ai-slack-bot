@@ -92,7 +92,9 @@ function hasBulletedRecap(text: string): boolean {
     const line = lines[i]!;
     if (BULLET_LINE_RE.test(line)) continue; // a bullet line is never itself the intro
     if (!RECAP_WORD_RE.test(line)) continue;
-    const followedByBullet = lines.slice(i + 1).some((l) => BULLET_LINE_RE.test(l));
+    const followedByBullet = lines
+      .slice(i + 1)
+      .some((l) => BULLET_LINE_RE.test(l));
     if (followedByBullet) return true;
   }
   return false;
@@ -180,7 +182,11 @@ export function detectAiTells(source: string): AiTell[] {
   if (PREAMBLE_OPENERS.some((re) => re.test(trimmed))) tells.push("preamble");
   if (GREAT_QUESTION_RE.test(text)) tells.push("great_question");
   if (hasBulletedRecap(text)) tells.push("bulleted_recap");
-  if (CLOSING_RESTATEMENT_PHRASES.some((phrase) => text.toLowerCase().includes(phrase))) {
+  if (
+    CLOSING_RESTATEMENT_PHRASES.some((phrase) =>
+      text.toLowerCase().includes(phrase)
+    )
+  ) {
     tells.push("closing_restatement");
   }
   if (EXCLAIMED_THANKS_RE.test(text)) tells.push("exclaimed_thanks");

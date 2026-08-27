@@ -16,14 +16,25 @@ export type ChannelPolicy = {
  * is never postable. Fail closed: the cost of being wrong here is a stray
  * message to a real customer under an engineer's name. See spec §4.4.
  */
-export async function getChannelPolicy(db: D1Database, channelId: string): Promise<ChannelPolicy> {
+export async function getChannelPolicy(
+  db: D1Database,
+  channelId: string
+): Promise<ChannelPolicy> {
   const row = await db
-    .prepare("SELECT channel_id, name, customer_slug, mode FROM channels WHERE channel_id = ?")
+    .prepare(
+      "SELECT channel_id, name, customer_slug, mode FROM channels WHERE channel_id = ?"
+    )
     .bind(channelId)
     .first<ChannelsRow>();
 
   if (!row) {
-    return { channel_id: channelId, name: channelId, customer_slug: null, mode: "observe", known: false };
+    return {
+      channel_id: channelId,
+      name: channelId,
+      customer_slug: null,
+      mode: "observe",
+      known: false,
+    };
   }
   return { ...row, known: true };
 }
@@ -76,7 +87,7 @@ export const CUSTOMER_SEARCH_MAX = 10;
 export async function searchCustomers(
   db: D1Database,
   query: string,
-  limit: number,
+  limit: number
 ): Promise<CustomerMatch[]> {
   const bounded = Math.min(Math.max(1, Math.floor(limit)), CUSTOMER_SEARCH_MAX);
   const escaped = query.replace(/[\\%_]/g, "\\$&");
@@ -90,7 +101,7 @@ export async function searchCustomers(
           AND customer_slug LIKE ? ESCAPE '\\'
         GROUP BY customer_slug
         ORDER BY customer_slug ASC
-        LIMIT ?`,
+        LIMIT ?`
     )
     .bind(`%${escaped}%`, bounded)
     // `customer_slug AS slug`, and non-null because the WHERE clause says so.
@@ -108,5 +119,7 @@ export async function searchCustomers(
  * tuning the triage prompt against messages we wrote ourselves.
  */
 export function shouldTriage(policy: ChannelPolicy): boolean {
-  return policy.known && policy.customer_slug !== null && policy.mode !== "internal";
+  return (
+    policy.known && policy.customer_slug !== null && policy.mode !== "internal"
+  );
 }

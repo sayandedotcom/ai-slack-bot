@@ -29,7 +29,10 @@ export function nudgeBlocks(input: {
   return [
     {
       type: "section",
-      text: { type: "mrkdwn", text: `Waiting on you: reply to #${channelName}` },
+      text: {
+        type: "mrkdwn",
+        text: `Waiting on you: reply to #${channelName}`,
+      },
     },
     {
       type: "section",
@@ -52,7 +55,10 @@ export function nudgeBlocks(input: {
   ];
 }
 
-const RESOLVED_LABEL: Record<"approved" | "edited" | "rejected" | "withdrawn", string> = {
+const RESOLVED_LABEL: Record<
+  "approved" | "edited" | "rejected" | "withdrawn",
+  string
+> = {
   approved: "Approved",
   edited: "Edited and approved",
   rejected: "Rejected",

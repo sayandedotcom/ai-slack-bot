@@ -43,8 +43,12 @@ function connector() {
   return new FirefighterConnector(
     {} as ExecutionContext,
     env,
-    { name: namespace.name, instructions: namespace.instructions, build: () => namespace.tools },
-    async () => undefined,
+    {
+      name: namespace.name,
+      instructions: namespace.instructions,
+      build: () => namespace.tools,
+    },
+    async () => undefined
   );
 }
 
@@ -54,13 +58,17 @@ describe("FirefighterConnector — the raw-Zod trap", () => {
     // because it has .type === "object", then the model-facing type degrades
     // to `unknown` and the description is dropped, with no error anywhere.
     const described = await connector().describe();
-    expect(described.descriptors.echo?.inputSchema).toHaveProperty("properties.text");
+    expect(described.descriptors.echo?.inputSchema).toHaveProperty(
+      "properties.text"
+    );
     expect(described.descriptors.echo?.inputSchema).not.toHaveProperty("_def");
   });
 
   it("keeps the field description the model reads", async () => {
     const described = await connector().describe();
-    expect(JSON.stringify(described.descriptors.echo?.inputSchema)).toContain("what to echo");
+    expect(JSON.stringify(described.descriptors.echo?.inputSchema)).toContain(
+      "what to echo"
+    );
   });
 
   it("degrades only the unrepresentable FIELD, never the whole capability", async () => {
@@ -72,7 +80,9 @@ describe("FirefighterConnector — the raw-Zod trap", () => {
     const publish = described.descriptors.publish;
     expect(publish?.inputSchema).toHaveProperty("properties.bytes");
     // The sibling field keeps its real type and description.
-    expect(JSON.stringify(publish?.inputSchema)).toContain("the name to store it under");
+    expect(JSON.stringify(publish?.inputSchema)).toContain(
+      "the name to store it under"
+    );
   });
 });
 
@@ -83,8 +93,14 @@ describe("FirefighterConnector — approval flags", () => {
     // executionId and so cannot carry the text a human edited.
     const described = await connector().describe();
     for (const [method, descriptor] of Object.entries(described.descriptors)) {
-      expect((descriptor as { needsApproval?: unknown }).needsApproval, method).toBeUndefined();
-      expect(described.annotations?.[method]?.requiresApproval, method).toBeUndefined();
+      expect(
+        (descriptor as { needsApproval?: unknown }).needsApproval,
+        method
+      ).toBeUndefined();
+      expect(
+        described.annotations?.[method]?.requiresApproval,
+        method
+      ).toBeUndefined();
     }
   });
 });
@@ -92,19 +108,25 @@ describe("FirefighterConnector — approval flags", () => {
 describe("FirefighterConnector — execution", () => {
   it("runs a tool and returns its result", async () => {
     expect(
-      await connector().executeTool("echo", { text: "hi" }, { executionId: "e1" }),
+      await connector().executeTool(
+        "echo",
+        { text: "hi" },
+        { executionId: "e1" }
+      )
     ).toEqual({ text: "hi" });
   });
 
   it("accepts a zero-argument call", async () => {
-    expect(await connector().executeTool("ping", undefined, { executionId: "e2" })).toEqual({
+    expect(
+      await connector().executeTool("ping", undefined, { executionId: "e2" })
+    ).toEqual({
       ok: true,
     });
   });
 
   it("validates arguments at runtime through the Zod schema, not the JSON Schema", async () => {
     await expect(
-      connector().executeTool("echo", { text: 42 }, { executionId: "e3" }),
+      connector().executeTool("echo", { text: 42 }, { executionId: "e3" })
     ).rejects.toThrow();
   });
 
@@ -123,7 +145,9 @@ describe("toJsonSchema", () => {
   });
 
   it("does not throw on an unrepresentable node", () => {
-    expect(() => toJsonSchema(z.strictObject({ b: z.instanceof(Uint8Array) }))).not.toThrow();
+    expect(() =>
+      toJsonSchema(z.strictObject({ b: z.instanceof(Uint8Array) }))
+    ).not.toThrow();
   });
 
   it("caches by schema instance", () => {
@@ -142,7 +166,7 @@ describe("FirefighterConnector — per-execution isolation", () => {
       async (executionId) => {
         built.push(executionId);
         return undefined;
-      },
+      }
     );
     return { built, connector };
   }
@@ -173,7 +197,7 @@ describe("FirefighterConnector — per-execution isolation", () => {
     // than silently hand the call a private one.
     const { connector } = counting();
     await expect(
-      connector.executeTool("echo", { text: "a" }, undefined as never),
+      connector.executeTool("echo", { text: "a" }, undefined as never)
     ).rejects.toMatchObject({ code: "invalid_context" });
   });
 });

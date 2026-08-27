@@ -23,12 +23,20 @@
  * Node script, not a vitest test, because the worker test pool runs in
  * workerd and has no filesystem.
  *
- * WHERE IT RUNS. `pnpm test` and `pnpm codemode:dts:check`, both in this
- * package. It was only in the second one, which nothing runs automatically —
- * this repository has no CI and no turbo task reaches it — so a guard against a
- * mistake that recurred four times depended on somebody remembering the one
- * command that invoked it. It takes ~50 ms over the whole tracked tree, so
- * putting it in front of the suite costs nothing measurable.
+ * WHERE IT RUNS. Four places now: the root `check:text` script, the lefthook
+ * pre-commit hook, the `gate-fast` job in .github/workflows/ci.yml, and
+ * `pnpm test` / `pnpm capabilities:dts:check` in this package.
+ *
+ * It was once reachable only from `capabilities:dts:check`, which nothing ran
+ * automatically — so a guard against a mistake that recurred four times
+ * depended on somebody remembering the one command that invoked it.
+ *
+ * The root-level invocation is NOT redundant with the one inside this
+ * package's `test` script. This script enumerates `git ls-files` across the
+ * WHOLE repository, but turbo hashes only this package and its dependencies,
+ * so a control byte introduced in README.md or docs/*.md rides a cache hit and
+ * is never scanned. It takes ~50 ms over the whole tracked tree, so running it
+ * everywhere costs nothing measurable.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -38,7 +46,20 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const CHECKED_EXTENSIONS = new Set([
-  "ts", "tsx", "js", "mjs", "cjs", "json", "jsonc", "md", "sql", "yml", "yaml", "css", "html", "sh",
+  "ts",
+  "tsx",
+  "js",
+  "mjs",
+  "cjs",
+  "json",
+  "jsonc",
+  "md",
+  "sql",
+  "yml",
+  "yaml",
+  "css",
+  "html",
+  "sh",
 ]);
 
 /**
@@ -92,7 +113,10 @@ for (const relativePath of trackedFiles()) {
     if (!isForbiddenByte(contents[offset])) continue;
     // Report the location, never the surrounding content: this runs over every
     // file in the repo and its output goes to CI logs.
-    const line = contents.subarray(0, offset).toString("utf8").split("\n").length;
+    const line = contents
+      .subarray(0, offset)
+      .toString("utf8")
+      .split("\n").length;
     const byte = `0x${contents[offset].toString(16).padStart(2, "0")}`;
     failures.push(`${relativePath}:${line}: control byte ${byte}`);
     break;
@@ -102,7 +126,7 @@ for (const relativePath of trackedFiles()) {
 if (failures.length > 0) {
   console.error(
     `Control bytes found in ${failures.length} source file(s). Git renders these as binary,\n` +
-      "which hides the whole file from code review. Use an escape sequence instead.\n",
+      "which hides the whole file from code review. Use an escape sequence instead.\n"
   );
   for (const failure of failures) console.error(`  ${failure}`);
   process.exit(1);

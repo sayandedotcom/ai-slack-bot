@@ -12,11 +12,20 @@
  * reader knows which scope it answers for, and a sandbox gateway knows which
  * container is this run's. None of them takes a destination as an argument.
  */
-import { BETTERSTACK_UPTIME_ENDPOINT, makeBetterStackReader } from "../betterstack/client";
+
+import type { ApprovalPort } from "../approval/contracts";
+import {
+  BETTERSTACK_UPTIME_ENDPOINT,
+  makeBetterStackReader,
+} from "../betterstack/client";
 import { makeArtifactPublisher } from "../files/r2";
 import type { CapabilityDependencies } from "../gateways/ports";
 import type { RunScope } from "../gateways/scope";
-import { makeGithubAuthSource, makeGithubGateway, resolveGithubConfig } from "../git/commit";
+import {
+  makeGithubAuthSource,
+  makeGithubGateway,
+  resolveGithubConfig,
+} from "../git/commit";
 import { makeUserTokenSource } from "../identity/user-token";
 import type { Env } from "../index";
 import { makeLangSmithReader } from "../langsmith/client";
@@ -26,7 +35,6 @@ import { makeSandboxGateway } from "../sandbox/gateway";
 import { makeSlackGateway } from "../slack/gateway";
 import { PRODUCTION_ALLOWLIST } from "../supabase/allowlist";
 import { makeSupabaseReader } from "../supabase/reader";
-import type { ApprovalPort } from "../approval/contracts";
 
 export type DependencyOverrides = Partial<CapabilityDependencies>;
 
@@ -34,7 +42,7 @@ export function productionDependencies(
   env: Env,
   scope: RunScope,
   approval: ApprovalPort,
-  overrides: DependencyOverrides = {},
+  overrides: DependencyOverrides = {}
 ): CapabilityDependencies {
   const clock = () => Date.now();
   const githubConfig = resolveGithubConfig(env);
@@ -52,8 +60,12 @@ export function productionDependencies(
       teamName: env.LINEAR_TEAM_NAME,
     }),
     supabase: makeSupabaseReader(
-      { url: env.SUPABASE_URL, key: env.SUPABASE_KEY, allowlist: PRODUCTION_ALLOWLIST },
-      scope,
+      {
+        url: env.SUPABASE_URL,
+        key: env.SUPABASE_KEY,
+        allowlist: PRODUCTION_ALLOWLIST,
+      },
+      scope
     ),
     langsmith: makeLangSmithReader(
       {
@@ -65,27 +77,31 @@ export function productionDependencies(
         projectId: env.LANGSMITH_PROJECT_ID,
         projectName: env.LANGSMITH_PROJECT_NAME,
       },
-      clock,
+      clock
     ),
     betterstack: makeBetterStackReader(
       {
         sqlEndpoint: env.BETTERSTACK_SQL_ENDPOINT,
         sqlUsername: env.BETTERSTACK_SQL_USERNAME,
         sqlPassword: env.BETTERSTACK_SQL_PASSWORD,
-        logCollections: env.BETTERSTACK_LOG_SOURCE_IDS.split(",").filter(Boolean),
+        logCollections:
+          env.BETTERSTACK_LOG_SOURCE_IDS.split(",").filter(Boolean),
         uptimeToken: env.BETTERSTACK_UPTIME_TOKEN,
         uptimeEndpoint: BETTERSTACK_UPTIME_ENDPOINT,
       },
-      clock,
+      clock
     ),
-    files: makeArtifactPublisher({ bucket: env.ARTIFACTS, baseUrl: env.ARTIFACTS_BASE_URL }),
+    files: makeArtifactPublisher({
+      bucket: env.ARTIFACTS,
+      baseUrl: env.ARTIFACTS_BASE_URL,
+    }),
     approval,
     sandbox: makeSandboxGateway(env, scope.runId),
     github: makeGithubGateway(
       env,
       githubConfig,
       makeGithubAuthSource(env, githubConfig),
-      clock,
+      clock
     ),
     clock,
     ...overrides,

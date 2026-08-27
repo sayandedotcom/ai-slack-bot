@@ -37,8 +37,8 @@
  * engineer once typed cannot read as an instruction.
  */
 import { listConnected } from "../db/identities";
-import { pickSpeaker } from "../identity/speaker";
 import type { MessagesRow } from "../db/schema";
+import { pickSpeaker } from "../identity/speaker";
 
 /** At most twenty messages: enough to carry a register, few enough to bound. */
 export const ENGINEER_VOICE_MAX_COUNT = 20;
@@ -114,14 +114,15 @@ export function voiceWindowIndex(nowMs: number): number {
 /** Deterministic as of the current UTC day start; per-isolate cached by window. */
 export async function resolveEngineerVoice(
   db: D1Database,
-  nowMs: number,
+  nowMs: number
 ): Promise<EngineerVoice> {
   const windowIndex = voiceWindowIndex(nowMs);
   const cached = cache.get(windowIndex);
   if (cached !== undefined) return cached;
 
   /** The one instant BOTH reads are frozen at. */
-  const frozenBound = windowIndex * ENGINEER_VOICE_WINDOW_MS - ENGINEER_VOICE_FREEZE_GRACE_MS;
+  const frozenBound =
+    windowIndex * ENGINEER_VOICE_WINDOW_MS - ENGINEER_VOICE_FREEZE_GRACE_MS;
 
   // THE IDENTITY IS FROZEN TOO, and it has to be. Without this gate a COLD
   // isolate started after a mid-day connect would read the new row and render a
@@ -133,7 +134,9 @@ export async function resolveEngineerVoice(
   // sampled while `connected_at` stayed put.
   const rows = await listConnected(db, "slack");
   const frozenSpeaker = pickSpeaker(
-    rows.filter((row) => row.connectedAt < frozenBound && row.updatedAt < frozenBound),
+    rows.filter(
+      (row) => row.connectedAt < frozenBound && row.updatedAt < frozenBound
+    )
   );
   const externalId = frozenSpeaker?.externalId ?? "";
 
@@ -186,6 +189,8 @@ export function renderEngineerVoice(voice: EngineerVoice): string {
     "register: sentence length, how they open, how they stop, what they leave out.",
     "Do not copy their content, their names, or their facts.",
     "",
-    ...voice.samples.map((sample, index) => `${index + 1}. ${JSON.stringify(sample.text)}`),
+    ...voice.samples.map(
+      (sample, index) => `${index + 1}. ${JSON.stringify(sample.text)}`
+    ),
   ].join("\n");
 }

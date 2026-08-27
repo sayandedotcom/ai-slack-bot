@@ -12,24 +12,30 @@
  * separate UUID resolved through D1. Nothing here may hand the name to a client.
  */
 import {
-  defaultContextOverflowClassifier,
-  Think,
   type ChatErrorContext,
   type ChatRecoveryConfig,
   type ChatResponseResult,
+  defaultContextOverflowClassifier,
   type PrepareStepContext,
   type Session,
   type StepConfig,
   type StepContext,
+  Think,
   type ToolCallContext,
   type ToolCallDecision,
   type TurnConfig,
   type TurnContext,
 } from "@cloudflare/think";
 import { createExecuteRuntime } from "@cloudflare/think/tools/execute";
-import { callable, type Connection, type ConnectionContext } from "agents";
+import { type Connection, type ConnectionContext, callable } from "agents";
 import type { ContextProvider } from "agents/experimental/memory/session";
-import type { LanguageModel, ModelMessage, PrepareStepResult, Tool, ToolSet } from "ai";
+import type {
+  LanguageModel,
+  ModelMessage,
+  PrepareStepResult,
+  Tool,
+  ToolSet,
+} from "ai";
 
 import type { ApprovalPort } from "../approval/contracts";
 import { makeApprovalPort } from "../approval/port";
@@ -50,7 +56,18 @@ import {
 import { CapabilityError } from "../gateways/errors";
 import type { RunScope } from "../gateways/scope";
 import type { Env } from "../index";
+import { sendNudge } from "../notify/nudge";
 import { redact } from "../redact";
+import {
+  makeSandboxLifecycle,
+  sandboxContainersAvailable,
+} from "../sandbox/lifecycle";
+import {
+  channelForOrigin,
+  MAX_STEPS_PER_TURN,
+  RUN_CHANNELS,
+  type RunChannelId,
+} from "./agent-channels";
 import {
   askedFrom,
   enqueueTurnEpisode,
@@ -61,16 +78,7 @@ import {
   newTurnRecord,
   type TurnRecord,
 } from "./agent-memory";
-import { sendNudge } from "../notify/nudge";
-import { makeSandboxLifecycle, sandboxContainersAvailable } from "../sandbox/lifecycle";
-import {
-  channelForOrigin,
-  MAX_STEPS_PER_TURN,
-  RUN_CHANNELS,
-  type RunChannelId,
-} from "./agent-channels";
-import { runOriginOf } from "./keys";
-import { identityFromRequest, isBlockedClientFrame } from "./transport";
+import { projectStatus, recordUsage } from "./agent-projection";
 import {
   ANTHROPIC_PROVIDER_OPTIONS,
   composeInstructions,
@@ -80,7 +88,6 @@ import {
   type ThreadMessage,
   turnInstructions,
 } from "./agent-prompt";
-import { projectStatus, recordUsage } from "./agent-projection";
 import {
   costBreakdown,
   FABLE_5_MODEL_ID,
@@ -101,11 +108,17 @@ import {
   steerMessageText,
   steerText,
 } from "./agent-steering";
-import { renderEngineerVoice, resolveEngineerVoice, voiceWindowIndex } from "./agent-voice";
+import {
+  renderEngineerVoice,
+  resolveEngineerVoice,
+  voiceWindowIndex,
+} from "./agent-voice";
 import { productionDependencies } from "./dependencies";
+import { runOriginOf } from "./keys";
 import { isRunStatus, isTerminalRunStatus, type RunStatus } from "./protocol";
 import { getRunById, getRunByKey, readRunUsage } from "./repository";
 import { resolveRunScope } from "./scope";
+import { identityFromRequest, isBlockedClientFrame } from "./transport";
 
 /** The one outer tool. Named in the prompt, the tests and the README. */
 export const RUN_CODE_TOOL = "run_code";
@@ -146,7 +159,10 @@ export const CHAT_ERROR_MAX_CHARS = 300;
  * customer conversation, breaking invariant 10 somewhere nobody greps. Caller
  * metadata is merged last, so naming the public id here replaces it.
  */
-export function turnTelemetry(ids: { runId: string; turnId: string }): TurnConfig["telemetry"] {
+export function turnTelemetry(ids: {
+  runId: string;
+  turnId: string;
+}): TurnConfig["telemetry"] {
   return {
     functionId: "run-agent",
     metadata: { agentId: ids.runId, runId: ids.runId, turnId: ids.turnId },
@@ -168,7 +184,9 @@ export function turnTelemetry(ids: { runId: string; turnId: string }): TurnConfi
  * block is already in the transcript by the time this runs, and the turn has to
  * end so nothing else picks it up.
  */
-export function assertThinkingOmitted(reasoning: ReadonlyArray<unknown> | undefined): void {
+export function assertThinkingOmitted(
+  reasoning: ReadonlyArray<unknown> | undefined
+): void {
   for (const part of reasoning ?? []) {
     // `unknown` rather than the SDK's ReasoningPart union: a reasoning FILE part
     // has no `text` at all, and narrowing to the union here would have to be
@@ -177,7 +195,7 @@ export function assertThinkingOmitted(reasoning: ReadonlyArray<unknown> | undefi
     const text = (part as { text?: unknown } | null)?.text;
     if (typeof text === "string" && text.trim() !== "") {
       throw new Error(
-        "readable thinking reached the transcript: provider options must keep thinking display omitted (invariant 17)",
+        "readable thinking reached the transcript: provider options must keep thinking display omitted (invariant 17)"
       );
     }
   }
@@ -366,12 +384,14 @@ export class RunAgent extends Think<Env, RunAgentState> {
         executor: makeGuardedExecutor(
           guardLoader(env.LOADER, PRODUCTION_LIMITS),
           PRODUCTION_LIMITS,
-          () => Date.now(),
+          () => Date.now()
         ),
         // A PROVIDER keyed by execution id: the connector memoises one context
         // per `run_code` execution, so a call budget, an audit stream and a
         // customer-reference map belong to one execution and no two share them.
-        connectors: buildConnectors(ctx, env, (executionId) => this.#bindingContext(executionId)),
+        connectors: buildConnectors(ctx, env, (executionId) =>
+          this.#bindingContext(executionId)
+        ),
         // NO `description`, deliberately. A custom one is returned verbatim and
         // DISCARDS Code Mode's own workflow and rules text — including the
         // `codemode.search` / `codemode.describe` discovery instructions the
@@ -446,7 +466,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * before setting its own, because nothing on this side can verify an identity
    * that has already crossed a Durable Object boundary.
    */
-  override async onConnect(connection: Connection, ctx: ConnectionContext): Promise<void> {
+  override async onConnect(
+    connection: Connection,
+    ctx: ConnectionContext
+  ): Promise<void> {
     connection.setState({ email: identityFromRequest(ctx.request) });
   }
 
@@ -475,9 +498,15 @@ export class RunAgent extends Think<Env, RunAgentState> {
     try {
       const run = await getRunByKey(this.env.DB, this.name);
       if (run === null) return;
-      await this.bindRun({ runId: run.id, channel: channelForOrigin(runOriginOf(run.key)) });
+      await this.bindRun({
+        runId: run.id,
+        channel: channelForOrigin(runOriginOf(run.key)),
+      });
     } catch (err) {
-      console.warn("run id not resolved on start", err instanceof Error ? err.message : err);
+      console.warn(
+        "run id not resolved on start",
+        err instanceof Error ? err.message : err
+      );
     }
   }
 
@@ -530,7 +559,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
     this.#turn.asked = askedFrom(this.messages);
     this.#budgetExhausted = false;
 
-    const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
+    const scope = await resolveRunScope(
+      this.env,
+      this.#runId(),
+      this.#turnId()
+    );
     const perTurn = turnInstructions({
       scope,
       thread: this.#turnThread(),
@@ -580,7 +613,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * `StepConfig` has no stop. `beforeTurn`'s `stopWhen` is. This is the part
    * that makes the ending useful rather than abrupt.
    */
-  override async beforeStep(ctx: PrepareStepContext): Promise<StepConfig | void> {
+  override async beforeStep(
+    ctx: PrepareStepContext
+  ): Promise<StepConfig | void> {
     // Steers first: a human's instruction should reach the model even on the
     // step that turns out to be the last affordable one.
     const spliced = this.#spliceSteers(ctx.messages);
@@ -644,7 +679,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
    *    capability layer raises, so the model sees one vocabulary whether the
    *    supersession is caught here or three calls into a `run_code` block.
    */
-  override async beforeToolCall(_ctx: ToolCallContext): Promise<ToolCallDecision | void> {
+  override async beforeToolCall(
+    _ctx: ToolCallContext
+  ): Promise<ToolCallDecision | void> {
     if (this.state.openApprovalId !== null) {
       return {
         action: "block",
@@ -720,7 +757,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
   /** The revision stamped on this turn's user message, if it carries one. */
   #metadataRevision(): number | null {
     const raw = this.activeTurnMetadata?.inputRevision;
-    return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : null;
+    return typeof raw === "number" && Number.isInteger(raw) && raw >= 0
+      ? raw
+      : null;
   }
 
   /**
@@ -732,16 +771,23 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * on one key means the D1 index and the session disagree about which
    * conversation this is, and picking either would be a guess.
    */
-  async bindRun(input: { runId: string; channel: RunChannelId }): Promise<void> {
+  async bindRun(input: {
+    runId: string;
+    channel: RunChannelId;
+  }): Promise<void> {
     const current = this.state.runId;
     if (current !== null && current !== input.runId) {
       throw new CapabilityError(
         "invalid_context",
-        "this run key is already bound to a different run id",
+        "this run key is already bound to a different run id"
       );
     }
     if (current === input.runId && this.state.channel === input.channel) return;
-    this.setState({ ...this.state, runId: input.runId, channel: input.channel });
+    this.setState({
+      ...this.state,
+      runId: input.runId,
+      channel: input.channel,
+    });
   }
 
   /**
@@ -804,7 +850,8 @@ export class RunAgent extends Think<Env, RunAgentState> {
     // with it. Left set, the next path that reaches `#turnId()` without a turn
     // — an approval expiry, a projection — would attribute itself to a turn
     // that has already finished.
-    if (this.state.turnId !== null) this.setState({ ...this.state, turnId: null });
+    if (this.state.turnId !== null)
+      this.setState({ ...this.state, turnId: null });
     await this.setStatus(terminal);
     if (isTerminalRunStatus(terminal)) await this.#teardownSandbox();
   }
@@ -821,7 +868,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * broadcast before this ran; memory lag is an operational warning, not an
    * incident (invariant 32 applied to Zep). Every failure is caught and named.
    */
-  async #rememberTurn(result: ChatResponseResult, terminal: RunStatus): Promise<void> {
+  async #rememberTurn(
+    result: ChatResponseResult,
+    terminal: RunStatus
+  ): Promise<void> {
     const runId = this.state.runId;
     if (runId === null) return;
 
@@ -845,7 +895,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
         now: Date.now(),
       });
     } catch (err) {
-      console.warn("run episode not enqueued", err instanceof Error ? err.message : err);
+      console.warn(
+        "run episode not enqueued",
+        err instanceof Error ? err.message : err
+      );
     }
   }
 
@@ -914,7 +967,7 @@ export class RunAgent extends Think<Env, RunAgentState> {
     try {
       const spent = (await readRunUsage(this.env.DB, runId)).reduce(
         (total, row) => total + row.costNanoUsd,
-        0,
+        0
       );
       return spent < ceiling;
     } catch {
@@ -937,7 +990,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
     try {
       await makeSandboxLifecycle(this.env).teardown(runId);
     } catch (err) {
-      console.warn("sandbox teardown failed", err instanceof Error ? err.message : err);
+      console.warn(
+        "sandbox teardown failed",
+        err instanceof Error ? err.message : err
+      );
     }
   }
 
@@ -953,7 +1009,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
   async setStatus(to: RunStatus): Promise<void> {
     if (this.state.status === to) return;
     this.setState({ ...this.state, status: to });
-    await this.queue("applyStatusProjection", { to, at: Date.now() }, { retry: { maxAttempts: 5 } });
+    await this.queue(
+      "applyStatusProjection",
+      { to, at: Date.now() },
+      { retry: { maxAttempts: 5 } }
+    );
   }
 
   /**
@@ -974,9 +1034,13 @@ export class RunAgent extends Think<Env, RunAgentState> {
       this.env.DB,
       runId,
       to,
-      typeof at === "number" ? at : Date.now(),
+      typeof at === "number" ? at : Date.now()
     );
-    if (!outcome.applied && outcome.reason !== undefined && outcome.reason !== "same_status") {
+    if (
+      !outcome.applied &&
+      outcome.reason !== undefined &&
+      outcome.reason !== "same_status"
+    ) {
       // Named, not swallowed. An illegal transition reaching here means the DO
       // and the index disagree about what this run is, which is worth seeing.
       console.warn(`run projection not applied: ${outcome.reason}`);
@@ -1026,7 +1090,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
       });
     } catch (err) {
       // Never into the loop. See the ordering note on onStepEnd.
-      console.error("usage row not recorded", err instanceof Error ? err.message : err);
+      console.error(
+        "usage row not recorded",
+        err instanceof Error ? err.message : err
+      );
     }
   }
 
@@ -1056,10 +1123,14 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * blocks on the turn queue that this very call is trying to add to.
    */
   @callable()
-  async steer(text: string, requestId: string): Promise<{ queued: boolean; woke: boolean }> {
+  async steer(
+    text: string,
+    requestId: string
+  ): Promise<{ queued: boolean; woke: boolean }> {
     const body = steerText(text);
     const messageId = `steer:${requestId}`;
-    if (this.#alreadySteered(messageId, requestId)) return { queued: false, woke: false };
+    if (this.#alreadySteered(messageId, requestId))
+      return { queued: false, woke: false };
 
     // Parked, or a turn already running: store it. In the parked case that is
     // the whole point — surfacing a new instruction while a human still has the
@@ -1102,7 +1173,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
    */
   async startSteerTurn(payload: unknown): Promise<void> {
     if (typeof payload !== "object" || payload === null) return;
-    const { messageId, text } = payload as { messageId?: unknown; text?: unknown };
+    const { messageId, text } = payload as {
+      messageId?: unknown;
+      text?: unknown;
+    };
     if (typeof messageId !== "string" || typeof text !== "string") return;
 
     const inputRevision = await this.noteInput();
@@ -1116,7 +1190,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
           parts: [
             {
               type: "text",
-              text: steerMessageText({ requestId: messageId, text, createdAt: Date.now() }),
+              text: steerMessageText({
+                requestId: messageId,
+                text,
+                createdAt: Date.now(),
+              }),
             },
           ],
         },
@@ -1140,7 +1218,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
    */
   #alreadySteered(messageId: string, requestId: string): boolean {
     if (this.messages.some((message) => message.id === messageId)) return true;
-    return pendingSteers(this.sql.bind(this) as SqlTag).some((row) => row.requestId === requestId);
+    return pendingSteers(this.sql.bind(this) as SqlTag).some(
+      (row) => row.requestId === requestId
+    );
   }
 
   /**
@@ -1159,7 +1239,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
     return [
       ...messages,
       ...steers.map(
-        (row): ModelMessage => ({ role: "user", content: steerMessageText(row) }),
+        (row): ModelMessage => ({
+          role: "user",
+          content: steerMessageText(row),
+        })
       ),
     ];
   }
@@ -1195,7 +1278,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
 
   /** The merged map Think would assemble for a turn. */
   async toolNames(): Promise<string[]> {
-    const { createWorkspaceTools } = await import("@cloudflare/think/tools/workspace");
+    const { createWorkspaceTools } = await import(
+      "@cloudflare/think/tools/workspace"
+    );
     return Object.keys({
       ...createWorkspaceTools(this.workspace, { bash: this.workspaceBash }),
       ...this.getTools(),
@@ -1218,10 +1303,14 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * survive RPC. `TurnConfig` carries functions (`stopWhen`), so it cannot cross
    * a stub itself.
    */
-  async beforeTurnForTest(
-    assembledSystem = "",
-  ): Promise<{ instructions: string; activeTools: string[]; maxSteps: number }> {
-    const config = await this.beforeTurn({ system: assembledSystem } as TurnContext);
+  async beforeTurnForTest(assembledSystem = ""): Promise<{
+    instructions: string;
+    activeTools: string[];
+    maxSteps: number;
+  }> {
+    const config = await this.beforeTurn({
+      system: assembledSystem,
+    } as TurnContext);
     return {
       instructions: config.instructions ?? "",
       activeTools: [...(config.activeTools ?? [])],
@@ -1291,16 +1380,19 @@ export class RunAgent extends Think<Env, RunAgentState> {
     // value, so it has to be concatenated, which is why the shape is checked
     // first even though sqlite_master is the only source it has.
     const raw = this.ctx.storage.sql;
-    const tables = [...raw.exec<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC",
-    )];
+    const tables = [
+      ...raw.exec<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC"
+      ),
+    ];
 
     const hits: string[] = [];
     for (const { name } of tables) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
       try {
         const rows = [...raw.exec(`SELECT * FROM "${name}"`)];
-        if (rows.some((row) => JSON.stringify(row).includes(needle))) hits.push(name);
+        if (rows.some((row) => JSON.stringify(row).includes(needle)))
+          hits.push(name);
       } catch {
         // `_cf_KV` refuses direct SQL with SQLITE_AUTH: it is the key-value
         // surface the runtime reserves, and `this.state` lives in it. Skipped
@@ -1319,7 +1411,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
   async #sweepKeyValue(needle: string, label: string): Promise<string[]> {
     const stored = await this.ctx.storage.list();
     const values = [...stored.values(), this.state];
-    return values.some((value) => JSON.stringify(value ?? null).includes(needle)) ? [label] : [];
+    return values.some((value) =>
+      JSON.stringify(value ?? null).includes(needle)
+    )
+      ? [label]
+      : [];
   }
 
   /**
@@ -1356,7 +1452,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
 
   /** The per-turn instructions for the run as it stands. Test surface. */
   async turnInstructionsForTest(): Promise<string> {
-    const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
+    const scope = await resolveRunScope(
+      this.env,
+      this.#runId(),
+      this.#turnId()
+    );
     return turnInstructions({
       scope,
       thread: this.#turnThread(),
@@ -1384,7 +1484,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * nothing on it can be chosen by the model.
    */
   async #bindingContext(outerToolCallId: string): Promise<BindingContext> {
-    const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
+    const scope = await resolveRunScope(
+      this.env,
+      this.#runId(),
+      this.#turnId()
+    );
     return {
       scope,
       deps: productionDependencies(this.env, scope, this.#approvalPort(scope)),
@@ -1425,7 +1529,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
         await this.schedule(0, "nudgeApproval", { approvalId });
       },
       scheduleExpiry: async (approvalId) => {
-        await this.schedule(APPROVAL_TTL_SECONDS, "approvalExpired", { approvalId });
+        await this.schedule(APPROVAL_TTL_SECONDS, "approvalExpired", {
+          approvalId,
+        });
       },
     });
   }
@@ -1447,7 +1553,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
       if (card === null || card.decision !== "pending") return;
       await sendNudge(this.env, card);
     } catch (err) {
-      console.warn("approval nudge failed", err instanceof Error ? err.message : err);
+      console.warn(
+        "approval nudge failed",
+        err instanceof Error ? err.message : err
+      );
     }
   }
 
@@ -1468,7 +1577,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
     const approvalId = readApprovalId(payload);
     if (approvalId === null || this.state.openApprovalId !== approvalId) return;
 
-    const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
+    const scope = await resolveRunScope(
+      this.env,
+      this.#runId(),
+      this.#turnId()
+    );
     const outcome = await this.#approvalPort(scope).withdraw();
     if (!outcome.withdrawn) {
       // A human decided in the race. Their resolution turn carries the decision
@@ -1488,7 +1601,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
       get: async () => {
         const now = Date.now();
         this.#voiceWindow = voiceWindowIndex(now);
-        return renderEngineerVoice(await resolveEngineerVoice(this.env.DB, now));
+        return renderEngineerVoice(
+          await resolveEngineerVoice(this.env.DB, now)
+        );
       },
     };
   }
@@ -1514,7 +1629,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
   #runId(): string {
     const runId = this.state.runId;
     if (runId === null) {
-      throw new CapabilityError("invalid_context", "this run has not been woken yet");
+      throw new CapabilityError(
+        "invalid_context",
+        "this run has not been woken yet"
+      );
     }
     return runId;
   }
@@ -1538,13 +1656,15 @@ export class RunAgent extends Think<Env, RunAgentState> {
     return raw.flatMap((entry) => {
       if (typeof entry !== "object" || entry === null) return [];
       const record = entry as Record<string, unknown>;
-      if (typeof record.text !== "string" || typeof record.ts !== "string") return [];
+      if (typeof record.text !== "string" || typeof record.ts !== "string")
+        return [];
       return [
         {
           ts: record.ts,
           userId: typeof record.userId === "string" ? record.userId : null,
           text: record.text,
-          permalink: typeof record.permalink === "string" ? record.permalink : null,
+          permalink:
+            typeof record.permalink === "string" ? record.permalink : null,
         },
       ];
     });
@@ -1560,7 +1680,8 @@ export class RunAgent extends Think<Env, RunAgentState> {
       return [
         {
           fact: record.fact,
-          citation: typeof record.citation === "string" ? record.citation : null,
+          citation:
+            typeof record.citation === "string" ? record.citation : null,
         },
       ];
     });

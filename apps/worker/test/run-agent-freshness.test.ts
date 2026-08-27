@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { getAgentByName } from "agents";
-import { z } from "zod";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { FirefighterConnector } from "../src/capabilities/connector";
 import {
@@ -9,7 +9,10 @@ import {
   PRODUCTION_LIMITS,
   staleGeneration,
 } from "../src/capabilities/execution";
-import { auditedCapability, type BindingContext } from "../src/capabilities/registry";
+import {
+  auditedCapability,
+  type BindingContext,
+} from "../src/capabilities/registry";
 import { chatRunKey } from "../src/run/keys";
 import { createOrGetRun } from "../src/run/repository";
 
@@ -64,7 +67,9 @@ describe("the freshness guard at the tool boundary", () => {
     expect(decision?.action).toBe("block");
     // `block` and not `substitute`: being parked is a state, not a failure, and
     // the reason reaches the model as the tool result so it can stop and wait.
-    expect(decision).toMatchObject({ reason: expect.stringContaining("paused") });
+    expect(decision).toMatchObject({
+      reason: expect.stringContaining("paused"),
+    });
 
     await stub.setOpenApproval(null);
     expect(await stub.toolCallDecisionForTest()).toBeUndefined();
@@ -140,25 +145,29 @@ describe("the per-execution call budget", () => {
         limits: PRODUCTION_LIMITS,
         execution: newCodeExecution({
           outerToolCallId: executionId,
-          audit: { async started() {}, async completed() {}, async failed() {} },
+          audit: {
+            async started() {},
+            async completed() {},
+            async failed() {},
+          },
           guard: { async assertFresh() {} },
           limits: PRODUCTION_LIMITS,
           clock: () => 0,
         }),
-      }),
+      })
     );
 
     const limit = PRODUCTION_LIMITS.maxCapabilityCalls;
     for (let i = 0; i < limit; i += 1) {
       await connector.executeTool("ping", {}, { executionId: "e1" });
     }
-    await expect(connector.executeTool("ping", {}, { executionId: "e1" })).rejects.toThrow(
-      /budget of 40 capability calls/,
-    );
+    await expect(
+      connector.executeTool("ping", {}, { executionId: "e1" })
+    ).rejects.toThrow(/budget of 40 capability calls/);
 
     // A different execution starts with its own budget.
     await expect(
-      connector.executeTool("ping", {}, { executionId: "e2" }),
+      connector.executeTool("ping", {}, { executionId: "e2" })
     ).resolves.toBeDefined();
   });
 });

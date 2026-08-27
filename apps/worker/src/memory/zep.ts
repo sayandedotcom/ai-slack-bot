@@ -90,7 +90,7 @@ export class ZepMemory implements MemoryStore {
           ? {}
           : { sourceDescription: input.sourceDescription }),
       },
-      { timeoutInSeconds: ZEP_REQUEST_TIMEOUT_SECONDS, maxRetries: 0 },
+      { timeoutInSeconds: ZEP_REQUEST_TIMEOUT_SECONDS, maxRetries: 0 }
     );
     return { episodeUuid: episode.uuid };
   }
@@ -102,14 +102,26 @@ export class ZepMemory implements MemoryStore {
    * touch. It is now a wrapper over `addEpisode`, so there is exactly one place
    * where a Zep write happens.
    */
-  async addMessage(graphId: string, data: string): Promise<{ episodeUuid: string }> {
+  async addMessage(
+    graphId: string,
+    data: string
+  ): Promise<{ episodeUuid: string }> {
     return this.addEpisode({ graphId, type: "message", data });
   }
 
-  async search(graphId: string, query: string, limit = 8): Promise<MemoryFact[]> {
+  async search(
+    graphId: string,
+    query: string,
+    limit = 8
+  ): Promise<MemoryFact[]> {
     let res: Awaited<ReturnType<typeof this.client.graph.search>>;
     try {
-      res = await this.client.graph.search({ graphId, query, scope: "edges", limit });
+      res = await this.client.graph.search({
+        graphId,
+        query,
+        scope: "edges",
+        limit,
+      });
     } catch (e: unknown) {
       if (isGraphNotFound(e)) return [];
       throw e;

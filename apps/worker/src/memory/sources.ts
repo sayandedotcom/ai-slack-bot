@@ -1,5 +1,5 @@
-import type { EpisodeSourceDescriptor } from "./episode";
 import type { MessagesRow } from "../db/schema";
+import type { EpisodeSourceDescriptor } from "./episode";
 
 /**
  * Turning a bounded source DESCRIPTOR into an exact D1 provenance row.
@@ -35,14 +35,14 @@ type MessageRow = Pick<MessagesRow, "event_id" | "permalink">;
 async function resolveOne(
   db: D1Database,
   source: EpisodeSourceDescriptor,
-  runId: string,
+  runId: string
 ): Promise<ResolvedSource | null> {
   if (source.kind === "zep_episode") {
     const row = await db
       .prepare(
         `SELECT m.event_id, m.permalink
            FROM zep_episodes z JOIN messages m ON m.event_id = z.event_id
-          WHERE z.episode_uuid = ?`,
+          WHERE z.episode_uuid = ?`
       )
       .bind(source.ref)
       .first<MessageRow>();
@@ -86,7 +86,7 @@ export type PreparedSourceRow = ResolvedSource & { sourceIndex: number };
 export async function resolveSources(
   db: D1Database,
   sources: readonly EpisodeSourceDescriptor[],
-  runId: string,
+  runId: string
 ): Promise<PreparedSourceRow[]> {
   const out: PreparedSourceRow[] = [];
   for (const source of sources) {
@@ -98,7 +98,9 @@ export async function resolveSources(
 }
 
 /** Parse the frozen `source_json` payload, tolerating nothing unexpected. */
-export function parseSourceDescriptors(json: string): EpisodeSourceDescriptor[] {
+export function parseSourceDescriptors(
+  json: string
+): EpisodeSourceDescriptor[] {
   const parsed: unknown = JSON.parse(json);
   if (!Array.isArray(parsed)) return [];
   const out: EpisodeSourceDescriptor[] = [];
@@ -108,11 +110,16 @@ export function parseSourceDescriptors(json: string): EpisodeSourceDescriptor[] 
     const kind = record.kind;
     const ref = record.ref;
     if (typeof ref !== "string" || ref.length === 0) continue;
-    if (kind !== "run_turn" && kind !== "zep_episode" && kind !== "slack_message") continue;
+    if (
+      kind !== "run_turn" &&
+      kind !== "zep_episode" &&
+      kind !== "slack_message"
+    )
+      continue;
     out.push(
       typeof record.turnId === "string"
         ? { kind, ref, turnId: record.turnId }
-        : { kind, ref },
+        : { kind, ref }
     );
   }
   return out;

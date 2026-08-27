@@ -1,6 +1,6 @@
-import type { Env } from "../index";
 import { CapabilityError } from "../gateways/errors";
 import { sha256Bytes } from "../gateways/hash";
+import type { Env } from "../index";
 
 /**
  * The seam between the sandbox and Phase 20's pull request.
@@ -95,7 +95,11 @@ export function internalDiffKey(diffRef: string): string | null {
   return match === null ? null : `${DIFF_KEY_PREFIX}${match[1]}.patch`;
 }
 
-type DiffStats = { filesChanged: number; insertions: number; deletions: number };
+type DiffStats = {
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+};
 
 /**
  * Counted from the diff itself rather than from `--numstat`, so one command
@@ -137,13 +141,15 @@ function parseStats(raw: string): DiffStats {
  * that ended, and the model would report a partial change as the whole one.
  */
 function buildPreview(raw: string): { preview: string; truncated: boolean } {
-  if (raw.length <= DIFF_PREVIEW_CHARS) return { preview: raw, truncated: false };
+  if (raw.length <= DIFF_PREVIEW_CHARS)
+    return { preview: raw, truncated: false };
 
   const head = raw.slice(0, DIFF_PREVIEW_CHARS);
   // Half a hunk line reads as corruption; back up to the last newline unless
   // that would throw away most of the preview.
   const lastNewline = head.lastIndexOf("\n");
-  const body = lastNewline > DIFF_PREVIEW_CHARS / 2 ? head.slice(0, lastNewline) : head;
+  const body =
+    lastNewline > DIFF_PREVIEW_CHARS / 2 ? head.slice(0, lastNewline) : head;
 
   return {
     truncated: true,
@@ -176,7 +182,7 @@ export async function captureDiff(
   env: Env,
   runId: string,
   raw: string,
-  baseSha: string,
+  baseSha: string
 ): Promise<DiffResult> {
   if (raw.trim().length === 0) {
     // Not an error, and deliberately not a ref to an empty object: Phase 20 must
@@ -195,20 +201,24 @@ export async function captureDiff(
   if (bytes.byteLength > MAX_DIFF_BYTES) {
     throw new CapabilityError(
       "output_too_large",
-      `the diff is ${bytes.byteLength} bytes; the cap is ${MAX_DIFF_BYTES}. It was not stored, because a truncated patch cannot be applied. Revert generated or vendored files and diff again.`,
+      `the diff is ${bytes.byteLength} bytes; the cap is ${MAX_DIFF_BYTES}. It was not stored, because a truncated patch cannot be applied. Revert generated or vendored files and diff again.`
     );
   }
 
   const hash = await sha256Bytes(bytes);
-  await env.ARTIFACTS.put(`${DIFF_KEY_PREFIX}${hash}.patch`, bytes as BufferSource, {
-    httpMetadata: { contentType: "text/x-diff" },
-    // The run and the base sha are metadata, not part of the key: the key is
-    // the content, and two runs producing identical bytes are the same object
-    // (see the CAVEAT on `captureDiff` above for what that means for
-    // `baseSha` specifically). `runId` is here for the sweeper and for
-    // after-the-fact attribution; neither field is ever served directly.
-    customMetadata: { runId, baseSha, capturedAt: new Date().toISOString() },
-  });
+  await env.ARTIFACTS.put(
+    `${DIFF_KEY_PREFIX}${hash}.patch`,
+    bytes as BufferSource,
+    {
+      httpMetadata: { contentType: "text/x-diff" },
+      // The run and the base sha are metadata, not part of the key: the key is
+      // the content, and two runs producing identical bytes are the same object
+      // (see the CAVEAT on `captureDiff` above for what that means for
+      // `baseSha` specifically). `runId` is here for the sweeper and for
+      // after-the-fact attribution; neither field is ever served directly.
+      customMetadata: { runId, baseSha, capturedAt: new Date().toISOString() },
+    }
+  );
 
   const { preview, truncated } = buildPreview(raw);
   return { preview, truncated, ...parseStats(raw), diffRef: `diff_${hash}` };
@@ -222,7 +232,10 @@ export async function captureDiff(
  * `text()` decodes the stored UTF-8 back to the exact string that was captured,
  * which is the whole point — trailing newlines, CRLFs and non-ASCII included.
  */
-export async function readDiff(env: Env, diffRef: string): Promise<string | null> {
+export async function readDiff(
+  env: Env,
+  diffRef: string
+): Promise<string | null> {
   const key = internalDiffKey(diffRef);
   if (key === null) return null;
 
@@ -239,7 +252,7 @@ export async function readDiff(env: Env, diffRef: string): Promise<string | null
  */
 export async function readDiffWithBase(
   env: Env,
-  diffRef: string,
+  diffRef: string
 ): Promise<{ patch: string; baseSha: string } | null> {
   const key = internalDiffKey(diffRef);
   if (key === null) return null;

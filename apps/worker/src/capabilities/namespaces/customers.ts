@@ -26,7 +26,7 @@ import type { BindingContext } from "../registry";
 
 export function resolveCustomerScope(
   ctx: BindingContext,
-  customerRef: string | undefined,
+  customerRef: string | undefined
 ): string {
   if (customerRef !== undefined) {
     if (ctx.scope.origin !== "chat") {
@@ -35,7 +35,7 @@ export function resolveCustomerScope(
       // is precisely the cross-customer read this design exists to prevent.
       throw new CapabilityError(
         "invalid_input",
-        "this conversation's customer is fixed by the channel it is in and cannot be chosen here. Drop customerRef.",
+        "this conversation's customer is fixed by the channel it is in and cannot be chosen here. Drop customerRef."
       );
     }
     // A reference, never a slug. Unknown, stale, guessed and cross-execution
@@ -49,7 +49,7 @@ export function resolveCustomerScope(
     "customer_scope_required",
     ctx.scope.origin === "chat"
       ? "this conversation is not about a particular customer yet. Use memory.findCustomers to look one up, then pass the customerRef it returns."
-      : "this run has no customer, so there is no customer scope to search. Ask which customer this concerns.",
+      : "this run has no customer, so there is no customer scope to search. Ask which customer this concerns."
   );
 }
 
@@ -69,6 +69,6 @@ export function assertDiscoveryAllowed(ctx: BindingContext): void {
   if (ctx.scope.origin === "chat") return;
   throw new CapabilityError(
     "capability_unavailable",
-    "customer lookup is only available in an internal chat. This conversation is already scoped to one customer.",
+    "customer lookup is only available in an internal chat. This conversation is already scoped to one customer."
   );
 }

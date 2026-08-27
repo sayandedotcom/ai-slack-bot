@@ -61,7 +61,9 @@ function fromBase64(value: string): Uint8Array {
  * back, and a key that cannot be exported cannot be accidentally logged or
  * serialised by code that gets hold of the `CryptoKey`.
  */
-export async function importIdentityKey(base64Secret: string): Promise<CryptoKey> {
+export async function importIdentityKey(
+  base64Secret: string
+): Promise<CryptoKey> {
   let bytes: Uint8Array;
   try {
     bytes = fromBase64(base64Secret);
@@ -70,12 +72,21 @@ export async function importIdentityKey(base64Secret: string): Promise<CryptoKey
   }
   if (bytes.length !== KEY_BYTES) {
     // Length only -- never the decoded bytes, and never the secret itself.
-    throw new SealError("bad_key", `the identity secret must decode to ${KEY_BYTES} bytes`);
+    throw new SealError(
+      "bad_key",
+      `the identity secret must decode to ${KEY_BYTES} bytes`
+    );
   }
   try {
-    return await crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+    return await crypto.subtle.importKey("raw", bytes, "AES-GCM", false, [
+      "encrypt",
+      "decrypt",
+    ]);
   } catch {
-    throw new SealError("bad_key", "the identity secret could not be imported as an AES-GCM key");
+    throw new SealError(
+      "bad_key",
+      "the identity secret could not be imported as an AES-GCM key"
+    );
   }
 }
 
@@ -88,7 +99,11 @@ export async function importIdentityKey(base64Secret: string): Promise<CryptoKey
  */
 export async function seal(key: CryptoKey, plaintext: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(plaintext)
+  );
   return `${toBase64(iv)}.${toBase64(new Uint8Array(ct))}`;
 }
 
@@ -113,7 +128,11 @@ export async function open(key: CryptoKey, sealed: string): Promise<string> {
     if (iv.length !== IV_BYTES) {
       throw new SealError("tampered", "sealed token failed to open");
     }
-    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      key,
+      ct
+    );
     return new TextDecoder().decode(plaintext);
   } catch {
     // Includes the SealError thrown just above; rethrowing an identical one

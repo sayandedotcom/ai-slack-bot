@@ -1,7 +1,6 @@
-import { Component } from "react";
-import type { ErrorInfo, ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
+import type { ErrorInfo, ReactNode } from "react";
+import { Component } from "react";
 
 /**
  * The one class component in this app, and it exists because React gives no
@@ -40,7 +39,10 @@ export class ErrorBoundary extends Component<Props, State> {
     return { failed: true };
   }
 
-  static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
+  static getDerivedStateFromProps(
+    props: Props,
+    state: State
+  ): Partial<State> | null {
     if (props.resetKey === state.resetKey) return null;
     return { failed: false, resetKey: props.resetKey };
   }

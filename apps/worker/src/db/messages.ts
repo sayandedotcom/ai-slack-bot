@@ -10,11 +10,14 @@ import type { EventsSeenRow } from "./schema";
  */
 export async function recordEvent(
   db: D1Database,
-  row: Pick<EventsSeenRow, "event_id" | "channel_id" | "outcome" | "received_at">,
+  row: Pick<
+    EventsSeenRow,
+    "event_id" | "channel_id" | "outcome" | "received_at"
+  >
 ): Promise<boolean> {
   const res = await db
     .prepare(
-      "INSERT OR IGNORE INTO events_seen (event_id, channel_id, outcome, received_at) VALUES (?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO events_seen (event_id, channel_id, outcome, received_at) VALUES (?, ?, ?, ?)"
     )
     .bind(row.event_id, row.channel_id, row.outcome, row.received_at)
     .run();
@@ -34,13 +37,13 @@ export async function insertMessage(
     permalink: string | null;
     customer_slug: string | null;
     received_at: number;
-  },
+  }
 ): Promise<void> {
   await db
     .prepare(
       `INSERT OR IGNORE INTO messages
         (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       row.event_id,
@@ -52,7 +55,7 @@ export async function insertMessage(
       row.subtype,
       row.permalink,
       row.customer_slug,
-      row.received_at,
+      row.received_at
     )
     .run();
 }

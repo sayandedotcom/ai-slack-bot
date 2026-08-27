@@ -30,23 +30,32 @@ export class RunKeyError extends Error {
  * must go through this before building a key, or a root message and its first
  * reply would land on two different Durable Objects.
  */
-export function canonicalThreadTs(ts: string, threadTs: string | null | undefined): string {
+export function canonicalThreadTs(
+  ts: string,
+  threadTs: string | null | undefined
+): string {
   return threadTs ?? ts;
 }
 
 export function slackRunKey(channelId: string, threadTs: string): string {
   if (!SLACK_CHANNEL.test(channelId)) {
-    throw new RunKeyError(`invalid slack channel id: ${JSON.stringify(channelId)}`);
+    throw new RunKeyError(
+      `invalid slack channel id: ${JSON.stringify(channelId)}`
+    );
   }
   if (!SLACK_TS.test(threadTs)) {
-    throw new RunKeyError(`invalid slack thread ts: ${JSON.stringify(threadTs)}`);
+    throw new RunKeyError(
+      `invalid slack thread ts: ${JSON.stringify(threadTs)}`
+    );
   }
   return `slack:${channelId}:${threadTs}`;
 }
 
 export function chatRunKey(chatId: string): string {
   if (!UUID.test(chatId)) {
-    throw new RunKeyError(`chat run id must be a uuid: ${JSON.stringify(chatId)}`);
+    throw new RunKeyError(
+      `chat run id must be a uuid: ${JSON.stringify(chatId)}`
+    );
   }
   return `chat:${chatId}`;
 }
@@ -59,11 +68,13 @@ export function chatRunKey(chatId: string): string {
 export function assertRunKey(key: string): string {
   const [origin, ...rest] = key.split(":");
   if (origin === "slack") {
-    if (rest.length !== 2) throw new RunKeyError(`malformed slack key: ${JSON.stringify(key)}`);
+    if (rest.length !== 2)
+      throw new RunKeyError(`malformed slack key: ${JSON.stringify(key)}`);
     return slackRunKey(rest[0], rest[1]);
   }
   if (origin === "chat") {
-    if (rest.length !== 1) throw new RunKeyError(`malformed chat key: ${JSON.stringify(key)}`);
+    if (rest.length !== 1)
+      throw new RunKeyError(`malformed chat key: ${JSON.stringify(key)}`);
     return chatRunKey(rest[0]);
   }
   throw new RunKeyError(`unknown run key origin: ${JSON.stringify(key)}`);

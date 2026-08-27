@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
 import {
   Card,
@@ -7,6 +5,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@workspace/ui/components/card";
+import type { ReactNode } from "react";
 
 import type { ApiError } from "../lib/api";
 
@@ -58,7 +57,7 @@ export function Panel<T>({
           </div>
         ) : state.kind === "error" ? (
           <div role="alert" className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-sm">
               {REASON[state.error.kind]}
             </p>
             <Button variant="outline" size="sm" onClick={state.retry}>
@@ -66,7 +65,7 @@ export function Panel<T>({
             </Button>
           </div>
         ) : state.kind === "empty" ? (
-          <p className="text-sm text-muted-foreground">{state.hint}</p>
+          <p className="text-muted-foreground text-sm">{state.hint}</p>
         ) : (
           children(state.data)
         )}

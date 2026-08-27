@@ -24,7 +24,9 @@ const monitor = z.strictObject({
   lastCheckedAt: z.string().nullable(),
 });
 
-export function makeBetterStackTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeBetterStackTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     logs: auditedCapability(ctx, "betterstack", "logs", {
       effect: "read",
@@ -48,8 +50,7 @@ export function makeBetterStackTools(ctx: BindingContext): Record<string, Classi
 
     monitors: auditedCapability(ctx, "betterstack", "monitors", {
       effect: "read",
-      description:
-        "List the current up/down state of the configured monitors.",
+      description: "List the current up/down state of the configured monitors.",
       // Takes no arguments, but still needs `.default({})`: a model writing
       // `betterstack.monitors()` reaches execute(undefined), because
       // ToolDispatcher spreads an empty argument array.

@@ -34,7 +34,7 @@ const trace = z.strictObject({
       inputPreview: z.string(),
       outputPreview: z.string(),
       error: z.string().nullable(),
-    }),
+    })
   ),
   truncated: z.boolean(),
 });
@@ -44,7 +44,9 @@ const trace = z.strictObject({
  * project pin lives in configuration and never in an argument — the same reason
  * the Linear destination is not a parameter.
  */
-export function makeLangSmithTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeLangSmithTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     trace: auditedCapability(ctx, "langsmith", "trace", {
       effect: "read",

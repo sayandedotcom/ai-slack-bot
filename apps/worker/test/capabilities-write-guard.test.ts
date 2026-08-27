@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import { assertEffectPermitted } from "../src/capabilities/write-guard";
 import { CapabilityError } from "../src/gateways/errors";
 import type { RunScope } from "../src/gateways/scope";
-import { createOrGetRun, createOrGetRunUnderPolicy } from "../src/run/repository";
+import {
+  createOrGetRun,
+  createOrGetRunUnderPolicy,
+} from "../src/run/repository";
 
 /**
  * Storage is shared across tests AND files in this pool, so every case mints
@@ -14,10 +17,12 @@ function freshChannelId(): string {
   return `C${crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
 }
 
-async function seedChannel(mode: "observe" | "live" | "internal"): Promise<string> {
+async function seedChannel(
+  mode: "observe" | "live" | "internal"
+): Promise<string> {
   const channelId = freshChannelId();
   await env.DB.prepare(
-    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, NULL, ?)",
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, NULL, ?)"
   )
     .bind(channelId, `chan-${channelId}`, mode)
     .run();
@@ -71,7 +76,9 @@ const deps = { db: env.DB };
 describe("write guard", () => {
   it("lets a read through on a shadow run", async () => {
     const scope = await seedScope({ shadow: true });
-    await expect(assertEffectPermitted(deps, scope, "read")).resolves.toBeUndefined();
+    await expect(
+      assertEffectPermitted(deps, scope, "read")
+    ).resolves.toBeUndefined();
   });
 
   it("lets a control write and a sandbox write through on a shadow run", async () => {
@@ -79,13 +86,19 @@ describe("write guard", () => {
     // escalate for approval and drive its own container — it just cannot
     // reach the outside world.
     const scope = await seedScope({ shadow: true });
-    await expect(assertEffectPermitted(deps, scope, "control_write")).resolves.toBeUndefined();
-    await expect(assertEffectPermitted(deps, scope, "sandbox_write")).resolves.toBeUndefined();
+    await expect(
+      assertEffectPermitted(deps, scope, "control_write")
+    ).resolves.toBeUndefined();
+    await expect(
+      assertEffectPermitted(deps, scope, "sandbox_write")
+    ).resolves.toBeUndefined();
   });
 
   it("refuses an external write from a shadow run", async () => {
     const scope = await seedScope({ shadow: true });
-    await expect(assertEffectPermitted(deps, scope, "external_write")).rejects.toMatchObject({
+    await expect(
+      assertEffectPermitted(deps, scope, "external_write")
+    ).rejects.toMatchObject({
       code: "shadow_write_denied",
     });
   });
@@ -93,21 +106,30 @@ describe("write guard", () => {
   it("permits an external write from a live channel", async () => {
     const channelId = await seedChannel("live");
     const scope = await seedScope({ shadow: false, channelId });
-    await expect(assertEffectPermitted(deps, scope, "external_write")).resolves.toBeUndefined();
+    await expect(
+      assertEffectPermitted(deps, scope, "external_write")
+    ).resolves.toBeUndefined();
   });
 
   it("refuses an external write into an observe channel", async () => {
     const channelId = await seedChannel("observe");
     const scope = await seedScope({ shadow: false, channelId });
-    await expect(assertEffectPermitted(deps, scope, "external_write")).rejects.toMatchObject({
+    await expect(
+      assertEffectPermitted(deps, scope, "external_write")
+    ).rejects.toMatchObject({
       code: "channel_read_only",
     });
   });
 
   it("refuses an external write into a channel absent from the table", async () => {
     // Fail closed: an unmapped channel is never postable.
-    const scope = await seedScope({ shadow: false, channelId: freshChannelId() });
-    await expect(assertEffectPermitted(deps, scope, "external_write")).rejects.toMatchObject({
+    const scope = await seedScope({
+      shadow: false,
+      channelId: freshChannelId(),
+    });
+    await expect(
+      assertEffectPermitted(deps, scope, "external_write")
+    ).rejects.toMatchObject({
       code: "channel_read_only",
     });
   });
@@ -116,7 +138,11 @@ describe("write guard", () => {
     const channelId = await seedChannel("live");
     const scope = await seedScope({ shadow: false, channelId });
     await expect(
-      assertEffectPermitted(deps, { ...scope, slackThread: null }, "external_write"),
+      assertEffectPermitted(
+        deps,
+        { ...scope, slackThread: null },
+        "external_write"
+      )
     ).rejects.toMatchObject({ code: "slack_context_required" });
   });
 
@@ -125,7 +151,11 @@ describe("write guard", () => {
     // than default shadow to false.
     const scope = await seedScope({ shadow: false });
     await expect(
-      assertEffectPermitted(deps, { ...scope, runId: crypto.randomUUID() }, "external_write"),
+      assertEffectPermitted(
+        deps,
+        { ...scope, runId: crypto.randomUUID() },
+        "external_write"
+      )
     ).rejects.toMatchObject({ code: "shadow_write_denied" });
   });
 
@@ -133,16 +163,18 @@ describe("write guard", () => {
     // scope.shadow is a diagnostic snapshot, deliberately not an authorization.
     // An operator flipping a run to shadow mid-run must stop the NEXT write.
     const scope = await seedScope({ shadow: false });
-    await env.DB.prepare("UPDATE runs SET shadow = 1 WHERE id = ?").bind(scope.runId).run();
+    await env.DB.prepare("UPDATE runs SET shadow = 1 WHERE id = ?")
+      .bind(scope.runId)
+      .run();
     await expect(
-      assertEffectPermitted(deps, { ...scope, shadow: false }, "external_write"),
+      assertEffectPermitted(deps, { ...scope, shadow: false }, "external_write")
     ).rejects.toMatchObject({ code: "shadow_write_denied" });
   });
 
   it("throws CapabilityError, so a refusal serialises as `code: message`", async () => {
     const scope = await seedScope({ shadow: true });
-    await expect(assertEffectPermitted(deps, scope, "external_write")).rejects.toBeInstanceOf(
-      CapabilityError,
-    );
+    await expect(
+      assertEffectPermitted(deps, scope, "external_write")
+    ).rejects.toBeInstanceOf(CapabilityError);
   });
 });

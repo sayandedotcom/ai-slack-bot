@@ -1,9 +1,8 @@
-import { useState } from "react";
-import type { ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
+import type { ReactNode } from "react";
+import { useState } from "react";
 
-import type { Decision, DecideAction, OpenApproval } from "./api";
+import type { DecideAction, Decision, OpenApproval } from "./api";
 
 /**
  * One approval, rendered as the thing a fire-fighter actually acts on. The card
@@ -78,18 +77,20 @@ const VERB: Record<Decision, string> = {
 function resolvedLine(
   decision: Decision,
   decidedBy: string | null,
-  mine: boolean,
+  mine: boolean
 ): string {
   // Withdrawal is the agent's own doing — no human decided it, so neither the
   // "you" nor the "someone else" framing is true.
-  if (decision === "withdrawn") return "The agent withdrew this — the thread moved on";
+  if (decision === "withdrawn")
+    return "The agent withdrew this — the thread moved on";
   if (mine) {
     if (decision === "approved") return "You approved this";
     if (decision === "edited") return "You edited this";
     if (decision === "rejected") return "You rejected this";
     return "You closed this";
   }
-  if (decidedBy !== null) return `${decidedBy} ${VERB[decision]} this before you`;
+  if (decidedBy !== null)
+    return `${decidedBy} ${VERB[decision]} this before you`;
   return `Someone else ${VERB[decision]} this first`;
 }
 
@@ -100,7 +101,9 @@ function Meta({ card, now }: { card: OpenApproval; now: number }): ReactNode {
         #{card.channelId}
       </span>
       <span className="tabular-nums">thread {card.threadTs}</span>
-      <span className="ml-auto shrink-0 tabular-nums">{ago(card.createdAt, now)}</span>
+      <span className="ml-auto shrink-0 tabular-nums">
+        {ago(card.createdAt, now)}
+      </span>
     </div>
   );
 }
@@ -112,13 +115,17 @@ function Meta({ card, now }: { card: OpenApproval; now: number }): ReactNode {
  */
 function Draft({ text }: { text: string }): ReactNode {
   return (
-    <blockquote className="max-h-52 overflow-y-auto whitespace-pre-wrap border-l-2 border-border bg-muted/40 px-3 py-2 text-sm">
+    <blockquote className="max-h-52 overflow-y-auto whitespace-pre-wrap border-border border-l-2 bg-muted/40 px-3 py-2 text-sm">
       {text}
     </blockquote>
   );
 }
 
-export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): ReactNode {
+export function ApprovalCard({
+  state,
+  role,
+  onDecide,
+}: ApprovalCardProps): ReactNode {
   const card = state.card;
   const viewer = role === "viewer";
 
@@ -133,10 +140,12 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
   if (state.kind === "resolved") {
     return (
       <li className="rounded-lg border bg-card px-3 py-2">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-muted-foreground text-sm">
           {resolvedLine(state.decision, state.decidedBy, state.mine)}
         </p>
-        <p className="mt-1 truncate text-xs text-muted-foreground/80">{card.why}</p>
+        <p className="mt-1 truncate text-muted-foreground/80 text-xs">
+          {card.why}
+        </p>
       </li>
     );
   }
@@ -152,7 +161,7 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
 
       {/* The `why` leads. It is the answer to "why am I being interrupted?",
           and an operator who skips it is deciding blind. */}
-      <p className="text-sm font-medium">{card.why}</p>
+      <p className="font-medium text-sm">{card.why}</p>
 
       {composer === "edit" && !locked ? (
         <textarea
@@ -160,7 +169,7 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
           onChange={(event) => setEditText(event.target.value)}
           rows={8}
           aria-label="Edited reply"
-          className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
         />
       ) : (
         <Draft text={card.draft} />
@@ -173,7 +182,7 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
             onChange={(event) => setReason(event.target.value)}
             placeholder="Why is this wrong?"
             aria-label="Rejection reason"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
           />
           <p className="text-[11px] text-muted-foreground">
             The reason trains the agent — it is required.
@@ -229,7 +238,11 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
           </>
         ) : (
           <>
-            <Button size="sm" disabled={locked} onClick={() => onDecide({ action: "approve" })}>
+            <Button
+              size="sm"
+              disabled={locked}
+              onClick={() => onDecide({ action: "approve" })}
+            >
               Approve
             </Button>
             <Button
@@ -252,7 +265,9 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
         )}
 
         {viewer ? (
-          <span className="text-[11px] text-muted-foreground">{VIEWER_CAPTION}</span>
+          <span className="text-[11px] text-muted-foreground">
+            {VIEWER_CAPTION}
+          </span>
         ) : deciding ? (
           // Deliberately quiet: the locked buttons already say "in flight", and
           // a spinner on a sub-second PATCH is more flicker than feedback.
@@ -263,7 +278,7 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
       </div>
 
       {state.kind === "open" && state.error !== undefined ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-destructive text-xs">
           {state.error}
         </p>
       ) : null}

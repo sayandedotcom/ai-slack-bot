@@ -19,17 +19,16 @@
  * `PATCH /api/approvals/:id`, which takes the roster check and the D1 CAS.
  */
 
-import { useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
+import type { KeyboardEvent, ReactNode } from "react";
+import { useState } from "react";
 
 import {
-  useRunAgent,
   type ChatMessage,
   type ChatMessagePart,
   type ConnectionState,
   type RunAgentState,
+  useRunAgent,
 } from "./use-run-agent";
 
 /** How much of a tool payload this pane will show. It is not a JSON viewer. */
@@ -72,25 +71,39 @@ function toolNameOf(part: ChatMessagePart): string {
 function preview(value: unknown): { text: string; truncated: boolean } {
   let full: string;
   try {
-    full = typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value));
+    full =
+      typeof value === "string"
+        ? value
+        : (JSON.stringify(value, null, 2) ?? String(value));
   } catch {
     full = String(value);
   }
-  return { text: full.slice(0, PAYLOAD_MAX_CHARS), truncated: full.length > PAYLOAD_MAX_CHARS };
+  return {
+    text: full.slice(0, PAYLOAD_MAX_CHARS),
+    truncated: full.length > PAYLOAD_MAX_CHARS,
+  };
 }
 
 function Caption({ children }: { children: ReactNode }): ReactNode {
   return (
-    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{children}</div>
+    <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
+      {children}
+    </div>
   );
 }
 
-function Payload({ label, value }: { label: string; value: unknown }): ReactNode {
+function Payload({
+  label,
+  value,
+}: {
+  label: string;
+  value: unknown;
+}): ReactNode {
   const { text, truncated } = preview(value);
   return (
     <div className="space-y-1">
       <Caption>{label}</Caption>
-      <pre className="overflow-x-auto rounded bg-muted/60 p-2 text-xs leading-snug break-words whitespace-pre-wrap">
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-muted/60 p-2 text-xs leading-snug">
         {text}
       </pre>
       {truncated ? (
@@ -128,7 +141,7 @@ function ToolRow({ part }: { part: ChatMessagePart }): ReactNode {
           {open ? "▾" : "▸"}
         </span>
         <span className="font-medium">{toolNameOf(part)}</span>
-        <span className="ml-auto text-xs text-muted-foreground">{state}</span>
+        <span className="ml-auto text-muted-foreground text-xs">{state}</span>
       </button>
       {open ? (
         <div className="space-y-2 border-t px-3 py-2">
@@ -137,7 +150,9 @@ function ToolRow({ part }: { part: ChatMessagePart }): ReactNode {
           ) : record.input === undefined ? null : (
             <Payload label="input" value={record.input} />
           )}
-          {record.output === undefined ? null : <Payload label="output" value={record.output} />}
+          {record.output === undefined ? null : (
+            <Payload label="output" value={record.output} />
+          )}
         </div>
       ) : null}
     </div>
@@ -165,14 +180,13 @@ function MessageRow({ message }: { message: ChatMessage }): ReactNode {
           className={`rounded-lg border px-3 py-2 ${ROLE_CLASS[message.role] ?? ROLE_CLASS.system}`}
         >
           <Caption>{message.role}</Caption>
-          <p className="mt-1 text-sm break-words whitespace-pre-wrap">{text}</p>
-        </div>,
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm">{text}</p>
+        </div>
       );
       continue;
     }
     if (isToolPart(part)) {
       rows.push(<ToolRow key={key} part={part} />);
-      continue;
     }
     // `reasoning` is deliberately not rendered: the provider returns thinking
     // with an empty text field (invariant 17), so there is nothing to show and
@@ -259,8 +273,8 @@ export function RunView({
           role="alert"
           className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
         >
-          The run socket was refused. Reload the page — if it keeps happening you are probably
-          signed out of Access.
+          The run socket was refused. Reload the page — if it keeps happening
+          you are probably signed out of Access.
         </div>
       ) : null}
 
@@ -287,17 +301,22 @@ export function RunView({
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto rounded-lg border bg-background p-3">
         {messages.length === 0 && !busy ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
+          <p className="py-8 text-center text-muted-foreground text-sm">
             Nothing yet — the transcript fills in as the agent works.
           </p>
         ) : (
-          messages.map((message) => <MessageRow key={message.id} message={message} />)
+          messages.map((message) => (
+            <MessageRow key={message.id} message={message} />
+          ))
         )}
 
         {approvals}
 
         {busy ? (
-          <p className="text-center text-xs text-muted-foreground" role="status">
+          <p
+            className="text-center text-muted-foreground text-xs"
+            role="status"
+          >
             Working…
           </p>
         ) : null}

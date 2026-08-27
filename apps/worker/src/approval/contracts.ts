@@ -8,9 +8,20 @@
  * the two small pure helpers every later task needs.
  */
 
-export type ApprovalDecision = "pending" | "approved" | "edited" | "rejected" | "withdrawn";
+export type ApprovalDecision =
+  | "pending"
+  | "approved"
+  | "edited"
+  | "rejected"
+  | "withdrawn";
 
-export type ApprovalDelivery = "none" | "sending" | "sent" | "blocked" | "suppressed" | "in_doubt";
+export type ApprovalDelivery =
+  | "none"
+  | "sending"
+  | "sent"
+  | "blocked"
+  | "suppressed"
+  | "in_doubt";
 
 export type ApprovalRow = {
   id: string;
@@ -39,7 +50,9 @@ export type DecisionInput =
   | { action: "edit"; text: string }
   | { action: "reject"; reason: string };
 
-export type DecisionInputErrorCode = "edit_requires_text" | "reject_requires_reason";
+export type DecisionInputErrorCode =
+  | "edit_requires_text"
+  | "reject_requires_reason";
 
 /**
  * Thrown by `validateDecisionInput` (and, transitively, by
@@ -158,7 +171,10 @@ export function resolutionTurnContent(input: {
   return parts.join("\n\n");
 }
 
-function deliveryLine(delivery: ApprovalDelivery, error: string | null): string {
+function deliveryLine(
+  delivery: ApprovalDelivery,
+  error: string | null
+): string {
   switch (delivery) {
     case "sent":
       // "Do not re-read" is here because a live run did exactly that: told
@@ -168,27 +184,27 @@ function deliveryLine(delivery: ApprovalDelivery, error: string | null): string 
       // receipt (the message ts came back from Slack), so it is authoritative;
       // the in_doubt branch below is the one that asks for a check.
       return (
-        "It has been sent to the customer thread; that delivery is confirmed, so do not spend a"
-        + " step re-reading the thread to check. If the customer asked for nothing else, stop here."
+        "It has been sent to the customer thread; that delivery is confirmed, so do not spend a" +
+        " step re-reading the thread to check. If the customer asked for nothing else, stop here."
       );
     case "blocked":
       // The honest version of Phase 11's terminal state. The run resumes on
       // this, so the model has to be told what is still owed to the customer.
       return (
-        `It was NOT sent (${error ?? "blocked"}), and it will not be sent automatically.`
-        + " Sending as the on-duty engineer is not available yet, so the approved text above has to be posted by a human."
-        + " Say so plainly in your answer, and do not try to send it another way."
+        `It was NOT sent (${error ?? "blocked"}), and it will not be sent automatically.` +
+        " Sending as the on-duty engineer is not available yet, so the approved text above has to be posted by a human." +
+        " Say so plainly in your answer, and do not try to send it another way."
       );
     case "suppressed":
       return (
-        "This run is shadowing a conversation it must never write to, so nothing was sent"
-        + " and nothing will be. The approved text is on the record for review only."
+        "This run is shadowing a conversation it must never write to, so nothing was sent" +
+        " and nothing will be. The approved text is on the record for review only."
       );
     case "in_doubt":
       return (
-        `The send was attempted and its outcome is unknown (${error ?? "unknown"}).`
-        + " Do NOT send it again — a duplicate message to a customer cannot be taken back."
-        + " A human has to check the thread and reconcile."
+        `The send was attempted and its outcome is unknown (${error ?? "unknown"}).` +
+        " Do NOT send it again — a duplicate message to a customer cannot be taken back." +
+        " A human has to check the thread and reconcile."
       );
     case "none":
     case "sending":
@@ -231,6 +247,9 @@ export interface ApprovalPort {
    */
   withdraw(): Promise<
     | { withdrawn: true }
-    | { withdrawn: false; decision: Exclude<ApprovalDecision, "pending" | "withdrawn"> }
+    | {
+        withdrawn: false;
+        decision: Exclude<ApprovalDecision, "pending" | "withdrawn">;
+      }
   >;
 }

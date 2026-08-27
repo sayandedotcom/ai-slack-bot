@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-
-import { ApiError } from "./api";
 import type { PanelState } from "../components/panel";
+import { ApiError } from "./api";
 
 type Snapshot<T> =
   | { kind: "loading" }

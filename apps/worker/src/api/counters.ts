@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import type { Env } from "../index";
 import { getCounters } from "../db/counters";
+import type { Env } from "../index";
 
 export const countersApi = new Hono<{ Bindings: Env }>();
 

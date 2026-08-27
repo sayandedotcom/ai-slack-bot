@@ -23,9 +23,12 @@ function scopeFor(turnId = crypto.randomUUID()): RunScope {
 
 const deps = { db: env.DB, clock: () => Date.now() };
 
-async function stateOf(scope: RunScope, method: string): Promise<string | undefined> {
+async function stateOf(
+  scope: RunScope,
+  method: string
+): Promise<string | undefined> {
   const row = await env.DB.prepare(
-    "SELECT state FROM codemode_effects WHERE run_id = ? AND method = ?",
+    "SELECT state FROM codemode_effects WHERE run_id = ? AND method = ?"
   )
     .bind(scope.runId, method)
     .first<{ state: string }>();
@@ -37,12 +40,19 @@ describe("effect ledger — at most once", () => {
     const scope = scopeFor();
     let calls = 0;
     const run = () =>
-      runEffect(deps, scope, "linear", "createIssue", { title: "t" }, {
-        execute: async () => {
-          calls += 1;
-          return { id: "ISS-1" };
-        },
-      });
+      runEffect(
+        deps,
+        scope,
+        "linear",
+        "createIssue",
+        { title: "t" },
+        {
+          execute: async () => {
+            calls += 1;
+            return { id: "ISS-1" };
+          },
+        }
+      );
 
     expect(await run()).toEqual({ id: "ISS-1" });
     expect(await run()).toEqual({ id: "ISS-1" });
@@ -66,7 +76,7 @@ describe("effect ledger — at most once", () => {
       "slack",
       "reply",
       { text: "hi" },
-      { execute },
+      { execute }
     );
     expect(calls).toBe(2);
   });
@@ -91,8 +101,12 @@ describe("effect ledger — at most once", () => {
     const scope = scopeFor();
     let n = 0;
     const execute = async () => ({ n: (n += 1) });
-    expect(await runEffect(deps, scope, "linear", "createIssue", {}, { execute })).toEqual({ n: 1 });
-    expect(await runEffect(deps, scope, "linear", "createIssue", {}, { execute })).toEqual({ n: 1 });
+    expect(
+      await runEffect(deps, scope, "linear", "createIssue", {}, { execute })
+    ).toEqual({ n: 1 });
+    expect(
+      await runEffect(deps, scope, "linear", "createIssue", {}, { execute })
+    ).toEqual({ n: 1 });
   });
 });
 
@@ -104,16 +118,19 @@ describe("effect ledger — failure classification", () => {
     let calls = 0;
     const execute = async () => {
       calls += 1;
-      if (calls === 1) throw new CapabilityError("channel_read_only", "not postable");
+      if (calls === 1)
+        throw new CapabilityError("channel_read_only", "not postable");
       return { ts: "ok" };
     };
 
     await expect(
-      runEffect(deps, scope, "slack", "reply", { text: "x" }, { execute }),
+      runEffect(deps, scope, "slack", "reply", { text: "x" }, { execute })
     ).rejects.toMatchObject({ code: "channel_read_only" });
     expect(await stateOf(scope, "reply")).toBe("failed");
 
-    expect(await runEffect(deps, scope, "slack", "reply", { text: "x" }, { execute })).toEqual({
+    expect(
+      await runEffect(deps, scope, "slack", "reply", { text: "x" }, { execute })
+    ).toEqual({
       ts: "ok",
     });
     expect(calls).toBe(2);
@@ -130,12 +147,12 @@ describe("effect ledger — failure classification", () => {
     };
 
     await expect(
-      runEffect(deps, scope, "slack", "reply", { text: "x" }, { execute }),
+      runEffect(deps, scope, "slack", "reply", { text: "x" }, { execute })
     ).rejects.toMatchObject({ code: "effect_in_doubt" });
     expect(await stateOf(scope, "reply")).toBe("in_doubt");
 
     await expect(
-      runEffect(deps, scope, "slack", "reply", { text: "x" }, { execute }),
+      runEffect(deps, scope, "slack", "reply", { text: "x" }, { execute })
     ).rejects.toMatchObject({ code: "effect_in_doubt" });
     expect(calls).toBe(1);
   });
@@ -144,21 +161,35 @@ describe("effect ledger — failure classification", () => {
     const scope = scopeFor();
     let sends = 0;
     await expect(
-      runEffect(deps, scope, "linear", "createIssue", { title: "t" }, {
-        execute: async () => {
-          sends += 1;
-          throw new Error("gateway timeout");
-        },
-      }),
+      runEffect(
+        deps,
+        scope,
+        "linear",
+        "createIssue",
+        { title: "t" },
+        {
+          execute: async () => {
+            sends += 1;
+            throw new Error("gateway timeout");
+          },
+        }
+      )
     ).rejects.toMatchObject({ code: "effect_in_doubt" });
 
-    const resolved = await runEffect(deps, scope, "linear", "createIssue", { title: "t" }, {
-      execute: async () => {
-        sends += 1;
-        return { id: "SHOULD-NOT-HAPPEN" };
-      },
-      reconcile: async () => ({ id: "ISS-7" }),
-    });
+    const resolved = await runEffect(
+      deps,
+      scope,
+      "linear",
+      "createIssue",
+      { title: "t" },
+      {
+        execute: async () => {
+          sends += 1;
+          return { id: "SHOULD-NOT-HAPPEN" };
+        },
+        reconcile: async () => ({ id: "ISS-7" }),
+      }
+    );
 
     expect(resolved).toEqual({ id: "ISS-7" });
     expect(sends).toBe(1);
@@ -168,18 +199,32 @@ describe("effect ledger — failure classification", () => {
   it("stays in_doubt when reconcile cannot confirm either way", async () => {
     const scope = scopeFor();
     await expect(
-      runEffect(deps, scope, "linear", "createIssue", {}, {
-        execute: async () => {
-          throw new Error("timeout");
-        },
-      }),
+      runEffect(
+        deps,
+        scope,
+        "linear",
+        "createIssue",
+        {},
+        {
+          execute: async () => {
+            throw new Error("timeout");
+          },
+        }
+      )
     ).rejects.toMatchObject({ code: "effect_in_doubt" });
 
     await expect(
-      runEffect(deps, scope, "linear", "createIssue", {}, {
-        execute: async () => ({ id: "no" }),
-        reconcile: async () => null,
-      }),
+      runEffect(
+        deps,
+        scope,
+        "linear",
+        "createIssue",
+        {},
+        {
+          execute: async () => ({ id: "no" }),
+          reconcile: async () => null,
+        }
+      )
     ).rejects.toMatchObject({ code: "effect_in_doubt" });
     expect(await stateOf(scope, "createIssue")).toBe("in_doubt");
   });
@@ -193,9 +238,16 @@ describe("effect ledger — failure classification", () => {
     cyclic.self = cyclic;
 
     await expect(
-      runEffect(deps, scope, "slack", "reply", { text: "x" }, {
-        execute: async () => cyclic,
-      }),
+      runEffect(
+        deps,
+        scope,
+        "slack",
+        "reply",
+        { text: "x" },
+        {
+          execute: async () => cyclic,
+        }
+      )
     ).rejects.toMatchObject({ code: "effect_in_doubt" });
     expect(await stateOf(scope, "reply")).toBe("in_doubt");
   });
@@ -204,16 +256,16 @@ describe("effect ledger — failure classification", () => {
 describe("effect key canonicalisation", () => {
   it("is stable across object key order", async () => {
     const scope = scopeFor();
-    expect(await effectKey(scope, "linear", "createIssue", { a: 1, b: 2 })).toBe(
-      await effectKey(scope, "linear", "createIssue", { b: 2, a: 1 }),
-    );
+    expect(
+      await effectKey(scope, "linear", "createIssue", { a: 1, b: 2 })
+    ).toBe(await effectKey(scope, "linear", "createIssue", { b: 2, a: 1 }));
   });
 
   it("preserves array order, which is meaningful", async () => {
     const scope = scopeFor();
-    expect(await effectKey(scope, "linear", "createIssue", { l: [1, 2] })).not.toBe(
-      await effectKey(scope, "linear", "createIssue", { l: [2, 1] }),
-    );
+    expect(
+      await effectKey(scope, "linear", "createIssue", { l: [1, 2] })
+    ).not.toBe(await effectKey(scope, "linear", "createIssue", { l: [2, 1] }));
   });
 
   it("separates namespace from method rather than concatenating", async () => {
@@ -221,13 +273,15 @@ describe("effect key canonicalisation", () => {
     // separator; the envelope is structured for that reason.
     const scope = scopeFor();
     expect(await effectKey(scope, "slack", "reply", {})).not.toBe(
-      await effectKey(scope, "slackreply", "", {}),
+      await effectKey(scope, "slackreply", "", {})
     );
   });
 
   it("refuses an argument that cannot be canonicalised", async () => {
     const scope = scopeFor();
-    await expect(effectKey(scope, "slack", "reply", { n: Number.NaN } as never)).rejects.toThrow();
+    await expect(
+      effectKey(scope, "slack", "reply", { n: Number.NaN } as never)
+    ).rejects.toThrow();
   });
 
   it("leaves no reservation behind when the arguments are unhashable", async () => {
@@ -235,7 +289,7 @@ describe("effect key canonicalisation", () => {
     await expect(
       runEffect(deps, scope, "slack", "reply", { n: Number.NaN } as never, {
         execute: async () => ({ ts: "1" }),
-      }),
+      })
     ).rejects.toThrow();
     expect(await stateOf(scope, "reply")).toBeUndefined();
   });

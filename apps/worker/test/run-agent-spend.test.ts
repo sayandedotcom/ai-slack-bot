@@ -34,7 +34,10 @@ function usage(over: {
       cacheWriteTokens: over.cacheWrite,
     },
     outputTokens: over.output,
-    outputTokenDetails: { textTokens: undefined, reasoningTokens: over.reasoning },
+    outputTokenDetails: {
+      textTokens: undefined,
+      reasoningTokens: over.reasoning,
+    },
     totalTokens: over.total,
   } as LanguageModelUsage;
 }
@@ -48,8 +51,14 @@ describe("pricing", () => {
   });
 
   it("charges a cache read at a tenth of a fresh input token", () => {
-    const fresh = costNanoUsd(FABLE_5_MODEL_ID, usage({ input: 1_000, noCache: 1_000 }));
-    const cached = costNanoUsd(FABLE_5_MODEL_ID, usage({ input: 1_000, cacheRead: 1_000 }));
+    const fresh = costNanoUsd(
+      FABLE_5_MODEL_ID,
+      usage({ input: 1_000, noCache: 1_000 })
+    );
+    const cached = costNanoUsd(
+      FABLE_5_MODEL_ID,
+      usage({ input: 1_000, cacheRead: 1_000 })
+    );
     expect(fresh).toBe(1_000 * FABLE_5_PRICES.input);
     expect(cached).toBe(1_000 * FABLE_5_PRICES.cacheRead);
     expect(cached * 10).toBe(fresh);
@@ -75,7 +84,9 @@ describe("pricing", () => {
       usage: normalizeUsage(usage({ input: 900, output: 10 })),
     });
     expect(breakdown.unclassifiedInputTokens).toBe(900);
-    expect(breakdown.totalNanoUsd).toBe(900 * FABLE_5_PRICES.input + 10 * FABLE_5_PRICES.output);
+    expect(breakdown.totalNanoUsd).toBe(
+      900 * FABLE_5_PRICES.input + 10 * FABLE_5_PRICES.output
+    );
   });
 
   it("never double-charges a token that is a subset of another count", () => {
@@ -84,12 +95,20 @@ describe("pricing", () => {
     const breakdown = costBreakdown({
       modelId: FABLE_5_MODEL_ID,
       usage: normalizeUsage(
-        usage({ input: 1_000, noCache: 400, cacheRead: 600, output: 200, reasoning: 150 }),
+        usage({
+          input: 1_000,
+          noCache: 400,
+          cacheRead: 600,
+          output: 200,
+          reasoning: 150,
+        })
       ),
     });
     expect(breakdown.unclassifiedInputTokens).toBe(0);
     expect(breakdown.totalNanoUsd).toBe(
-      400 * FABLE_5_PRICES.input + 600 * FABLE_5_PRICES.cacheRead + 200 * FABLE_5_PRICES.output,
+      400 * FABLE_5_PRICES.input +
+        600 * FABLE_5_PRICES.cacheRead +
+        200 * FABLE_5_PRICES.output
     );
   });
 
@@ -105,12 +124,14 @@ describe("pricing", () => {
 
   it("refuses to price a model with no reviewed row", () => {
     expect(() => costNanoUsd("some-other-model", usage({ input: 1 }))).toThrow(
-      UnknownModelPriceError,
+      UnknownModelPriceError
     );
   });
 
   it("fills in a missing total rather than reporting zero tokens", () => {
-    expect(normalizeUsage(usage({ input: 30, output: 12 })).totalTokens).toBe(42);
+    expect(normalizeUsage(usage({ input: 30, output: 12 })).totalTokens).toBe(
+      42
+    );
     expect(normalizeUsage(undefined).totalTokens).toBe(0);
   });
 });
@@ -120,7 +141,11 @@ describe("the spend decision", () => {
 
   it("allows a step that fits", () => {
     expect(
-      spendDecision({ spentNanoUsd: 100, ceilingNanoUsd: ceiling, estimateNanoUsd: 100 }),
+      spendDecision({
+        spentNanoUsd: 100,
+        ceilingNanoUsd: ceiling,
+        estimateNanoUsd: 100,
+      })
     ).toEqual({ allow: true });
   });
 
@@ -134,7 +159,9 @@ describe("the spend decision", () => {
       estimateNanoUsd: 1_000,
     });
     expect(decision.allow).toBe(false);
-    expect(decision.allow === false && decision.reason).toContain("spend ceiling");
+    expect(decision.allow === false && decision.reason).toContain(
+      "spend ceiling"
+    );
   });
 
   it("treats a ceiling of zero as unbounded", () => {
@@ -143,7 +170,7 @@ describe("the spend decision", () => {
         spentNanoUsd: Number.MAX_SAFE_INTEGER,
         ceilingNanoUsd: 0,
         estimateNanoUsd: 1,
-      }),
+      })
     ).toEqual({ allow: true });
   });
 
@@ -155,24 +182,37 @@ describe("the spend decision", () => {
       promptBytes: 2_000,
       maxOutputTokens: 100,
     });
-    expect(estimate).toBe(1_000 * FABLE_5_PRICES.cacheWrite1h + 100 * FABLE_5_PRICES.output);
+    expect(estimate).toBe(
+      1_000 * FABLE_5_PRICES.cacheWrite1h + 100 * FABLE_5_PRICES.output
+    );
   });
 });
 
 describe("the stop condition", () => {
   const step = (nanoUsdWorth: number) => ({
-    usage: usage({ input: nanoUsdWorth / FABLE_5_PRICES.input, noCache: nanoUsdWorth / FABLE_5_PRICES.input }),
+    usage: usage({
+      input: nanoUsdWorth / FABLE_5_PRICES.input,
+      noCache: nanoUsdWorth / FABLE_5_PRICES.input,
+    }),
   });
 
   it("does not fire while the turn is under the ceiling", async () => {
     const stop = spendStopWhen(FABLE_5_MODEL_ID, 1_000_000_000);
-    expect(await stop({ steps: [step(400_000_000), step(400_000_000)] as never })).toBe(false);
+    expect(
+      await stop({ steps: [step(400_000_000), step(400_000_000)] as never })
+    ).toBe(false);
   });
 
   it("fires once cumulative usage crosses it", async () => {
     const stop = spendStopWhen(FABLE_5_MODEL_ID, 1_000_000_000);
     expect(
-      await stop({ steps: [step(400_000_000), step(400_000_000), step(400_000_000)] as never }),
+      await stop({
+        steps: [
+          step(400_000_000),
+          step(400_000_000),
+          step(400_000_000),
+        ] as never,
+      })
     ).toBe(true);
   });
 
@@ -182,7 +222,9 @@ describe("the stop condition", () => {
   });
 
   it("sums the steps of one turn", () => {
-    expect(spentNanoUsd(FABLE_5_MODEL_ID, [step(10_000), step(20_000)] as never)).toBe(30_000);
+    expect(
+      spentNanoUsd(FABLE_5_MODEL_ID, [step(10_000), step(20_000)] as never)
+    ).toBe(30_000);
   });
 });
 

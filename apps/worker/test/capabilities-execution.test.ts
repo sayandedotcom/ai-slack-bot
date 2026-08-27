@@ -20,7 +20,9 @@ const scope: RunScope = {
   actor: null,
 };
 
-function harness(overrides: { fresh?: boolean; maxCapabilityCalls?: number } = {}) {
+function harness(
+  overrides: { fresh?: boolean; maxCapabilityCalls?: number } = {}
+) {
   const events: CapabilityEvent[] = [];
   const execution = newCodeExecution({
     outerToolCallId: "tc-1",
@@ -39,7 +41,8 @@ function harness(overrides: { fresh?: boolean; maxCapabilityCalls?: number } = {
         : alwaysFresh(),
     limits: {
       ...PRODUCTION_LIMITS,
-      maxCapabilityCalls: overrides.maxCapabilityCalls ?? PRODUCTION_LIMITS.maxCapabilityCalls,
+      maxCapabilityCalls:
+        overrides.maxCapabilityCalls ?? PRODUCTION_LIMITS.maxCapabilityCalls,
     },
     clock: () => 0,
   });
@@ -49,7 +52,9 @@ function harness(overrides: { fresh?: boolean; maxCapabilityCalls?: number } = {
 describe("withCapabilityAudit — ordering", () => {
   it("records started then completed around a successful call", async () => {
     const { events, execution } = harness();
-    await withCapabilityAudit(execution, scope, "slack", "thread", async () => ["m"]);
+    await withCapabilityAudit(execution, scope, "slack", "thread", async () => [
+      "m",
+    ]);
     expect(events.map((e) => e.kind)).toEqual(["started", "completed"]);
   });
 
@@ -60,7 +65,7 @@ describe("withCapabilityAudit — ordering", () => {
         // An adapter that failed to translate its own upstream error. Narrowing
         // here is what stops a connection string reaching model-authored code.
         throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
-      }),
+      })
     ).rejects.toMatchObject({ code: expect.any(String) });
 
     expect(events.map((e) => e.kind)).toEqual(["started", "failed"]);
@@ -71,8 +76,20 @@ describe("withCapabilityAudit — ordering", () => {
     // A bare `cap:1` collides across the many run_code calls of one loop, which
     // makes the audit trail unreadable exactly when someone needs it.
     const { events, execution } = harness();
-    await withCapabilityAudit(execution, scope, "slack", "thread", async () => null);
-    await withCapabilityAudit(execution, scope, "slack", "thread", async () => null);
+    await withCapabilityAudit(
+      execution,
+      scope,
+      "slack",
+      "thread",
+      async () => null
+    );
+    await withCapabilityAudit(
+      execution,
+      scope,
+      "slack",
+      "thread",
+      async () => null
+    );
     const ids = events.filter((e) => e.kind === "started").map((e) => e.callId);
     expect(ids).toEqual(["cap:tc-1:1", "cap:tc-1:2"]);
   });
@@ -85,7 +102,7 @@ describe("withCapabilityAudit — budget", () => {
 
     await withCapabilityAudit(execution, scope, "slack", "thread", upstream);
     await expect(
-      withCapabilityAudit(execution, scope, "slack", "thread", upstream),
+      withCapabilityAudit(execution, scope, "slack", "thread", upstream)
     ).rejects.toMatchObject({ code: "capability_unavailable" });
 
     expect(upstream).toHaveBeenCalledTimes(1);
@@ -94,7 +111,7 @@ describe("withCapabilityAudit — budget", () => {
   it("still records the refused call, rather than leaving no trace", async () => {
     const { events, execution } = harness({ maxCapabilityCalls: 0 });
     await expect(
-      withCapabilityAudit(execution, scope, "slack", "thread", async () => "ok"),
+      withCapabilityAudit(execution, scope, "slack", "thread", async () => "ok")
     ).rejects.toMatchObject({ code: "capability_unavailable" });
     expect(events.map((e) => e.kind)).toEqual(["started", "failed"]);
   });
@@ -103,9 +120,21 @@ describe("withCapabilityAudit — budget", () => {
     // A module-global counter would let one run exhaust another's budget.
     const a = harness({ maxCapabilityCalls: 1 });
     const b = harness({ maxCapabilityCalls: 1 });
-    await withCapabilityAudit(a.execution, scope, "slack", "thread", async () => "a");
+    await withCapabilityAudit(
+      a.execution,
+      scope,
+      "slack",
+      "thread",
+      async () => "a"
+    );
     await expect(
-      withCapabilityAudit(b.execution, scope, "slack", "thread", async () => "b"),
+      withCapabilityAudit(
+        b.execution,
+        scope,
+        "slack",
+        "thread",
+        async () => "b"
+      )
     ).resolves.toBe("b");
   });
 });
@@ -115,7 +144,7 @@ describe("withCapabilityAudit — freshness", () => {
     const { execution } = harness({ fresh: false });
     const upstream = vi.fn(async () => "ok");
     await expect(
-      withCapabilityAudit(execution, scope, "slack", "reply", upstream),
+      withCapabilityAudit(execution, scope, "slack", "reply", upstream)
     ).rejects.toMatchObject({ code: "stale_generation" });
     expect(upstream).not.toHaveBeenCalled();
   });
@@ -125,7 +154,7 @@ describe("withCapabilityAudit — freshness", () => {
     // exactly what an operator needs to be able to see.
     const { events, execution } = harness({ fresh: false });
     await expect(
-      withCapabilityAudit(execution, scope, "slack", "reply", async () => "ok"),
+      withCapabilityAudit(execution, scope, "slack", "reply", async () => "ok")
     ).rejects.toThrow();
     expect(events.map((e) => e.kind)).toEqual(["started", "failed"]);
   });
@@ -135,8 +164,12 @@ describe("audit redaction", () => {
   it("drops a credential-shaped VALUE whatever the field is called", async () => {
     const { events, execution } = harness();
     await withCapabilityAudit(
-      execution, scope, "slack", "reply", async () => "ok",
-      { note: "xoxb-1234567890-abcdef" },
+      execution,
+      scope,
+      "slack",
+      "reply",
+      async () => "ok",
+      { note: "xoxb-1234567890-abcdef" }
     );
     expect(JSON.stringify(events)).not.toContain("xoxb-1234567890-abcdef");
   });
@@ -146,8 +179,12 @@ describe("audit redaction", () => {
     // adapter is passing around, and an audit record is durable.
     const { events, execution } = harness();
     await withCapabilityAudit(
-      execution, scope, "github", "openPR", async () => "ok",
-      { apiKey: "harmless-looking", title: "fix" },
+      execution,
+      scope,
+      "github",
+      "openPR",
+      async () => "ok",
+      { apiKey: "harmless-looking", title: "fix" }
     );
     const started = events.find((e) => e.kind === "started");
     expect(started?.args).not.toHaveProperty("apiKey");
@@ -159,8 +196,12 @@ describe("audit redaction", () => {
     // in the parent Worker before anything downstream gets to bound it.
     const { events, execution } = harness();
     await withCapabilityAudit(
-      execution, scope, "files", "publish", async () => "ok",
-      { bytes: new Uint8Array(5000) },
+      execution,
+      scope,
+      "files",
+      "publish",
+      async () => "ok",
+      { bytes: new Uint8Array(5000) }
     );
     const started = events.find((e) => e.kind === "started");
     expect(started?.args).toMatchObject({ bytes: "<binary: 5000 bytes>" });
@@ -169,7 +210,13 @@ describe("audit redaction", () => {
 
   it("records no args at all when a capability takes none", async () => {
     const { events, execution } = harness();
-    await withCapabilityAudit(execution, scope, "sandbox", "boot", async () => "ok");
+    await withCapabilityAudit(
+      execution,
+      scope,
+      "sandbox",
+      "boot",
+      async () => "ok"
+    );
     expect(events.find((e) => e.kind === "started")?.args).toBeNull();
   });
 });
@@ -185,7 +232,9 @@ describe("customer references", () => {
 
   it("resolves a reference it minted", () => {
     const { execution } = harness();
-    expect(execution.customers.resolve(execution.customers.mint("pulsefit"))).toBe("pulsefit");
+    expect(
+      execution.customers.resolve(execution.customers.mint("pulsefit"))
+    ).toBe("pulsefit");
   });
 
   it("refuses a reference minted by a DIFFERENT execution", () => {
@@ -194,7 +243,9 @@ describe("customer references", () => {
     const a = harness();
     const b = harness();
     const ref = a.execution.customers.mint("pulsefit");
-    expect(() => b.execution.customers.resolve(ref)).toThrow(/not produced in this execution/);
+    expect(() => b.execution.customers.resolve(ref)).toThrow(
+      /not produced in this execution/
+    );
   });
 
   it("refuses a guessed reference", () => {

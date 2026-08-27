@@ -1,4 +1,8 @@
-import type { AddEpisodeInput, MemoryFact, MemoryStore } from "../../src/memory/store";
+import type {
+  AddEpisodeInput,
+  MemoryFact,
+  MemoryStore,
+} from "../../src/memory/store";
 
 let uuidCounter = 0;
 
@@ -40,7 +44,10 @@ export class FakeMemoryStore implements MemoryStore {
   }
 
   /** Mirrors the production wrapper: addMessage is addEpisode with type message. */
-  async addMessage(graphId: string, data: string): Promise<{ episodeUuid: string }> {
+  async addMessage(
+    graphId: string,
+    data: string
+  ): Promise<{ episodeUuid: string }> {
     return this.addEpisode({ graphId, type: "message", data });
   }
 

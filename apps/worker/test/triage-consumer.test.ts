@@ -28,11 +28,21 @@ const wakeOutcome: TriageOutcome = {
   latency_ms: 400,
 };
 
-async function seedMessage(eventId: string, opts: { thread_ts?: string; ts?: string; text?: string } = {}) {
+async function seedMessage(
+  eventId: string,
+  opts: { thread_ts?: string; ts?: string; text?: string } = {}
+) {
   await env.DB.prepare(
     `INSERT INTO messages (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
-     VALUES (?, 'C1', ?, ?, 'U1', ?, NULL, NULL, 'pulsefit', 1)`,
-  ).bind(eventId, opts.ts ?? "9.9", opts.thread_ts ?? null, opts.text ?? "how do I do X?").run();
+     VALUES (?, 'C1', ?, ?, 'U1', ?, NULL, NULL, 'pulsefit', 1)`
+  )
+    .bind(
+      eventId,
+      opts.ts ?? "9.9",
+      opts.thread_ts ?? null,
+      opts.text ?? "how do I do X?"
+    )
+    .run();
 }
 
 describe("handleTriageBatch", () => {
@@ -46,7 +56,7 @@ describe("handleTriageBatch", () => {
       env.DB.prepare("DELETE FROM channels"),
     ]);
     await env.DB.prepare(
-      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES ('C1', 'ext-pulsefit', 'pulsefit', 'live')",
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES ('C1', 'ext-pulsefit', 'pulsefit', 'live')"
     ).run();
   });
 
@@ -54,9 +64,13 @@ describe("handleTriageBatch", () => {
     await seedMessage("Root", { ts: "1.0", text: "earlier in thread" });
     await seedMessage("Ev1", { ts: "2.0", thread_ts: "1.0" });
     const memory = new FakeMemoryStore();
-    memory.searchResults = [{ factId: "f1", fact: "known issue", episodeUuids: [] }];
+    memory.searchResults = [
+      { factId: "f1", fact: "known issue", episodeUuids: [] },
+    ];
     const seen: TriageInput[] = [];
-    const triage = async (input: TriageInput) => (seen.push(input), wakeOutcome);
+    const triage = async (input: TriageInput) => (
+      seen.push(input), wakeOutcome
+    );
     const { batch, acked } = batchOf(["Ev1"]);
 
     await handleTriageBatch(batch, env, { triage, memory });
@@ -64,8 +78,14 @@ describe("handleTriageBatch", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0].thread.map((m) => m.text)).toEqual(["earlier in thread"]);
     expect(seen[0].recall[0].fact).toBe("known issue");
-    const row = await env.DB.prepare("SELECT wake, why, cost_usd FROM triage_decisions WHERE event_id = 'Ev1'").first();
-    expect(row).toMatchObject({ wake: 1, why: "direct question", cost_usd: 0.0003 });
+    const row = await env.DB.prepare(
+      "SELECT wake, why, cost_usd FROM triage_decisions WHERE event_id = 'Ev1'"
+    ).first();
+    expect(row).toMatchObject({
+      wake: 1,
+      why: "direct question",
+      cost_usd: 0.0003,
+    });
     expect(acked).toEqual(["Ev1"]);
   });
 
@@ -94,7 +114,9 @@ describe("handleTriageBatch", () => {
 
     expect(calls).toBe(0);
     expect(acked).toEqual(["Ev1"]);
-    const row = await env.DB.prepare("SELECT 1 FROM triage_decisions WHERE event_id = 'Ev1'").first();
+    const row = await env.DB.prepare(
+      "SELECT 1 FROM triage_decisions WHERE event_id = 'Ev1'"
+    ).first();
     expect(row).toBeNull();
   });
 
@@ -105,7 +127,9 @@ describe("handleTriageBatch", () => {
       throw new Error("zep down");
     };
     const seen: TriageInput[] = [];
-    const triage = async (input: TriageInput) => (seen.push(input), wakeOutcome);
+    const triage = async (input: TriageInput) => (
+      seen.push(input), wakeOutcome
+    );
 
     await handleTriageBatch(batchOf(["Ev1"]).batch, env, { triage, memory });
 
@@ -136,16 +160,32 @@ describe("handleTriageBatch", () => {
       await env.DB.prepare("DELETE FROM runs WHERE channel_id = 'C1'").run();
     });
 
-    const seedRun = async (id: string, status: string, threadTs: string, createdAt: number) =>
+    const seedRun = async (
+      id: string,
+      status: string,
+      threadTs: string,
+      createdAt: number
+    ) =>
       env.DB.prepare(
         `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, summary, created_at, updated_at)
-         VALUES (?, ?, 'slack', 'C1', ?, ?, NULL, ?, ?)`,
+         VALUES (?, ?, 'slack', 'C1', ?, ?, NULL, ?, ?)`
       )
-        .bind(id, `slack:C1:${threadTs}:${id}`, threadTs, status, createdAt, createdAt)
+        .bind(
+          id,
+          `slack:C1:${threadTs}:${id}`,
+          threadTs,
+          status,
+          createdAt,
+          createdAt
+        )
         .run();
 
     it("wakes anyway when the thread's last run failed", async () => {
-      await seedMessage("Ev1", { ts: "2.0", thread_ts: "1.0", text: "any luck?" });
+      await seedMessage("Ev1", {
+        ts: "2.0",
+        thread_ts: "1.0",
+        text: "any luck?",
+      });
       await seedRun("r-dead", "failed", "1.0", 1000);
       const woke: unknown[] = [];
 
@@ -155,8 +195,9 @@ describe("handleTriageBatch", () => {
         wakeRun: async (m) => void woke.push(m),
       });
 
-      const row = await env.DB.prepare("SELECT wake, why, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'")
-        .first<{ wake: number; why: string; opening_prompt: string }>();
+      const row = await env.DB.prepare(
+        "SELECT wake, why, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'"
+      ).first<{ wake: number; why: string; opening_prompt: string }>();
       expect(row?.wake).toBe(1);
       expect(row?.why).toContain("abandoned-thread override");
       // A declining decision has no reason to carry a usable prompt, so the
@@ -176,8 +217,9 @@ describe("handleTriageBatch", () => {
 
       // `idle` means waiting on the customer -- healthy, and exactly the case
       // triage exists to judge. Overriding it would wake a run per follow-up.
-      const row = await env.DB.prepare("SELECT wake, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'")
-        .first<{ wake: number; opening_prompt: string }>();
+      const row = await env.DB.prepare(
+        "SELECT wake, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'"
+      ).first<{ wake: number; opening_prompt: string }>();
       expect(row?.wake).toBe(0);
       // The "previous attempt failed" fallback belongs to the override only.
       // Storing it on an ordinary decline made the table say a run had died
@@ -198,8 +240,9 @@ describe("handleTriageBatch", () => {
 
       // Newest run only. A thread that failed once and then recovered must not
       // be forced awake for the rest of its life.
-      const row = await env.DB.prepare("SELECT wake FROM triage_decisions WHERE event_id = 'Ev1'")
-        .first<{ wake: number }>();
+      const row = await env.DB.prepare(
+        "SELECT wake FROM triage_decisions WHERE event_id = 'Ev1'"
+      ).first<{ wake: number }>();
       expect(row?.wake).toBe(0);
     });
 
@@ -212,10 +255,13 @@ describe("handleTriageBatch", () => {
         memory: new FakeMemoryStore(),
       });
 
-      const row = await env.DB.prepare("SELECT why, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'")
-        .first<{ why: string; opening_prompt: string }>();
+      const row = await env.DB.prepare(
+        "SELECT why, opening_prompt FROM triage_decisions WHERE event_id = 'Ev1'"
+      ).first<{ why: string; opening_prompt: string }>();
       expect(row?.why).toBe("direct question");
-      expect(row?.opening_prompt).toBe("Customer asks about language variants.");
+      expect(row?.opening_prompt).toBe(
+        "Customer asks about language variants."
+      );
     });
   });
 
@@ -232,7 +278,10 @@ describe("handleTriageBatch", () => {
     };
     const { batch, acked, retried } = batchOf(["Ev1", "Ev2"]);
 
-    await handleTriageBatch(batch, env, { triage, memory: new FakeMemoryStore() });
+    await handleTriageBatch(batch, env, {
+      triage,
+      memory: new FakeMemoryStore(),
+    });
 
     expect(retried).toEqual(["Ev1"]);
     expect(acked).toEqual(["Ev2"]);

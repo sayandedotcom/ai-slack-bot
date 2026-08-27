@@ -33,7 +33,7 @@ export type SweepResult = {
 export async function sweepMemoryOutbox(
   env: Env,
   now: number = Date.now(),
-  limit: number = SWEEP_PAGE_SIZE,
+  limit: number = SWEEP_PAGE_SIZE
 ): Promise<SweepResult> {
   const due = await listDueOutboxRows(env.DB, { now, limit });
   let enqueued = 0;
@@ -46,7 +46,10 @@ export async function sweepMemoryOutbox(
       // second implementation of it is a second thing that can be wrong. It
       // also means a row whose lease is still live is simply re-delivered and
       // no-ops on the claim, which is the cheapest possible outcome.
-      await env.MEMORY_QUEUE.send({ kind: "agent_generation", outboxId: row.id });
+      await env.MEMORY_QUEUE.send({
+        kind: "agent_generation",
+        outboxId: row.id,
+      });
       enqueued += 1;
     } catch {
       // One unsendable row must not abandon the rest of the page. The row stays

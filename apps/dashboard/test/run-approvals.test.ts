@@ -34,8 +34,12 @@ import type { CardState } from "../src/approvals/approval-card";
 import { RunApprovals } from "../src/approvals/run-approvals";
 import type { PanelState } from "../src/components/panel";
 
-function stubFetch(impl: (input: string, init?: RequestInit) => Promise<Response> | Response) {
-  const spy = vi.fn((input: unknown, init?: unknown) => impl(String(input), init as RequestInit));
+function stubFetch(
+  impl: (input: string, init?: RequestInit) => Promise<Response> | Response
+) {
+  const spy = vi.fn((input: unknown, init?: unknown) =>
+    impl(String(input), init as RequestInit)
+  );
   vi.stubGlobal("fetch", spy);
   return spy;
 }
@@ -64,7 +68,7 @@ afterEach(() => {
 describe("deciding an approval from the run view", () => {
   it("sends the decision to PATCH /api/approvals/:id and opens no agent transport at all", async () => {
     const fetchSpy = stubFetch(() =>
-      jsonResponse(200, { approval: { ...CARD, decision: "approved" } }),
+      jsonResponse(200, { approval: { ...CARD, decision: "approved" } })
     );
     // The Agents SDK reaches `RunAgent` over a WebSocket under `/agents/*`. If a
     // decision ever went that way instead, it would show up here.
@@ -89,11 +93,19 @@ describe("deciding an approval from the run view", () => {
 
   it("renders a 409 as the winner's decision rather than as an error banner", async () => {
     stubFetch(() =>
-      jsonResponse(409, { code: "already_decided", message: "already decided", decision: "rejected" }),
+      jsonResponse(409, {
+        code: "already_decided",
+        message: "already decided",
+        decision: "rejected",
+      })
     );
 
     const outcome = await decide(CARD.id, { action: "approve" });
-    expect(outcome).toEqual({ result: "already_decided", decision: "rejected", decidedBy: null });
+    expect(outcome).toEqual({
+      result: "already_decided",
+      decision: "rejected",
+      decidedBy: null,
+    });
     if (outcome.result !== "already_decided") throw new Error("unreachable");
 
     // This is `use-approvals.ts`'s own mapping for a lost race, inlined because
@@ -121,7 +133,7 @@ describe("deciding an approval from the run view", () => {
         onDecide: () => {
           throw new Error("a resolved card must offer nothing to click");
         },
-      }),
+      })
     );
 
     expect(markup).toContain("Someone else rejected this first");

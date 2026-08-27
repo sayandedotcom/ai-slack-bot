@@ -94,7 +94,7 @@ export class CapabilityError extends Error {
   constructor(
     code: CapabilityErrorCode,
     reason: string,
-    options?: { retryable?: boolean; details?: JsonObject },
+    options?: { retryable?: boolean; details?: JsonObject }
   ) {
     super(`${code}: ${reason}`);
     this.name = "CapabilityError";

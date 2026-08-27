@@ -6,7 +6,7 @@
  * touching the worktree — CI must report drift, not silently repair it.
  *
  */
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,7 +22,10 @@ import type { RunScope } from "../src/gateways/scope";
 import type { Env } from "../src/index";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const OUTPUT = resolvePath(here, "../src/capabilities/generated/capabilities.d.ts");
+const OUTPUT = resolvePath(
+  here,
+  "../src/capabilities/generated/capabilities.d.ts"
+);
 
 /**
  * Rendering reads schemas and descriptions only — it never invokes a
@@ -82,7 +85,7 @@ function unreachableEnv(): Env {
   return new Proxy({} as Record<string, unknown>, {
     get(_target, binding) {
       throw new Error(
-        `the declaration generator must not read env.${String(binding)}`,
+        `the declaration generator must not read env.${String(binding)}`
       );
     },
   }) as unknown as Env;
@@ -94,8 +97,7 @@ function unreachableEnv(): Env {
  * is the whole surface a connector could reach for, and dropping it is correct
  * here: there is no request to keep alive.
  */
-const renderContext = () =>
-  ({ waitUntil() {} }) as unknown as ExecutionContext;
+const renderContext = () => ({ waitUntil() {} }) as unknown as ExecutionContext;
 
 const silentAudit = {
   async started() {},
@@ -135,12 +137,16 @@ async function main(): Promise<void> {
   // call the codemode runtime makes, so the committed artifact is what the
   // model is actually handed. Both build over the same `buildNamespaces`
   // descriptors, so this is a change of vantage point, not of content.
-  const connectors = buildConnectors(renderContext(), unreachableEnv(), async (_executionId) => ({
-    scope: RENDER_SCOPE,
-    deps: unreachableDependencies(),
-    limits: PRODUCTION_LIMITS,
-    execution: renderExecution(),
-  }));
+  const connectors = buildConnectors(
+    renderContext(),
+    unreachableEnv(),
+    async (_executionId) => ({
+      scope: RENDER_SCOPE,
+      deps: unreachableDependencies(),
+      limits: PRODUCTION_LIMITS,
+      execution: renderExecution(),
+    })
+  );
   const rendered = await renderDeclarationsFromConnectors(connectors);
 
   if (mode === "write") {
@@ -155,7 +161,7 @@ async function main(): Promise<void> {
     existing = await readFile(OUTPUT, "utf8");
   } catch {
     console.error(
-      `${OUTPUT} does not exist. Run \`pnpm capabilities:dts\` and commit the result.`,
+      `${OUTPUT} does not exist. Run \`pnpm capabilities:dts\` and commit the result.`
     );
     process.exit(1);
     return;
@@ -164,7 +170,7 @@ async function main(): Promise<void> {
   if (existing !== rendered) {
     console.error(
       "the committed capability declarations are stale.\n" +
-        "Run `pnpm capabilities:dts` and commit the result.",
+        "Run `pnpm capabilities:dts` and commit the result."
     );
     process.exit(1);
     return;

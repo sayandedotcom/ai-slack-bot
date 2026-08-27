@@ -14,7 +14,9 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 function toHex(buffer: ArrayBuffer): string {
-  return [...new Uint8Array(buffer)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(buffer)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 export async function verifySlackSignature(opts: {
@@ -38,12 +40,12 @@ export async function verifySlackSignature(opts: {
     new TextEncoder().encode(signingSecret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"],
+    ["sign"]
   );
   const mac = await crypto.subtle.sign(
     "HMAC",
     key,
-    new TextEncoder().encode(`v0:${timestamp}:${rawBody}`),
+    new TextEncoder().encode(`v0:${timestamp}:${rawBody}`)
   );
 
   return timingSafeEqual(`v0=${toHex(mac)}`, signature);

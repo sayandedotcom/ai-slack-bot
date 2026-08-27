@@ -23,9 +23,9 @@
  * timestamp this writes is compared against one a caller already fixed.
  */
 
+import { CapabilityError } from "../gateways/errors";
 import type { Env } from "../index";
 import { updateNudge } from "../notify/nudge";
-import { CapabilityError } from "../gateways/errors";
 import type { ApprovalDecision, ApprovalPort } from "./contracts";
 import { getApproval, insertApproval, withdrawApproval } from "./repository";
 
@@ -83,7 +83,7 @@ export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
         // a run parked on a card that can never exist.
         throw new CapabilityError(
           "slack_context_required",
-          "this run has no customer Slack thread, so there is no reply for a human to approve. Answer here instead.",
+          "this run has no customer Slack thread, so there is no reply for a human to approve. Answer here instead."
         );
       }
 
@@ -109,7 +109,7 @@ export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
       if (inserted === "duplicate_open") {
         throw new CapabilityError(
           "approval_already_open",
-          "an approval is already open for this run. Withdraw it first, or wait for the human decision, before escalating again.",
+          "an approval is already open for this run. Withdraw it first, or wait for the human decision, before escalating again."
         );
       }
 
@@ -155,9 +155,9 @@ export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
 
       const result = await withdrawApproval(db, approvalId, now);
       if (
-        result.result === "already_decided"
-        && result.row.decision !== "pending"
-        && result.row.decision !== "withdrawn"
+        result.result === "already_decided" &&
+        result.row.decision !== "pending" &&
+        result.row.decision !== "withdrawn"
       ) {
         // A HUMAN GOT THERE FIRST. Their decision wins and comes back to the
         // model instead of a withdrawal. The run stays UNPARKED: the decision's
@@ -197,14 +197,21 @@ export function makeApprovalPort(input: ApprovalPortInput): ApprovalPort {
  */
 async function settledDecision(
   db: D1Database,
-  approvalId: string | null,
+  approvalId: string | null
 ): Promise<
   | { withdrawn: true }
-  | { withdrawn: false; decision: Exclude<ApprovalDecision, "pending" | "withdrawn"> }
+  | {
+      withdrawn: false;
+      decision: Exclude<ApprovalDecision, "pending" | "withdrawn">;
+    }
 > {
   if (approvalId === null) return { withdrawn: true };
   const row = await getApproval(db, approvalId);
-  if (row === null || row.decision === "pending" || row.decision === "withdrawn") {
+  if (
+    row === null ||
+    row.decision === "pending" ||
+    row.decision === "withdrawn"
+  ) {
     return { withdrawn: true };
   }
   return { withdrawn: false, decision: row.decision };

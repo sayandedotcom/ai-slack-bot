@@ -19,7 +19,11 @@ export const MAX_JSON_DEPTH = 3;
  * one; assigning it with `out[key] = …` would set the prototype instead of a
  * field.
  */
-const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+const FORBIDDEN_KEYS: ReadonlySet<string> = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
 
 function invalidInput(reason: string): CapabilityError {
   return new CapabilityError("invalid_input", reason);
@@ -27,7 +31,9 @@ function invalidInput(reason: string): CapabilityError {
 
 function describeValue(value: object): string {
   const name = value.constructor?.name;
-  return typeof name === "string" && name.length > 0 ? name : "an exotic object";
+  return typeof name === "string" && name.length > 0
+    ? name
+    : "an exotic object";
 }
 
 /**
@@ -66,7 +72,7 @@ function coerce(value: unknown, depth: number, path: Set<object>): JsonValue {
 
   if (depth >= MAX_JSON_DEPTH) {
     throw invalidInput(
-      `nested deeper than ${MAX_JSON_DEPTH} levels, which the run protocol cannot store`,
+      `nested deeper than ${MAX_JSON_DEPTH} levels, which the run protocol cannot store`
     );
   }
   if (path.has(object)) {
@@ -86,7 +92,7 @@ function coerce(value: unknown, depth: number, path: Set<object>): JsonValue {
     const proto = Object.getPrototypeOf(object) as unknown;
     if (proto !== Object.prototype && proto !== null) {
       throw invalidInput(
-        `a ${describeValue(object)} is not plain JSON data; format it in the adapter`,
+        `a ${describeValue(object)} is not plain JSON data; format it in the adapter`
       );
     }
 
@@ -101,14 +107,17 @@ function coerce(value: unknown, depth: number, path: Set<object>): JsonValue {
   }
 }
 
-export function toSafeJson(value: unknown, limits: CapabilityLimits): JsonValue {
+export function toSafeJson(
+  value: unknown,
+  limits: CapabilityLimits
+): JsonValue {
   const safe = coerce(value, 0, new Set<object>());
 
   const encoded = JSON.stringify(safe);
   if (encoded !== undefined && encoded.length > limits.maxResultChars) {
     throw new CapabilityError(
       "output_too_large",
-      `the result is ${encoded.length} characters; the cap is ${limits.maxResultChars}. Narrow the query or select fewer fields.`,
+      `the result is ${encoded.length} characters; the cap is ${limits.maxResultChars}. Narrow the query or select fewer fields.`
     );
   }
   return safe;

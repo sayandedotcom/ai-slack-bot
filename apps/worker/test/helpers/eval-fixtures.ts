@@ -43,12 +43,12 @@ export async function seedMessage(row: SeedMessage): Promise<void> {
   const outcome = row.outcome ?? "ingested";
   await env.DB.batch([
     env.DB.prepare(
-      "INSERT OR REPLACE INTO events_seen (event_id, channel_id, outcome, received_at) VALUES (?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO events_seen (event_id, channel_id, outcome, received_at) VALUES (?, ?, ?, ?)"
     ).bind(row.eventId, row.channelId, outcome, row.receivedAt),
     env.DB.prepare(
       `INSERT OR REPLACE INTO messages
          (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pulsefit', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pulsefit', ?)`
     ).bind(
       row.eventId,
       row.channelId,
@@ -57,7 +57,7 @@ export async function seedMessage(row: SeedMessage): Promise<void> {
       row.userId,
       row.text,
       row.permalink ?? null,
-      row.receivedAt,
+      row.receivedAt
     ),
   ]);
 }
@@ -72,7 +72,7 @@ export async function seedDecision(row: {
   await env.DB.prepare(
     `INSERT OR REPLACE INTO triage_decisions
        (event_id, wake, why, opening_prompt, model, cost_usd, latency_ms, created_at)
-     VALUES (?, ?, ?, 'opening', 'test-model', 0.0, 1, ?)`,
+     VALUES (?, ?, ?, 'opening', 'test-model', 0.0, 1, ?)`
   )
     .bind(row.eventId, row.wake ? 1 : 0, row.why, row.createdAt)
     .run();
@@ -99,13 +99,20 @@ export async function seedApproval(row: {
   await env.DB.batch([
     env.DB.prepare(
       `INSERT OR REPLACE INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
-       VALUES (?, ?, 'slack', ?, ?, 'idle', 1, NULL, ?, ?)`,
-    ).bind(row.runId, row.runKey, row.channelId, row.threadTs, row.createdAt, row.createdAt),
+       VALUES (?, ?, 'slack', ?, ?, 'idle', 1, NULL, ?, ?)`
+    ).bind(
+      row.runId,
+      row.runKey,
+      row.channelId,
+      row.threadTs,
+      row.createdAt,
+      row.createdAt
+    ),
     env.DB.prepare(
       `INSERT OR REPLACE INTO approvals
          (id, run_id, generation_id, kind, draft, why, channel_id, thread_ts, shadow,
           decision, delivery, created_at, updated_at)
-       VALUES (?, ?, 'gen-1', 'slack_reply', ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+       VALUES (?, ?, 'gen-1', 'slack_reply', ?, ?, ?, ?, 1, ?, ?, ?, ?)`
     ).bind(
       row.id,
       row.runId,
@@ -116,7 +123,7 @@ export async function seedApproval(row: {
       decision,
       delivery,
       row.createdAt,
-      row.createdAt,
+      row.createdAt
     ),
   ]);
 }
@@ -237,9 +244,15 @@ export async function cleanupEvalFixtures(tag: string): Promise<void> {
   const eventLike = `ev:${tag}:%`;
   const idLike = `%${tag}%`;
   await env.DB.batch([
-    env.DB.prepare("DELETE FROM triage_decisions WHERE event_id LIKE ?").bind(eventLike),
-    env.DB.prepare("DELETE FROM messages WHERE event_id LIKE ?").bind(eventLike),
-    env.DB.prepare("DELETE FROM events_seen WHERE event_id LIKE ?").bind(eventLike),
+    env.DB.prepare("DELETE FROM triage_decisions WHERE event_id LIKE ?").bind(
+      eventLike
+    ),
+    env.DB.prepare("DELETE FROM messages WHERE event_id LIKE ?").bind(
+      eventLike
+    ),
+    env.DB.prepare("DELETE FROM events_seen WHERE event_id LIKE ?").bind(
+      eventLike
+    ),
     env.DB.prepare("DELETE FROM approvals WHERE id LIKE ?").bind(idLike),
     env.DB.prepare("DELETE FROM runs WHERE id LIKE ?").bind(idLike),
   ]);

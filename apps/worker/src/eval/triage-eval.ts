@@ -31,7 +31,10 @@ export type TriageScore = {
   disagreements: TriageOutcomeRow[];
 };
 
-export function scoreTriage(rows: TriageOutcomeRow[], maxDisagreements = 25): TriageScore {
+export function scoreTriage(
+  rows: TriageOutcomeRow[],
+  maxDisagreements = 25
+): TriageScore {
   let truePos = 0;
   let falsePos = 0;
   let falseNeg = 0;
@@ -53,12 +56,17 @@ export function scoreTriage(rows: TriageOutcomeRow[], maxDisagreements = 25): Tr
     }
   }
 
-  const precision = truePos + falsePos === 0 ? null : truePos / (truePos + falsePos);
-  const recall = truePos + falseNeg === 0 ? null : truePos / (truePos + falseNeg);
+  const precision =
+    truePos + falsePos === 0 ? null : truePos / (truePos + falsePos);
+  const recall =
+    truePos + falseNeg === 0 ? null : truePos / (truePos + falseNeg);
 
   // False negatives (missed wakes) cost more than false positives (spurious
   // wakes), so they fill the cap first.
-  const disagreements = [...falseNegRows, ...falsePosRows].slice(0, maxDisagreements);
+  const disagreements = [...falseNegRows, ...falsePosRows].slice(
+    0,
+    maxDisagreements
+  );
 
   return {
     n: rows.length,

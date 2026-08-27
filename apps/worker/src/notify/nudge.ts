@@ -1,10 +1,15 @@
-import type { Env } from "../index";
 import type { ApprovalRow } from "../approval/contracts";
-import { claimNudge, getApproval, recordNudgeMessage, releaseNudge } from "../approval/repository";
+import {
+  claimNudge,
+  getApproval,
+  recordNudgeMessage,
+  releaseNudge,
+} from "../approval/repository";
 import { getChannelPolicy } from "../db/channels";
-import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
-import { nudgeBlocks, resolvedBlocks } from "./blocks";
 import type { ApprovalsRow } from "../db/schema";
+import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
+import type { Env } from "../index";
+import { nudgeBlocks, resolvedBlocks } from "./blocks";
 
 /**
  * The escalation nudge: one Block Kit DM to the on-duty engineer, once.
@@ -58,12 +63,17 @@ const SWEEP_LIMIT = 10;
 
 export type NudgeOutcome = "sent" | "skipped" | "failed";
 
-type SlackResponse = { ok?: unknown; ts?: unknown; error?: unknown; channel?: unknown };
+type SlackResponse = {
+  ok?: unknown;
+  ts?: unknown;
+  error?: unknown;
+  channel?: unknown;
+};
 
 async function slackCall(
   env: Env,
   url: string,
-  payload: Record<string, unknown>,
+  payload: Record<string, unknown>
 ): Promise<SlackResponse> {
   const response = await fetch(url, {
     method: "POST",
@@ -88,7 +98,9 @@ async function slackCall(
  * case `email` is the first roster address, so the channel message can still
  * name someone in plain text.
  */
-async function resolveTarget(env: Env): Promise<{ email: string; slackUserId: string | null }> {
+async function resolveTarget(
+  env: Env
+): Promise<{ email: string; slackUserId: string | null }> {
   const speaker = await resolveSpeaker(env.DB, "slack");
   return speaker === null
     ? { email: SPEAKER_POOL[0] ?? "", slackUserId: null }
@@ -111,7 +123,7 @@ async function resolveTarget(env: Env): Promise<{ email: string; slackUserId: st
 export async function sendNudge(
   env: Env,
   row: ApprovalRow,
-  nowMs = Date.now(),
+  nowMs = Date.now()
 ): Promise<NudgeOutcome> {
   const now = nowMs;
   const mode = env.NUDGE_MODE === "channel" ? "channel" : "dm";
@@ -137,7 +149,9 @@ export async function sendNudge(
     let mention: string | null = null;
 
     if (mode === "dm" && target.slackUserId !== null) {
-      const opened = await slackCall(env, CONVERSATIONS_OPEN_URL, { users: target.slackUserId });
+      const opened = await slackCall(env, CONVERSATIONS_OPEN_URL, {
+        users: target.slackUserId,
+      });
       const openedId = (opened.channel as { id?: unknown } | undefined)?.id;
       if (opened.ok !== true || typeof openedId !== "string") {
         await release(env, row.id);
@@ -151,7 +165,8 @@ export async function sendNudge(
       // one there is no user id in the system, so it is the roster email in
       // plain text — deliberately NOT a `<@…>` around an email, which Slack
       // renders as a broken mention and pings nobody.
-      mention = target.slackUserId !== null ? `<@${target.slackUserId}>` : target.email;
+      mention =
+        target.slackUserId !== null ? `<@${target.slackUserId}>` : target.email;
     }
 
     const policy = await getChannelPolicy(env.DB, row.channelId);
@@ -165,10 +180,17 @@ export async function sendNudge(
 
     const posted = await slackCall(env, POST_MESSAGE_URL, {
       channel: channelId,
-      text: mention === null ? `Waiting on you: #${policy.name}` : `${mention} waiting on you: #${policy.name}`,
-      blocks: mention === null
-        ? blocks
-        : [{ type: "section", text: { type: "mrkdwn", text: mention } }, ...blocks],
+      text:
+        mention === null
+          ? `Waiting on you: #${policy.name}`
+          : `${mention} waiting on you: #${policy.name}`,
+      blocks:
+        mention === null
+          ? blocks
+          : [
+              { type: "section", text: { type: "mrkdwn", text: mention } },
+              ...blocks,
+            ],
     });
 
     if (posted.ok !== true || typeof posted.ts !== "string") {
@@ -270,7 +292,10 @@ export async function updateNudge(env: Env, row: ApprovalRow): Promise<void> {
       // only that the card is settled; the decision and the decider are in the
       // body, where a reader has the surrounding context to read them.
       text: "This approval has been settled — nothing left to review.",
-      blocks: resolvedBlocks({ decision: row.decision, decidedBy: row.decidedBy }),
+      blocks: resolvedBlocks({
+        decision: row.decision,
+        decidedBy: row.decidedBy,
+      }),
     });
     // An `ok: false` answer needs no branch: there is no retry that would be
     // safe (the row's once-only nudge slot has already been spent) and no
@@ -315,7 +340,7 @@ export async function sweepNudges(env: Env, now = Date.now()): Promise<number> {
     `SELECT id FROM approvals
      WHERE decision = 'pending' AND nudged_at IS NULL AND created_at <= ?
      ORDER BY created_at ASC
-     LIMIT ?`,
+     LIMIT ?`
   )
     .bind(now - NUDGE_RETRY_AFTER_MS, SWEEP_LIMIT)
     .all<Pick<ApprovalsRow, "id">>();
@@ -334,7 +359,6 @@ export async function sweepNudges(env: Env, now = Date.now()): Promise<number> {
       // thrown value is not logged (see above); the id and the literal outcome
       // are all this line is allowed to say.
       console.warn("nudge sweep", { approvalId: id, outcome: "failed" });
-      continue;
     }
   }
   return sent;

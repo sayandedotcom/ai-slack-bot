@@ -4,10 +4,14 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { ApprovalPort } from "../src/approval/contracts";
 import { makeApprovalPort } from "../src/approval/port";
-import { decideApproval, getApproval, insertApproval } from "../src/approval/repository";
+import {
+  decideApproval,
+  getApproval,
+  insertApproval,
+} from "../src/approval/repository";
 import { CapabilityError } from "../src/gateways/errors";
-import { installTestModel, resetTestModel } from "../src/run/model";
 import { chatRunKey } from "../src/run/keys";
+import { installTestModel, resetTestModel } from "../src/run/model";
 import { createOrGetRun } from "../src/run/repository";
 import { createRunFromChat } from "../src/run/wake";
 import { cannedModel } from "./helpers/canned-model";
@@ -31,7 +35,9 @@ async function freshRunId(): Promise<string> {
  * is a synchronous read of `this.state` in production, and this mirror is what
  * lets the port be exercised without a live turn.
  */
-function port(over: Partial<Parameters<typeof makeApprovalPort>[0]> & { runId: string }) {
+function port(
+  over: Partial<Parameters<typeof makeApprovalPort>[0]> & { runId: string }
+) {
   const state = { open: null as string | null, last: null as string | null };
   const nudged: string[] = [];
   const expired: string[] = [];
@@ -66,7 +72,10 @@ describe("opening an approval", () => {
     const runId = await freshRunId();
     const { port: approval, state, nudged, expired } = port({ runId });
 
-    const { approvalId } = await approval.open({ draft: "We can refund it.", why: "committal" });
+    const { approvalId } = await approval.open({
+      draft: "We can refund it.",
+      why: "committal",
+    });
 
     expect(approvalId).toMatch(/^apr:[0-9a-f-]{36}$/);
     expect(state.open).toBe(approvalId);
@@ -91,7 +100,9 @@ describe("opening an approval", () => {
     const runId = await freshRunId();
     const { port: approval } = port({ runId, shadow: true });
     const { approvalId } = await approval.open({ draft: "d", why: "w" });
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ shadow: true });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      shadow: true,
+    });
   });
 
   it("refuses a run with no customer thread", async () => {
@@ -102,7 +113,7 @@ describe("opening an approval", () => {
     const { port: approval, state } = port({ runId, slackThread: null });
 
     await expect(approval.open({ draft: "d", why: "w" })).rejects.toThrow(
-      /no customer Slack thread/,
+      /no customer Slack thread/
     );
     expect(state.open).toBeNull();
   });
@@ -115,7 +126,9 @@ describe("opening an approval", () => {
     await first.port.open({ draft: "first", why: "w" });
 
     const racer = port({ runId, openApprovalId: () => null });
-    await expect(racer.port.open({ draft: "second", why: "w" })).rejects.toMatchObject({
+    await expect(
+      racer.port.open({ draft: "second", why: "w" })
+    ).rejects.toMatchObject({
       code: "approval_already_open",
     });
   });
@@ -129,7 +142,9 @@ describe("withdrawing an approval", () => {
 
     expect(await approval.withdraw()).toEqual({ withdrawn: true });
     expect(state.open).toBeNull();
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ decision: "withdrawn" });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      decision: "withdrawn",
+    });
   });
 
   it("frees the one-open slot, so the run can escalate again", async () => {
@@ -139,7 +154,9 @@ describe("withdrawing an approval", () => {
     await approval.withdraw();
 
     const second = await approval.open({ draft: "second", why: "w" });
-    expect(await getApproval(env.DB, second.approvalId)).toMatchObject({ draft: "second" });
+    expect(await getApproval(env.DB, second.approvalId)).toMatchObject({
+      draft: "second",
+    });
   });
 
   it("returns the human's decision when they got there first", async () => {
@@ -148,11 +165,22 @@ describe("withdrawing an approval", () => {
     const runId = await freshRunId();
     const { port: approval } = port({ runId });
     const { approvalId } = await approval.open({ draft: "d", why: "w" });
-    await decideApproval(env.DB, approvalId, { action: "approve" }, "eng@zellify.com", Date.now());
+    await decideApproval(
+      env.DB,
+      approvalId,
+      { action: "approve" },
+      "eng@zellify.com",
+      Date.now()
+    );
 
-    expect(await approval.withdraw()).toEqual({ withdrawn: false, decision: "approved" });
+    expect(await approval.withdraw()).toEqual({
+      withdrawn: false,
+      decision: "approved",
+    });
     // Never overwritten: delivery is a separate machine and the decision stands.
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ decision: "approved" });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      decision: "approved",
+    });
   });
 
   it("returns an edited decision as edited, not as approved", async () => {
@@ -164,10 +192,13 @@ describe("withdrawing an approval", () => {
       approvalId,
       { action: "edit", text: "Actually, no refund." },
       "eng@zellify.com",
-      Date.now(),
+      Date.now()
     );
 
-    expect(await approval.withdraw()).toEqual({ withdrawn: false, decision: "edited" });
+    expect(await approval.withdraw()).toEqual({
+      withdrawn: false,
+      decision: "edited",
+    });
   });
 
   it("tells a redelivered withdrawal apart from one that lost a race", async () => {
@@ -185,26 +216,37 @@ describe("withdrawing an approval", () => {
     // Nothing open, but the last card was DECIDED — the flag was cleared by the
     // resolution while the model's program was awaiting something. Reporting a
     // withdrawal here would be a lie about a message that may have been sent.
-    const decided = port({ runId, openApprovalId: () => null, lastApprovalId: () => null });
+    const decided = port({
+      runId,
+      openApprovalId: () => null,
+      lastApprovalId: () => null,
+    });
     const second = await decided.port.open({ draft: "d2", why: "w" });
     await decideApproval(
       env.DB,
       second.approvalId,
       { action: "reject", reason: "wrong tone" },
       "eng@zellify.com",
-      Date.now(),
+      Date.now()
     );
     const after = port({
       runId,
       openApprovalId: () => null,
       lastApprovalId: () => second.approvalId,
     });
-    expect(await after.port.withdraw()).toEqual({ withdrawn: false, decision: "rejected" });
+    expect(await after.port.withdraw()).toEqual({
+      withdrawn: false,
+      decision: "rejected",
+    });
   });
 
   it("says withdrawn when this run has never opened anything", async () => {
     const runId = await freshRunId();
-    const { port: approval } = port({ runId, openApprovalId: () => null, lastApprovalId: () => null });
+    const { port: approval } = port({
+      runId,
+      openApprovalId: () => null,
+      lastApprovalId: () => null,
+    });
     expect(await approval.withdraw()).toEqual({ withdrawn: true });
   });
 
@@ -222,9 +264,14 @@ describe("withdrawing an approval", () => {
 
 describe("the run's own parked flag", () => {
   it("blocks every tool call while a decision is outstanding", async () => {
-    const stub = await getAgentByName(env.RUN_AGENTS, chatRunKey(crypto.randomUUID()));
+    const stub = await getAgentByName(
+      env.RUN_AGENTS,
+      chatRunKey(crypto.randomUUID())
+    );
     await stub.setOpenApproval("apr:blocked");
-    expect(await stub.toolCallDecisionForTest()).toMatchObject({ action: "block" });
+    expect(await stub.toolCallDecisionForTest()).toMatchObject({
+      action: "block",
+    });
 
     await stub.setOpenApproval(null);
     expect(await stub.toolCallDecisionForTest()).toBeUndefined();
@@ -233,7 +280,10 @@ describe("the run's own parked flag", () => {
   it("remembers the last approval after the flag is cleared", async () => {
     // `openApprovalId` alone cannot answer a withdraw that arrives just after a
     // human decided: the resolution clears it.
-    const stub = await getAgentByName(env.RUN_AGENTS, chatRunKey(crypto.randomUUID()));
+    const stub = await getAgentByName(
+      env.RUN_AGENTS,
+      chatRunKey(crypto.randomUUID())
+    );
     await stub.setOpenApproval("apr:remembered");
     await stub.setOpenApproval(null);
 
@@ -249,7 +299,9 @@ describe("the run's own parked flag", () => {
     installTestModel(cannedModel());
     const { runId } = await createRunFromChat(env, {});
     const key = (
-      await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?').bind(runId).first<{ key: string }>()
+      await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?')
+        .bind(runId)
+        .first<{ key: string }>()
     )?.key;
     const stub = await getAgentByName(env.RUN_AGENTS, key ?? "");
 
@@ -270,11 +322,16 @@ describe("the run's own parked flag", () => {
     await stub.approvalExpired({ approvalId });
 
     expect((await stub.runStateForTest()).status).toBe("failed");
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ decision: "withdrawn" });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      decision: "withdrawn",
+    });
   });
 
   it("does nothing on an expiry for an approval that is no longer open", async () => {
-    const stub = await getAgentByName(env.RUN_AGENTS, chatRunKey(crypto.randomUUID()));
+    const stub = await getAgentByName(
+      env.RUN_AGENTS,
+      chatRunKey(crypto.randomUUID())
+    );
     await stub.approvalExpired({ approvalId: "apr:stale" });
     expect((await stub.runStateForTest()).status).toBe("idle");
   });
@@ -283,7 +340,10 @@ describe("the run's own parked flag", () => {
     // A schedule row round-trips through JSON in DO SQLite and can outlive a
     // deploy, so one written by an older build is a thing to drop rather than
     // to crash on.
-    const stub = await getAgentByName(env.RUN_AGENTS, chatRunKey(crypto.randomUUID()));
+    const stub = await getAgentByName(
+      env.RUN_AGENTS,
+      chatRunKey(crypto.randomUUID())
+    );
     await stub.approvalExpired(null);
     await stub.approvalExpired({ approvalId: 7 });
     await stub.nudgeApproval("apr:not-an-object");
@@ -319,7 +379,9 @@ describe("nudging the engineer about a fresh card", () => {
     installTestModel(cannedModel());
     const { runId } = await createRunFromChat(env, {});
     const key = (
-      await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?').bind(runId).first<{ key: string }>()
+      await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?')
+        .bind(runId)
+        .first<{ key: string }>()
     )?.key;
     const stub = await getAgentByName(env.RUN_AGENTS, key ?? "");
 
@@ -349,14 +411,24 @@ describe("nudging the engineer about a fresh card", () => {
     const runId = await freshRunId();
     const { port: approval } = port({ runId });
     const { approvalId } = await approval.open({ draft: "d", why: "w" });
-    await decideApproval(env.DB, approvalId, { action: "approve" }, "eng@zellify.com", Date.now());
+    await decideApproval(
+      env.DB,
+      approvalId,
+      { action: "approve" },
+      "eng@zellify.com",
+      Date.now()
+    );
 
     const key = (
-      await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?').bind(runId).first<{ key: string }>()
+      await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?')
+        .bind(runId)
+        .first<{ key: string }>()
     )?.key;
     const stub = await getAgentByName(env.RUN_AGENTS, key ?? "");
     await stub.nudgeApproval({ approvalId });
 
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ nudgedAt: null });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      nudgedAt: null,
+    });
   });
 });

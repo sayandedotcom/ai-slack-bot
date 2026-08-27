@@ -1,16 +1,20 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
+import {
+  type AccessIdentity,
+  AccessJwtError,
+  type AccessVerifier,
+} from "../src/access/jwt";
+import { FIREFIGHTERS } from "../src/access/roster";
 import {
   identityApi,
   installIdentityApiPorts,
   resetIdentityApiPorts,
 } from "../src/api/identity";
-import { upsertIdentity, type ConnectStatus } from "../src/db/identities";
-import { importIdentityKey, seal, SealError } from "../src/identity/crypto";
-import { getDecryptedToken } from "../src/identity/tokens";
+import { type ConnectStatus, upsertIdentity } from "../src/db/identities";
+import { importIdentityKey, SealError, seal } from "../src/identity/crypto";
 import { SPEAKER_POOL } from "../src/identity/speaker";
-import { FIREFIGHTERS } from "../src/access/roster";
+import { getDecryptedToken } from "../src/identity/tokens";
 import type { Env } from "../src/index";
 
 /**
@@ -66,7 +70,8 @@ function fakeVerifier(): AccessVerifier {
   return {
     async verify(jwt: string): Promise<AccessIdentity> {
       if (!jwt) throw new AccessJwtError("missing", "no token was supplied");
-      if (!jwt.includes("@")) throw new AccessJwtError("malformed", "not an email-shaped fake token");
+      if (!jwt.includes("@"))
+        throw new AccessJwtError("malformed", "not an email-shaped fake token");
       return { email: jwt };
     },
   };
@@ -89,7 +94,9 @@ describe("GET /identity", () => {
     installIdentityApiPorts({ verifier: fakeVerifier() });
     const res = await req("/identity");
     expect(res.status).toBe(401);
-    expect(((await res.json()) as { code: string }).code).toBe("access_jwt_invalid");
+    expect(((await res.json()) as { code: string }).code).toBe(
+      "access_jwt_invalid"
+    );
   });
 
   it("401s a garbage token", async () => {
@@ -102,7 +109,9 @@ describe("GET /identity", () => {
     installIdentityApiPorts({ verifier: fakeVerifier() });
     const res = await req("/identity", OUTSIDER);
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { code: string }).code).toBe("not_a_firefighter");
+    expect(((await res.json()) as { code: string }).code).toBe(
+      "not_a_firefighter"
+    );
   });
 
   it("returns role viewer for a viewer", async () => {
@@ -116,7 +125,10 @@ describe("GET /identity", () => {
     installIdentityApiPorts({ verifier: fakeVerifier() });
     const res = await req("/identity", FIREFIGHTER);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ email: FIREFIGHTER, role: "firefighter" });
+    expect(await res.json()).toEqual({
+      email: FIREFIGHTER,
+      role: "firefighter",
+    });
   });
 });
 
@@ -142,7 +154,7 @@ describe("GET /roster", () => {
         tokenCiphertext: await seal(key, "xoxp-super-secret"),
         connectedAt: Date.now(),
       },
-      Date.now(),
+      Date.now()
     );
 
     const res = await req("/roster", VIEWER);
@@ -192,7 +204,7 @@ describe("GET /roster", () => {
         tokenCiphertext: sealed,
         connectedAt: Date.now(),
       },
-      Date.now(),
+      Date.now()
     );
 
     const res = await req("/roster", FIREFIGHTER);
@@ -223,10 +235,12 @@ describe("getDecryptedToken", () => {
         tokenCiphertext: await seal(key, "ghu_live_token"),
         connectedAt: Date.now(),
       },
-      Date.now(),
+      Date.now()
     );
 
-    expect(await getDecryptedToken(testEnv, FIREFIGHTER, "github")).toBe("ghu_live_token");
+    expect(await getDecryptedToken(testEnv, FIREFIGHTER, "github")).toBe(
+      "ghu_live_token"
+    );
     // Provider-scoped: the same person's unconnected provider is still null.
     expect(await getDecryptedToken(testEnv, FIREFIGHTER, "slack")).toBeNull();
   });
@@ -242,10 +256,12 @@ describe("getDecryptedToken", () => {
         tokenCiphertext: "not-a-sealed-value",
         connectedAt: Date.now(),
       },
-      Date.now(),
+      Date.now()
     );
 
-    await expect(getDecryptedToken(testEnv, FIREFIGHTER, "slack")).rejects.toThrow(SealError);
+    await expect(
+      getDecryptedToken(testEnv, FIREFIGHTER, "slack")
+    ).rejects.toThrow(SealError);
   });
 
   it("names the VARIABLE, not a value, when IDENTITY_KEY is missing", async () => {
@@ -260,12 +276,12 @@ describe("getDecryptedToken", () => {
         tokenCiphertext: await seal(key, "xoxp-super-secret"),
         connectedAt: Date.now(),
       },
-      Date.now(),
+      Date.now()
     );
 
     const keyless = { ...env, IDENTITY_KEY: undefined } as unknown as Env;
-    await expect(getDecryptedToken(keyless, FIREFIGHTER, "slack")).rejects.toThrow(
-      /missing configuration: IDENTITY_KEY/,
-    );
+    await expect(
+      getDecryptedToken(keyless, FIREFIGHTER, "slack")
+    ).rejects.toThrow(/missing configuration: IDENTITY_KEY/);
   });
 });

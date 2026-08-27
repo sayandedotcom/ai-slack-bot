@@ -1,5 +1,5 @@
-import type { MemoryFact } from "./store";
 import type { MessagesRow } from "../db/schema";
+import type { MemoryFact } from "./store";
 
 export type Citation = {
   factId: string;
@@ -26,7 +26,10 @@ type CitationRow = Pick<MessagesRow, "permalink" | "channel_id" | "ts">;
  * channel and a timestamp, because a URL that looks right and points nowhere is
  * worse than an honest absence.
  */
-export async function cite(db: D1Database, facts: MemoryFact[]): Promise<Citation[]> {
+export async function cite(
+  db: D1Database,
+  facts: MemoryFact[]
+): Promise<Citation[]> {
   const citations: Citation[] = [];
   for (const fact of facts) {
     for (const episodeUuid of fact.episodeUuids) {
@@ -57,13 +60,13 @@ export async function cite(db: D1Database, facts: MemoryFact[]): Promise<Citatio
  */
 async function resolveEpisode(
   db: D1Database,
-  episodeUuid: string,
+  episodeUuid: string
 ): Promise<CitationRow | null> {
   const message = await db
     .prepare(
       `SELECT m.permalink, m.channel_id, m.ts
          FROM zep_episodes z JOIN messages m ON m.event_id = z.event_id
-        WHERE z.episode_uuid = ?`,
+        WHERE z.episode_uuid = ?`
     )
     .bind(episodeUuid)
     .first<CitationRow>();
@@ -92,7 +95,7 @@ async function resolveEpisode(
          FROM memory_episode_sources s JOIN messages m ON m.event_id = s.message_event_id
         WHERE s.episode_uuid = ? AND s.message_event_id IS NOT NULL
         ORDER BY (s.source_kind = 'run_turn') ASC, s.source_index ASC
-        LIMIT 1`,
+        LIMIT 1`
     )
     .bind(episodeUuid)
     .first<CitationRow>();

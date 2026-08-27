@@ -8,9 +8,24 @@ import { canPost, getChannelPolicy, shouldTriage } from "../src/db/channels";
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM channels").run();
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind("C0B9YBENNAD", "ext-zellify-sidehop", "sidehop", "observe"),
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind("C0BPGUXG5RS", "test-firedrill", "firedrill", "live"),
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind("C0BPA2L4BBP", "ff-test", "firedrill", "live"),
+    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
+      "C0B9YBENNAD",
+      "ext-zellify-sidehop",
+      "sidehop",
+      "observe"
+    ),
+    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
+      "C0BPGUXG5RS",
+      "test-firedrill",
+      "firedrill",
+      "live"
+    ),
+    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
+      "C0BPA2L4BBP",
+      "ff-test",
+      "firedrill",
+      "live"
+    ),
   ]);
 });
 
@@ -20,7 +35,9 @@ describe("seeded production policy", () => {
   });
 
   it("still triages the customer channel — observe blocks posting, not hearing", async () => {
-    expect(shouldTriage(await getChannelPolicy(env.DB, "C0B9YBENNAD"))).toBe(true);
+    expect(shouldTriage(await getChannelPolicy(env.DB, "C0B9YBENNAD"))).toBe(
+      true
+    );
   });
 
   it("permits posting only in our own test channels", async () => {
@@ -30,7 +47,7 @@ describe("seeded production policy", () => {
 
   it("no channel named ext-* is ever postable", async () => {
     const { results } = await env.DB.prepare(
-      "SELECT channel_id FROM channels WHERE name LIKE 'ext-%'",
+      "SELECT channel_id FROM channels WHERE name LIKE 'ext-%'"
     ).all<{ channel_id: string }>();
     expect(results.length).toBeGreaterThan(0);
     for (const r of results) {

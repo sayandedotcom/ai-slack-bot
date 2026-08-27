@@ -10,7 +10,7 @@
  * `Container` in `@cloudflare/containers` (0.3.7), which is why grepping the
  * sandbox package for them finds nothing and reads as "these were removed".
  */
-import { ContainerProxy, Sandbox as BaseSandbox } from "@cloudflare/sandbox";
+import { Sandbox as BaseSandbox, ContainerProxy } from "@cloudflare/sandbox";
 import type { Env } from "../index";
 
 /**
@@ -91,7 +91,7 @@ export function assertGitSentinel(env: Env): string {
   if (configured && configured !== GIT_SENTINEL_HOST) {
     throw new Error(
       `SANDBOX_GIT_HOST is "${configured}" but the outbound interceptor is registered for "${GIT_SENTINEL_HOST}". ` +
-        "The var and src/sandbox/class.ts must name the same host.",
+        "The var and src/sandbox/class.ts must name the same host."
     );
   }
   return GIT_SENTINEL_HOST;
@@ -135,15 +135,21 @@ export class Sandbox extends BaseSandbox<Env> {
  * Route the minimum.
  */
 Sandbox.outboundByHost = {
-  [GIT_SENTINEL_HOST]: async (request: Request, env: Env): Promise<Response> => {
+  [GIT_SENTINEL_HOST]: async (
+    request: Request,
+    env: Env
+  ): Promise<Response> => {
     const pat = env.MONOREPO_PAT;
     if (!pat) {
       // Naming the missing secret, never a value. Absence is not a mode: a
       // fetch that quietly proceeds unauthenticated 404s on a private repo and
       // reads as "the branch is gone".
       return Response.json(
-        { code: "configuration_incomplete", message: "MONOREPO_PAT is not set on this Worker" },
-        { status: 503 },
+        {
+          code: "configuration_incomplete",
+          message: "MONOREPO_PAT is not set on this Worker",
+        },
+        { status: 503 }
       );
     }
 
@@ -152,19 +158,28 @@ Sandbox.outboundByHost = {
       // The sentinel is a credential for one repository, not a general
       // authenticated GitHub proxy.
       return Response.json(
-        { code: "forbidden_repo", message: `the sentinel host only proxies ${MONOREPO_SLUG}` },
-        { status: 403 },
+        {
+          code: "forbidden_repo",
+          message: `the sentinel host only proxies ${MONOREPO_SLUG}`,
+        },
+        { status: 403 }
       );
     }
 
-    const target = new URL(incoming.pathname + incoming.search, "https://github.com");
+    const target = new URL(
+      incoming.pathname + incoming.search,
+      "https://github.com"
+    );
 
     const outgoing = new Request(target, request);
     // Overwrite rather than append: whatever the container sent (the
     // placeholder, or nothing) is discarded here and never reaches the wire.
     // `x-access-token` is GitHub's username convention for a token used as a
     // Basic password over https git.
-    outgoing.headers.set("authorization", `Basic ${btoa(`x-access-token:${pat}`)}`);
+    outgoing.headers.set(
+      "authorization",
+      `Basic ${btoa(`x-access-token:${pat}`)}`
+    );
 
     // Passed through unchanged: git needs the real bytes, and GitHub's
     // response does not carry the credential back. (The spike returned a
@@ -185,5 +200,10 @@ function isMonorepoPath(pathname: string): boolean {
   const slug = `/${MONOREPO_SLUG.toLowerCase()}`;
   if (!lower.startsWith(slug)) return false;
   const rest = lower.slice(slug.length);
-  return rest === "" || rest === ".git" || rest.startsWith("/") || rest.startsWith(".git/");
+  return (
+    rest === "" ||
+    rest === ".git" ||
+    rest.startsWith("/") ||
+    rest.startsWith(".git/")
+  );
 }

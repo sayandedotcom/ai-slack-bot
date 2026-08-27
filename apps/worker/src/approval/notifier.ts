@@ -23,20 +23,20 @@ import type { RunTurnSubmit, SubmitMessagesResult } from "@cloudflare/think";
 import { getAgentByName } from "agents";
 
 import type { ResolutionNotifier } from "../api/approvals";
+import { makeUserTokenSource } from "../identity/user-token";
 import type { Env } from "../index";
 import { updateNudge } from "../notify/nudge";
 import type { RunAgent } from "../run/agent";
 import { channelForOrigin } from "../run/agent-channels";
 import { getRunById, type RunRecord } from "../run/repository";
 import {
-  outboundText,
-  resolutionTurnContent,
   type ApprovalDelivery,
   type ApprovalRow,
+  outboundText,
+  resolutionTurnContent,
 } from "./contracts";
 import { getApproval, setDelivery } from "./repository";
-import { makeUserTokenSender, type ApprovalSender } from "./sender";
-import { makeUserTokenSource } from "../identity/user-token";
+import { type ApprovalSender, makeUserTokenSender } from "./sender";
 
 /** See `wake.ts` for why an overloaded method needs restating through a stub. */
 type SubmitOnlyAgent = {
@@ -56,7 +56,9 @@ export type ResolutionNotifierInput = {
   now?: () => number;
 };
 
-export function makeRunAgentResolutionNotifier(input: ResolutionNotifierInput): ResolutionNotifier {
+export function makeRunAgentResolutionNotifier(
+  input: ResolutionNotifierInput
+): ResolutionNotifier {
   const { env } = input;
   const now = input.now ?? (() => Date.now());
   const sender = input.sender ?? makeProductionSender(env);
@@ -92,12 +94,22 @@ export function makeRunAgentResolutionNotifier(input: ResolutionNotifierInput): 
       const finalText = notification.outboundText ?? outboundText(card);
       const delivery =
         notification.decision === "rejected"
-          // Nothing to send, so there is no delivery sub-machine to run at all.
-          ? { delivery: "none" as ApprovalDelivery, error: null }
-          : await deliverApproval({ env, sender, now, card, run, text: finalText });
+          ? // Nothing to send, so there is no delivery sub-machine to run at all.
+            { delivery: "none" as ApprovalDelivery, error: null }
+          : await deliverApproval({
+              env,
+              sender,
+              now,
+              card,
+              run,
+              text: finalText,
+            });
 
       const stub = await getAgentByName<Env, RunAgent>(env.RUN_AGENTS, run.key);
-      await stub.bindRun({ runId: run.id, channel: channelForOrigin(run.origin) });
+      await stub.bindRun({
+        runId: run.id,
+        channel: channelForOrigin(run.origin),
+      });
 
       // UNPARK BEFORE THE TURN, never after. `beforeToolCall` blocks every tool
       // call while `state.openApprovalId` is set, so a resolution turn started
@@ -159,8 +171,11 @@ async function deliverApproval(input: {
   text: string;
 }): Promise<{ delivery: ApprovalDelivery; error: string | null }> {
   const { env, card, run } = input;
-  const settle = (from: ApprovalDelivery[], to: ApprovalDelivery, error: string | null) =>
-    settleDelivery(env.DB, input.now, card.id, from, to, error);
+  const settle = (
+    from: ApprovalDelivery[],
+    to: ApprovalDelivery,
+    error: string | null
+  ) => settleDelivery(env.DB, input.now, card.id, from, to, error);
 
   // Shadow is read LIVE from the D1 `runs` row rather than taken from the
   // card's snapshot, and the two are OR-ed. A run's flag only ever ratchets
@@ -181,7 +196,14 @@ async function deliverApproval(input: {
   // THE GUARD AGAINST A SECOND SEND, and it is this CAS rather than a read: a
   // read can be stale, a conditional UPDATE cannot. Exactly one caller moves
   // `none -> sending`, and only that caller sends.
-  const started = await setDelivery(env.DB, card.id, ["none"], "sending", null, input.now());
+  const started = await setDelivery(
+    env.DB,
+    card.id,
+    ["none"],
+    "sending",
+    null,
+    input.now()
+  );
   if (!started) {
     // Somebody already started it. A row still `sending` is a crash between the
     // send and its outcome: an unknown outcome is a human's problem to
@@ -229,12 +251,14 @@ async function settleDelivery(
   approvalId: string,
   from: ApprovalDelivery[],
   to: ApprovalDelivery,
-  error: string | null,
+  error: string | null
 ): Promise<{ delivery: ApprovalDelivery; error: string | null }> {
   const moved = await setDelivery(db, approvalId, from, to, error, now());
   if (moved) return { delivery: to, error };
   const current = await getApproval(db, approvalId);
-  return current === null ? { delivery: to, error } : { delivery: current.delivery, error: null };
+  return current === null
+    ? { delivery: to, error }
+    : { delivery: current.delivery, error: null };
 }
 
 /**

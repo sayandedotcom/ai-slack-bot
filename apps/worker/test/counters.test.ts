@@ -16,11 +16,31 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM runs"),
   ]);
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind("e1", "C1", "ingested", NOW),
-    env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind("e2", "C1", "dropped_dm", NOW),
-    env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind("e3", "C1", "dropped_bot", NOW),
+    env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind(
+      "e1",
+      "C1",
+      "ingested",
+      NOW
+    ),
+    env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind(
+      "e2",
+      "C1",
+      "dropped_dm",
+      NOW
+    ),
+    env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind(
+      "e3",
+      "C1",
+      "dropped_bot",
+      NOW
+    ),
     // yesterday — must not be counted
-    env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind("e4", "C1", "ingested", NOW - DAY - 1),
+    env.DB.prepare("INSERT INTO events_seen VALUES (?, ?, ?, ?)").bind(
+      "e4",
+      "C1",
+      "ingested",
+      NOW - DAY - 1
+    ),
   ]);
 });
 
@@ -28,18 +48,22 @@ beforeEach(async () => {
 async function seedRun(id: string): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
-     VALUES (?, ?, 'slack', 'C1', '1720000000.000100', 'live', 0, NULL, 1, 1)`,
+     VALUES (?, ?, 'slack', 'C1', '1720000000.000100', 'live', 0, NULL, 1, 1)`
   )
     .bind(id, `slack:C1:${id}`)
     .run();
 }
 
 /** A minimal `approvals` row, shaped like `escalate` mints one. */
-async function seedApproval(input: { id: string; runId: string; createdAt: number }): Promise<void> {
+async function seedApproval(input: {
+  id: string;
+  runId: string;
+  createdAt: number;
+}): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO approvals
        (id, run_id, generation_id, kind, draft, why, channel_id, thread_ts, created_at, updated_at)
-     VALUES (?, ?, 'gen:1', 'slack_reply', 'draft', 'why', 'C1', '1720000000.000100', ?, ?)`,
+     VALUES (?, ?, 'gen:1', 'slack_reply', 'draft', 'why', 'C1', '1720000000.000100', ?, ?)`
   )
     .bind(input.id, input.runId, input.createdAt, input.createdAt)
     .run();
@@ -76,7 +100,11 @@ describe("getCounters", () => {
     await seedApproval({ id: "apr:1", runId: "run1", createdAt: NOW });
     await seedApproval({ id: "apr:2", runId: "run2", createdAt: NOW });
     // yesterday — must not be counted
-    await seedApproval({ id: "apr:3", runId: "run3", createdAt: NOW - DAY - 1 });
+    await seedApproval({
+      id: "apr:3",
+      runId: "run3",
+      createdAt: NOW - DAY - 1,
+    });
 
     const c = await getCounters(env.DB, NOW - DAY);
     expect(c.escalated).toBe(2);
@@ -86,7 +114,7 @@ describe("getCounters", () => {
     await env.DB.prepare(
       `INSERT INTO triage_decisions (event_id, wake, why, opening_prompt, model, cost_usd, latency_ms, created_at)
        VALUES ('EvT1', 1, 'q', 'p', 'claude-haiku-4-5', 0.0003, 400, 5000),
-              ('EvT2', 0, 'banter', '', 'claude-haiku-4-5', 0.0002, 300, 1000)`,
+              ('EvT2', 0, 'banter', '', 'claude-haiku-4-5', 0.0002, 300, 1000)`
     ).run();
     const counters = await getCounters(env.DB, 2000);
     expect(counters.triaged).toBe(1); // only EvT1 is inside the window
@@ -102,8 +130,16 @@ describe("GET /api/counters", () => {
   it("serves the counters as json", async () => {
     const res = await SELF.fetch("https://example.com/api/counters");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { counters: Record<string, number>; since: number };
-    expect(Object.keys(body.counters).sort()).toEqual(["escalated", "heard", "ingested", "triaged"]);
+    const body = (await res.json()) as {
+      counters: Record<string, number>;
+      since: number;
+    };
+    expect(Object.keys(body.counters).sort()).toEqual([
+      "escalated",
+      "heard",
+      "ingested",
+      "triaged",
+    ]);
     expect(typeof body.since).toBe("number");
   });
 });

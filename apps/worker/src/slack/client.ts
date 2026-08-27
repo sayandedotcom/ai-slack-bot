@@ -6,14 +6,16 @@
 export async function getPermalink(
   botToken: string,
   channel: string,
-  ts: string,
+  ts: string
 ): Promise<string | null> {
   const url = new URL("https://slack.com/api/chat.getPermalink");
   url.searchParams.set("channel", channel);
   url.searchParams.set("message_ts", ts);
 
   try {
-    const res = await fetch(url, { headers: { authorization: `Bearer ${botToken}` } });
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${botToken}` },
+    });
     if (!res.ok) return null;
     const body = (await res.json()) as { ok: boolean; permalink?: string };
     return body.ok && body.permalink ? body.permalink : null;
@@ -39,17 +41,24 @@ export type SlackChannelInfo = { id: string; name: string };
  */
 export async function getConversationInfo(
   botToken: string,
-  channelId: string,
+  channelId: string
 ): Promise<SlackChannelInfo | null> {
   const url = new URL("https://slack.com/api/conversations.info");
   url.searchParams.set("channel", channelId);
 
   try {
-    const res = await fetch(url, { headers: { authorization: `Bearer ${botToken}` } });
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${botToken}` },
+    });
     if (!res.ok) return null;
     const body = (await res.json()) as {
       ok: boolean;
-      channel?: { id?: string; name?: string; is_im?: boolean; is_mpim?: boolean };
+      channel?: {
+        id?: string;
+        name?: string;
+        is_im?: boolean;
+        is_mpim?: boolean;
+      };
     };
     const channel = body.channel;
     if (!body.ok || !channel?.id || !channel.name) return null;
@@ -73,7 +82,9 @@ const MAX_CONVERSATION_PAGES = 5;
  * that emptied it must not be mistaken for "the bot is in no channels", which
  * is why nothing downstream ever deletes a row based on absence from this list.
  */
-export async function listBotConversations(botToken: string): Promise<SlackChannelInfo[]> {
+export async function listBotConversations(
+  botToken: string
+): Promise<SlackChannelInfo[]> {
   const found: SlackChannelInfo[] = [];
   let cursor = "";
 
@@ -85,7 +96,9 @@ export async function listBotConversations(botToken: string): Promise<SlackChann
       url.searchParams.set("limit", "200");
       if (cursor !== "") url.searchParams.set("cursor", cursor);
 
-      const res = await fetch(url, { headers: { authorization: `Bearer ${botToken}` } });
+      const res = await fetch(url, {
+        headers: { authorization: `Bearer ${botToken}` },
+      });
       if (!res.ok) return [];
       const body = (await res.json()) as {
         ok: boolean;
@@ -95,7 +108,8 @@ export async function listBotConversations(botToken: string): Promise<SlackChann
       if (!body.ok) return [];
 
       for (const channel of body.channels ?? []) {
-        if (channel.id && channel.name) found.push({ id: channel.id, name: channel.name });
+        if (channel.id && channel.name)
+          found.push({ id: channel.id, name: channel.name });
       }
 
       cursor = body.response_metadata?.next_cursor ?? "";

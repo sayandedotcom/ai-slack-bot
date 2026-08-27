@@ -1,5 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { isArtifactKey } from "../src/api/artifacts";
+import { makeArtifactPublisher } from "../src/files/r2";
 import type { Env } from "../src/index";
 import {
   captureDiff,
@@ -11,8 +13,6 @@ import {
   readDiff,
   readDiffWithBase,
 } from "../src/sandbox/diff";
-import { isArtifactKey } from "../src/api/artifacts";
-import { makeArtifactPublisher } from "../src/files/r2";
 
 /**
  * THE DIFF TRAVELS WORKER→WORKER, NEVER THROUGH THE MODEL.
@@ -35,7 +35,10 @@ const OTHER_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
 /** How many objects currently sit under the internal namespace. */
 async function internalObjectCount(): Promise<number> {
-  const listed = await env.ARTIFACTS.list({ prefix: INTERNAL_KEY_PREFIX, limit: 1000 });
+  const listed = await env.ARTIFACTS.list({
+    prefix: INTERNAL_KEY_PREFIX,
+    limit: 1000,
+  });
   return listed.objects.length;
 }
 
@@ -94,7 +97,10 @@ index 1111111..2222222 100644
 `;
 
 const longDiff = (lines: number): string => {
-  const body = Array.from({ length: lines }, (_, i) => `+  const line${i} = ${i};`).join("\n");
+  const body = Array.from(
+    { length: lines },
+    (_, i) => `+  const line${i} = ${i};`
+  ).join("\n");
   return `diff --git a/apps/web/src/big.ts b/apps/web/src/big.ts
 index 1111111..2222222 100644
 --- a/apps/web/src/big.ts
@@ -165,7 +171,11 @@ index 1111111..2222222 100644
 +new
 `;
     const result = await captureDiff(worker, run(), oneLine, BASE_SHA);
-    expect(result).toMatchObject({ filesChanged: 1, insertions: 1, deletions: 1 });
+    expect(result).toMatchObject({
+      filesChanged: 1,
+      insertions: 1,
+      deletions: 1,
+    });
   });
 });
 
@@ -176,7 +186,11 @@ describe("an empty diff is a fact, not an error", () => {
 
     expect(result.diffRef).toBeNull();
     expect(result.truncated).toBe(false);
-    expect(result).toMatchObject({ filesChanged: 0, insertions: 0, deletions: 0 });
+    expect(result).toMatchObject({
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    });
     // The model has to be able to act on "I changed nothing" without parsing
     // an empty string or catching an exception.
     expect(result.preview.toLowerCase()).toContain("no changes");
@@ -191,21 +205,28 @@ describe("an empty diff is a fact, not an error", () => {
 });
 
 describe("an oversized diff is refused, never truncated", () => {
-  const huge = () => `diff --git a/a b/a\n@@ -0,0 +1 @@\n${"+xxxxxxxxxxxxxxxxxxxx\n".repeat(60_000)}`;
+  const huge = () =>
+    `diff --git a/a b/a\n@@ -0,0 +1 @@\n${"+xxxxxxxxxxxxxxxxxxxx\n".repeat(60_000)}`;
 
   it("refuses with a reason that names the size, the cap and a way forward", async () => {
     const raw = huge();
-    expect(new TextEncoder().encode(raw).byteLength).toBeGreaterThan(MAX_DIFF_BYTES);
+    expect(new TextEncoder().encode(raw).byteLength).toBeGreaterThan(
+      MAX_DIFF_BYTES
+    );
 
     await expect(captureDiff(worker, run(), raw, BASE_SHA)).rejects.toThrow(
-      new RegExp(`${MAX_DIFF_BYTES}`),
+      new RegExp(`${MAX_DIFF_BYTES}`)
     );
-    await expect(captureDiff(worker, run(), raw, BASE_SHA)).rejects.toThrow(/output_too_large/);
+    await expect(captureDiff(worker, run(), raw, BASE_SHA)).rejects.toThrow(
+      /output_too_large/
+    );
   });
 
   it("stores nothing rather than half a patch", async () => {
     const before = await internalObjectCount();
-    await expect(captureDiff(worker, run(), huge(), BASE_SHA)).rejects.toThrow();
+    await expect(
+      captureDiff(worker, run(), huge(), BASE_SHA)
+    ).rejects.toThrow();
     // A truncated patch is a broken patch. Silently keeping the first megabyte
     // would fail at PR time in Phase 20, where the failure is expensive and
     // confusing.
@@ -240,13 +261,16 @@ index 1111111..2222222 100644
     // prefix entirely.
     expect(await readDiff(worker, "../../etc/passwd")).toBeNull();
     expect(await readDiff(worker, `${"a".repeat(64)}.csv`)).toBeNull();
-    expect(await readDiff(worker, `${INTERNAL_KEY_PREFIX}diff/x.patch`)).toBeNull();
+    expect(
+      await readDiff(worker, `${INTERNAL_KEY_PREFIX}diff/x.patch`)
+    ).toBeNull();
     expect(await readDiff(worker, "")).toBeNull();
   });
 });
 
 describe("the internal namespace is not reachable from the public artifacts route", () => {
-  const fetchKey = (path: string) => SELF.fetch(`https://firefighter.example/api/artifacts/${path}`);
+  const fetchKey = (path: string) =>
+    SELF.fetch(`https://firefighter.example/api/artifacts/${path}`);
 
   it("404s the key that actually holds a captured diff", async () => {
     const result = await captureDiff(worker, run(), REALISTIC_DIFF, BASE_SHA);
@@ -289,7 +313,11 @@ describe("the internal namespace is not reachable from the public artifacts rout
       bytes: new TextEncoder().encode("id,name\n1,acme\n"),
       contentType: "text/csv",
       filename: "report.csv",
-      idempotencyKey: crypto.randomUUID().replace(/-/g, "").padEnd(64, "0").slice(0, 64),
+      idempotencyKey: crypto
+        .randomUUID()
+        .replace(/-/g, "")
+        .padEnd(64, "0")
+        .slice(0, 64),
     });
 
     const response = await fetchKey(published.url.split("/artifacts/")[1]!);
@@ -303,7 +331,9 @@ describe("the internal namespace is not reachable from the public artifacts rout
     expect(isInternalKey(`${hex}.csv`)).toBe(false);
     // A published key can never begin with the prefix: it is 64 lowercase hex
     // characters and a dot, so `_` cannot be its first character.
-    expect(isArtifactKey(`${INTERNAL_KEY_PREFIX}diff/${hex}.patch`)).toBe(false);
+    expect(isArtifactKey(`${INTERNAL_KEY_PREFIX}diff/${hex}.patch`)).toBe(
+      false
+    );
     expect(INTERNAL_KEY_PREFIX.startsWith("_")).toBe(true);
   });
 });
@@ -325,7 +355,14 @@ describe("the base sha travels with the diff", () => {
     // Exact key set: a new field here would be `.d.ts` churn for Phase 20's
     // model-facing schema, which the brief says must not happen.
     expect(Object.keys(result).sort()).toEqual(
-      ["deletions", "diffRef", "filesChanged", "insertions", "preview", "truncated"].sort(),
+      [
+        "deletions",
+        "diffRef",
+        "filesChanged",
+        "insertions",
+        "preview",
+        "truncated",
+      ].sort()
     );
   });
 

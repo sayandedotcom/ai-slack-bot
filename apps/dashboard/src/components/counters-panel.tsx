@@ -1,10 +1,9 @@
 import type { ReactNode } from "react";
-
-import { getCounters } from "../lib/api";
 import type { Counters } from "../lib/api";
+import { getCounters } from "../lib/api";
 import { usePoll } from "../lib/use-poll";
-import { Panel } from "./panel";
 import type { PanelState } from "./panel";
+import { Panel } from "./panel";
 
 /**
  * The agent's last 24 hours in four numbers. All-zero is not a state worth four
@@ -22,8 +21,8 @@ const TILES: { key: keyof Counters["counters"]; label: string }[] = [
 function Tile({ value, label }: { value: number; label: string }): ReactNode {
   return (
     <div className="rounded-lg border bg-card px-3 py-2">
-      <div className="text-2xl font-semibold tabular-nums">{value}</div>
-      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="font-semibold text-2xl tabular-nums">{value}</div>
+      <div className="text-muted-foreground text-xs">{label}</div>
     </div>
   );
 }
@@ -49,7 +48,7 @@ export function CountersPanel() {
               <Tile key={key} value={counters[key]} label={label} />
             ))}
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-muted-foreground text-xs">
             last 24h — since {new Date(since).toLocaleString()}
           </p>
         </div>

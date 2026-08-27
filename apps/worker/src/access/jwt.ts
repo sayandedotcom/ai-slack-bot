@@ -147,7 +147,7 @@ function base64UrlToText(segment: string): string {
 export function makeAccessVerifier(
   cfg: AccessVerifierConfig,
   fetchJwks: typeof fetch = fetch,
-  now: () => number = () => Date.now(),
+  now: () => number = () => Date.now()
 ): AccessVerifier {
   const jwksUrl = `https://${cfg.teamDomain}/cdn-cgi/access/certs`;
 
@@ -185,16 +185,25 @@ export function makeAccessVerifier(
       try {
         response = await fetchJwks(jwksUrl);
       } catch {
-        throw new AccessJwtError("bad_signature", "could not reach the Access JWKS endpoint");
+        throw new AccessJwtError(
+          "bad_signature",
+          "could not reach the Access JWKS endpoint"
+        );
       }
       if (!response.ok) {
-        throw new AccessJwtError("bad_signature", "the Access JWKS endpoint returned an error");
+        throw new AccessJwtError(
+          "bad_signature",
+          "the Access JWKS endpoint returned an error"
+        );
       }
       let body: { keys?: Jwk[] };
       try {
         body = (await response.json()) as { keys?: Jwk[] };
       } catch {
-        throw new AccessJwtError("bad_signature", "the Access JWKS endpoint returned something unreadable");
+        throw new AccessJwtError(
+          "bad_signature",
+          "the Access JWKS endpoint returned something unreadable"
+        );
       }
       const keys = new Map<string, CryptoKey>();
       for (const jwk of body.keys ?? []) {
@@ -218,7 +227,7 @@ export function makeAccessVerifier(
             jwk,
             { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
             false,
-            ["verify"],
+            ["verify"]
           );
         } catch {
           // No key material, no `kid`, no exception text in the log line: a
@@ -268,14 +277,18 @@ export function makeAccessVerifier(
     const negativeUntil = unknownKids.get(kid);
     if (negativeUntil !== undefined) {
       if (nowMs < negativeUntil) {
-        throw new AccessJwtError("bad_signature", "no JWKS key matches the token's kid");
+        throw new AccessJwtError(
+          "bad_signature",
+          "no JWKS key matches the token's kid"
+        );
       }
       // TTL elapsed -- give this kid a genuine fresh look, exactly like a
       // `kid` this isolate has never seen before.
       unknownKids.delete(kid);
     }
 
-    const isFresh = cache !== null && nowMs - cache.fetchedAt < JWKS_CACHE_FLOOR_MS;
+    const isFresh =
+      cache !== null && nowMs - cache.fetchedAt < JWKS_CACHE_FLOOR_MS;
     let { keys } = isFresh ? cache! : await loadJwks();
     let key = keys.get(kid);
     if (!key) {
@@ -284,7 +297,10 @@ export function makeAccessVerifier(
     }
     if (!key) {
       rememberUnknownKid(kid, nowMs);
-      throw new AccessJwtError("bad_signature", "no JWKS key matches the token's kid");
+      throw new AccessJwtError(
+        "bad_signature",
+        "no JWKS key matches the token's kid"
+      );
     }
     return key;
   }
@@ -297,54 +313,97 @@ export function makeAccessVerifier(
 
       const parts = jwt.split(".");
       if (parts.length !== 3) {
-        throw new AccessJwtError("malformed", "token is not a three-segment JWS");
+        throw new AccessJwtError(
+          "malformed",
+          "token is not a three-segment JWS"
+        );
       }
       const [headerSeg, payloadSeg, sigSeg] = parts;
 
       let header: { alg?: string; kid?: string };
-      let payload: { iss?: string; aud?: string | string[]; exp?: number; email?: string };
+      let payload: {
+        iss?: string;
+        aud?: string | string[];
+        exp?: number;
+        email?: string;
+      };
       try {
         header = JSON.parse(base64UrlToText(headerSeg)) as typeof header;
         payload = JSON.parse(base64UrlToText(payloadSeg)) as typeof payload;
       } catch {
-        throw new AccessJwtError("malformed", "token header or payload is not valid JSON");
+        throw new AccessJwtError(
+          "malformed",
+          "token header or payload is not valid JSON"
+        );
       }
       if (header.alg !== "RS256" || !header.kid) {
-        throw new AccessJwtError("malformed", "token header is missing alg or kid");
+        throw new AccessJwtError(
+          "malformed",
+          "token header is missing alg or kid"
+        );
       }
 
       let signature: Uint8Array;
       try {
         signature = base64UrlToBytes(sigSeg);
       } catch {
-        throw new AccessJwtError("malformed", "token signature segment is not valid base64url");
+        throw new AccessJwtError(
+          "malformed",
+          "token signature segment is not valid base64url"
+        );
       }
 
       // Signature first, always -- nothing below this line is trusted until
       // the JOSE signing input is proven to come from a key the configured
       // Access team actually publishes.
       const key = await resolveKey(header.kid);
-      const signingInput = new TextEncoder().encode(`${headerSeg}.${payloadSeg}`);
+      const signingInput = new TextEncoder().encode(
+        `${headerSeg}.${payloadSeg}`
+      );
       let valid: boolean;
       try {
-        valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, signingInput);
+        valid = await crypto.subtle.verify(
+          "RSASSA-PKCS1-v1_5",
+          key,
+          signature,
+          signingInput
+        );
       } catch {
-        throw new AccessJwtError("bad_signature", "signature verification failed");
+        throw new AccessJwtError(
+          "bad_signature",
+          "signature verification failed"
+        );
       }
       if (!valid) {
-        throw new AccessJwtError("bad_signature", "token signature does not match");
+        throw new AccessJwtError(
+          "bad_signature",
+          "token signature does not match"
+        );
       }
 
       if (payload.iss !== `https://${cfg.teamDomain}`) {
-        throw new AccessJwtError("wrong_issuer", "token issuer does not match the configured team domain");
+        throw new AccessJwtError(
+          "wrong_issuer",
+          "token issuer does not match the configured team domain"
+        );
       }
 
-      const auds = Array.isArray(payload.aud) ? payload.aud : payload.aud ? [payload.aud] : [];
+      const auds = Array.isArray(payload.aud)
+        ? payload.aud
+        : payload.aud
+          ? [payload.aud]
+          : [];
       if (!auds.includes(cfg.aud)) {
-        throw new AccessJwtError("wrong_audience", "token audience does not match the configured application");
+        throw new AccessJwtError(
+          "wrong_audience",
+          "token audience does not match the configured application"
+        );
       }
 
-      if (typeof payload.exp !== "number" || payload.exp <= Math.floor(Date.now() / 1000)) {
+      if (
+        typeof payload.exp !== "number" ||
+        payload.exp <= Math.floor(Date.now() / 1000)
+      ) {
         throw new AccessJwtError("expired", "token has expired");
       }
 
