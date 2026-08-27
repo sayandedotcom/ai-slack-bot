@@ -23,12 +23,20 @@
  * Node script, not a vitest test, because the worker test pool runs in
  * workerd and has no filesystem.
  *
- * WHERE IT RUNS. `pnpm test` and `pnpm codemode:dts:check`, both in this
- * package. It was only in the second one, which nothing runs automatically —
- * this repository has no CI and no turbo task reaches it — so a guard against a
- * mistake that recurred four times depended on somebody remembering the one
- * command that invoked it. It takes ~50 ms over the whole tracked tree, so
- * putting it in front of the suite costs nothing measurable.
+ * WHERE IT RUNS. Four places now: the root `check:text` script, the lefthook
+ * pre-commit hook, the `gate-fast` job in .github/workflows/ci.yml, and
+ * `pnpm test` / `pnpm capabilities:dts:check` in this package.
+ *
+ * It was once reachable only from `capabilities:dts:check`, which nothing ran
+ * automatically — so a guard against a mistake that recurred four times
+ * depended on somebody remembering the one command that invoked it.
+ *
+ * The root-level invocation is NOT redundant with the one inside this
+ * package's `test` script. This script enumerates `git ls-files` across the
+ * WHOLE repository, but turbo hashes only this package and its dependencies,
+ * so a control byte introduced in README.md or docs/*.md rides a cache hit and
+ * is never scanned. It takes ~50 ms over the whole tracked tree, so running it
+ * everywhere costs nothing measurable.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";

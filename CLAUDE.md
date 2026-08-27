@@ -21,12 +21,18 @@ Canonical docs, in reading order:
 
 ## Commands
 
-Monorepo: pnpm 10.33.4 + Turborepo, Node ≥ 20. Workspaces: `apps/worker` (the product), `apps/dashboard` (Vite/React SPA served by the Worker), `packages/ui|eslint-config|typescript-config`. Root `pnpm build|dev|lint|typecheck` fan out via turbo.
+Monorepo: pnpm 10.33.4 + Turborepo, Node 22.20.0 (`.nvmrc`; `engines` is `>=22.20.0` and `.npmrc` sets `engine-strict=true`, so the wrong Node fails the install rather than a confusing runtime error later). Workspaces: `apps/worker` (the product), `apps/dashboard` (Vite/React SPA served by the Worker), `packages/ui|typescript-config`.
+
+Root scripts: `pnpm build|dev|test|typecheck` fan out via turbo; `pnpm lint|format` are **Biome, run once at the root, not through turbo** — that is the only shape that reaches the 60 `.md` files, `spikes/` and `.github/` that no workspace owns. `pnpm check` is the whole gate in one command.
 
 Almost all work happens in `apps/worker`:
 
 ```bash
-pnpm install                          # once, at repo root
+pnpm install                          # once, at repo root — also installs the git hooks
+pnpm check                            # THE GATE: check:text, lint, typecheck, capabilities:dts:check, test
+pnpm format                           # biome check --write . — formats AND sorts imports
+pnpm lint                             # biome ci . — writes nothing, errors only (warnings stay visible)
+
 cd apps/worker
 cp .dev.vars.example .dev.vars        # local secrets (gitignored) — needed for wrangler dev, NOT for tests
 pnpm test                             # check-text-files.mjs + vitest run, in workerd against real D1/queues/DOs
@@ -46,7 +52,11 @@ pnpm capabilities:dts                 # regenerate src/capabilities/generated/ca
 
 Dashboard (`apps/dashboard`): `pnpm dev` (vite, proxies `/api` — which carries the run SOCKET as well as JSON, hence `ws: true` — and `/ws` to :8787; `dev-stubs.ts` fakes the Access-gated identity/roster/approvals routes so the SPA renders locally). **The run socket, `POST /api/runs` and `GET /api/runs/:id` do NOT work on localhost**: they take an inner roster check and `wrangler dev` has no Access in front of it, so all three answer 401. That is documented in `dev-stubs.ts` and is deliberate — a stubbed socket would be a fiction of a live transcript. `pnpm build`, `pnpm test`, `pnpm typecheck`. `dist/` is gitignored and is the Worker's `ASSETS` directory, so a fresh checkout must build it before `wrangler dev`/`deploy`/the worker test pool will find it.
 
-There is **no CI**. `pnpm test`, `pnpm typecheck` and `pnpm capabilities:dts:check` in `apps/worker` are the gate; run all three yourself and establish the baseline before judging a change — do not trust a stated pass count. Commit after every task, conventional prefixes (`feat(scope):`, `fix(scope):`, `docs:`).
+**The gate is `pnpm check` at the repository root** — control bytes, Biome, `tsc --noEmit`, generated declarations, then the suite, in that order (cheapest first). `.github/workflows/ci.yml` runs the same four jobs on every push and pull request. Run it yourself and establish the baseline before judging a change — do not trust a stated pass count. Commit after every task, conventional prefixes (`feat(scope):`, `fix(scope):`, `docs:`).
+
+Git hooks are lefthook (`lefthook.yml`), installed by the root `prepare` script. **pre-commit**: Biome over staged files + the control-byte guard. **pre-push**: `typecheck` + `capabilities:dts:check`. The worker suite is deliberately NOT in a hook — 205–306s is a hook people learn to `--no-verify` past, which would cost the two fast checks as well. Escape hatches: `LEFTHOOK=0 git commit`, `git push --no-verify`.
+
+Deploying is `workflow_dispatch` only (`.github/workflows/deploy-worker.yml`), behind a `production` environment and four preflight guards. **Never add a push trigger**: `wrangler.jsonc` runs a one-minute cron, so a deploy swaps the Worker under anything in flight.
 
 Production secrets: `wrangler secret bulk` — never bare `wrangler secret put` from a non-interactive shell (uploads an empty string and reports success).
 
@@ -80,7 +90,7 @@ The LangSmith **READ** pin is a different thing entirely and must not be confuse
 ## Conventions and traps
 
 - **Deployment profiles** (`apps/worker/scripts/profile.mjs`, `config/profiles/*.json`, gitignored): pointing this Worker at a different org's Slack/GitHub/Linear/Supabase means moving ~39 values across three unrelated places — `.dev.vars`, the `vars` block of `wrangler.jsonc`, and Cloudflare's secret store — and nothing else checks the three agree. `apply` refuses a profile whose `SLACK_BOT_USER_ID` does not match `auth.test` on that profile's own bot token: that pin is the loop guard, and getting it wrong makes the agent re-ingest its own replies and answer itself, invisibly, until it is live. **`capture` before switching** or the setup being left behind is gone. It deliberately does NOT touch D1/R2/queue/DO bindings (swapping those swaps data), `src/access/roster.ts` (who may approve is code), or deploy for you.
-- **Generated files — never hand-edit:** `apps/worker/worker-configuration.d.ts` (`pnpm cf-typegen`; only commit it from a real regeneration — it is machine-dependent on `.dev.vars` names, and running it **without** `.dev.vars` deletes every secret from `Cloudflare.Env` and breaks `tsc` in twenty places) and `apps/worker/src/capabilities/generated/capabilities.d.ts` (`pnpm capabilities:dts`).
+- **Generated files — never hand-edit:** `apps/worker/worker-configuration.d.ts` (`pnpm cf-typegen`; only commit it from a real regeneration — it is machine-dependent on `.dev.vars` names, and running it **without** `.dev.vars` deletes every secret from `Cloudflare.Env` and breaks `tsc` in twenty places) and `apps/worker/src/capabilities/generated/capabilities.d.ts` (`pnpm capabilities:dts`). **Both are excluded from Biome in `biome.jsonc`, and that exclusion is load-bearing** — `capabilities:dts:check` compares the generated file BYTE-WISE against what `@cloudflare/codemode` renders (four-space indent, its own line breaks), so formatting it once makes the check fail permanently, and the only repair re-runs `--write`, which reverts the formatting, which the formatter re-applies.
 - **`Env` type** lives in `src/index.ts`: `Cloudflare.Env` plus optional declarations for secrets and test opt-outs `wrangler types` cannot see. `wrangler.jsonc` `vars` are non-secret pins (vendor IDs, hosts, mode flags) deliberately kept in the repo; everything credential-shaped is a `wrangler secret`. Code names variables, never values, in errors/logs/health.
 - **Adding a capability:** define it with `auditedCapability(...)` (a bare descriptor throws at registry construction), `effect` is required, append namespaces to the registry order (order = rendered `.d.ts` order), keep method names globally unique (generator emits un-namespaced `XInput`), regenerate the `.d.ts`, add `test/capabilities-<ns>.test.ts`. Zero-arg methods need `z.object({}).default({})`. Connectors pick it up automatically (`buildConnectors` maps the registry), but `test/capabilities-connector.test.ts` pins the surface count and sweeps every method for `requiresApproval` — never set it (spec D4: approval is a model-called capability, not a harness gate). Never hand a raw Zod schema to a connector: `toolInputSchema` accepts it silently and the model-facing type degrades to `unknown`.
 - **The agent packages are exact-pinned** (`@cloudflare/think` 0.15.1, `agents` 0.20.1, `@cloudflare/codemode` 0.5.1, `@ai-sdk/react` 4.0.62) — no carets; `agents/codemode/ai` and `agents/ai-chat-agent` are removed entrypoints that throw at module evaluation. Read `dist/*.js`, not just the `.d.ts`, before writing against them. The traps that have cost real time, each one measured:
