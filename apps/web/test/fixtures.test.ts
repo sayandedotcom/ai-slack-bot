@@ -42,7 +42,11 @@ describe("the demo transport switch", () => {
     const result = await roster.getRoster();
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.speaker?.email).toBe("blake@example.com");
+    // The witness that fixture data came back rather than an empty object.
+    // Both speakers resolve to the one connected account, which is what the
+    // deployed Worker returns too — see lib/fixtures/roster.ts.
+    expect(result.speaker?.email).toBe("sayandeten@gmail.com");
+    expect(result.githubSpeaker?.email).toBe("sayandeten@gmail.com");
   });
 
   it("calls the relative path when demo is off", async () => {

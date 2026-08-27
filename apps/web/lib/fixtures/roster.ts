@@ -1,71 +1,75 @@
 import type { Roster } from "../api/roster";
 
 /**
- * The roster's SHAPE as `src/access/roster.ts` declares it — four fire-fighters
- * in that file's order, then three viewers — with invented people in it.
+ * The roster as `src/access/roster.ts` actually declares it: FIVE fire-fighters
+ * in that file's order — the four `@zellify.app` accounts and the personal
+ * override tagged `G2-TEMP-OVERRIDE` — then three viewers.
  *
- * THE NAMES ARE FICTIONAL ON PURPOSE, and must stay that way. Demo mode is what
- * a public Vercel deployment renders, `NEXT_PUBLIC_` constants are inlined into
- * the client bundle at build time, and a fixture is therefore published to
- * anyone who opens the page. This file previously carried the seven real
- * `@zellify.app` addresses, which is how they ended up readable in a JS chunk
- * on a public URL. `example.com` is reserved by IANA and cannot be registered,
- * so nothing here can ever address a mailbox.
+ * The connect flags are not invented either. They reproduce what the deployed
+ * Worker's `GET /api/roster` returns today: only `sayandeten@gmail.com` has
+ * completed either OAuth flow, so `src/identity/speaker.ts` — first in `pool`
+ * order who has connected — resolves BOTH the Slack speaker and the GitHub
+ * author to that account, even though it is last in the pool. Everyone above it
+ * is skipped for the one reason that matters: nobody connected.
  *
- * Structure is preserved exactly, because the structure is what the screen is
- * demonstrating. The connect flags keep the fixture consistent with how
- * `src/identity/speaker.ts` picks — first in `pool` order who has connected.
- * Avery is first in the pool but has not connected Slack, so Blake speaks;
- * Avery HAS connected GitHub, so PRs are authored as Avery. That divergence is
- * real behaviour and worth seeing on screen. Cameron has connected neither,
- * which is what an unconnected row looks like.
+ * That is why this fixture looks lopsided, and why it should stay lopsided.
+ * Demo mode is a rehearsal of the live screen, and the live screen currently
+ * shows one connected engineer carrying every outbound message. A fixture that
+ * spread the connections around would be a nicer picture of a system that does
+ * not exist, and the first live run would contradict it.
+ *
+ * Note what the pool order still buys: it is the evidence that seniority in the
+ * roster does NOT decide who speaks. Connection does.
  */
 export const demoRoster: Roster = {
-  speaker: { email: "blake@example.com" },
-  githubSpeaker: { email: "avery@example.com" },
+  speaker: { email: "sayandeten@gmail.com" },
+  githubSpeaker: { email: "sayandeten@gmail.com" },
   pool: [
-    "avery@example.com",
-    "blake@example.com",
-    "cameron@example.com",
-    "devon@example.com",
+    "ronit@zellify.app",
+    "luka@zellify.app",
+    "mikheil@zellify.app",
+    "zurab@zellify.app",
+    "sayandeten@gmail.com",
   ],
   engineers: [
     {
-      email: "avery@example.com",
+      email: "ronit@zellify.app",
       role: "firefighter",
       slack: false,
-      github: true,
+      github: false,
     },
     {
-      email: "blake@example.com",
+      email: "luka@zellify.app",
+      role: "firefighter",
+      slack: false,
+      github: false,
+    },
+    {
+      email: "mikheil@zellify.app",
+      role: "firefighter",
+      slack: false,
+      github: false,
+    },
+    {
+      email: "zurab@zellify.app",
+      role: "firefighter",
+      slack: false,
+      github: false,
+    },
+    // The only connected account, and therefore the only one that can speak.
+    {
+      email: "sayandeten@gmail.com",
       role: "firefighter",
       slack: true,
       github: true,
     },
     {
-      email: "cameron@example.com",
-      role: "firefighter",
-      slack: false,
-      github: false,
-    },
-    {
-      email: "devon@example.com",
-      role: "firefighter",
-      slack: true,
-      github: true,
-    },
-    {
-      email: "ellis@example.com",
+      email: "marcus@zellify.app",
       role: "viewer",
       slack: false,
       github: false,
     },
-    {
-      email: "frankie@example.com",
-      role: "viewer",
-      slack: false,
-      github: false,
-    },
-    { email: "gray@example.com", role: "viewer", slack: false, github: false },
+    { email: "nils@zellify.app", role: "viewer", slack: false, github: false },
+    { email: "eric@zellify.app", role: "viewer", slack: false, github: false },
   ],
 };

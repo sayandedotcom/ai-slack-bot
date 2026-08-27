@@ -68,7 +68,7 @@ describe("the approvals overlay", () => {
   it("restarts the countdown rather than stacking timers when a card resolves twice", () => {
     store().resolve(card, "approved", null, true);
     vi.advanceTimersByTime(RESOLVED_TTL_MS - 100);
-    store().resolve(card, "approved", "devon@example.com", false);
+    store().resolve(card, "approved", "zurab@zellify.app", false);
 
     // The first timer must not fire and remove the card 100ms from now.
     vi.advanceTimersByTime(200);
@@ -80,28 +80,28 @@ describe("the approvals overlay", () => {
 
   it("fills in a decider's name but never changes the decision", () => {
     store().resolve(card, "approved", null, false);
-    store().nameDecider(card.id, "devon@example.com");
+    store().nameDecider(card.id, "zurab@zellify.app");
 
     expect(store().cards.get(card.id)).toMatchObject({
       kind: "resolved",
       decision: "approved",
-      decidedBy: "devon@example.com",
+      decidedBy: "zurab@zellify.app",
     });
   });
 
   it("refuses to name a decider on a card that is not resolved", () => {
     store().beginDecide(card, { action: "approve" });
-    store().nameDecider(card.id, "devon@example.com");
+    store().nameDecider(card.id, "zurab@zellify.app");
 
     expect(store().cards.get(card.id)).toMatchObject({ kind: "deciding" });
   });
 
   it("never overwrites a name that is already known", () => {
-    store().resolve(card, "approved", "blake@example.com", false);
-    store().nameDecider(card.id, "devon@example.com");
+    store().resolve(card, "approved", "luka@zellify.app", false);
+    store().nameDecider(card.id, "zurab@zellify.app");
 
     expect(store().cards.get(card.id)).toMatchObject({
-      decidedBy: "blake@example.com",
+      decidedBy: "luka@zellify.app",
     });
   });
 
