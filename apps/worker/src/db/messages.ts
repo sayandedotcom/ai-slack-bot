@@ -1,4 +1,5 @@
 import type { IngestOutcome } from "../ingest/rules";
+import type { EventsSeenRow } from "./schema";
 
 /**
  * Record that an envelope was seen. Returns true on first sighting, false if
@@ -9,7 +10,7 @@ import type { IngestOutcome } from "../ingest/rules";
  */
 export async function recordEvent(
   db: D1Database,
-  row: { event_id: string; channel_id: string | null; outcome: IngestOutcome; received_at: number },
+  row: Pick<EventsSeenRow, "event_id" | "channel_id" | "outcome" | "received_at">,
 ): Promise<boolean> {
   const res = await db
     .prepare(

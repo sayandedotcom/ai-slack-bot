@@ -3,6 +3,7 @@ import type { CapabilityErrorCode } from "../gateways/errors";
 import { sha256Bytes } from "../gateways/hash";
 import type { RunScope } from "../gateways/scope";
 import type { JsonValue } from "../run/protocol";
+import type { CodemodeEffectsRow } from "../db/schema";
 
 /**
  * Bumping this invalidates every existing key, which is the point: if the
@@ -99,10 +100,7 @@ export type RunEffectOptions<T> = {
   reconcile?: (idempotencyKey: string) => Promise<T | null>;
 };
 
-type EffectRow = {
-  state: "reserved" | "completed" | "failed" | "in_doubt";
-  safe_result_json: string | null;
-};
+type EffectRow = Pick<CodemodeEffectsRow, "state" | "safe_result_json">;
 
 /* ------------------------------------------------------------ canonical -- */
 
@@ -276,7 +274,7 @@ async function claim(
        RETURNING effect_key`,
     )
     .bind(key, scope.runId, scope.turnId, namespace, method, argsHash, now, now)
-    .first<{ effect_key: string }>();
+    .first<Pick<CodemodeEffectsRow, "effect_key">>();
   return row !== null;
 }
 
@@ -294,7 +292,7 @@ async function reclaim(deps: EffectDeps, key: string): Promise<boolean> {
         RETURNING effect_key`,
     )
     .bind(deps.clock(), key)
-    .first<{ effect_key: string }>();
+    .first<Pick<CodemodeEffectsRow, "effect_key">>();
   return row !== null;
 }
 

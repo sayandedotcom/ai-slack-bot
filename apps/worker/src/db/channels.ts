@@ -1,3 +1,5 @@
+import type { ChannelsRow } from "./schema";
+
 export type ChannelMode = "observe" | "live" | "internal";
 
 export type ChannelPolicy = {
@@ -18,7 +20,7 @@ export async function getChannelPolicy(db: D1Database, channelId: string): Promi
   const row = await db
     .prepare("SELECT channel_id, name, customer_slug, mode FROM channels WHERE channel_id = ?")
     .bind(channelId)
-    .first<{ channel_id: string; name: string; customer_slug: string | null; mode: ChannelMode }>();
+    .first<ChannelsRow>();
 
   if (!row) {
     return { channel_id: channelId, name: channelId, customer_slug: null, mode: "observe", known: false };
@@ -91,7 +93,8 @@ export async function searchCustomers(
         LIMIT ?`,
     )
     .bind(`%${escaped}%`, bounded)
-    .all<{ slug: string }>();
+    // `customer_slug AS slug`, and non-null because the WHERE clause says so.
+    .all<{ slug: NonNullable<ChannelsRow["customer_slug"]> }>();
 
   // The label is the slug, not the channel name. A channel name is a
   // destination identifier and the model is never shown one; the slug is the

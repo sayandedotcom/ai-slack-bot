@@ -1,5 +1,6 @@
 import { ACTIVE_RUN_STATUSES, type RunStatus } from "./protocol";
 import type { RunOrigin } from "./keys";
+import type { ChannelsRow, RunsRow } from "../db/schema";
 
 /**
  * D1-only operations on the run index. Nothing here touches the RUNS namespace:
@@ -47,18 +48,19 @@ export type RunDescriptor = {
 export const RUN_LIST_DEFAULT_LIMIT = 50;
 export const RUN_LIST_MAX_LIMIT = 200;
 
-type RunRow = {
-  id: string;
-  key: string;
-  origin: RunOrigin;
-  channel_id: string | null;
-  thread_ts: string | null;
-  status: RunStatus;
-  shadow: number;
-  summary: string | null;
-  created_at: number;
-  updated_at: number;
-};
+type RunRow = Pick<
+  RunsRow,
+  | "id"
+  | "key"
+  | "origin"
+  | "channel_id"
+  | "thread_ts"
+  | "status"
+  | "shadow"
+  | "summary"
+  | "created_at"
+  | "updated_at"
+>;
 
 const COLUMNS = `id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at`;
 
@@ -247,18 +249,25 @@ export async function listRuns(
        LIMIT ?`,
     )
     .bind(...bindings)
-    .all<{
-      id: string;
-      origin: RunOrigin;
-      status: RunStatus;
-      shadow: number;
-      summary: string | null;
-      channel_id: string | null;
-      channel_name: string | null;
-      customer_slug: string | null;
-      created_at: number;
-      updated_at: number;
-    }>();
+    .all<
+      Pick<
+        RunsRow,
+        | "id"
+        | "origin"
+        | "status"
+        | "shadow"
+        | "summary"
+        | "channel_id"
+        | "created_at"
+        | "updated_at"
+      > & {
+        // Widened at the call site, not in the schema: this is a LEFT JOIN, so
+        // both columns come back NULL for a run whose channel is absent from
+        // `channels` — even though `channels.name` is NOT NULL in the DDL.
+        channel_name: ChannelsRow["name"] | null;
+        customer_slug: ChannelsRow["customer_slug"];
+      }
+    >();
 
   return (results ?? []).map((row) => ({
     id: row.id,
@@ -398,6 +407,33 @@ export async function setRunStatus(
     .prepare("UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ?")
     .bind(status, at, id)
     .run();
+}
+
+/**
+ * Move a run's status only if it is still in the state the caller validated
+ * against.
+ *
+ * The twin of `setRunStatus`, and the one the agent's projection uses. The
+ * unconditional version cannot be safe on that path: two projections racing
+ * would both read `live`, both find their own transition legal, and the loser
+ * would overwrite the winner — writing a change that was legal only against a
+ * row that no longer exists. Comparing on `status` makes the loser a no-op,
+ * which `projectStatus` reports rather than swallowing.
+ */
+export async function casRunStatus(
+  db: D1Database,
+  id: string,
+  from: RunStatus,
+  to: RunStatus,
+  at = Date.now(),
+): Promise<{ applied: boolean }> {
+  const result = await db
+    .prepare(
+      "UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ? AND status = ?",
+    )
+    .bind(to, at, id, from)
+    .run();
+  return { applied: (result.meta.changes ?? 0) > 0 };
 }
 
 export async function setRunSummary(db: D1Database, id: string, summary: string): Promise<void> {

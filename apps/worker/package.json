@@ -12,7 +12,8 @@
     "capabilities:dts": "node --import ./scripts/capabilities-node-shim.mjs --import tsx scripts/generate-capabilities-dts.ts --write",
     "capabilities:dts:check": "node scripts/check-text-files.mjs && node --import ./scripts/capabilities-node-shim.mjs --import tsx scripts/generate-capabilities-dts.ts --check",
     "cf-typegen": "wrangler types --strict-vars=false",
-    "check:text": "node scripts/check-text-files.mjs"
+    "check:text": "node scripts/check-text-files.mjs",
+    "profile": "node scripts/profile.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.37",

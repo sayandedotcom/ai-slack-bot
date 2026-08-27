@@ -1,4 +1,5 @@
 import type { SlackMessage } from "../gateways/ports";
+import type { MessagesRow } from "../db/schema";
 
 /**
  * Reads over the ingested message table.
@@ -13,13 +14,7 @@ import type { SlackMessage } from "../gateways/ports";
  * flexibility is how a bounded read surface becomes an arbitrary one.
  */
 
-type MessageRow = {
-  event_id: string;
-  ts: string;
-  user_id: string | null;
-  text: string;
-  permalink: string | null;
-};
+type MessageRow = Pick<MessagesRow, "event_id" | "ts" | "user_id" | "text" | "permalink">;
 
 /**
  * Drop the raw row shape at the boundary. Callers never see D1 column names.

@@ -91,37 +91,31 @@
     // runs rather than an error.
     "LANGSMITH_PROJECT_ID": "4a42e1fa-d619-49a9-afe4-0a9e97a5196f",
     "LANGSMITH_PROJECT_NAME": "fire-fighter-standin",
-    // LangSmith WRITE surface: the agent's own traces, in a SECOND project.
-    // Reads address the stand-in by id above; ingest addresses this one by NAME,
-    // because `session_name` is what the batch endpoint accepts and it creates
-    // the project on first write.
+    // THE AGENT'S OWN TRACES ARE THE SDK'S NOW, so there is nothing to
+    // configure here.
     //
-    // MUST BE IN THE SAME WORKSPACE as LANGSMITH_API_KEY (LANGSMITH_WORKSPACE_ID
-    // above). Measured 2026-08-17: a LangSmith key is scoped to exactly one
-    // workspace and a project in any other is invisible rather than an error, so
-    // a mismatch here does not fail -- it writes into a project nobody watches.
+    // Phase 26 replaced the hand-written LangSmith writer with Think's native
+    // GenAI OTLP spans (`RunAgent.storeTools` / `storeMessages`), exported by
+    // the Workers runtime. The destination is a dashboard-side OTLP setting,
+    // not a var: LangSmith ingests at `/otel/v1/traces` with `x-api-key` and a
+    // `Langsmith-Project` header, and the header picks the project exactly as
+    // `session_name` used to. `LANGSMITH_TRACING`, `LANGSMITH_TRACE_PROJECT`
+    // and `LANGSMITH_TRACE_PAYLOADS` are gone with the writer that read them.
     //
-    // OPT-IN, and read strictly: only "true"/"1" enables. A typo leaves a new
-    // outbound sink OFF, which is the safe direction for this one -- the
-    // inverse of AGENT_MODEL_DISABLED, where a typo must not silently re-enable
-    // a provider call.
+    // The READ pins above are untouched and are a different thing entirely: a
+    // capability that reads a CUSTOMER's traces. Do not repoint them here.
+
+    // What one agent turn may spend, in nano-USD ($5.00). The MONEY is the
+    // binding authority on how long a turn runs (invariant 28), not the 40-step
+    // ceiling, which at the ~$0.068 per step these runs bill would cost ~$2.70
+    // and so can never be the thing that stops an expensive turn first.
     //
-    // NAME COLLISION, known and accepted: LANGSMITH_TRACING is also what the
-    // official `langsmith` npm package auto-reads. We do not install it (the
-    // emitter is hand-rolled in src/langsmith/tracer.ts), so nothing else picks
-    // this up today. If that package is ever added, it will start tracing on
-    // its own and this var is why.
-    "LANGSMITH_TRACING": "true",
-    "LANGSMITH_TRACE_PROJECT": "fire-fighter",
-    // "none" = ids, tokens, cost, latency, finish reason. "redacted" = the
-    // above PLUS bounded, scrubbed prompt/completion/program text.
-    //
-    // "redacted" is a deliberate widening of what leaves the Worker, taken
-    // knowingly: AI Gateway runs with cf-aig-collect-log-payload false
-    // (invariant 26) and this does not change that, but it does mean agent
-    // prose reaches a second vendor. Recorded in the README security model,
-    // swept by test/agent-canaries.test.ts, and never reasoning (invariant 18).
-    "LANGSMITH_TRACE_PAYLOADS": "redacted",
+    // Enforced twice: `beforeTurn`'s stopWhen ends the turn once cumulative
+    // usage crosses this, and `beforeStep` takes the tools away one step
+    // earlier so the model writes a closing message instead of being cut off.
+    // Absent or unparseable falls back to this same default; an explicit "0" is
+    // unbounded, and is deliberately something someone has to type.
+    "RUN_SPEND_CEILING_NANO_USD": "5000000000",
     // Supabase PostgREST origin (Task 9). Fixed server-side so the reader can
     // never be pointed at another project. Credential is SUPABASE_KEY.
     "SUPABASE_URL": "https://uahmoigkzsuwhheohitz.supabase.co",
@@ -187,7 +181,7 @@
     // draft in a channel the agent also replies into. Acceptable only because
     // no real customer is in it. Point this at a genuinely internal channel
     // before this system sees a real customer workspace.
-    "NUDGE_FALLBACK_CHANNEL_ID": "C0BPA2L4BBP",
+    "NUDGE_FALLBACK_CHANNEL_ID": "",
     // Where the nudge's "Review" button points: `${DASHBOARD_BASE_URL}/?approval=${id}`.
     // The Worker's own origin — the dashboard is served from it (see "assets").
     "DASHBOARD_BASE_URL": "https://firefighter.sayandeten.workers.dev",
@@ -197,8 +191,8 @@
     // the agent's replies from D1 (found live, 2026-08-14). Both are public
     // identifiers, not credentials: they appear in every message the app posts.
     // app_id from the app's own settings URL; bot user id from auth.test.
-    "SLACK_APP_ID": "A0BPVS02D1N",
-    "SLACK_BOT_USER_ID": "U0BNZGM7422",
+    "SLACK_APP_ID": "A0BSZPDKG4D",
+    "SLACK_BOT_USER_ID": "U0BT3PMMCEN",
     // --------------------------------------------------------- Phase 18
     //
     // The Tier 2 sandbox. All three are non-secret by construction: a path
@@ -338,64 +332,57 @@
       { "name": "RUN_AGENTS", "class_name": "RunAgent" }
     ]
   },
-  // APPENDED, never edited. `v1` is RunDO's and is already applied in
-  // production; rewriting an applied tag is how you lose a Durable Object's
-  // storage. A new class gets a new tag.
+  // APPENDED, NEVER EDITED — from this deploy onward.
+  //
+  // THIS LIST WAS COLLAPSED ONCE, ON 2026-08-27, AND THE REASON IS NARROW.
+  //
+  // It used to carry five tags describing the real history of this project:
+  // v1 RunDO, v2 Sandbox, v3 RunAgent + CodemodeRuntime, v4 deleting all three
+  // when the agent layer was torn out, v5 re-creating the rebuilt two. The file
+  // asserted "v1-v3 are applied in production". They were not. The Worker had
+  // been deleted from the account, and a deleted script takes its migration
+  // state with it — so the first deploy of the rebuild presented the whole
+  // chain to an account with no previous version, and Cloudflare refused:
+  //
+  //   Cannot apply delete-class migration to class 'RunAgent' which was not
+  //   exported in the previous version of the script [code: 10074]
+  //
+  // Verified before touching it, through the API rather than by assumption:
+  // `/workers/scripts` returned NONE and
+  // `/workers/durable_objects/namespaces` returned NONE. Zero applied
+  // migrations, zero namespaces, therefore zero Durable Object storage that a
+  // rewrite could destroy. The append-only rule exists to protect APPLIED
+  // migrations; there were none to protect.
+  //
+  // THAT WINDOW IS NOW CLOSED. This tag is applied. Never edit it, never
+  // reorder it, and never rewrite this list again — a new class gets a new tag
+  // appended below. Rewriting an applied tag is how you lose a run's storage.
+  //
+  // CodemodeRuntime IS LISTED, and the reason is measured, not decorative
+  // (Phase 25 Task 1 spike; docs/superpowers/plans/phase-25-notes.md). The
+  // durable codemode runtime behind the execute tool is a FACET of whichever
+  // Durable Object created the tool:
+  //
+  //   ctx.facets.get("codemode:run_code", () => ({
+  //     class: ctx.exports.CodemodeRuntime
+  //   }))
+  //
+  // `facets.get` demands a real Durable Object class, and workerd only makes
+  // `ctx.exports.X` a `LoopbackDurableObjectNamespace` when X is DECLARED as a
+  // Durable Object class. Merely exporting it from src/index.ts — which is all
+  // the package docs and the @cloudflare/codemode vite plugin do — leaves it a
+  // `LoopbackServiceStub`, and the first facet RPC dies with:
+  //
+  //   TypeError: Incorrect type for the 'class' field on 'StartupOptions': the
+  //   provided value is not of type 'DurableObjectClass or
+  //   LoopbackDurableObjectNamespace or LoopbackColoLocalActorNamespace'.
+  //
+  // This one line is the entire fix. No `durable_objects.bindings` entry is
+  // needed and none is wanted: nothing addresses the runtime from outside — it
+  // is reached only through its host DO's own `facets` map, where it gets an
+  // isolated SQLite database of its own.
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["RunDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["Sandbox"] },
-    // Phase 25. RunAgent is a Think agent, which is an Agents-SDK Agent, which
-    // is a SQLite Durable Object — `new_sqlite_classes`, same as v1.
-    //
-    // CodemodeRuntime IS LISTED HERE, and the reason is measured, not
-    // decorative (Task 1 spike, 2026-08-16 — docs/superpowers/plans/
-    // phase-25-notes.md). The durable codemode runtime behind the execute tool
-    // is a FACET of whichever DO created the tool:
-    //
-    //   ctx.facets.get("codemode:run_code", () => ({
-    //     class: ctx.exports.CodemodeRuntime
-    //   }))
-    //
-    // `facets.get` demands a real Durable Object class, and workerd only makes
-    // `ctx.exports.X` a `LoopbackDurableObjectNamespace` when X is DECLARED as
-    // a Durable Object class. Merely exporting it from src/index.ts — which is
-    // all the package docs and the @cloudflare/codemode/vite plugin do — leaves
-    // it a `LoopbackServiceStub`, and the first facet RPC dies with:
-    //
-    //   TypeError: Incorrect type for the 'class' field on 'StartupOptions':
-    //   the provided value is not of type 'DurableObjectClass or
-    //   LoopbackDurableObjectNamespace or LoopbackColoLocalActorNamespace'.
-    //
-    // This one line is the entire fix. No `durable_objects.bindings` entry is
-    // needed and none is wanted: nothing addresses the runtime from outside —
-    // it is reached only through its host DO's own `facets` map, where it gets
-    // an isolated SQLite database of its own.
-    { "tag": "v3", "new_sqlite_classes": ["RunAgent", "CodemodeRuntime"] },
-    // The agent layer was removed on 2026-08-23, to be rebuilt on the Agents
-    // SDK / Project Think / Code Mode. `deleted_classes` is what tells the
-    // platform to drop the objects; without it a deploy that no longer exports
-    // these classes is refused outright.
-    //
-    // Every run transcript lived in that SQLite and goes with it. The D1 rows
-    // — `runs`, `approvals`, `messages`, `channels`, the memory outbox — are
-    // untouched, so ingest, the run index, the approval history and memory all
-    // survive the teardown.
-    //
-    // v1-v3 are applied in production and are never edited; this is appended.
-    { "tag": "v4", "deleted_classes": ["RunDO", "RunAgent", "CodemodeRuntime"] },
-    // The agent layer, rebuilt on Think + Code Mode (Phase 26). v4 deleted
-    // these classes; re-declaring them here creates them fresh, with empty
-    // SQLite — nothing survives from the v1-v3 objects and nothing should.
-    //
-    // CodemodeRuntime is listed for the same measured reason as in v3 above:
-    // `facets.get` needs `ctx.exports.CodemodeRuntime` to be a
-    // LoopbackDurableObjectNamespace, and only a `new_sqlite_classes`
-    // declaration makes it one. Exporting it from src/index.ts is necessary
-    // but NOT sufficient — without this line the first facet RPC dies with
-    // "Incorrect type for the 'class' field on 'StartupOptions'".
-    //
-    // v1-v4 are applied and are never edited; this is appended.
-    { "tag": "v5", "new_sqlite_classes": ["RunAgent", "CodemodeRuntime"] }
+    { "tag": "v1", "new_sqlite_classes": ["Sandbox", "RunAgent", "CodemodeRuntime"] }
   ],
   "d1_databases": [
     {

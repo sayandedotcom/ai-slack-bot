@@ -3,6 +3,7 @@ import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
 import { backfillApi } from "./api/backfill";
 import { runsApi } from "./api/runs";
+import { agentsApi } from "./api/agents";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
 import { proofsApi } from "./api/proofs";
@@ -11,12 +12,15 @@ import { evalApi } from "./api/eval";
 import { slackOAuth } from "./oauth/slack";
 import { githubOAuth } from "./oauth/github";
 import { slackRunKey } from "./run/keys";
+import { routeToOwnedRun, wakeRun } from "./run/wake";
+import { sweepChannelMembership } from "./channels/registry";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
 import { sweepNudges } from "./notify/nudge";
 import { sweepSandboxes } from "./sandbox/lifecycle";
 import { ZepMemory } from "./memory/zep";
+import { subscribe } from "agents/observability";
 import { handleTriageBatch, type TriageJob } from "./triage/consumer";
 import { makeTriageRunner } from "./triage/run";
 import type { QueuedEvent } from "./slack/types";
@@ -122,10 +126,18 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    * naming the variable. There is no state in which absence silently enables an
    * outbound sink.
    */
-  LANGSMITH_TRACING?: string;
-  LANGSMITH_TRACE_PROJECT?: string;
+  /**
+   * What one agent turn may spend, in nano-USD. A NON-SECRET `var`, declared
+   * here for the same reason as the ones above.
+   *
+   * Optional, and absence means the reviewed default ($5.00), not unbounded —
+   * `spendCeilingFrom` treats an unparseable or missing value as the default so
+   * an operator typo cannot remove the money bound. An explicit `"0"` IS
+   * unbounded, which is the only way to turn the ceiling off and is deliberately
+   * something someone has to type.
+   */
+  RUN_SPEND_CEILING_NANO_USD?: string;
   /** `"none"` or `"redacted"`. Anything else is refused by name. */
-  LANGSMITH_TRACE_PAYLOADS?: string;
   /**
    * Phase 18's read-only monorepo credential — a SECRET, so `wrangler types`
    * cannot know it, same as every entry above. Fine-grained, `web2app-rebuild`
@@ -215,6 +227,11 @@ app.route("/slack", slackEvents);
 app.route("/api", countersApi);
 app.route("/api", backfillApi);
 app.route("/api", runsApi);
+// The run transport (Phase 26). Mounted on the same `/api` as everything else,
+// which is what gates the socket and the transcript read with the dashboard's
+// own Access application — see `src/api/agents.ts` for why this is not
+// `/agents/*` and not `routeAgentRequest`.
+app.route("/api", agentsApi);
 // The one human-decision surface (Phase 11). Same `/api` mount as everything
 // else here, so it inherits the same Access application as the dashboard —
 // `PATCH /api/approvals/:id` is exactly as gated as `GET /api/runs`.
@@ -276,6 +293,28 @@ app.all("/ws/*", (c) => c.json({ code: "not_found", message: "no such route" }, 
 // config that later phases would have to keep correct.
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
+/**
+ * Think's own diagnostics, into Workers Logs.
+ *
+ * MODULE SCOPE, and exactly once. `subscribe` registers a process-wide listener
+ * on the isolate, so calling it per request or per Durable Object would attach a
+ * new one every time and print each event as many times as the isolate had
+ * served requests.
+ *
+ * `chat` only. The SDK emits a dozen channels — rpc, mcp, fiber, schedule,
+ * lifecycle — and forwarding all of them would bury the one that says why a
+ * turn did not answer under traffic nobody reads.
+ *
+ * IDS AND STATES, NEVER CONTENT. The payload of a chat event can carry request
+ * metadata, so what is logged here is the event type and the run's public id
+ * where the event carries one. Message text, tool payloads and model output are
+ * deliberately absent: Workers Logs is a durable sink and invariant 39 applies
+ * to it exactly as it applies to a D1 row.
+ */
+subscribe("chat", (event) => {
+  console.log("agent", { type: event.type });
+});
+
 export default {
   fetch: app.fetch,
   // One handler serves every queue; `batch.queue` is the only thing that says
@@ -292,24 +331,23 @@ export default {
           memory: new ZepMemory(env.ZEP_API_KEY),
           // No HTTP self-call and no extra queue: the consumer and the
           // coordinator both run in the trusted parent Worker.
-          // NO WAKE. The agent layer was removed on 2026-08-23 to be rebuilt
-          // on the Agents SDK / Project Think / Code Mode. Triage still runs,
-          // still classifies with the cheap model, and still writes its
-          // decision to `triage_decisions` — so the corpus, the counters and
-          // the eval routes keep working — but there is nothing to wake yet.
           //
-          // Restore both deps when the new chassis lands: `routeToOwnedRun`
-          // absorbs a reply into the run that already owns the thread, and
-          // `wakeRun` starts one. `slackRunKey(channelId, threadTs)` is the
-          // run key both of them address, and the Slack `event_id` is the
-          // idempotency token on either path.
+          // `routeToOwnedRun` absorbs a reply into the run that already owns
+          // the thread — no triage call, no second model spend — and `wakeRun`
+          // starts one. Both re-read the channel policy and apply the shadow
+          // ratchet before any turn exists, and both are idempotent on the
+          // Slack `event_id`, so a redelivered queue message submits nothing.
+          routeToOwnedRun: (message) => routeToOwnedRun(env, message),
+          wakeRun: async (input) => {
+            await wakeRun(env, input);
+          },
         });
     }
   },
   /**
    * The one-minute Cron Trigger, configured in wrangler.jsonc.
    *
-   * It owns two jobs, run every minute:
+   * It owns five independent repair jobs, run every minute:
    *
    *  - re-enqueueing D1 memory-outbox rows that are due, including rows whose
    *    queue delivery has already exhausted its retries and gone to the DLQ.
@@ -357,6 +395,7 @@ export default {
       sweepUndeliveredApprovals(env),
       sweepNudges(env),
       sweepSandboxes(env),
+      sweepChannelMembership(env),
     ]);
     // The other two sweeps report their own counts from inside themselves
     // (`console.warn("memory sweep"…)`, `console.warn("approval sweep"…)`);
@@ -373,6 +412,16 @@ export default {
     const sandboxes = results[3];
     if (sandboxes?.status === "fulfilled" && sandboxes.value.destroyed > 0) {
       console.warn("sandbox sweep", { destroyed: sandboxes.value.destroyed });
+    }
+    // The fifth sweep registers channels the bot was invited to but nobody has
+    // spoken in yet, and self-heals anything the lazy ingest path missed. It
+    // only ever ADDS rows, and `listBotConversations` answers `[]` on any
+    // failure, so a Slack outage makes this a no-op rather than a mass
+    // registration or a mass removal. Independent of the other four for the
+    // reason stated above.
+    const channels = results[4];
+    if (channels?.status === "fulfilled" && channels.value.registered > 0) {
+      console.warn("channel sweep", { registered: channels.value.registered });
     }
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length > 0) {

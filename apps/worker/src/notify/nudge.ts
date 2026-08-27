@@ -4,6 +4,7 @@ import { claimNudge, getApproval, recordNudgeMessage, releaseNudge } from "../ap
 import { getChannelPolicy } from "../db/channels";
 import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
 import { nudgeBlocks, resolvedBlocks } from "./blocks";
+import type { ApprovalsRow } from "../db/schema";
 
 /**
  * The escalation nudge: one Block Kit DM to the on-duty engineer, once.
@@ -317,7 +318,7 @@ export async function sweepNudges(env: Env, now = Date.now()): Promise<number> {
      LIMIT ?`,
   )
     .bind(now - NUDGE_RETRY_AFTER_MS, SWEEP_LIMIT)
-    .all<{ id: string }>();
+    .all<Pick<ApprovalsRow, "id">>();
 
   let sent = 0;
   for (const { id } of results ?? []) {

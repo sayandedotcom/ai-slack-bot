@@ -5,6 +5,7 @@ import {
   type ApprovalRow,
   type DecisionInput,
 } from "./contracts";
+import type { ApprovalsRow } from "../db/schema";
 
 /**
  * D1-only operations on `approvals` (`migrations/0007_approvals.sql`). D1 is
@@ -44,27 +45,29 @@ export type WithdrawApprovalResult =
   | { result: "already_decided"; row: ApprovalRow }
   | { result: "not_found" };
 
-type ApprovalRowDb = {
-  id: string;
-  run_id: string;
-  generation_id: string;
-  draft: string;
-  why: string;
-  channel_id: string;
-  thread_ts: string;
-  shadow: number;
-  decision: ApprovalDecision;
-  decided_by: string | null;
-  decided_at: number | null;
-  edited_text: string | null;
-  reject_reason: string | null;
-  delivery: ApprovalDelivery;
-  created_at: number;
-  updated_at: number;
-  nudged_at: number | null;
-  nudge_channel_id: string | null;
-  nudge_ts: string | null;
-};
+/** Exactly the columns `COLUMNS` selects — note `delivery_error` is not one. */
+type ApprovalRowDb = Pick<
+  ApprovalsRow,
+  | "id"
+  | "run_id"
+  | "generation_id"
+  | "draft"
+  | "why"
+  | "channel_id"
+  | "thread_ts"
+  | "shadow"
+  | "decision"
+  | "decided_by"
+  | "decided_at"
+  | "edited_text"
+  | "reject_reason"
+  | "delivery"
+  | "created_at"
+  | "updated_at"
+  | "nudged_at"
+  | "nudge_channel_id"
+  | "nudge_ts"
+>;
 
 const COLUMNS = `id, run_id, generation_id, draft, why, channel_id, thread_ts, shadow,
   decision, decided_by, decided_at, edited_text, reject_reason, delivery, created_at, updated_at,

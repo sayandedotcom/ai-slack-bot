@@ -103,25 +103,42 @@ exposes `state.*`; "exactly one tool" read from the merged map, not
 
 ## 5. Turn lifecycle on Think hooks
 
+**Amended 2026-08-24 after the docs audit** (`phase-26-notes.md` §"Docs audit
+before Wave 3"). The original table assumed context blocks re-render per turn,
+that recovery had to be built, and named a deprecated hook. Verified hook
+signatures for 0.15.1: `beforeTurn(ctx: TurnContext)`, `beforeStep(ctx:
+PrepareStepContext)`, `beforeToolCall(ctx: ToolCallContext)`,
+`afterToolCall(ctx: ToolCallResultContext)`, `onStepEnd(ctx: StepContext)`
+(`onStepFinish` is deprecated), `onChatResponse(result)`,
+`onChatError(error, ctx)`, `onSubmissionStatus(...)`.
+
+**Where each kind of fact lives** — this is the part the first draft got wrong:
+
+| Kind | Home | Why |
+|---|---|---|
+| Static text (policy, engineer voice, capability rules) | get-only `withContext` blocks + `withCachedPrompt()` | Rendered once per isolate and cached; `getSystemPrompt()` is ignored once any block exists |
+| Per-turn facts (`RunScope`, thread, recall, pending approval) | `beforeTurn → { instructions }` and the channel's `instructions(ctx)` | Re-evaluated every turn; a context block would freeze the first turn's scope |
+| Per-turn identifiers (`turnId`, Slack `event_id`, `approvalId`) | `runTurn({ mode: "submit", metadata })` → `this.activeTurnMetadata` | Persisted on the user message; client-supplied keys are stripped at intake |
+| Run-scoped durable state (`runId`, status, open approval) | `this.state` / `setState` | SQLite-backed, survives hibernation, broadcast to connections. `this.configure()` does not exist |
+| Delivery label (Slack final = narration, Chat final = visible) | `configureChannels()`: `slack` = `kind: "custom"` (transcript-only), `web` = `kind: "web"`; `channel` passed on every submit | A custom channel has no out-of-turn delivery surface, which IS "internal narration" |
+
 | Hook | `RunAgent` behaviour | Invariants / defects |
 |---|---|---|
-| `configureSession` | blocks `policy, voice, engineer, trusted-context`, each with an explicit read-only provider (an unprovided block auto-adds a writable `set_context` tool); `withCachedPrompt()` | 23–26 |
-| `beforeTurn` | read D1 `runs` row → `RunScope` (new `turnId` per settled input, reused across continuation); shadow ratchet false→true only; re-read channel policy; dynamic block (thread, memory recall, local `pending_approval`) inside an untrusted-evidence envelope; `delivery` label from origin (Slack final = internal narration, Chat final = visible); `providerOptions.anthropic.disableParallelToolUse = true` | 3, 4, 6–8, 23, 25, 35, 37; defect 9 |
-| `beforeStep` | spend preflight: worst case (input + cache write/read + output + Gateway) vs `RUN_SPEND_CEILING_NANO_USD` minus spent; over → `activeTools: []`, a system note, turn marked `spend_capped`; two Anthropic cache breakpoints via `system: SystemModelMessage[]` (build a checked `PrepareStepResult` and widen on return — `StepConfig` type-collapses); splice pending steers | 12–14, 26, 28, 29; defect 8 |
-| `beforeToolCall` | revision check → `{ action: "substitute", output: { error: "stale_generation" } }`; block while parked on an approval | 15; defects 10, 13 |
-| `afterToolCall` | audit row (no args, no code); `makeRedactor` on sandbox output | 18, 39 |
-| `onStepFinish` | usage row nano-USD, idempotent on `turnId:step`; D1 projection through `evaluateTransition` (illegal → refuse + log, never write); memory episode job | 9, 21, 22, 29, 32, 33; defect 7 |
-| `onChatResponse` | final status `idle` / `awaiting_approval` / `done` / `failed`; terminal → sandbox teardown; tracer flush via `waitUntil` | 21; defect 3 |
-| `onChatError` / `classifyChatError` | refusal and stall → visible failed/idle event; no fallback model | 27, 30, 31 |
+| `configureSession` | get-only blocks `policy`, `voice`, `capabilities`; `withCachedPrompt()`; `refreshSystemPrompt()` on UTC-day change for the frozen voice block | 23–26 |
+| `configureChannels` | `slack` (custom, websocket ingress, `maxTurns`, per-turn `instructions(ctx)` = the delivery label) and `web` | 4; defect 9 |
+| `beforeTurn` | resolve `RunScope` from D1 + `activeTurnMetadata` (new `turnId` per settled input, reused across continuation); shadow ratchet false→true only; `instructions` = untrusted-evidence envelope (thread, recall, pending approval); `activeTools: ["run_code"]`; `stopWhen` from the nano-USD ceiling + explicit `maxSteps`; `providerOptions.anthropic.disableParallelToolUse`; `telemetry.metadata { runId, turnId }`; `headers` for gateway attribution | 3, 6–8, 23, 25, 26, 28, 35, 37 |
+| `beforeStep` | splice pending steers via `{ messages }`; spend preflight from `ctx.steps[].usage` → `activeTools: []` + a system note when the next step would cross the ceiling (`beforeStep` cannot end a turn; `stopWhen` does) | 12–14, 28, 29; defect 8 |
+| `beforeToolCall` | revision check → `{ action: "substitute", output: { error: "stale_generation" } }`; `block` while parked on an approval | 15; defects 10, 13 |
+| `afterToolCall` | LangSmith `tool` span only (no second audit store — `cm_log` is the durable record); `makeRedactor` already applied by the sandbox gateway | 18, 39 |
+| `onStepEnd` | usage row nano-USD keyed on `response.id`; refusal = `finishReason === "content-filter"` → visible failed outcome; omitted-thinking passthrough check; `this.queue("projectStatus", …)` for the D1 projection through `evaluateTransition` | 9, 17, 21, 22, 29, 30, 32; defects 7, 11 |
+| `onChatResponse` | terminal status from `result.status` (`completed` / `error` / `aborted`) → `idle` / `awaiting_approval` / `failed`; memory episode; terminal → sandbox teardown | 21, 33; defect 3 |
+| `onChatError` | **returns scrubbed text** — its return value is the client-visible error, so provider bodies must never pass through | 39 |
+| `chatRecovery` (class field) | Think's own recovery stays on; `onExhausted` → `failed`; `shouldKeepRecovering` → the spend ceiling keyed by `recoveryRootRequestId`; `contextOverflow = { reactive: true }` + `defaultContextOverflowClassifier` | 27, 31 |
+| `onMessage` (re-wrapped after `super()`) | drop `clear`, `cancel`, `tool-approval`, `tool-result` and `chat-request` frames — Think honours them from ANY connection and readonly does not gate them; human input enters only via `steer` | security |
 
-Omitted-thinking: a test pins that a reasoning part with only
-`signature`/`redactedData` round-trips unchanged and that readable unsigned
-thinking fails the step (17; defect 11).
+Not built: interruption recovery (Think's), stall watchdog (`chatStreamStallTimeoutMs` stays 0 — sandbox-backed `run_code` gaps would trip it), a second audit log.
 
-Steering: `@callable steer(text, requestId)` → insert into `pending_steers`
-unique on `requestId` (defect 1) → `submit` with `steer:{requestId}`. Active
-turn: spliced at the next `beforeStep`. Idle: the submit is the wake (defect
-12). Parked on approval: stored, surfaced after the decision (defect 13).
+Steering: `@callable steer(text, requestId)` → `addMessages([{ id: requestId, … }])` (idempotent by message id across the session tree — the SDK has no RPC dedupe) → if idle, `runTurn({ mode: "submit", idempotencyKey: "steer:" + requestId })` (defects 1, 12). Active turn: a `pending_steers` row keyed `requestId`, spliced at the next `beforeStep` via `{ messages }`. Parked on approval: stored, surfaced after the decision (defect 13).
 
 ## 6. Wake paths and approval
 
@@ -141,30 +158,41 @@ speaker from `src/identity/speaker.ts`, `identity_unavailable` fails safe (34).
 
 ## 7. Transport and dashboard
 
-Server: `/agents/run-agents/:runId/*` behind Access (`src/api/agents.ts`).
-Resolve `runs.id → runs.key` via `getRunById` (404 on miss), `assertRunKey`,
-rewrite the third path segment, then `routeAgentRequest(request, env)`. The
-`cf_agent_identity` frame carrying the DO name is suppressed with the SDK's own
-opt-out — `static options = { sendIdentityOnConnect: false }` on `RunAgent`
-(`agents/dist/index.js:951-964`, which even warns when the name is not already
-visible in the URL). **Amendment (2026-08-23):** an earlier draft of this spec
-called for stripping the frame in the Worker; that relay is unnecessary. Test:
-no early frame matches `/^(slack|chat):/` or carries
-`type === "cf_agent_identity"` (defect 2). Steer is `@callable steer(text, requestId)`; the client
-mints `requestId` once per send.
+**Amended 2026-08-24.** The first draft rewrote the third path segment before
+`routeAgentRequest`. That works, but partyserver computes `idFromName` before
+`onBeforeConnect`/`onBeforeRequest` run (they cannot remap the instance), and
+the rewritten URL still reaches the DO as `connection.uri`. The built-in
+indirection is used instead, and `/agents/*` is not mounted at all.
 
-Client (`apps/dashboard`): `useAgent({ agent: "run-agents", name: runId })` +
-`useAgentChat` from `@cloudflare/think/react`, under `<Suspense>` and the
-existing `error-boundary.tsx`. One transcript component used by:
-- run view (`src/runs/run-view.tsx`, drawer from the run list): tool parts as "ran code → result" rows, status pill, steer box, `run-approvals.tsx` inline; loading / empty / error / disconnected states;
-- chat page (`src/chat/chat-page.tsx`): `POST /api/runs { firstMessage }` → run view; citations as permalinks.
+Server (`src/api/agents.ts`, mounted under the Access-gated `/api`):
+`/api/runs/:id/agent/*` for both the WebSocket upgrade and HTTP. Resolve
+`runs.id → runs.key` via `getRunById` (404 on miss), `assertRunKey`, stamp the
+verified identity onto the forwarded Request as a header, then
+`(await getAgentByName(env.RUN_AGENTS, key)).fetch(request)`. Think's own
+`onRequest` serves `…/get-messages` (the full transcript) on the same path, so
+it sits behind the same gate. The private key never appears in any URL.
+`static options = { sendIdentityOnConnect: false }` stays (defect 2). In
+`onConnect`, `connection.setState({ email })` from the header so steers are
+attributable; `shouldConnectionBeReadonly()` returns true for every connection
+so no browser can write `this.state`.
+
+Client (`apps/dashboard`): `useAgent({ agent: "run-agent", basePath:
+\`api/runs/${runId}/agent\` })` + `useAgentChat` from
+`@cloudflare/think/react` with `getInitialMessages: null` — the transcript
+arrives as the `cf_agent_chat_messages` connect frame, which removes the
+Suspense throw the error boundary existed for. Steer via
+`agent.stub.steer(text, requestId)`; approval via the REST `PATCH`, never
+`addToolApprovalResponse`. One transcript component used by:
+- run view (`src/runs/run-view.tsx`): tool parts as "ran code → result" rows, status pill from `this.state`, steer box, `run-approvals.tsx` inline; loading / empty / error / disconnected states;
+- chat page (`src/chat/chat-page.tsx`): `POST /api/runs { firstMessage }` → `createRunFromChat` → submit on channel `web` → run view; citations as permalinks.
 `dev-stubs.ts` returns for identity/roster/approvals.
 
 ## 8. Memory, tracing, cost
 
-- Memory: `onStepFinish` → bounded episode → D1 outbox → `MEMORY_QUEUE` → Zep; approval outcomes are episodes; citations via `src/memory/cite.ts` (33). Shift handoff = a chat prompt over memory.
-- Tracing: `src/langsmith/tracer.ts` restored as a hook-fed writer (root `chain` per turn in `beforeTurn`, `llm` per step in `onStepFinish`, `tool` per `run_code` in `afterToolCall`), single un-retried POST via `ctx.waitUntil` in `onChatResponse`, `dotted_order` with six fractional digits, `LANGSMITH_TRACING` / `LANGSMITH_TRACE_PAYLOADS` honoured; `vitest.config.ts` keeps `LANGSMITH_TRACING: "false"`. Not a capability.
-- Cost: `agent_model_calls` rows in nano-USD (`src/run/money.ts`), read by `GET /api/runs/:id/usage`; ceiling checked in `beforeStep`.
+- Memory: `onChatResponse` → one bounded episode per turn → D1 outbox → `MEMORY_QUEUE` → Zep; approval outcomes are episodes; citations via `src/memory/cite.ts` (33). Shift handoff = a chat prompt over memory. `Agent.queue()` is not used for episodes — the outbox already owns cross-DO durability.
+- Tracing — **open decision, Task 26.** Think emits GenAI OTLP spans natively (`wrapAISDK`, `gen_ai.*` attributes, gated by `storeTools` / `storeMessages`), and LangSmith ingests OTLP. That deletes the hand-written tracer, the `dotted_order` trap and the `waitUntil` flush — but the SDK has no `redacted` payload mode; `storeMessages` is all-or-nothing. Either (a) SDK-native: `storeTools = true`, `storeMessages = false`, `beforeTurn → telemetry.metadata { runId, turnId }`, OTLP destination = LangSmith project `fire-fighter`; or (b) keep `src/langsmith/tracer.ts` and `LANGSMITH_TRACE_PAYLOADS=redacted`, fed from `onStepEnd` / `afterToolCall` / `onChatResponse`. Either way it is not a capability. `vitest.config.ts` keeps `LANGSMITH_TRACING: "false"`.
+- Cost: `agent_model_calls` rows in nano-USD (`src/run/money.ts`) written from `onStepEnd` keyed on `response.id`, read by `GET /api/runs/:id/usage`; ceiling enforced by `stopWhen` in `beforeTurn` with a `beforeStep` preflight.
+- Audit trail: `cm_log` (codemode's own durable log) is the per-call record; no second store. Bounded to the newest 50 terminal executions per DO (`createExecuteRuntime` hardcodes `maxExecutions`). Large reads carry `replay: "reexecute"` so their results never land in SQLite.
 
 ## 9. Testing and build order
 
@@ -195,3 +223,24 @@ From installed `dist/` and Cloudflare docs (2026-08-23):
 - `createSandboxTools()` in `@cloudflare/think/tools/sandbox` is a no-op stub; sandbox access is our connector.
 - `outboundByHost` is a static on `Container` from `@cloudflare/containers`, already used in `src/sandbox/class.ts`.
 - Worker startup limit 1 s, gzip bundle limit 10 MB (Workers Paid).
+
+Added 2026-08-24 (see `phase-26-notes.md` §"Docs audit" items 4–18 for the evidence):
+- `this.configure()` / `getConfig()` do not exist on Think 0.15.1; durable per-run state is `this.state`.
+- Context blocks render once and are cached; `getSystemPrompt()` is ignored once any block exists; a channel's `instructions(ctx)` and `beforeTurn → instructions` are the per-turn surfaces.
+- `onStepFinish` is deprecated → `onStepEnd`.
+- `chatRecovery` is on by default; refusal arrives as `finishReason: "content-filter"`, not an error; `onChatError`'s return value is client-visible.
+- Readonly connections do not gate chat frames; `clear` / `cancel` / `chat-request` are honoured from any connection.
+- `routeAgentRequest` hooks cannot remap the instance; `useAgent({ basePath })` + `getAgentByName().fetch()` is the id→name indirection.
+- `addMessages` is idempotent by message id; `@callable` has no dedupe.
+- `beforeStep` cannot end a turn; `stopWhen` / `maxSteps` in `beforeTurn` can.
+- `createExecuteRuntime` hardcodes `maxExecutions: 50`; `cm_log` stores args and results verbatim; a custom tool `description` discards `connectorHints`.
+- `configureChannels()`: a `custom` channel's final text is transcript-only.
+
+## 11. Amendment log
+
+- **2026-08-23** — §3: "exactly one tool" → `activeTools: ["run_code"]` + merged-map allowlist. §7: identity frame via `sendIdentityOnConnect: false`, not a relay.
+- **2026-08-24** — §5, §7, §8, §10 rewritten after the pre-Wave-3 docs audit. Decisions R1–R10 unchanged; every one of them was re-tested against the SDK alternative and stands (`phase-26-notes.md` §"What stands"). Two bugs in committed code found and fixed the same day (§"Bugs in committed code").
+- **2026-08-27** — Wave 3 implemented; §5's "where each fact lives" table holds, with three mechanics corrected against the pin (`phase-26-notes.md` §19–23). Per-turn text is APPENDED to `ctx.system`, because `TurnConfig.instructions` replaces the assembled prompt rather than extending it. Decision A ships as "no `description`" alone: `createExecuteRuntime` has no `connectorHints` to pass, so the namespace hints moved into the frozen capability block. Prompt caching on this chassis is the request-level `cacheControl`, not per-block breakpoints — Think hands `streamText` one `system` string, and Anthropic's tools → system → messages prefix order is what keeps the `run_code` description cached across turns.
+- **2026-08-27** — Wave 4 implemented; §6's approval loop and §4's wake paths hold, with four additions (`phase-26-notes.md` §24–30). The wake, the owned-thread continuation and the resolution are one shape — bind, note the input revision, submit — and `idempotencyKey` is the whole of the downstream dedupe, so the resolution path has no delivered-CAS of its own. `onStart` resolving `runs.key === this.name` is the self-healing half of `bindRun`, for the entries that never go through a wake. The turn id stamped on submit metadata is now ADOPTED into `this.state.turnId`; it was previously written and never read, so every `RunScope`, usage row and audit entry named a turn that did not exist. Delivery — the shadow OR, the `none -> sending` CAS, the re-read on a refused CAS — moved from the run object to `src/approval/notifier.ts`, because the destination is the D1 `runs` row on either chassis.
+- **2026-08-27** — Wave 5 implemented; §7's transport section holds with four corrections (`phase-26-notes.md` §31–35). The transport is `/api/runs/:id/agent/*` forwarded through `getAgentByName().fetch()`, NOT `routeAgentRequest` with a path rewrite: the rewrite put the private run key in the URL the object reads back as `connection.uri`, and mounting under `/api` means the socket and the `/get-messages` read inherit the dashboard's own Access application instead of being a second top-level path to gate. `shouldConnectionBeReadonly` is NOT sufficient on its own — it gates client state frames only, so five chat frames (`chat-request`, `clear`, `cancel`, `tool-result`, `tool-approval`) are dropped by a filter installed from `onStart`, because Think installs its own protocol wrapper during `onStart` and a constructor-installed filter sits under it. Human input therefore enters a run through exactly one `@callable`, `steer`. Chat-run creation is idempotent at the RUN level, not only the turn level: the `chat:{uuid}` key is derived from the actor plus the client request id, so a retried `POST /api/runs` cannot leave a second half-empty run behind.
+- **2026-08-27** — Wave 6 implemented, and the tracing decision resolved to branch (a): the agent's own traces are Think's native GenAI OTLP spans, exported by the runtime, with `storeTools = true` and `storeMessages = false`. That is all-or-nothing (`think.js:2827`), so the `redacted` payload mode is gone with the writer — messages are off entirely, tool payloads are on, and `LANGSMITH_TRACING` / `LANGSMITH_TRACE_PROJECT` / `LANGSMITH_TRACE_PAYLOADS` are deleted. `beforeTurn` overrides the span's `agentId`, which the SDK defaults to the Durable Object's name — the private run key (invariant 10). Memory is one bounded episode per turn from `onChatResponse` into the existing D1 outbox, built from four host-held values rather than filtered out of a transcript. Every `read` capability is `replay: "reexecute"`, so a read's result never enters codemode's durable log, which stores args and results verbatim. Invariant 39 is now checked rather than asserted: `test/canary-secrets.test.ts` drives a full run and sweeps every table in D1 and in the agent's SQLite — enumerated from `sqlite_master` — for every secret-shaped binding on `env`.

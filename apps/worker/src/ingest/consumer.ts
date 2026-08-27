@@ -2,6 +2,7 @@ import type { Env } from "../index";
 import type { QueuedEvent } from "../slack/types";
 import { getChannelPolicy, shouldTriage } from "../db/channels";
 import { insertMessage, recordEvent } from "../db/messages";
+import { registerChannel } from "../channels/registry";
 import { getPermalink } from "../slack/client";
 import { classify } from "./rules";
 
@@ -16,7 +17,7 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
   for (const message of batch.messages) {
     const { event_id, event, received_at } = message.body;
 
-    const policy = await getChannelPolicy(env.DB, event.channel);
+    let policy = await getChannelPolicy(env.DB, event.channel);
     const outcome = classify(event, policy.known, {
       appId: env.SLACK_APP_ID,
       botUserId: env.SLACK_BOT_USER_ID,
@@ -31,6 +32,20 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
 
     if (!isFirstSighting) continue;
     if (outcome !== "ingested" && outcome !== "ingested_self") continue;
+
+    // AUTO-REGISTRATION, deliberately AFTER classify and after the drop checks.
+    // Ordering is the whole safety argument: `classify` has already refused
+    // DMs, group DMs, foreign bots and system subtypes, so the only channel
+    // that reaches this line is one this app is entitled to remember. Doing it
+    // earlier would call `conversations.info` for every DM Slack delivers.
+    //
+    // A null result leaves `policy` unknown, which is the pre-existing
+    // fail-closed behaviour: the message is still stored (core requirement 1),
+    // it is simply not triaged and the channel is not postable until the sweep
+    // or the next message registers it.
+    if (!policy.known) {
+      policy = (await registerChannel(env, event.channel)) ?? policy;
+    }
 
     await insertMessage(env.DB, {
       event_id,

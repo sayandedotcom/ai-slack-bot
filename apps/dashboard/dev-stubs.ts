@@ -13,9 +13,20 @@ import type { Connect, Plugin } from "vite";
  * reachable, including the two this phase built.
  *
  * This plugin answers exactly those three route families from memory so the
- * dashboard can be looked at. Everything else — `/api/runs`, `/api/counters`,
- * and the `/ws/run/:id` socket — falls through to the real worker, so the run
- * list and the drawer are showing genuine D1 data, not a fiction.
+ * dashboard can be looked at. Everything else — `/api/runs`, `/api/counters` —
+ * falls through to the real worker, so the run list is showing genuine D1 data,
+ * not a fiction.
+ *
+ * WHAT DOES NOT WORK ON LOCALHOST, stated rather than papered over. Three
+ * surfaces landed in Phase 26 behind the same `requireTeamMember` check, and
+ * `wrangler dev` has no Cloudflare Access in front of it, so all three answer
+ * 401 here: `POST /api/runs` (start a chat run), `GET /api/runs/:id`, and the
+ * run socket at `/api/runs/:id/agent`. The socket is the reason none of them is
+ * stubbed. A fake create would hand back an id whose socket then refuses, which
+ * looks like a bug in the run view rather than what it is — and a stubbed
+ * socket would be a fiction of a live transcript, which is the one thing this
+ * file has never done. Exercise them against a deployed Worker behind the real
+ * Access application.
  *
  * It CANNOT reach production: it is a `configureServer` hook, and that hook
  * exists only inside vite's dev server. `vite build` never calls it, so not one

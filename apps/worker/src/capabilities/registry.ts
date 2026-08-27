@@ -197,11 +197,13 @@ export function buildConnectors(
   doCtx: DurableObjectState | ExecutionContext,
   env: Env,
   /**
-   * Resolves the CURRENT execution's context. Called once per capability call,
-   * never memoised: two executions must not share a budget, an audit stream or
-   * a set of customer references.
+   * Builds the context for ONE execution, keyed by the `executionId` codemode
+   * hands to every call. The connector memoises it for the execution's
+   * lifetime and evicts it in `onPassEnd`, so every call inside one
+   * `run_code` shares a budget, an audit stream and a customer-reference map,
+   * and no two executions do.
    */
-  getContext: () => Promise<BindingContext>,
+  getContext: (executionId: string) => Promise<BindingContext>,
 ): CodemodeConnector[] {
   return NAMESPACE_FACTORIES.map(
     (factory) => new FirefighterConnector(doCtx, env, factory, getContext),

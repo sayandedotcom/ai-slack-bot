@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import type { MemoryJob } from "../memory/consumer";
+import type { MessagesRow } from "../db/schema";
 
 /**
  * Re-enqueues messages that predate the memory layer (or fell into the DLQ)
@@ -20,7 +21,7 @@ export async function backfillMemory(
        ORDER BY m.received_at ASC LIMIT ?`,
     )
     .bind(limit)
-    .all<{ event_id: string }>();
+    .all<Pick<MessagesRow, "event_id">>();
 
   for (const row of results) {
     await queue.send({ event_id: row.event_id });

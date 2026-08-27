@@ -1,4 +1,5 @@
 import { FIREFIGHTERS, VIEWERS } from "../access/roster";
+import type { IdentitiesRow } from "./schema";
 
 /**
  * D1-only operations on `identities` (`migrations/0008_identities.sql`): which
@@ -37,15 +38,7 @@ export type ConnectStatus = {
   github: boolean;
 };
 
-type IdentityRowDb = {
-  email: string;
-  provider: Provider;
-  external_id: string;
-  scopes: string;
-  token_ciphertext: string;
-  connected_at: number;
-  updated_at: number;
-};
+type IdentityRowDb = IdentitiesRow;
 
 const COLUMNS = `email, provider, external_id, scopes, token_ciphertext, connected_at, updated_at`;
 
@@ -125,7 +118,7 @@ export async function listConnected(
   const { results } = await db
     .prepare(`SELECT email, external_id, connected_at, updated_at FROM identities WHERE provider = ?`)
     .bind(provider)
-    .all<{ email: string; external_id: string; connected_at: number; updated_at: number }>();
+    .all<Pick<IdentitiesRow, "email" | "external_id" | "connected_at" | "updated_at">>();
   return (results ?? []).map((r) => ({
     email: r.email,
     externalId: r.external_id,
@@ -143,7 +136,7 @@ export async function listConnected(
 export async function listConnectStatus(db: D1Database): Promise<ConnectStatus[]> {
   const { results } = await db
     .prepare(`SELECT email, provider FROM identities`)
-    .all<{ email: string; provider: Provider }>();
+    .all<Pick<IdentitiesRow, "email" | "provider">>();
 
   const connected = new Map<string, Set<Provider>>();
   for (const { email, provider } of results ?? []) {
