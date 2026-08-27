@@ -669,7 +669,7 @@ async function publish(
     wrote = true;
     // ONE ATOMIC CALL, and the bytes never materialise in this isolate:
     // `FixedLengthStream` gives `put` the known length it demands while the
-    // stream stays a stream. `test/api-proofs.test.ts` uses the same pattern to
+    // stream stays a stream. `test/api/proofs.test.ts` uses the same pattern to
     // write an over-ceiling fixture without holding 50MB.
     await deps.bucket.put(
       key,

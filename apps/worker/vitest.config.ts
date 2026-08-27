@@ -146,7 +146,7 @@ export default defineConfig({
           // real channel from a test no matter what production pins.
           //
           // Suites that WANT the fallback branch pass their own value in their
-          // own env object (`test/notify-nudge.test.ts`), which is a stubbed
+          // own env object (`test/notify/nudge.test.ts`), which is a stubbed
           // `fetch` away from Slack by construction.
           NUDGE_FALLBACK_CHANNEL_ID: "",
           // THERE IS NO CONTAINER RUNTIME IN THIS POOL, AND EVERY SUITE THAT
@@ -166,7 +166,7 @@ export default defineConfig({
           // Same precedent as AGENT_MODEL_DISABLED above: a deliberate opt-out
           // that production must never carry, read strictly (`1`/`true`), and
           // consulted by exactly the two paths that reach a container without a
-          // caller having asked for one. `test/sandbox-lifecycle.test.ts` opts
+          // caller having asked for one. `test/sandbox/lifecycle.test.ts` opts
           // back IN with its own env object, over a fake container.
           SANDBOX_DISABLED: "true",
         },
@@ -182,7 +182,7 @@ export default defineConfig({
     // Durable Object namespace. That was survivable while nothing held a row
     // across an await — but a wake now runs a REAL turn on the object's own
     // alarm, so a suite polling for its usage row or its resolution turn stays
-    // live for hundreds of milliseconds, and `test/approval-api.test.ts` wipes
+    // live for hundreds of milliseconds, and `test/api/approvals.test.ts` wipes
     // `runs` and `approvals` wholesale in its `beforeEach`. Run in parallel,
     // that wipe lands inside another file's run and takes its rows with it:
     // observed once as seven failures across six files, green on the immediate

@@ -100,7 +100,7 @@ function descriptorsFor(
  * against the committed artifact; it says nothing about what the runtime
  * renders. If these two drifted, the committed `.d.ts` would be reviewed and
  * correct while the model was quietly handed something else — the one kind of
- * drift the check cannot see. `test/capabilities-dts.test.ts` asserts the two
+ * drift the check cannot see. `test/capabilities/dts.test.ts` asserts the two
  * render identical bytes.
  */
 export function renderCapabilityDeclarations(
