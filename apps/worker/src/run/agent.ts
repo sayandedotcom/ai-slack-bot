@@ -51,6 +51,16 @@ import { CapabilityError } from "../gateways/errors";
 import type { RunScope } from "../gateways/scope";
 import type { Env } from "../index";
 import { redact } from "../redact";
+import {
+  askedFrom,
+  enqueueTurnEpisode,
+  episodeOutcomeFor,
+  makeTurnAuditSink,
+  makeTurnProvenanceSink,
+  messageText,
+  newTurnRecord,
+  type TurnRecord,
+} from "./agent-memory";
 import { sendNudge } from "../notify/nudge";
 import { makeSandboxLifecycle, sandboxContainersAvailable } from "../sandbox/lifecycle";
 import {
@@ -94,7 +104,7 @@ import {
 import { renderEngineerVoice, resolveEngineerVoice, voiceWindowIndex } from "./agent-voice";
 import { productionDependencies } from "./dependencies";
 import { isRunStatus, isTerminalRunStatus, type RunStatus } from "./protocol";
-import { getRunByKey, readRunUsage } from "./repository";
+import { getRunById, getRunByKey, readRunUsage } from "./repository";
 import { resolveRunScope } from "./scope";
 
 /** The one outer tool. Named in the prompt, the tests and the README. */
@@ -117,6 +127,31 @@ export const ACTIVE_TOOLS = [RUN_CODE_TOOL];
  * echoed request, and `redact` removes credential SHAPES, not volume.
  */
 export const CHAT_ERROR_MAX_CHARS = 300;
+
+/**
+ * The telemetry settings for one turn, and the cast they need.
+ *
+ * MEASURED TRAP: `TurnConfig.telemetry` is typed as `streamText`'s
+ * `experimental_telemetry`, which on `ai` 7 is `TelemetryOptions` — and that
+ * type has NO `metadata`; v7 replaced it with `runtimeContext`. But Think reads
+ * `settings.metadata` at runtime (`think.js:2569`), spreads it into the
+ * runtime context it builds, and only then deletes the key from the options it
+ * forwards. So `metadata` is the shape Think honours and the type does not
+ * describe, and a cast is the honest way to say that rather than a silently
+ * dropped field.
+ *
+ * `agentId` is the reason any of this is stamped. Think's default is
+ * `this.name` — the PRIVATE run key — which would put
+ * `slack:{channel}:{thread_ts}` into a third-party trace store for every
+ * customer conversation, breaking invariant 10 somewhere nobody greps. Caller
+ * metadata is merged last, so naming the public id here replaces it.
+ */
+export function turnTelemetry(ids: { runId: string; turnId: string }): TurnConfig["telemetry"] {
+  return {
+    functionId: "run-agent",
+    metadata: { agentId: ids.runId, runId: ids.runId, turnId: ids.turnId },
+  } as TurnConfig["telemetry"];
+}
 
 /**
  * Invariant 17: readable chain-of-thought must never reach an event, a log, a
@@ -253,6 +288,27 @@ export class RunAgent extends Think<Env, RunAgentState> {
    */
   override chatStreamStallTimeoutMs = 0;
 
+  // --- tracing ------------------------------------------------------------
+  //
+  // Think already emits GenAI OTLP spans through `wrapAISDK`, and Workers
+  // export OTLP, so the agent's own traces are the SDK's rather than a
+  // hand-written writer's. These two flags are the whole payload policy, and
+  // they are not symmetric on purpose.
+  //
+  // `storeTools` is on: a `run_code` span carries the model-authored program
+  // and what the capabilities answered, which is the single most useful thing
+  // in a trace when a run goes wrong — and it is OUR code and OUR results, not
+  // a customer's words.
+  //
+  // `storeMessages` is OFF, and it is all-or-nothing (`think.js:2827` passes
+  // both straight to `wrapAISDK`). A `chat` span with messages on it would put
+  // the customer's Slack thread, the triage briefing and every recalled memory
+  // into a third-party trace store, verbatim and undredacted — there is no
+  // per-field switch to keep. Token counts, finish reasons, latencies and the
+  // tool payloads survive; the conversation does not.
+  override storeTools = true;
+  override storeMessages = false;
+
   #model: LanguageModel | null = null;
   #runCode: Tool | undefined;
   /**
@@ -278,6 +334,15 @@ export class RunAgent extends Think<Env, RunAgentState> {
   #recoveryAttempt = 0;
   /** Whether any step of this turn came back a refusal. Reset per turn. */
   #refusalSeen = false;
+  /** Whether the spend preflight took the tools away. Reset per turn. */
+  #budgetExhausted = false;
+  /**
+   * What this turn will leave in memory: what it was asked, what it did, and
+   * the host-produced ids its reads returned. Rebuilt per turn — an episode is
+   * a record of ONE turn, and carrying actions across would attribute work to
+   * the turn that happened to finish after it.
+   */
+  #turn: TurnRecord = newTurnRecord();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -458,6 +523,13 @@ export class RunAgent extends Think<Env, RunAgentState> {
     await this.#refreshVoiceIfDayChanged();
     await this.#adoptTurnId();
 
+    // The turn's own record starts here, and `asked` is read HERE rather than
+    // at the end: `this.messages` ends with this turn's user message now, and
+    // by `onChatResponse` the assistant's reply is on the end of it.
+    this.#turn = newTurnRecord();
+    this.#turn.asked = askedFrom(this.messages);
+    this.#budgetExhausted = false;
+
     const scope = await resolveRunScope(this.env, this.#runId(), this.#turnId());
     const perTurn = turnInstructions({
       scope,
@@ -486,6 +558,16 @@ export class RunAgent extends Think<Env, RunAgentState> {
       // is the binding authority (invariant 28); this is the belt.
       maxSteps: MAX_STEPS_PER_TURN,
       stopWhen: spendStopWhen(FABLE_5_MODEL_ID, this.#spendCeiling()),
+      // `agentId` is OVERRIDDEN, and that is the point of stamping this at
+      // all. Think's default is `this.name` (`think.js:2548`) — the PRIVATE
+      // run key — which would put `slack:{channel}:{thread_ts}` in the trace
+      // store for every customer conversation, breaking invariant 10 in a
+      // third-party system nobody greps. Caller metadata is merged last, so
+      // naming the public id here replaces it.
+      telemetry: turnTelemetry({
+        runId: this.state.runId ?? "unbound",
+        turnId: this.#turnId(),
+      }),
     };
   }
 
@@ -525,6 +607,7 @@ export class RunAgent extends Think<Env, RunAgentState> {
       return withSteers;
     }
 
+    this.#budgetExhausted = true;
     const config: PrepareStepResult<ToolSet> = {
       ...(spliced === null ? {} : { messages: spliced }),
       activeTools: [],
@@ -708,7 +791,13 @@ export class RunAgent extends Think<Env, RunAgentState> {
             ? "awaiting_approval"
             : "idle";
 
+    // The episode is written BEFORE the flags are reset, because it reads
+    // them, and before the status projection, because a memory failure must
+    // never change what the run reports. It cannot throw into this hook.
+    await this.#rememberTurn(result, terminal);
+
     this.#refusalSeen = false;
+    this.#budgetExhausted = false;
     this.#turnRevision = null;
     this.#recoveryAttempt = 0;
     // The turn is over, so the id it stamped on scopes and usage rows is over
@@ -718,6 +807,46 @@ export class RunAgent extends Think<Env, RunAgentState> {
     if (this.state.turnId !== null) this.setState({ ...this.state, turnId: null });
     await this.setStatus(terminal);
     if (isTerminalRunStatus(terminal)) await this.#teardownSandbox();
+  }
+
+  /**
+   * One bounded episode per finished turn, into the memory outbox.
+   *
+   * `Agent.queue()` is deliberately NOT used: the D1 outbox already owns
+   * cross-DO durability and has a one-minute cron sweep behind it, and a second
+   * durable queue for the same job would be two protocols that only work if
+   * there is one.
+   *
+   * NOTHING HERE MAY FAIL THE TURN. The customer's answer was durable and
+   * broadcast before this ran; memory lag is an operational warning, not an
+   * incident (invariant 32 applied to Zep). Every failure is caught and named.
+   */
+  async #rememberTurn(result: ChatResponseResult, terminal: RunStatus): Promise<void> {
+    const runId = this.state.runId;
+    if (runId === null) return;
+
+    try {
+      const run = await getRunById(this.env.DB, runId);
+      if (run === null) return;
+      await enqueueTurnEpisode(this.env, {
+        runId,
+        turnId: this.#turnId(),
+        origin: run.origin,
+        channelId: run.channelId,
+        outcome: episodeOutcomeFor({
+          status: terminal,
+          refused: this.#refusalSeen,
+          budgetExhausted: this.#budgetExhausted,
+        }),
+        record: this.#turn,
+        // The SELECTED final assistant text, handed over by the hook. Never a
+        // stream delta: deltas have no route into this module at all.
+        draft: messageText(result.message as never),
+        now: Date.now(),
+      });
+    } catch (err) {
+      console.warn("run episode not enqueued", err instanceof Error ? err.message : err);
+    }
   }
 
   /**
@@ -1117,6 +1246,91 @@ export class RunAgent extends Think<Env, RunAgentState> {
     }
   }
 
+  /**
+   * The whole of this agent's trace policy, as one readable value.
+   *
+   * Span EMISSION is a deploy-side property — the OTLP destination is a
+   * dashboard setting, not anything a Worker var or the test pool can reach —
+   * so what a test can pin from in here is the policy that decides what those
+   * spans carry. That is the half with the security content.
+   */
+  async tracingPolicyForTest(): Promise<{
+    storeTools: boolean;
+    storeMessages: boolean;
+    telemetry: { functionId?: string; metadata?: Record<string, unknown> };
+  }> {
+    return {
+      storeTools: this.storeTools,
+      storeMessages: this.storeMessages,
+      telemetry: turnTelemetry({
+        runId: this.state.runId ?? "unbound",
+        turnId: this.#turnId(),
+      }) as { functionId?: string; metadata?: Record<string, unknown> },
+    };
+  }
+
+  /**
+   * Every table in this object's own SQLite that contains `needle`.
+   *
+   * ENUMERATED FROM `sqlite_master`, NEVER FROM A LIST OF NAMES. The tables
+   * that matter here are not ours: Think creates the session tree, the
+   * submission ledger, the chat fiber snapshots, the cached prompt store and
+   * the stream chunk table, and the set changes when the SDK version does. A
+   * sweep over names somebody wrote down by hand would keep passing after the
+   * SDK added the table that leaks.
+   *
+   * A test surface, and only that — nothing in production calls it. It exists
+   * because invariant 39 is a claim about storage nobody can see from outside
+   * the object, and a claim nothing checks is a claim that quietly stops being
+   * true.
+   */
+  async sweepForCanaryForTest(needle: string): Promise<string[]> {
+    // `ctx.storage.sql.exec` and NOT the `this.sql` tag. The tag binds every
+    // interpolation as a PARAMETER, and SQLite has no bind slot for an
+    // identifier — `FROM "${name}"` would run `FROM "?"`. A table name is not a
+    // value, so it has to be concatenated, which is why the shape is checked
+    // first even though sqlite_master is the only source it has.
+    const raw = this.ctx.storage.sql;
+    const tables = [...raw.exec<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC",
+    )];
+
+    const hits: string[] = [];
+    for (const { name } of tables) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+      try {
+        const rows = [...raw.exec(`SELECT * FROM "${name}"`)];
+        if (rows.some((row) => JSON.stringify(row).includes(needle))) hits.push(name);
+      } catch {
+        // `_cf_KV` refuses direct SQL with SQLITE_AUTH: it is the key-value
+        // surface the runtime reserves, and `this.state` lives in it. Skipped
+        // here and swept below through the API that IS allowed to read it, so
+        // the hole is covered rather than excused.
+        hits.push(...(await this.#sweepKeyValue(needle, name)));
+      }
+    }
+    return hits;
+  }
+
+  /**
+   * The half of durable storage SQL cannot reach: the key-value surface, which
+   * is where `this.state` and every scheduled callback's payload live.
+   */
+  async #sweepKeyValue(needle: string, label: string): Promise<string[]> {
+    const stored = await this.ctx.storage.list();
+    const values = [...stored.values(), this.state];
+    return values.some((value) => JSON.stringify(value ?? null).includes(needle)) ? [label] : [];
+  }
+
+  /**
+   * The Code Mode audit trail as the runtime holds it: the model-authored
+   * program, every capability call's arguments, and every logged result.
+   */
+  async codemodeAuditForTest(): Promise<string> {
+    const executions = (await this.codemode?.executions(50)) ?? [];
+    return JSON.stringify(executions);
+  }
+
   /** The durable run state, for assertions that would otherwise need a socket. */
   async runStateForTest(): Promise<RunAgentState> {
     return { ...this.state };
@@ -1177,10 +1391,15 @@ export class RunAgent extends Think<Env, RunAgentState> {
       limits: PRODUCTION_LIMITS,
       execution: newCodeExecution({
         outerToolCallId,
-        audit: { async started() {}, async completed() {}, async failed() {} },
+        // The audit is what "what it did" in the turn's episode is made of:
+        // capability NAMES and stable error CODES, never a result body.
+        audit: makeTurnAuditSink(this.#turn),
         guard: this.#freshnessGuard(),
         limits: PRODUCTION_LIMITS,
         clock: () => Date.now(),
+        // Where a trusted read registers the host-produced ids it RETURNED, so
+        // a later claim can be traced back to a real message.
+        provenance: makeTurnProvenanceSink(this.#turn),
       }),
     };
   }
