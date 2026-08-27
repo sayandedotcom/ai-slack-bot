@@ -17,6 +17,39 @@ updates:
     # Bump the declared range, not just the lockfile: this is a private
     # application, not a published library, so a widening range buys nothing.
     versioning-strategy: "increase"
+
+    # ---------------------------------------------------------------- cooldown
+    #
+    # THIS IS A BUG FIX, not a preference. Both npm update runs on 2026-08-27
+    # failed outright, and the cause is a version disagreement between
+    # Dependabot and us:
+    #
+    #   ERROR <job_1543202691> Scope: all 6 workspace projects
+    #   ERR_PNPM_NO_MATURE_MATCHING_VERSION
+    #   pnpm: 11.17.0
+    #
+    # Dependabot runs its own pnpm 11.17.0 regardless of this repository's
+    # `"packageManager": "pnpm@10.33.4"`, and pnpm 11 refuses to resolve a
+    # version published more recently than its minimum release age -- a
+    # supply-chain guard against a freshly published compromised package.
+    # Dependabot proposes the NEWEST version by definition, so every proposal
+    # was rejected by its own installer and `PnpmLockfileUpdater` failed for 18
+    # dependencies with `unknown_error`.
+    #
+    # A cooldown makes Dependabot propose only versions that have already aged,
+    # which is what pnpm is asking for. It is also the behaviour we want on its
+    # own merits: nothing here needs a package published this morning.
+    #
+    # The exact threshold pnpm 11 enforces is not something this repository can
+    # observe -- it is the updater's environment, not ours -- so these numbers
+    # are set well clear of any plausible one rather than tuned to it. If a run
+    # still fails on the same error, raise `default-days` before looking
+    # anywhere else.
+    cooldown:
+      default-days: 7
+      semver-patch-days: 3
+      semver-minor-days: 7
+      semver-major-days: 14
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
@@ -61,8 +94,8 @@ updates:
       - dependency-name: "@cloudflare/sandbox"
 
       # =====================================================================
-      # Exact-pinned at 19.2.4 in BOTH packages/ui and apps/dashboard (and in
-      # apps/web once worktree-next-frontend lands). Dependabot opens one
+      # Exact-pinned at 19.2.4 in packages/ui, apps/dashboard AND apps/web --
+      # three manifests since worktree-next-frontend landed. Dependabot opens one
       # pull request per manifest for a workspace-duplicated dependency, so a
       # React bump would arrive as two or three independent PRs that can be
       # merged out of order — and a react/react-dom skew is a runtime
