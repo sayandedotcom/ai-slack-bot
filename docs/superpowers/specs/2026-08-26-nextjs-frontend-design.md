@@ -66,6 +66,39 @@ what renders on Vercel.
   to the ember accent in its own layer, and `next-themes` (already a
   `packages/ui` dependency) drives the class.
 
+### Added 2026-08-27, when the Agents-SDK run chassis landed on `main`
+
+- **D9 — A run gets a route, not a drawer.** The Vite dashboard renders the
+  live session inline beneath the runs list. Here it is `/runs/[id]`. A run is
+  the thing an operator pastes into Slack and reloads into at 3am, so it
+  deserves a URL that survives a refresh and a back button. The `?run=` sheet
+  stays as the cheap peek from the list — status, spend, origin, two D1 reads
+  and no socket — and its primary action opens the route.
+- **D10 — `/chat` is a create form and nothing else.** A chat run is the same
+  object a Slack wake produces, so once `POST /api/runs` answers, the page
+  routes to `/runs/:id` and the run view takes over. Building a second session
+  shape on the chat page is how the two drift.
+- **D11 — The socket needs its own address.** `next.config.ts` rewrites keep
+  every REST path relative, but a rewrite proxies an HTTP request and does not
+  carry a WebSocket upgrade — on Vercel there is no upgrade path at all. So
+  `NEXT_PUBLIC_WORKER_ORIGIN` puts the Worker's host in the bundle for the
+  socket alone. It is a hostname, carries no credential, and the Worker still
+  runs `requireTeamMember` on the upgrade. What it does *not* fix is §1 of the
+  gaps doc, and a WebSocket handshake is a subresource request, so it fails
+  there sooner than a fetch would.
+- **D12 — Demo mode branches at the component, not in the hook.** `useRunAgent`
+  would otherwise open a socket to a host that demo mode deliberately does not
+  have, and a hook cannot be called conditionally. `RunPanel` picks; both
+  branches render the same pure `RunView`, so a demo is a demo of the real
+  component. The fixture transcript is in the socket's own wire shape for the
+  same reason, and it is per-run — one customer's conversation under another
+  customer's header teaches the reader that the transcript is decorative.
+- **D13 — The transcript narrows `unknown` itself.** Its part union comes from
+  the AI SDK and moves with it. Typing the prop as that union would drag the
+  SDK into a component the test harness renders; narrowing locally also makes
+  an unrecognised part something that is *dropped* rather than something that
+  throws in a view somebody is reading during an incident.
+
 ## 4. Layout
 
 ```
@@ -139,9 +172,21 @@ no endpoint for one.
 
 ### Chat
 
-The second door: transcript, citation cards that link back to Slack threads,
-tool-call chips, the composer, and the suggested prompts. **Demo-only**, and the
-page says so in a banner rather than pretending. See gaps §2.
+The second door, and a create form: one composer, the four claims about what
+this door proves, and openings that fill the box rather than sending
+themselves. `POST /api/runs`, then straight to the run.
+
+### Run
+
+`/runs/[id]`. A header from D1 — status, origin, channel, run id, spend — that
+draws whether or not a socket ever connected, and beneath it the transcript
+over `/api/runs/:id/agent`. Tool calls collapse by default; every capability
+call is inside one `run_code` payload, so an expanded row is most of the
+transcript's bytes and almost never what the reader came for. The run's
+approval card renders *inside* the transcript, because a run parks mid-answer
+and the reader is already looking here — the decision still leaves over
+`PATCH /api/approvals/:id`. The composer has one verb, `Steer`, because the
+Worker drops every other client frame.
 
 ## 6. State and errors
 
@@ -174,6 +219,9 @@ build; it only widens what Tailwind scans.
 
 ## 9. Out of scope
 
-Retiring `apps/dashboard`. Any Worker change — CORS, an auth exchange, a chat
-endpoint, a run detail route. Those are enumerated with their contracts in
-`apps/web/BACKEND-GAPS.md` and built by nobody until someone decides to.
+Retiring `apps/dashboard`. Any Worker change — CORS, an auth exchange, or a
+writer for `runs.summary`. Those are enumerated with their contracts in
+`apps/web/BACKEND-GAPS.md` and built by nobody until someone decides to. The
+chat route and the run detail route *were* on this list and are no longer:
+they landed on the Worker on their own, and gaps §3–§5 record what closed
+them.

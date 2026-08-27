@@ -363,3 +363,39 @@ block and consumed under that name in Tasks 5–10. `CardState` and `DecideActio
 originate in Task 3 (ported types) and are used unchanged in Tasks 4 and 9.
 `ago(thenMs, nowMs)` keeps the SPA's signature so both apps agree on "now".
 `deriveFunnel` is defined in Task 7 and used nowhere else.
+
+---
+
+## Addendum — 2026-08-27: the run chassis landed
+
+The plan above was executed and committed. Afterwards the Agents-SDK run
+chassis appeared in the main working tree, and with it three endpoints this
+plan had recorded as missing. The follow-up work, in one pass rather than
+tasks:
+
+- **Deps.** `@cloudflare/think` 0.15.1, `agents` 0.20.1, `@ai-sdk/react`
+  4.0.62 in `apps/web`, exact-pinned per the repo's Phase 25 rule.
+- **`lib/api/chat.ts`** — was a hardcoded `chatIsDemoOnly()` refusal, is now
+  `POST /api/runs` plus `makeChatStarter`'s reuse-the-id-on-retry rule.
+- **`lib/api/runs.ts`** — `getRun(id)` against the new `GET /api/runs/:id`.
+- **`lib/api/socket-host.ts`** — `NEXT_PUBLIC_WORKER_ORIGIN`, and the paragraph
+  explaining why a rewrite cannot stand in for it (spec D11).
+- **`lib/hooks/use-run-agent.ts`** — ported from the Vite dashboard's
+  `src/runs/use-run-agent.ts`, plus `host`, and with `droppedRef` turned into
+  state because `react-hooks/refs` is right that a ref read during render is
+  the shape that leaves a banner stale.
+- **`components/run/*`** — `transcript` (narrows `unknown`), `run-view` (pure,
+  follow-the-stream scrolling), `run-session` (four lines of wiring),
+  `run-panel` (demo/live branch), `run-approvals` (this run's cards, same
+  query key as the queue).
+- **Routes** — `/runs/[id]` added, `/chat` rewritten as a create form, the
+  `?run=` sheet's closing apology replaced by a link to the route.
+- **Deleted** — `components/chat/transcript.tsx`, `components/chat/composer.tsx`,
+  `lib/fixtures/chat.ts`, and `queryKeys.chat`. All of it existed to describe
+  an absence.
+- **Docs** — gaps §3/§4/§5 rewritten as resolved, §13 added (`runs.summary` is
+  never written by anything), §1 and §12 extended, spec D9–D13, README.
+
+**Gate re-run:** `apps/web` 75 tests in 10 files, typecheck, lint and both a
+demo and a live `next build` clean. `apps/dashboard` and `apps/worker` were not
+touched.
