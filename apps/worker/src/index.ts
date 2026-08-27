@@ -19,6 +19,7 @@ import { sweepMemoryOutbox } from "./memory/sweeper";
 import { sweepNudges } from "./notify/nudge";
 import { sweepSandboxes } from "./sandbox/lifecycle";
 import { ZepMemory } from "./memory/zep";
+import { subscribe } from "agents/observability";
 import { handleTriageBatch, type TriageJob } from "./triage/consumer";
 import { makeTriageRunner } from "./triage/run";
 import type { QueuedEvent } from "./slack/types";
@@ -124,8 +125,6 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    * naming the variable. There is no state in which absence silently enables an
    * outbound sink.
    */
-  LANGSMITH_TRACING?: string;
-  LANGSMITH_TRACE_PROJECT?: string;
   /**
    * What one agent turn may spend, in nano-USD. A NON-SECRET `var`, declared
    * here for the same reason as the ones above.
@@ -138,7 +137,6 @@ export type Env = Omit<Cloudflare.Env, "MEMORY_QUEUE" | "TRIAGE_QUEUE"> & {
    */
   RUN_SPEND_CEILING_NANO_USD?: string;
   /** `"none"` or `"redacted"`. Anything else is refused by name. */
-  LANGSMITH_TRACE_PAYLOADS?: string;
   /**
    * Phase 18's read-only monorepo credential — a SECRET, so `wrangler types`
    * cannot know it, same as every entry above. Fine-grained, `web2app-rebuild`
@@ -293,6 +291,28 @@ app.all("/ws/*", (c) => c.json({ code: "not_found", message: "no such route" }, 
 // the static asset bundle. Explicit, rather than relying on route-ordering
 // config that later phases would have to keep correct.
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
+
+/**
+ * Think's own diagnostics, into Workers Logs.
+ *
+ * MODULE SCOPE, and exactly once. `subscribe` registers a process-wide listener
+ * on the isolate, so calling it per request or per Durable Object would attach a
+ * new one every time and print each event as many times as the isolate had
+ * served requests.
+ *
+ * `chat` only. The SDK emits a dozen channels — rpc, mcp, fiber, schedule,
+ * lifecycle — and forwarding all of them would bury the one that says why a
+ * turn did not answer under traffic nobody reads.
+ *
+ * IDS AND STATES, NEVER CONTENT. The payload of a chat event can carry request
+ * metadata, so what is logged here is the event type and the run's public id
+ * where the event carries one. Message text, tool payloads and model output are
+ * deliberately absent: Workers Logs is a durable sink and invariant 39 applies
+ * to it exactly as it applies to a D1 row.
+ */
+subscribe("chat", (event) => {
+  console.log("agent", { type: event.type });
+});
 
 export default {
   fetch: app.fetch,

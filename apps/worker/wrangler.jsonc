@@ -91,37 +91,20 @@
     // runs rather than an error.
     "LANGSMITH_PROJECT_ID": "4a42e1fa-d619-49a9-afe4-0a9e97a5196f",
     "LANGSMITH_PROJECT_NAME": "fire-fighter-standin",
-    // LangSmith WRITE surface: the agent's own traces, in a SECOND project.
-    // Reads address the stand-in by id above; ingest addresses this one by NAME,
-    // because `session_name` is what the batch endpoint accepts and it creates
-    // the project on first write.
+    // THE AGENT'S OWN TRACES ARE THE SDK'S NOW, so there is nothing to
+    // configure here.
     //
-    // MUST BE IN THE SAME WORKSPACE as LANGSMITH_API_KEY (LANGSMITH_WORKSPACE_ID
-    // above). Measured 2026-08-17: a LangSmith key is scoped to exactly one
-    // workspace and a project in any other is invisible rather than an error, so
-    // a mismatch here does not fail -- it writes into a project nobody watches.
+    // Phase 26 replaced the hand-written LangSmith writer with Think's native
+    // GenAI OTLP spans (`RunAgent.storeTools` / `storeMessages`), exported by
+    // the Workers runtime. The destination is a dashboard-side OTLP setting,
+    // not a var: LangSmith ingests at `/otel/v1/traces` with `x-api-key` and a
+    // `Langsmith-Project` header, and the header picks the project exactly as
+    // `session_name` used to. `LANGSMITH_TRACING`, `LANGSMITH_TRACE_PROJECT`
+    // and `LANGSMITH_TRACE_PAYLOADS` are gone with the writer that read them.
     //
-    // OPT-IN, and read strictly: only "true"/"1" enables. A typo leaves a new
-    // outbound sink OFF, which is the safe direction for this one -- the
-    // inverse of AGENT_MODEL_DISABLED, where a typo must not silently re-enable
-    // a provider call.
-    //
-    // NAME COLLISION, known and accepted: LANGSMITH_TRACING is also what the
-    // official `langsmith` npm package auto-reads. We do not install it (the
-    // emitter is hand-rolled in src/langsmith/tracer.ts), so nothing else picks
-    // this up today. If that package is ever added, it will start tracing on
-    // its own and this var is why.
-    "LANGSMITH_TRACING": "true",
-    "LANGSMITH_TRACE_PROJECT": "fire-fighter",
-    // "none" = ids, tokens, cost, latency, finish reason. "redacted" = the
-    // above PLUS bounded, scrubbed prompt/completion/program text.
-    //
-    // "redacted" is a deliberate widening of what leaves the Worker, taken
-    // knowingly: AI Gateway runs with cf-aig-collect-log-payload false
-    // (invariant 26) and this does not change that, but it does mean agent
-    // prose reaches a second vendor. Recorded in the README security model,
-    // swept by test/agent-canaries.test.ts, and never reasoning (invariant 18).
-    "LANGSMITH_TRACE_PAYLOADS": "redacted",
+    // The READ pins above are untouched and are a different thing entirely: a
+    // capability that reads a CUSTOMER's traces. Do not repoint them here.
+
     // What one agent turn may spend, in nano-USD ($5.00). The MONEY is the
     // binding authority on how long a turn runs (invariant 28), not the 40-step
     // ceiling, which at the ~$0.068 per step these runs bill would cost ~$2.70
