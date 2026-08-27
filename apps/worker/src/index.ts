@@ -13,6 +13,7 @@ import { slackOAuth } from "./oauth/slack";
 import { githubOAuth } from "./oauth/github";
 import { slackRunKey } from "./run/keys";
 import { routeToOwnedRun, wakeRun } from "./run/wake";
+import { sweepChannelMembership } from "./channels/registry";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
@@ -346,7 +347,7 @@ export default {
   /**
    * The one-minute Cron Trigger, configured in wrangler.jsonc.
    *
-   * It owns two jobs, run every minute:
+   * It owns five independent repair jobs, run every minute:
    *
    *  - re-enqueueing D1 memory-outbox rows that are due, including rows whose
    *    queue delivery has already exhausted its retries and gone to the DLQ.
@@ -394,6 +395,7 @@ export default {
       sweepUndeliveredApprovals(env),
       sweepNudges(env),
       sweepSandboxes(env),
+      sweepChannelMembership(env),
     ]);
     // The other two sweeps report their own counts from inside themselves
     // (`console.warn("memory sweep"…)`, `console.warn("approval sweep"…)`);
@@ -410,6 +412,16 @@ export default {
     const sandboxes = results[3];
     if (sandboxes?.status === "fulfilled" && sandboxes.value.destroyed > 0) {
       console.warn("sandbox sweep", { destroyed: sandboxes.value.destroyed });
+    }
+    // The fifth sweep registers channels the bot was invited to but nobody has
+    // spoken in yet, and self-heals anything the lazy ingest path missed. It
+    // only ever ADDS rows, and `listBotConversations` answers `[]` on any
+    // failure, so a Slack outage makes this a no-op rather than a mass
+    // registration or a mass removal. Independent of the other four for the
+    // reason stated above.
+    const channels = results[4];
+    if (channels?.status === "fulfilled" && channels.value.registered > 0) {
+      console.warn("channel sweep", { registered: channels.value.registered });
     }
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length > 0) {
