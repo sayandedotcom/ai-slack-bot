@@ -58,7 +58,7 @@ Next.js front-end (`apps/web`, added 2026-08-26): the second front-end, App Rout
 
 Git hooks are husky (`.husky/pre-commit`, `.husky/pre-push`), installed by the root `prepare` script (`husky`), which points `core.hooksPath` at `.husky/_`. **pre-commit**: Biome over staged files + the control-byte guard. **pre-push**: `typecheck` + `capabilities:dts:check`. The worker suite is deliberately NOT in a hook — 205–306s is a hook people learn to `--no-verify` past, which would cost the two fast checks as well. Escape hatches: `HUSKY=0 git commit`, `git push --no-verify`.
 
-Deploying is `workflow_dispatch` only (`.github/workflows/deploy-worker.yml`), behind a `production` environment and four preflight guards. **Never add a push trigger**: `wrangler.jsonc` runs a one-minute cron, so a deploy swaps the Worker under anything in flight.
+Deploying is `workflow_dispatch` only (`.github/workflows/deploy-worker.yml`), behind a `production` environment and six preflight guards. **Never add a push trigger**: `wrangler.jsonc` runs a one-minute cron, so a deploy swaps the Worker under anything in flight.
 
 Production secrets: `wrangler secret bulk` — never bare `wrangler secret put` from a non-interactive shell (uploads an empty string and reports success).
 
