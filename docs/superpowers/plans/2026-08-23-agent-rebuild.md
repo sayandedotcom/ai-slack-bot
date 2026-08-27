@@ -2071,6 +2071,32 @@ Idempotency replaces the delivered-CAS: the cron re-submits `approval:{id}` unco
 
 ## Wave 5 — Transport and dashboard
 
+**IMPLEMENTED 2026-08-27** (Tasks 22–24), gate: worker 69 files / 1014 tests,
+dashboard 6 files / 59 tests, `tsc` clean in both, `.d.ts` in sync. Recorded in
+`phase-26-notes.md` §"Wave 5 implementation notes" (items 31–35).
+
+**One correction, and it is a security one.** Task 22 says to re-wrap
+`onMessage` "after `super()`". That does not work on this pin: Think installs
+its own protocol wrapper from `_setupProtocolHandlers()` during **`onStart`**,
+so a constructor-installed filter sits UNDERNEATH it and never sees a protocol
+frame. Measured, not deduced — a `chat-request` frame over a real socket
+started a turn and a `clear` frame wiped a transcript. The filter is installed
+from `RunAgent.onStart`, which runs three lines after that setup.
+
+Three additions the tasks did not specify:
+
+1. **`src/run/transport.ts`**, one file beyond the list. The identity header and
+   the blocked-frame list are needed by both `src/api/agents.ts` and
+   `src/run/agent.ts`; putting them in either would have made the two import
+   each other.
+2. **`steer` no longer calls `noteInput` inline.** `setState` throws inside a
+   connection-scoped invocation once connections are readonly, and every caller
+   of `steer` reaches it that way. The revision is minted in `startSteerTurn`,
+   from the alarm.
+3. **A retried create resolves to the same run.** The specified turn-level
+   `idempotencyKey` dedupes inside a run that already exists, so the run key is
+   now derived from the actor plus the client request id.
+
 ### Task 22: The agent route
 
 **Files:**

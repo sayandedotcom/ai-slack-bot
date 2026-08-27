@@ -546,3 +546,119 @@ A completed suite now logs `disconnected: pump canceled` and
 `fixed-length pipe ended prematurely` from workerd. They appear only since real
 turns run under the pool — Think's UI stream is torn down when a turn ends —
 and no test fails on them. Worth a look if they ever coincide with a failure.
+
+
+## Wave 5 implementation notes (2026-08-27)
+
+Gate before: worker 67 files / 987 tests, dashboard 4 files / 26 tests. After:
+worker **69 / 1014**, dashboard **6 / 59**, `tsc --noEmit` clean in both,
+`capabilities:dts:check` in sync.
+
+**31. THE FRAME FILTER MUST BE INSTALLED IN `onStart`, NOT THE CONSTRUCTOR —
+and this one shipped broken before it was measured.** The plan says to re-wrap
+`onMessage` "after `super()`". That is wrong for this pin: Think installs its
+own protocol `onMessage` wrapper from `_setupProtocolHandlers()`
+(`think.js:1036`), which runs **during `onStart`**, i.e. after every constructor
+in the chain. A filter wrapped around `this.onMessage` in the constructor
+therefore sits UNDERNEATH Think's and never sees a protocol frame at all —
+Think handles `chat-request` and returns without delegating.
+
+Not deduced: the first run of `test/agents-route.test.ts` sent a
+`cf_agent_use_chat_request` frame over a real socket and got back a completed
+turn with the client's text in it, plus a `cf_agent_chat_clear` that wiped a
+transcript. `RunAgent.onStart` runs at `think.js:1039`, three lines after that
+setup, so `#filterClientFrames()` is called from there and is re-applied per
+wake because Think re-installs its wrapper per wake.
+
+**32. `shouldConnectionBeReadonly` gates ONE thing.** It refuses client
+`cf_agent_state` frames and throws out of `setState` inside a
+connection-scoped invocation (`agents/dist/index.js:865, 1133`). It does not
+gate `@callable` RPC and does not gate a single chat frame. So readonly and the
+frame filter are two controls with no overlap, and the five frames in
+`BLOCKED_CLIENT_FRAMES` are each a way to drive a run around everything this
+codebase enforces.
+
+**33. That readonly rule broke `steer`, which is the one thing a browser MAY
+do.** `steer` is `@callable`, so it runs inside `runInInvocation({ connection })`
+— and it called `noteInput()`, which calls `setState`, which throws "Connection
+is readonly" in exactly that context. The revision is now minted inside
+`startSteerTurn`, which runs from the alarm outside any connection. That is also
+the more honest place for it: the revision belongs to the turn that actually
+starts.
+
+**34. The transport is `/api/runs/:id/agent/*` and `getAgentByName().fetch()`,
+not `routeAgentRequest`.** `routePartykitRequest` names the object with
+`idFromName(<path segment>)` verbatim, so the previous build resolved the id to
+the key and REWROTE the path — which put the private run key in the URL the
+object reads back as `connection.uri`. `getAgentByName` takes the key as an
+argument, so it never appears in a URL. partysocket builds the socket URL as
+`${host}/${basePath}` (`partysocket/dist/index.js:50`), which is why the route
+answers both the bare path and `/*`, and why `basePath` carries no leading
+slash. Think serves `/get-messages` off the same path
+(`think.js:6136`), so the transcript read inherits the gate rather than needing
+one of its own.
+
+**35. The identity header is delete-then-set.** The agent cannot verify an
+identity that crossed a Durable Object boundary, so a client-supplied
+`x-firefighter-identity` would be indistinguishable from the one the route
+writes. `src/api/agents.ts` deletes any inbound copy before setting its own,
+after `requireTeamMember` has verified the Access JWT.
+
+### Decisions made here, not in the plan
+
+**A retried create resolves to the same run.** The plan specifies
+`idempotencyKey: clientRequestId` on the submission, which dedupes the opening
+TURN inside a run that has already been created — so a client retrying a POST it
+never saw the response to would leave a second, half-empty run in the dashboard
+list every time. `createRunFromChat` now derives the `chat:{uuid}` key from
+SHA-256 over the actor and the request id, so the retry resolves to the same
+run. The actor is in the digest so two people whose clients mint the same id
+cannot land in one conversation.
+
+**The two idempotency rules are OPPOSITES, on purpose.** A steer that failed may
+never have arrived, so re-asserting it mints a fresh request id — reusing one
+would have the agent refuse a steer it never took. A create that failed may
+already have written a run, so re-asserting it reuses the id. Both are pure
+functions (`makeSteerSender`, `makeChatStarter`) precisely so the difference is
+testable and stated rather than implied.
+
+**The composer has ONE verb.** The view this replaces had two — `sendMessage`
+when idle, `steer` when busy. `sendMessage` sends `cf_agent_use_chat_request`,
+which the frame filter now drops, so that path would fail silently. Every send
+is a steer.
+
+**`GET /api/runs` and `/runs/:id/usage` are still gated by Access alone.** The
+new routes take the inner `requireTeamMember` check; those two pre-date it and
+were not touched. Worth resolving one way or the other in Task 28's security
+table rather than leaving a half-gated router.
+
+### Files added
+
+`apps/worker/src/api/agents.ts`, `src/run/transport.ts`; tests
+`test/agents-route.test.ts`, `test/api-runs.test.ts`.
+`apps/dashboard/src/runs/use-run-agent.ts`, `src/runs/run-view.tsx`,
+`src/chat/api.ts`, `src/chat/chat-page.tsx`; tests `test/run-view.test.tsx`,
+`test/chat-page.test.tsx`.
+
+`src/run/transport.ts` is one file beyond the plan's list: the header constant
+and the blocked-frame list are needed by BOTH `src/api/agents.ts` and
+`src/run/agent.ts`, and putting them in either would have made the two import
+each other.
+
+### The dashboard's harness, restated
+
+`apps/dashboard` has **no DOM** — `vite.config.ts` is the whole vitest config,
+there is no jsdom and no testing-library, and rendering is
+`renderToStaticMarkup`, which cannot run effects. Every component this wave adds
+is therefore split in two: a pure view that takes what it draws as props, and a
+four-line container that wires the hook. That is what makes the four states and
+both idempotency rules assertable at all; a single component calling `useAgent`
+would have been untestable in this package.
+
+### Still open
+
+- `dev-stubs.ts` does not stub the three new Access-gated surfaces, and says so
+  in a comment. `wrangler dev` has no Access in front of it, so the create, the
+  run detail and the socket all answer 401 on localhost. A fake create would
+  hand back an id whose socket then refuses; a stubbed socket would be a fiction
+  of a live transcript. They are exercised against a deployed Worker.
