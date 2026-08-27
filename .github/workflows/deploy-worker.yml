@@ -1,0 +1,238 @@
+name: Deploy Worker
+
+# workflow_dispatch ONLY. There is no push trigger and there must not be one.
+#
+# Two independent reasons, both learned in this repository:
+#   - wrangler.jsonc sets triggers.crons = ["* * * * *"], so a deploy swaps
+#     the Worker under a sweep that fires every 60 seconds.
+#   - phase-24-dashboard-narration.md explicitly HELD a deploy because it
+#     would "swap the Worker under an in-flight drill".
+#
+# CI proves green on every push. Shipping stays a decision.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type the WORKER name to confirm: firefighter"
+        required: true
+        type: string
+      drill_in_flight:
+        description: "Is a drill or live run in flight right now?"
+        required: true
+        type: choice
+        options: ["yes", "no"]
+        default: "yes"
+      migrations_reviewed:
+        description: >
+          I have read wrangler.jsonc's `migrations` array and accept that any
+          NEW tag is applied irreversibly on deploy. The chain was collapsed to
+          a single v1 for the first real deploy, so anything beyond v1 is new
+          since then - and a deleted_classes entry is data destruction.
+        required: true
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+      reason:
+        description: "Why are you deploying? (recorded in the run summary)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# NEVER cancel a deploy in progress. Two half-applied deploys of a Worker
+# carrying Durable Object migrations is strictly worse than one slow one.
+concurrency:
+  group: deploy-worker-production
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # No secrets, no environment, no approval needed. Everything that can fail
+  # cheaply fails here, BEFORE a human is asked to approve anything.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: preflight guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Confirmation matches the worker name
+        # The WORKER is `firefighter` (wrangler.jsonc). The GitHub REPOSITORY
+        # is ai-slack-bot. They differ on purpose, and nothing in this
+        # workflow hardcodes the repository name.
+        run: |
+          if [ "${{ inputs.confirm }}" != "firefighter" ]; then
+            echo "::error::confirm must be exactly 'firefighter', the worker name in wrangler.jsonc"
+            exit 1
+          fi
+
+      - name: No drill in flight
+        run: |
+          if [ "${{ inputs.drill_in_flight }}" != "no" ]; then
+            echo "::error::Refusing to deploy during a drill. wrangler.jsonc runs a one-minute cron and a deploy swaps the Worker mid-run."
+            exit 1
+          fi
+
+      - name: Durable Object migrations acknowledged
+        run: |
+          if [ "${{ inputs.migrations_reviewed }}" != "yes" ]; then
+            echo "::error::Read wrangler.jsonc's migrations array, then re-dispatch with migrations_reviewed=yes."
+            exit 1
+          fi
+
+      # THE TEST OPT-OUTS MUST NEVER REACH PRODUCTION.
+      #
+      # Neither appears in wrangler.jsonc today — they exist only as miniflare
+      # bindings in vitest.config.ts, where they stop a test reaching the real
+      # model or a real container. This guard exists so a fixture copied into
+      # the deployed config while debugging cannot ship.
+      - name: wrangler.jsonc carries no test opt-out
+        run: |
+          set -uo pipefail
+          bad=0
+          for name in AGENT_MODEL_DISABLED SANDBOX_DISABLED; do
+            if grep -qE "\"${name}\"[[:space:]]*:" apps/worker/wrangler.jsonc; then
+              echo "::error file=apps/worker/wrangler.jsonc::${name} is a TEST-ONLY opt-out and must never be deployed."
+              bad=1
+            fi
+          done
+          exit $bad
+
+      # THE TRACE PAYLOAD POLICY.
+      #
+      # This used to assert `LANGSMITH_TRACE_PAYLOADS` in wrangler.jsonc. That
+      # var no longer exists: the hand-written trace writer was deleted in the
+      # Phase 26 rebuild and `LANGSMITH_TRACING`, `LANGSMITH_TRACE_PROJECT`
+      # and `LANGSMITH_TRACE_PAYLOADS` went with it. Tracing is now the SDK's,
+      # and the whole payload policy is two class fields on RunAgent.
+      #
+      # `storeMessages = false` is the one that matters, and it is
+      # all-or-nothing: flipping it true puts the customer's Slack thread, the
+      # triage briefing and recalled memory into a third-party trace store.
+      # That is a new outbound disclosure of customer data, so it must never
+      # ride along in an unrelated deploy.
+      #
+      # `storeTools = true` is the reviewed setting — a run_code span carries
+      # our own program and our own capability results — and is not asserted.
+      - name: RunAgent still refuses to send messages to the trace store
+        run: |
+          set -euo pipefail
+          if ! grep -qE '^\s*override storeMessages = false;' apps/worker/src/run/agent.ts; then
+            echo "::error file=apps/worker/src/run/agent.ts::storeMessages must be false. True sends customer thread text to the trace store."
+            exit 1
+          fi
+
+      # CI MUST NOT REBUILD THE CONTAINER IMAGE.
+      #
+      # The image is built by sandbox/build.sh with two BuildKit --secret
+      # values (MONOREPO_PAT, NUCLEO_LICENSE_KEY) that `wrangler deploy` has
+      # no way to pass. That is the entire reason containers[0].image is a
+      # pre-built digest rather than "./sandbox/Dockerfile". If someone
+      # reverts it, wrangler would try to build here, in a runner holding
+      # neither secret. Fail before that.
+      - name: Container image is a pinned digest, not a Dockerfile
+        run: |
+          set -euo pipefail
+          if grep -qE '"image"[[:space:]]*:[[:space:]]*"\./' apps/worker/wrangler.jsonc; then
+            echo "::error file=apps/worker/wrangler.jsonc::containers[0].image points at a Dockerfile. CI cannot supply the BuildKit secrets; build locally with sandbox/build.sh and push a digest."
+            exit 1
+          fi
+          if ! grep -qE '"image"[[:space:]]*:[[:space:]]*"registry\.cloudflare\.com/[^"]+@sha256:[0-9a-f]{64}"' apps/worker/wrangler.jsonc; then
+            echo "::error file=apps/worker/wrangler.jsonc::containers[0].image must be a registry.cloudflare.com digest reference."
+            exit 1
+          fi
+
+      - name: Record intent
+        run: |
+          {
+            echo "### Deploy request"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| worker | \`firefighter\` |"
+            echo "| ref | \`${{ github.ref }}\` |"
+            echo "| sha | \`${{ github.sha }}\` |"
+            echo "| actor | @${{ github.actor }} |"
+            echo "| reason | ${{ inputs.reason }} |"
+            echo
+            echo "#### Durable Object migration tags in wrangler.jsonc"
+            grep -oE '"tag"[[:space:]]*:[[:space:]]*"v[0-9]+"' apps/worker/wrangler.jsonc | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # The gate, RE-RUN on the exact SHA being deployed.
+  #
+  # The environment approval below controls WHO deploys, not WHAT. A dispatch
+  # can target any ref, including one where ci.yml never ran or where its run
+  # has since been superseded. This makes "green" mean green for THIS deploy.
+  # ---------------------------------------------------------------------------
+  gate:
+    name: gate
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: pnpm run check:text
+      - run: pnpm exec biome ci .
+      - run: pnpm run typecheck
+      - run: pnpm run capabilities:dts:check
+      # Builds apps/dashboard/dist via ^build, then runs the workerd suite.
+      - run: pnpm run test
+
+  deploy:
+    name: deploy to production
+    needs: [gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # THE APPROVAL GATE. Configure "Required reviewers" on this environment
+    # under Settings -> Environments -> production. WITHOUT that setting this
+    # name is decorative: it only scopes the secrets.
+    environment:
+      name: production
+      url: https://firefighter.sayandeten.workers.dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+
+      # MANDATORY, AND FIRST.
+      #
+      # wrangler.jsonc's assets.directory is ../dashboard/dist and dist/ is
+      # gitignored. Without this, `wrangler deploy` ships the Worker with an
+      # EMPTY assets directory — the API keeps working and the dashboard 404s,
+      # which is the worst kind of half-broken deploy. This mirrors the
+      # worker's own deploy script.
+      - name: Build the dashboard (the Worker's ASSETS)
+        run: pnpm --filter @workspace/dashboard build
+
+      - name: Assert the assets exist
+        run: test -f apps/dashboard/dist/index.html
+
+      - name: Deploy
+        id: deploy
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: "apps/worker"
+          packageManager: "pnpm"
+          command: "deploy"
+          # NO `secrets:` input, deliberately. The Worker's secrets are managed
+          # out of band with `wrangler secret bulk` and must not be re-uploaded
+          # from CI: a bare `wrangler secret put` from a non-interactive shell
+          # uploads an EMPTY string and reports success.
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy result"
+            echo
+            echo "- worker: \`firefighter\`"
+            echo "- url: ${{ steps.deploy.outputs.deployment-url }}"
+            echo "- sha: \`${{ github.sha }}\`"
+            echo "- by: @${{ github.actor }}"
+          } >> "$GITHUB_STEP_SUMMARY"
