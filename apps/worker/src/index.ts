@@ -3,6 +3,7 @@ import { slackEvents } from "./slack/events";
 import { countersApi } from "./api/counters";
 import { backfillApi } from "./api/backfill";
 import { runsApi } from "./api/runs";
+import { agentsApi } from "./api/agents";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
 import { proofsApi } from "./api/proofs";
@@ -227,6 +228,11 @@ app.route("/slack", slackEvents);
 app.route("/api", countersApi);
 app.route("/api", backfillApi);
 app.route("/api", runsApi);
+// The run transport (Phase 26). Mounted on the same `/api` as everything else,
+// which is what gates the socket and the transcript read with the dashboard's
+// own Access application — see `src/api/agents.ts` for why this is not
+// `/agents/*` and not `routeAgentRequest`.
+app.route("/api", agentsApi);
 // The one human-decision surface (Phase 11). Same `/api` mount as everything
 // else here, so it inherits the same Access application as the dashboard —
 // `PATCH /api/approvals/:id` is exactly as gated as `GET /api/runs`.
