@@ -32,7 +32,10 @@ slackEvents.post("/events", async (c) => {
     return c.json({ challenge: envelope.challenge });
   }
 
-  if (envelope.type === "event_callback" && envelope.event?.type === "message") {
+  if (
+    envelope.type === "event_callback" &&
+    envelope.event?.type === "message"
+  ) {
     const queued: QueuedEvent = {
       event_id: envelope.event_id,
       event: envelope.event,

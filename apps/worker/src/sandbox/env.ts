@@ -58,7 +58,10 @@ const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SECRET_NAME = "MONOREPO_DEV_ENV";
 
 function unusable(reason: string): CapabilityError {
-  return new CapabilityError("capability_unavailable", `${SECRET_NAME} ${reason}`);
+  return new CapabilityError(
+    "capability_unavailable",
+    `${SECRET_NAME} ${reason}`
+  );
 }
 
 /**
@@ -81,29 +84,37 @@ export function devEnvFor(env: Env): Record<string, string> {
   } catch {
     // Never `err.message`: `JSON.parse` quotes the input it choked on, which
     // for this secret means quoting a credential into an error string.
-    throw unusable("is not valid JSON. It must be a JSON object of string to string.");
+    throw unusable(
+      "is not valid JSON. It must be a JSON object of string to string."
+    );
   }
 
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw unusable(
-      `must be a JSON object of string to string; this one is ${describe(parsed)}.`,
+      `must be a JSON object of string to string; this one is ${describe(parsed)}.`
     );
   }
 
   const entries: [string, string][] = [];
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(
+    parsed as Record<string, unknown>
+  )) {
     if (key.length === 0) {
-      throw unusable("has an entry with an empty name; every key must be a variable name.");
+      throw unusable(
+        "has an entry with an empty name; every key must be a variable name."
+      );
     }
     if (!VARIABLE_NAME.test(key)) {
       throw unusable(
-        `entry "${key}" is not a usable variable name; names must match ${VARIABLE_NAME.source}.`,
+        `entry "${key}" is not a usable variable name; names must match ${VARIABLE_NAME.source}.`
       );
     }
     if (typeof value !== "string") {
       // The KEY and the offending TYPE, never the value — `describe` reports a
       // shape, and the one case it could quote (a string) is the legal one.
-      throw unusable(`entry "${key}" is ${describe(value)}; every value must be a string.`);
+      throw unusable(
+        `entry "${key}" is ${describe(value)}; every value must be a string.`
+      );
     }
     entries.push([key, value]);
   }
@@ -147,14 +158,17 @@ export function devEnvKeyNames(env: Env): string[] {
  * failure the agent sees several turns later as "the monorepo is broken",
  * having spent a container's worth of time on it.
  */
-export function devEnvForProcess(env: Env, injectDevEnv?: boolean): Record<string, string> {
+export function devEnvForProcess(
+  env: Env,
+  injectDevEnv?: boolean
+): Record<string, string> {
   if (injectDevEnv !== true) return {};
 
   const devEnv = devEnvFor(env);
   if (Object.keys(devEnv).length === 0) {
     throw new CapabilityError(
       "capability_unavailable",
-      `injectDevEnv was requested but ${SECRET_NAME} is not configured on this Worker, so there is nothing to inject. Run the command without dev env, or ask an operator to set the secret.`,
+      `injectDevEnv was requested but ${SECRET_NAME} is not configured on this Worker, so there is nothing to inject. Run the command without dev env, or ask an operator to set the secret.`
     );
   }
   return devEnv;

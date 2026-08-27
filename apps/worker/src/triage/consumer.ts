@@ -37,13 +37,19 @@ export type TriageDeps = {
 
 type MessageRow = Pick<
   MessagesRow,
-  "event_id" | "channel_id" | "ts" | "thread_ts" | "user_id" | "text" | "permalink"
+  | "event_id"
+  | "channel_id"
+  | "ts"
+  | "thread_ts"
+  | "user_id"
+  | "text"
+  | "permalink"
 >;
 
 export async function handleTriageBatch(
   batch: MessageBatch<TriageJob>,
   env: Env,
-  deps: TriageDeps,
+  deps: TriageDeps
 ): Promise<void> {
   for (const message of batch.messages) {
     try {
@@ -55,9 +61,12 @@ export async function handleTriageBatch(
   }
 }
 
-async function loadMessage(env: Env, eventId: string): Promise<MessageRow | null> {
+async function loadMessage(
+  env: Env,
+  eventId: string
+): Promise<MessageRow | null> {
   return env.DB.prepare(
-    "SELECT event_id, channel_id, ts, thread_ts, user_id, text, permalink FROM messages WHERE event_id = ?",
+    "SELECT event_id, channel_id, ts, thread_ts, user_id, text, permalink FROM messages WHERE event_id = ?"
   )
     .bind(eventId)
     .first<MessageRow>();
@@ -79,9 +88,13 @@ async function loadMessage(env: Env, eventId: string): Promise<MessageRow | null
  * already contains it. Keeping the decision check first means a retry always
  * takes the replay branch and never reaches routeToOwnedRun.
  */
-async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<void> {
+async function triageOne(
+  eventId: string,
+  env: Env,
+  deps: TriageDeps
+): Promise<void> {
   const decided = await env.DB.prepare(
-    "SELECT wake, opening_prompt FROM triage_decisions WHERE event_id = ?",
+    "SELECT wake, opening_prompt FROM triage_decisions WHERE event_id = ?"
   )
     .bind(eventId)
     .first<Pick<TriageDecisionsRow, "wake" | "opening_prompt">>();
@@ -131,7 +144,7 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
   const { results: threadRows } = await env.DB.prepare(
     `SELECT user_id, text FROM messages
      WHERE channel_id = ? AND (thread_ts = ? OR ts = ?) AND event_id != ?
-     ORDER BY ts ASC LIMIT 30`,
+     ORDER BY ts ASC LIMIT 30`
   )
     .bind(row.channel_id, threadTs, threadTs, eventId)
     .all<Pick<MessagesRow, "user_id" | "text">>();
@@ -187,13 +200,15 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
   const openingPrompt =
     wake && outcome.opening_prompt.trim().length === 0
       ? `${policy.customer_slug} wrote in ${policy.name}: ${row.text}` +
-        (abandoned ? `\n\nA previous attempt on this thread failed before it finished. Pick it up.` : "")
+        (abandoned
+          ? `\n\nA previous attempt on this thread failed before it finished. Pick it up.`
+          : "")
       : outcome.opening_prompt;
 
   await env.DB.prepare(
     `INSERT OR IGNORE INTO triage_decisions
        (event_id, wake, why, opening_prompt, model, cost_usd, latency_ms, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       eventId,
@@ -203,7 +218,7 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
       outcome.model,
       outcome.cost_usd,
       outcome.latency_ms,
-      Date.now(),
+      Date.now()
     )
     .run();
 
@@ -234,13 +249,13 @@ async function triageOne(eventId: string, env: Env, deps: TriageDeps): Promise<v
 async function threadRunFailed(
   env: Env,
   channelId: string,
-  threadTs: string,
+  threadTs: string
 ): Promise<boolean> {
   const run = await env.DB.prepare(
     `SELECT status FROM runs
       WHERE origin = 'slack' AND channel_id = ? AND thread_ts = ?
       ORDER BY created_at DESC
-      LIMIT 1`,
+      LIMIT 1`
   )
     .bind(channelId, threadTs)
     .first<Pick<RunsRow, "status">>();

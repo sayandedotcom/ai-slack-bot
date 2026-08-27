@@ -17,7 +17,9 @@ describe("graphIdFor", () => {
   });
 
   it("routes internal channels to org", () => {
-    expect(graphIdFor({ ...base, customer_slug: null, mode: "internal" })).toBe("org");
+    expect(graphIdFor({ ...base, customer_slug: null, mode: "internal" })).toBe(
+      "org"
+    );
   });
 
   it("routes an internal channel with a slug to org, not the customer graph", () => {
@@ -29,6 +31,8 @@ describe("graphIdFor", () => {
   });
 
   it("returns null for known channels with no slug and no internal mode", () => {
-    expect(graphIdFor({ ...base, customer_slug: null, mode: "observe" })).toBeNull();
+    expect(
+      graphIdFor({ ...base, customer_slug: null, mode: "observe" })
+    ).toBeNull();
   });
 });

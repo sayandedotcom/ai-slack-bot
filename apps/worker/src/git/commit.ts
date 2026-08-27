@@ -109,7 +109,7 @@ function resolveAuthor(raw: string | undefined): "on-duty" | "worker-pat" {
   if (value === "on-duty" || value === "worker-pat") return value;
   throw new Error(
     `GITHUB_AUTHOR must be "on-duty" or "worker-pat"; got ${JSON.stringify(raw)}. ` +
-      "Refused rather than defaulted: a typo here would open pull requests on the monorepo under the worker PAT with no other signal that the handover did not take.",
+      "Refused rather than defaulted: a typo here would open pull requests on the monorepo under the worker PAT with no other signal that the handover did not take."
   );
 }
 
@@ -125,7 +125,10 @@ function resolveAuthor(raw: string | undefined): "on-duty" | "worker-pat" {
  * credential: a missing credential is an honest refusal, not a silent switch to
  * a different identity's authority.
  */
-export function makeGithubAuthSource(env: Env, config: GithubShipConfig): GithubAuthSource {
+export function makeGithubAuthSource(
+  env: Env,
+  config: GithubShipConfig
+): GithubAuthSource {
   return {
     async token(nowMs: number): Promise<{ token: string } | null> {
       if (config.author === "worker-pat") {
@@ -168,7 +171,7 @@ function assertValidBranch(branch: string): void {
   if (invalid) {
     throw new CapabilityError(
       "invalid_input",
-      `"${branch}" is not a valid branch name; refused before any request was made.`,
+      `"${branch}" is not a valid branch name; refused before any request was made.`
     );
   }
 }
@@ -198,7 +201,7 @@ function assertValidSha(sha: string): void {
   if (!VALID_SHA.test(sha)) {
     throw new CapabilityError(
       "invalid_input",
-      `the stored diff names a base commit that is not a 40-character sha; refused before any request was made. Capture a fresh diff and try again.`,
+      `the stored diff names a base commit that is not a 40-character sha; refused before any request was made. Capture a fresh diff and try again.`
     );
   }
 }
@@ -213,11 +216,13 @@ function assertValidSha(sha: string): void {
  */
 function assertSafeRepoPath(path: string): void {
   const segments = path.split("/");
-  const unsafe = path.length === 0 || segments.some((seg) => seg === "" || seg === "." || seg === "..");
+  const unsafe =
+    path.length === 0 ||
+    segments.some((seg) => seg === "" || seg === "." || seg === "..");
   if (unsafe) {
     throw new CapabilityError(
       "invalid_input",
-      `the diff touches an unsafe path "${path}"; refused before any request was made.`,
+      `the diff touches an unsafe path "${path}"; refused before any request was made.`
     );
   }
 }
@@ -240,7 +245,7 @@ function assertValidPrNumber(value: number): void {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new CapabilityError(
       "invalid_input",
-      `${JSON.stringify(value)} is not a valid pull request number; refused before any request was made.`,
+      `${JSON.stringify(value)} is not a valid pull request number; refused before any request was made.`
     );
   }
 }
@@ -265,7 +270,7 @@ async function githubFetch(
   token: string,
   method: string,
   url: string,
-  body?: unknown,
+  body?: unknown
 ): Promise<Response> {
   try {
     return await fetch(url, {
@@ -276,7 +281,7 @@ async function githubFetch(
   } catch {
     throw new CapabilityError(
       "upstream_unavailable",
-      "GitHub could not be reached; whether anything was created is unknown.",
+      "GitHub could not be reached; whether anything was created is unknown."
     );
   }
 }
@@ -292,7 +297,11 @@ async function readErrorMessage(response: Response): Promise<string> {
       .map((e) => e.message)
       .filter((m): m is string => typeof m === "string" && m.length > 0)
       .join("; ");
-    return [body.message, extra].filter((s) => typeof s === "string" && s.length > 0).join(" — ") || "no message";
+    return (
+      [body.message, extra]
+        .filter((s) => typeof s === "string" && s.length > 0)
+        .join(" — ") || "no message"
+    );
   } catch {
     return "no message";
   }
@@ -340,14 +349,18 @@ function reconcileHint(ctx: WrittenContext): string {
 async function upstreamError(
   response: Response,
   redact: (text: string) => string,
-  written?: WrittenContext,
+  written?: WrittenContext
 ): Promise<CapabilityError> {
-  if (response.status === 401 || response.status === 403 || response.status === 404) {
+  if (
+    response.status === 401 ||
+    response.status === 403 ||
+    response.status === 404
+  ) {
     return new CapabilityError(
       written ? "upstream_unavailable" : "capability_unavailable",
       written
         ? `GitHub is not authorised, or the pull request endpoint was not found. ${reconcileHint(written)}`
-        : "GitHub is not authorised, or the repository was not found — nothing was opened.",
+        : "GitHub is not authorised, or the repository was not found — nothing was opened."
     );
   }
   if (response.status === 422) {
@@ -357,14 +370,14 @@ async function upstreamError(
       written ? "upstream_unavailable" : "invalid_input",
       written
         ? `GitHub rejected the request. ${reconcileHint(written)} GitHub said: ${bounded}`
-        : `GitHub rejected the request: ${bounded}`,
+        : `GitHub rejected the request: ${bounded}`
     );
   }
   return new CapabilityError(
     "upstream_unavailable",
     written
       ? `GitHub failed while handling the request. ${reconcileHint(written)}`
-      : "GitHub failed while handling the request; whether anything was created is unknown.",
+      : "GitHub failed while handling the request; whether anything was created is unknown."
   );
 }
 
@@ -403,14 +416,18 @@ function decodeBase64Utf8(base64: string, path: string): string {
   // `fatal: false` is stated rather than inherited: the round trip below is
   // what decides, and a throwing decoder would report the same fact as an
   // untyped `TypeError` instead of a named refusal.
-  const text = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(bytes);
+  const text = new TextDecoder("utf-8", {
+    fatal: false,
+    ignoreBOM: true,
+  }).decode(bytes);
   const reencoded = new TextEncoder().encode(text);
   const identical =
-    reencoded.length === bytes.length && reencoded.every((byte, i) => byte === bytes[i]);
+    reencoded.length === bytes.length &&
+    reencoded.every((byte, i) => byte === bytes[i]);
   if (!identical) {
     throw new CapabilityError(
       "invalid_input",
-      `"${path}" is not valid UTF-8, so it cannot be modified byte-exactly through this path — an automated apply would rewrite every undecodable byte in the file, including on lines this change never touches. It needs a human pull request.`,
+      `"${path}" is not valid UTF-8, so it cannot be modified byte-exactly through this path — an automated apply would rewrite every undecodable byte in the file, including on lines this change never touches. It needs a human pull request.`
     );
   }
   return text;
@@ -448,7 +465,7 @@ export function makeGithubGateway(
   env: Env,
   config: GithubShipConfig,
   auth: GithubAuthSource,
-  clock: () => number,
+  clock: () => number
 ): GithubGateway {
   // Invariant, not a preference: `dev` is an abandoned branch roughly 1300
   // commits behind, so a PR opened against it is a silent no-op review that
@@ -456,7 +473,7 @@ export function makeGithubGateway(
   // for this run fails immediately rather than opening a PR nobody reviews.
   if (config.base === "dev") {
     throw new Error(
-      'GITHUB_BASE must not be "dev" — it is an abandoned branch far behind staging/main; a PR opened against it would be reviewed by nobody.',
+      'GITHUB_BASE must not be "dev" — it is an abandoned branch far behind staging/main; a PR opened against it would be reviewed by nobody.'
     );
   }
 
@@ -465,10 +482,13 @@ export function makeGithubGateway(
   async function requireToken(): Promise<{ token: string }> {
     const result = await auth.token(clock());
     if (result !== null) return result;
-    const hint = config.author === "on-duty" ? "connect GitHub on the dashboard" : "set MONOREPO_PAT";
+    const hint =
+      config.author === "on-duty"
+        ? "connect GitHub on the dashboard"
+        : "set MONOREPO_PAT";
     throw new CapabilityError(
       "capability_unavailable",
-      `no GitHub credential is available for the configured author (${config.author}) — ${hint}. Nothing was opened.`,
+      `no GitHub credential is available for the configured author (${config.author}) — ${hint}. Nothing was opened.`
     );
   }
 
@@ -512,7 +532,10 @@ export function makeGithubGateway(
    * deliberate override — sandbox AND `GITHUB_BASE` both on the planted branch
    * — is `identical` and passes. Only the dangerous direction is refused.
    */
-  async function assertBaseContains(token: string, baseSha: string): Promise<void> {
+  async function assertBaseContains(
+    token: string,
+    baseSha: string
+  ): Promise<void> {
     const url = `${GITHUB_ORIGIN}/repos/${config.repo}/compare/${encodeBranchPath(config.base)}...${baseSha}`;
     const res = await githubFetch(token, "GET", url);
     if (!res.ok) throw await upstreamError(res, redact);
@@ -520,7 +543,7 @@ export function makeGithubGateway(
     if (body.status === "identical" || body.status === "behind") return;
     throw new CapabilityError(
       "invalid_input",
-      `the working tree was cut from commit ${baseSha}, which is not contained in "${config.base}" on ${config.repo} (GitHub compares them as "${body.status ?? "unknown"}"). A pull request from it would carry every commit that is on ${baseSha} and not on "${config.base}", so merging it would land them there. Nothing was pushed. Either point the sandbox at "${config.base}", or set GITHUB_BASE to the branch the sandbox actually checks out.`,
+      `the working tree was cut from commit ${baseSha}, which is not contained in "${config.base}" on ${config.repo} (GitHub compares them as "${body.status ?? "unknown"}"). A pull request from it would carry every commit that is on ${baseSha} and not on "${config.base}", so merging it would land them there. Nothing was pushed. Either point the sandbox at "${config.base}", or set GITHUB_BASE to the branch the sandbox actually checks out.`
     );
   }
 
@@ -528,7 +551,7 @@ export function makeGithubGateway(
   async function findOpenPull(
     token: string,
     branch: string,
-    written?: WrittenContext,
+    written?: WrittenContext
   ): Promise<PullListItem | null> {
     const headOwner = config.headRepo.split("/")[0];
     const qualifiedHead = `${headOwner}:${branch}`;
@@ -546,9 +569,13 @@ export function makeGithubGateway(
    * that actually exists is a false negative the model would act on, sending
    * it to re-request a link it already has.
    */
-  async function fetchAllComments(token: string, number: number): Promise<Comment[]> {
+  async function fetchAllComments(
+    token: string,
+    number: number
+  ): Promise<Comment[]> {
     const out: Comment[] = [];
-    let url: string | null = `${GITHUB_ORIGIN}/repos/${config.repo}/issues/${number}/comments?per_page=100`;
+    let url: string | null =
+      `${GITHUB_ORIGIN}/repos/${config.repo}/issues/${number}/comments?per_page=100`;
     let pages = 0;
     while (url !== null && pages < MAX_COMMENT_PAGES) {
       pages += 1;
@@ -589,7 +616,7 @@ export function makeGithubGateway(
       if (diff === null) {
         throw new CapabilityError(
           "invalid_input",
-          `unknown or expired diffRef "${input.diffRef}"; capture a fresh diff and try again.`,
+          `unknown or expired diffRef "${input.diffRef}"; capture a fresh diff and try again.`
         );
       }
       const { patch, baseSha } = diff;
@@ -614,11 +641,14 @@ export function makeGithubGateway(
         const res = await githubFetch(
           token,
           "GET",
-          `${GITHUB_ORIGIN}/repos/${config.headRepo}/contents/${encodeRepoPath(path)}?ref=${baseSha}`,
+          `${GITHUB_ORIGIN}/repos/${config.headRepo}/contents/${encodeRepoPath(path)}?ref=${baseSha}`
         );
         if (res.status === 404) continue;
         if (!res.ok) throw await upstreamError(res, redact);
-        const body = (await res.json()) as { content?: string; encoding?: string };
+        const body = (await res.json()) as {
+          content?: string;
+          encoding?: string;
+        };
         // A 200 that is not a base64 payload is a REFUSAL, never a skip. The
         // case that matters is a file between 1 MB and 100 MB: the contents
         // API answers those with `encoding: "none"` and `content: ""`, and
@@ -629,7 +659,7 @@ export function makeGithubGateway(
         if (body.encoding !== "base64" || typeof body.content !== "string") {
           throw new CapabilityError(
             "invalid_input",
-            `"${path}" could not be read as base64 through GitHub's contents API (encoding: ${JSON.stringify(body.encoding ?? null)}) — a file over 1 MB is not served that way. This change needs a human pull request; capturing the diff again will not help.`,
+            `"${path}" could not be read as base64 through GitHub's contents API (encoding: ${JSON.stringify(body.encoding ?? null)}) — a file over 1 MB is not served that way. This change needs a human pull request; capturing the diff again will not help.`
           );
         }
         baseMap.set(path, decodeBase64Utf8(body.content, path));
@@ -649,10 +679,15 @@ export function makeGithubGateway(
       const blobShas = new Map<string, string>();
       for (const change of changes) {
         if (change.kind === "delete") continue;
-        const res = await githubFetch(token, "POST", `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/blobs`, {
-          content: change.content,
-          encoding: "utf-8",
-        });
+        const res = await githubFetch(
+          token,
+          "POST",
+          `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/blobs`,
+          {
+            content: change.content,
+            encoding: "utf-8",
+          }
+        );
         if (!res.ok) throw await upstreamError(res, redact);
         const body = (await res.json()) as { sha: string };
         blobShas.set(change.path, body.sha);
@@ -663,10 +698,12 @@ export function makeGithubGateway(
       const baseCommitRes = await githubFetch(
         token,
         "GET",
-        `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/commits/${baseSha}`,
+        `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/commits/${baseSha}`
       );
       if (!baseCommitRes.ok) throw await upstreamError(baseCommitRes, redact);
-      const baseCommit = (await baseCommitRes.json()) as { tree: { sha: string } };
+      const baseCommit = (await baseCommitRes.json()) as {
+        tree: { sha: string };
+      };
 
       // `sha: null` is written EXPLICITLY for a delete, never left to
       // `blobShas.get()`'s `undefined` on a lookup miss: `JSON.stringify`
@@ -676,27 +713,42 @@ export function makeGithubGateway(
       // shape to `toEqual` in a test but very different requests on the wire.
       const treeEntries = changes.map((change) =>
         change.kind === "delete"
-          ? { path: change.path, mode: "100644" as const, type: "blob" as const, sha: null }
+          ? {
+              path: change.path,
+              mode: "100644" as const,
+              type: "blob" as const,
+              sha: null,
+            }
           : {
               path: change.path,
               mode: change.mode,
               type: "blob" as const,
               sha: blobShas.get(change.path),
-            },
+            }
       );
 
-      const treeRes = await githubFetch(token, "POST", `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/trees`, {
-        base_tree: baseCommit.tree.sha,
-        tree: treeEntries,
-      });
+      const treeRes = await githubFetch(
+        token,
+        "POST",
+        `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/trees`,
+        {
+          base_tree: baseCommit.tree.sha,
+          tree: treeEntries,
+        }
+      );
       if (!treeRes.ok) throw await upstreamError(treeRes, redact);
       const tree = (await treeRes.json()) as { sha: string };
 
-      const newCommitRes = await githubFetch(token, "POST", `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/commits`, {
-        message: input.commitMessage,
-        tree: tree.sha,
-        parents: [baseSha],
-      });
+      const newCommitRes = await githubFetch(
+        token,
+        "POST",
+        `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/commits`,
+        {
+          message: input.commitMessage,
+          tree: tree.sha,
+          parents: [baseSha],
+        }
+      );
       if (!newCommitRes.ok) throw await upstreamError(newCommitRes, redact);
       const newCommit = (await newCommitRes.json()) as { sha: string };
 
@@ -717,10 +769,15 @@ export function makeGithubGateway(
       // and a human reads that field: a force-update of an existing branch is
       // not a creation, even when the pull request itself is new.
       let refExisted = false;
-      const createRefRes = await githubFetch(token, "POST", `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/refs`, {
-        ref: `refs/heads/${input.branch}`,
-        sha: newCommit.sha,
-      });
+      const createRefRes = await githubFetch(
+        token,
+        "POST",
+        `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/refs`,
+        {
+          ref: `refs/heads/${input.branch}`,
+          sha: newCommit.sha,
+        }
+      );
       if (createRefRes.ok) {
         written = { branch: input.branch, headRepo: config.headRepo };
       } else if (createRefRes.status === 422) {
@@ -729,7 +786,7 @@ export function makeGithubGateway(
           token,
           "PATCH",
           `${GITHUB_ORIGIN}/repos/${config.headRepo}/git/refs/heads/${encodeBranchPath(input.branch)}`,
-          { sha: newCommit.sha, force: true },
+          { sha: newCommit.sha, force: true }
         );
         if (!patchRefRes.ok) throw await upstreamError(patchRefRes, redact);
         written = { branch: input.branch, headRepo: config.headRepo };
@@ -747,26 +804,42 @@ export function makeGithubGateway(
       let pull: { number: number; html_url: string };
       let updated: boolean;
       if (existing) {
-        const patchRes = await githubFetch(token, "PATCH", `${GITHUB_ORIGIN}/repos/${config.repo}/pulls/${existing.number}`, {
-          title: input.title,
-          body: input.body,
-        });
+        const patchRes = await githubFetch(
+          token,
+          "PATCH",
+          `${GITHUB_ORIGIN}/repos/${config.repo}/pulls/${existing.number}`,
+          {
+            title: input.title,
+            body: input.body,
+          }
+        );
         if (!patchRes.ok) throw await upstreamError(patchRes, redact, written);
         pull = (await patchRes.json()) as { number: number; html_url: string };
         updated = true;
       } else {
-        const postRes = await githubFetch(token, "POST", `${GITHUB_ORIGIN}/repos/${config.repo}/pulls`, {
-          title: input.title,
-          body: input.body,
-          head: qualifiedHead,
-          base: config.base,
-        });
+        const postRes = await githubFetch(
+          token,
+          "POST",
+          `${GITHUB_ORIGIN}/repos/${config.repo}/pulls`,
+          {
+            title: input.title,
+            body: input.body,
+            head: qualifiedHead,
+            base: config.base,
+          }
+        );
         if (!postRes.ok) throw await upstreamError(postRes, redact, written);
         pull = (await postRes.json()) as { number: number; html_url: string };
         updated = refExisted;
       }
 
-      return { number: pull.number, url: pull.html_url, headRef: input.branch, author: login, updated };
+      return {
+        number: pull.number,
+        url: pull.html_url,
+        headRef: input.branch,
+        author: login,
+        updated,
+      };
     },
 
     async findPR(branch): Promise<PullRequestRef | null> {
@@ -775,14 +848,24 @@ export function makeGithubGateway(
       const found = await findOpenPull(token, branch);
       if (found === null) return null;
       const login = await currentLogin(token);
-      return { number: found.number, url: found.html_url, headRef: branch, author: login, updated: true };
+      return {
+        number: found.number,
+        url: found.html_url,
+        headRef: branch,
+        author: login,
+        updated: true,
+      };
     },
 
     async checkPR(number): Promise<PullRequestStatus> {
       assertValidPrNumber(number);
       const { token } = await requireToken();
 
-      const prRes = await githubFetch(token, "GET", `${GITHUB_ORIGIN}/repos/${config.repo}/pulls/${number}`);
+      const prRes = await githubFetch(
+        token,
+        "GET",
+        `${GITHUB_ORIGIN}/repos/${config.repo}/pulls/${number}`
+      );
       if (!prRes.ok) throw await upstreamError(prRes, redact);
       const pr = (await prRes.json()) as {
         state: string;
@@ -791,17 +874,32 @@ export function makeGithubGateway(
         head: { ref: string };
         base: { ref: string };
       };
-      const state: PullRequestStatus["state"] = pr.merged ? "merged" : pr.state === "open" ? "open" : "closed";
+      const state: PullRequestStatus["state"] = pr.merged
+        ? "merged"
+        : pr.state === "open"
+          ? "open"
+          : "closed";
 
       const comments = await fetchAllComments(token, number);
-      const linkback = comments.find((c) => LINEAR_BOT_LOGIN.test(c.user?.login ?? ""));
+      const linkback = comments.find((c) =>
+        LINEAR_BOT_LOGIN.test(c.user?.login ?? "")
+      );
 
       const linearLinkback =
         linkback === undefined
           ? { commented: false, identifiers: [] }
-          : { commented: true, identifiers: extractIdentifiers(linkback.body ?? "") };
+          : {
+              commented: true,
+              identifiers: extractIdentifiers(linkback.body ?? ""),
+            };
 
-      return { state, url: pr.html_url, headRef: pr.head.ref, baseRef: pr.base.ref, linearLinkback };
+      return {
+        state,
+        url: pr.html_url,
+        headRef: pr.head.ref,
+        baseRef: pr.base.ref,
+        linearLinkback,
+      };
     },
 
     async searchPRs(query, limit): Promise<PullRequestMatch[]> {
@@ -821,7 +919,11 @@ export function makeGithubGateway(
         per_page: String(limit),
         advanced_search: "true",
       });
-      const res = await githubFetch(token, "GET", `${GITHUB_ORIGIN}/search/issues?${params}`);
+      const res = await githubFetch(
+        token,
+        "GET",
+        `${GITHUB_ORIGIN}/search/issues?${params}`
+      );
       if (!res.ok) throw await upstreamError(res, redact);
       const body = (await res.json()) as {
         items?: Array<{
@@ -838,7 +940,11 @@ export function makeGithubGateway(
         number: item.number,
         title: item.title,
         // The search shape says `closed` for merged too; `merged_at` is the tell.
-        state: item.pull_request?.merged_at ? "merged" : item.state === "open" ? "open" : "closed",
+        state: item.pull_request?.merged_at
+          ? "merged"
+          : item.state === "open"
+            ? "open"
+            : "closed",
         url: item.html_url,
         author: item.user?.login ?? "",
         updatedAt: item.updated_at,

@@ -56,7 +56,10 @@ function fromBase64(value: string): Uint8Array {
 }
 
 function toBase64Url(bytes: Uint8Array): string {
-  return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return toBase64(bytes)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 function fromBase64Url(value: string): Uint8Array {
@@ -76,10 +79,13 @@ function fromBase64Url(value: string): Uint8Array {
  */
 export async function importStateKey(base64Secret: string): Promise<CryptoKey> {
   const bytes = fromBase64(base64Secret);
-  return crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-    "verify",
-  ]);
+  return crypto.subtle.importKey(
+    "raw",
+    bytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"]
+  );
 }
 
 /** `payload.signature`, both base64url. */
@@ -87,7 +93,7 @@ export async function mintState(
   key: CryptoKey,
   email: string,
   provider: Provider,
-  nowMs: number,
+  nowMs: number
 ): Promise<string> {
   const payload: StatePayload = {
     e: email,
@@ -95,8 +101,14 @@ export async function mintState(
     x: nowMs + STATE_TTL_MS,
     n: toBase64(crypto.getRandomValues(new Uint8Array(NONCE_BYTES))),
   };
-  const encoded = toBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(encoded));
+  const encoded = toBase64Url(
+    new TextEncoder().encode(JSON.stringify(payload))
+  );
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(encoded)
+  );
   return `${encoded}.${toBase64Url(new Uint8Array(sig))}`;
 }
 
@@ -116,7 +128,7 @@ export async function verifyState(
   key: CryptoKey,
   state: string,
   provider: Provider,
-  nowMs: number,
+  nowMs: number
 ): Promise<{ email: string } | null> {
   try {
     const parts = state.split(".");
@@ -127,11 +139,13 @@ export async function verifyState(
       "HMAC",
       key,
       fromBase64Url(sigSegment),
-      new TextEncoder().encode(encoded),
+      new TextEncoder().encode(encoded)
     );
     if (!valid) return null;
 
-    const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(encoded))) as StatePayload;
+    const payload = JSON.parse(
+      new TextDecoder().decode(fromBase64Url(encoded))
+    ) as StatePayload;
     if (typeof payload.e !== "string" || payload.e.length === 0) return null;
     if (payload.p !== provider) return null;
     if (typeof payload.x !== "number" || nowMs >= payload.x) return null;

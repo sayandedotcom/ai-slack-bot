@@ -2,8 +2,16 @@ import { Hono } from "hono";
 import type { Env } from "../index";
 import { requireTeamMember } from "./identity";
 import { detectAiTells, type AiTell } from "../eval/ai-tells";
-import { scoreTriage, type TriageOutcomeRow, type TriageScore } from "../eval/triage-eval";
-import type { ApprovalsRow, MessagesRow, TriageDecisionsRow } from "../db/schema";
+import {
+  scoreTriage,
+  type TriageOutcomeRow,
+  type TriageScore,
+} from "../eval/triage-eval";
+import type {
+  ApprovalsRow,
+  MessagesRow,
+  TriageDecisionsRow,
+} from "../db/schema";
 
 /**
  * The eval API: how good was the triage decision, and how close was the shadow
@@ -155,7 +163,12 @@ SELECT m.text, m.permalink, m.ts
  * cleared should get the narrowest honest window back, not a 400 it has to
  * render as an error.
  */
-function clampInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+function clampInt(
+  raw: string | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): number {
   const parsed = Number.parseInt(raw ?? "", 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
@@ -164,7 +177,7 @@ function clampInt(raw: string | undefined, fallback: number, min: number, max: n
 /** One `db.batch` per `BATCH_SIZE` statements, results in input order. */
 async function batched<T>(
   db: D1Database,
-  statements: D1PreparedStatement[],
+  statements: D1PreparedStatement[]
 ): Promise<D1Result<T>[]> {
   const out: D1Result<T>[] = [];
   for (let i = 0; i < statements.length; i += BATCH_SIZE) {
@@ -176,7 +189,13 @@ async function batched<T>(
 type DecisionRow = Pick<TriageDecisionsRow, "event_id" | "wake" | "why"> &
   Pick<
     MessagesRow,
-    "text" | "permalink" | "channel_id" | "ts" | "thread_ts" | "user_id" | "received_at"
+    | "text"
+    | "permalink"
+    | "channel_id"
+    | "ts"
+    | "thread_ts"
+    | "user_id"
+    | "received_at"
   >;
 
 /* ---------------------------------------------------------------- routes --- */
@@ -205,12 +224,15 @@ evalApi.get("/eval/triage", async (c) => {
   // about. `<=` on the boundary: at exactly 24h the window has fully elapsed.
   const ripeBefore = now - DAY_MS;
 
-  const [decisions, unripe] = await c.env.DB.batch<DecisionRow | { unripe: number }>([
+  const [decisions, unripe] = await c.env.DB.batch<
+    DecisionRow | { unripe: number }
+  >([
     c.env.DB.prepare(DECISIONS_SQL).bind(since, ripeBefore),
     c.env.DB.prepare(UNRIPE_COUNT_SQL).bind(since, ripeBefore),
   ]);
   const rows = (decisions?.results ?? []) as DecisionRow[];
-  const unripeExcluded = ((unripe?.results ?? []) as { unripe: number }[])[0]?.unripe ?? 0;
+  const unripeExcluded =
+    ((unripe?.results ?? []) as { unripe: number }[])[0]?.unripe ?? 0;
 
   /**
    * The engagement lookup runs once per decision, as the ground-truth statement
@@ -237,8 +259,8 @@ evalApi.get("/eval/triage", async (c) => {
       row.thread_ts ?? row.ts,
       row.user_id ?? "",
       row.received_at,
-      row.received_at,
-    ),
+      row.received_at
+    )
   );
   const engaged = await batched<{ 1: number }>(c.env.DB, lookups);
 
@@ -255,7 +277,12 @@ evalApi.get("/eval/triage", async (c) => {
   // `truncated` says the window held at least MAX_DECISIONS scoreable rows, so
   // `score` describes the NEWEST MAX_DECISIONS of them rather than the window.
   // The bound is deliberate; reporting it is what stops it being a silent lie.
-  return c.json({ score, windowDays, unripeExcluded, truncated: rows.length === MAX_DECISIONS });
+  return c.json({
+    score,
+    windowDays,
+    unripeExcluded,
+    truncated: rows.length === MAX_DECISIONS,
+  });
 });
 
 /**
@@ -272,16 +299,25 @@ evalApi.get("/eval/shadow", async (c) => {
 
   const limit = clampInt(c.req.query("limit"), 20, 1, 50);
 
-  const suppressed = await c.env.DB.prepare(SUPPRESSED_SQL).bind(limit).all<
-    Pick<ApprovalsRow, "id" | "draft" | "why" | "created_at" | "channel_id" | "thread_ts">
-  >();
+  const suppressed = await c.env.DB.prepare(SUPPRESSED_SQL)
+    .bind(limit)
+    .all<
+      Pick<
+        ApprovalsRow,
+        "id" | "draft" | "why" | "created_at" | "channel_id" | "thread_ts"
+      >
+    >();
   const rows = suppressed.results ?? [];
 
   const replies = await batched<Pick<MessagesRow, "text" | "permalink" | "ts">>(
     c.env.DB,
     rows.map((row) =>
-      c.env.DB.prepare(HUMAN_REPLY_SQL).bind(row.channel_id, row.thread_ts, row.created_at),
-    ),
+      c.env.DB.prepare(HUMAN_REPLY_SQL).bind(
+        row.channel_id,
+        row.thread_ts,
+        row.created_at
+      )
+    )
   );
 
   const pairs = rows.map((row, i) => {

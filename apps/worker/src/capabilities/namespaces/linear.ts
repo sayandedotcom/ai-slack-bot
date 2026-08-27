@@ -3,7 +3,11 @@ import { z } from "zod";
 import type { ClassifiedTool } from "../define";
 import type { JsonObject } from "../../run/protocol";
 import { runEffect } from "../effects";
-import { auditedCapability, effectDeps, type BindingContext } from "../registry";
+import {
+  auditedCapability,
+  effectDeps,
+  type BindingContext,
+} from "../registry";
 
 const level = z.enum(["low", "medium", "high"]);
 
@@ -20,7 +24,9 @@ const assessment = z.strictObject({
   evidence: z.string().min(1).max(2000),
 });
 
-export function makeLinearTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeLinearTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     createIssue: auditedCapability(ctx, "linear", "createIssue", {
       effect: "external_write",
@@ -43,7 +49,7 @@ export function makeLinearTools(ctx: BindingContext): Record<string, ClassifiedT
           .max(10)
           .optional()
           .describe(
-            "Always label. Linear label NAMES, matched case-insensitively — a name that does not exist is dropped without error, so use these exact ones: 'Bug' (something is broken), 'Improvement' (existing behaviour made better), 'Feature' (new behaviour); add 'Customer Request' when a customer asked for it, and 'Support thread' when it came out of a customer Slack channel. Never a name starting with '!' — those hand the issue to another team's automation.",
+            "Always label. Linear label NAMES, matched case-insensitively — a name that does not exist is dropped without error, so use these exact ones: 'Bug' (something is broken), 'Improvement' (existing behaviour made better), 'Feature' (new behaviour); add 'Customer Request' when a customer asked for it, and 'Support thread' when it came out of a customer Slack channel. Never a name starting with '!' — those hand the issue to another team's automation."
           ),
       }),
       output: z.strictObject({
@@ -52,7 +58,10 @@ export function makeLinearTools(ctx: BindingContext): Record<string, ClassifiedT
         url: z.string(),
       }),
       run: async (input) => {
-        const description = renderDescription(input.description, input.assessment);
+        const description = renderDescription(
+          input.description,
+          input.assessment
+        );
         // Normalized ONCE and used for both the key and the request, so the key
         // describes exactly what was sent. The assessment needs no key field of
         // its own: renderDescription folds it into `description`, which is in
@@ -83,8 +92,9 @@ export function makeLinearTools(ctx: BindingContext): Record<string, ClassifiedT
             // Turns an ambiguous 5xx into a decidable question. The create
             // supplies its own id, so "did this get filed?" is an exact lookup
             // rather than a guess at matching titles.
-            reconcile: (idempotencyKey) => ctx.deps.linear.findIssue(idempotencyKey),
-          },
+            reconcile: (idempotencyKey) =>
+              ctx.deps.linear.findIssue(idempotencyKey),
+          }
         );
       },
     }),
@@ -113,7 +123,10 @@ export function makeLinearTools(ctx: BindingContext): Record<string, ClassifiedT
         // the gateway is the real guard; this is defence in depth on top of
         // it, cheap because the model never has a legitimate reason to type
         // anything else here.
-        identifier: z.string().regex(/^[A-Z][A-Z0-9]*-\d+$/).max(40),
+        identifier: z
+          .string()
+          .regex(/^[A-Z][A-Z0-9]*-\d+$/)
+          .max(40),
       }),
       output: z
         .strictObject({
@@ -151,7 +164,8 @@ export function makeLinearTools(ctx: BindingContext): Record<string, ClassifiedT
         // X", so they must not hash alike.
         const patch: JsonObject = { issueId: input.issueId };
         if (input.title !== undefined) patch.title = input.title;
-        if (input.description !== undefined) patch.description = input.description;
+        if (input.description !== undefined)
+          patch.description = input.description;
         if (input.state !== undefined) patch.state = input.state;
 
         return runEffect(
@@ -169,7 +183,7 @@ export function makeLinearTools(ctx: BindingContext): Record<string, ClassifiedT
             // guessed at. The ledger reservation still gives the property that
             // matters here — a retry of this turn cannot apply the edit twice.
             execute: () => ctx.deps.linear.updateIssue(input),
-          },
+          }
         );
       },
     }),
@@ -186,7 +200,9 @@ export function makeLinearTools(ctx: BindingContext): Record<string, ClassifiedT
  * sent.
  */
 function normalizeLabels(labels: string[] | undefined): string[] {
-  return [...new Set((labels ?? []).map((label) => label.normalize("NFC")))].sort();
+  return [
+    ...new Set((labels ?? []).map((label) => label.normalize("NFC"))),
+  ].sort();
 }
 
 /**
@@ -200,7 +216,7 @@ function normalizeLabels(labels: string[] | undefined): string[] {
  */
 function renderDescription(
   body: string,
-  a: z.infer<typeof assessment>,
+  a: z.infer<typeof assessment>
 ): string {
   return [
     body,

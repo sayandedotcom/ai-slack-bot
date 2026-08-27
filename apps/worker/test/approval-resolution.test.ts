@@ -4,14 +4,22 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { UIMessage } from "ai";
 
-import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
+import {
+  AccessJwtError,
+  type AccessIdentity,
+  type AccessVerifier,
+} from "../src/access/jwt";
 import {
   installApprovalApiPorts,
   resetApprovalApiPorts,
   sweepUndeliveredApprovals,
 } from "../src/api/approvals";
 import { makeRunAgentResolutionNotifier } from "../src/approval/notifier";
-import { decideApproval, getApproval, insertApproval } from "../src/approval/repository";
+import {
+  decideApproval,
+  getApproval,
+  insertApproval,
+} from "../src/approval/repository";
 import type { ApprovalSender } from "../src/approval/sender";
 import { installTestModel, resetTestModel } from "../src/run/model";
 import { getRunByKey, setRunStatus } from "../src/run/repository";
@@ -28,15 +36,23 @@ function fakeVerifier(): AccessVerifier {
   return {
     async verify(jwt: string): Promise<AccessIdentity> {
       if (!jwt) throw new AccessJwtError("missing", "no token was supplied");
-      if (!jwt.includes("@")) throw new AccessJwtError("malformed", "not an email-shaped token");
+      if (!jwt.includes("@"))
+        throw new AccessJwtError("malformed", "not an email-shaped token");
       return { email: jwt };
     },
   };
 }
 
 /** A sender whose outcome the test picks, so `sent` and `in_doubt` are reachable. */
-function sender(result: ApprovalSender extends never ? never : "sent" | "blocked" | "in_doubt") {
-  const calls: { text: string; channelId: string; threadTs: string; decidedBy: string | null }[] = [];
+function sender(
+  result: ApprovalSender extends never ? never : "sent" | "blocked" | "in_doubt"
+) {
+  const calls: {
+    text: string;
+    channelId: string;
+    threadTs: string;
+    decidedBy: string | null;
+  }[] = [];
   const port: ApprovalSender = {
     async send(input) {
       calls.push({
@@ -46,7 +62,8 @@ function sender(result: ApprovalSender extends never ? never : "sent" | "blocked
         decidedBy: input.decidedBy,
       });
       if (result === "sent") return { result: "sent", ts: "1720000000.000200" };
-      if (result === "blocked") return { result: "blocked", reason: "identity_unavailable" };
+      if (result === "blocked")
+        return { result: "blocked", reason: "identity_unavailable" };
       return { result: "in_doubt", reason: "send attempted; outcome unknown" };
     },
   };
@@ -56,9 +73,11 @@ function sender(result: ApprovalSender extends never ? never : "sent" | "blocked
 let channelSeq = 0;
 async function liveChannel(): Promise<string> {
   channelSeq += 1;
-  const channelId = `CRES${channelSeq}${Math.floor(Math.random() * 1e5)}`.toUpperCase().slice(0, 20);
+  const channelId = `CRES${channelSeq}${Math.floor(Math.random() * 1e5)}`
+    .toUpperCase()
+    .slice(0, 20);
   await env.DB.prepare(
-    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'pulsefit', 'live')",
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'pulsefit', 'live')"
   )
     .bind(channelId, `ext-${channelId.toLowerCase()}`)
     .run();
@@ -86,7 +105,9 @@ async function parkedRun(options: { shadow?: boolean } = {}) {
   const run = await getRunByKey(env.DB, key);
   if (run === null) throw new Error("the wake wrote no run row");
   if (options.shadow === true) {
-    await env.DB.prepare("UPDATE runs SET shadow = 1 WHERE id = ?").bind(run.id).run();
+    await env.DB.prepare("UPDATE runs SET shadow = 1 WHERE id = ?")
+      .bind(run.id)
+      .run();
   }
 
   const approvalId = `apr:${crypto.randomUUID()}`;
@@ -115,15 +136,19 @@ async function parkedRun(options: { shadow?: boolean } = {}) {
  * explicit type arguments widens `state` to `never`, and naming only the one
  * method this reads keeps the helper honest about what it touches.
  */
-async function userTexts(stub: { getMessages(): Promise<UIMessage[]> }): Promise<string[]> {
+async function userTexts(stub: {
+  getMessages(): Promise<UIMessage[]>;
+}): Promise<string[]> {
   const messages = await stub.getMessages();
   return messages
     .filter((message) => message.role === "user")
     .map((message) =>
       message.parts
-        .filter((part): part is { type: "text"; text: string } => part.type === "text")
+        .filter(
+          (part): part is { type: "text"; text: string } => part.type === "text"
+        )
         .map((part) => part.text)
-        .join(""),
+        .join("")
     );
 }
 
@@ -140,9 +165,18 @@ describe("delivering a decision into its run", () => {
   it("unparks the run and submits the approved text", async () => {
     const { run, approvalId, stub } = await parkedRun();
     const outbound = sender("blocked");
-    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
+    await decideApproval(
+      env.DB,
+      approvalId,
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
 
-    const outcome = await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify({
+    const outcome = await makeRunAgentResolutionNotifier({
+      env,
+      sender: outbound.port,
+    }).notify({
       runId: run.id,
       approvalId,
       decision: "approved",
@@ -172,20 +206,24 @@ describe("delivering a decision into its run", () => {
       approvalId,
       { action: "edit", text: "We'll credit the last invoice instead." },
       FIREFIGHTER,
-      Date.now(),
+      Date.now()
     );
 
-    await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify({
-      runId: run.id,
-      approvalId,
-      decision: "edited",
-      outboundText: "We'll credit the last invoice instead.",
-      rejectReason: null,
-      decidedBy: FIREFIGHTER,
-    });
+    await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify(
+      {
+        runId: run.id,
+        approvalId,
+        decision: "edited",
+        outboundText: "We'll credit the last invoice instead.",
+        rejectReason: null,
+        decidedBy: FIREFIGHTER,
+      }
+    );
 
     // The edited text is what goes to the customer, byte-exact.
-    expect(outbound.calls[0].text).toBe("We'll credit the last invoice instead.");
+    expect(outbound.calls[0].text).toBe(
+      "We'll credit the last invoice instead."
+    );
     const resolution = await waitFor("the resolution turn", async () => {
       const texts = await userTexts(stub);
       return texts.find((text) => text.includes("EDITED")) ?? null;
@@ -203,20 +241,24 @@ describe("delivering a decision into its run", () => {
       approvalId,
       { action: "reject", reason: "we do not promise refunds" },
       FIREFIGHTER,
-      Date.now(),
+      Date.now()
     );
 
-    await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify({
-      runId: run.id,
-      approvalId,
-      decision: "rejected",
-      outboundText: null,
-      rejectReason: "we do not promise refunds",
-      decidedBy: FIREFIGHTER,
-    });
+    await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify(
+      {
+        runId: run.id,
+        approvalId,
+        decision: "rejected",
+        outboundText: null,
+        rejectReason: "we do not promise refunds",
+        decidedBy: FIREFIGHTER,
+      }
+    );
 
     expect(outbound.calls).toEqual([]);
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ delivery: "none" });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      delivery: "none",
+    });
     const resolution = await waitFor("the resolution turn", async () => {
       const texts = await userTexts(stub);
       return texts.find((text) => text.includes("REJECTED")) ?? null;
@@ -228,8 +270,17 @@ describe("delivering a decision into its run", () => {
     // Invariant 12: D1 records which engineer clicked because the dashboard and
     // later audits need it. A run's answer must not change with who was on duty.
     const { run, approvalId, stub } = await parkedRun();
-    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
-    await makeRunAgentResolutionNotifier({ env, sender: sender("blocked").port }).notify({
+    await decideApproval(
+      env.DB,
+      approvalId,
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
+    await makeRunAgentResolutionNotifier({
+      env,
+      sender: sender("blocked").port,
+    }).notify({
       runId: run.id,
       approvalId,
       decision: "approved",
@@ -249,8 +300,17 @@ describe("delivering a decision into its run", () => {
     // Idempotency replaces the delivered-CAS: the cron re-submits
     // `approval:{id}` unconditionally and the submission queue refuses repeats.
     const { run, approvalId, stub } = await parkedRun();
-    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
-    const notifier = makeRunAgentResolutionNotifier({ env, sender: sender("blocked").port });
+    await decideApproval(
+      env.DB,
+      approvalId,
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
+    const notifier = makeRunAgentResolutionNotifier({
+      env,
+      sender: sender("blocked").port,
+    });
     const notification = {
       runId: run.id,
       approvalId,
@@ -267,7 +327,9 @@ describe("delivering a decision into its run", () => {
       return texts.find((text) => text.includes("APPROVED")) ?? null;
     });
 
-    const resolutions = (await userTexts(stub)).filter((text) => text.includes("APPROVED"));
+    const resolutions = (await userTexts(stub)).filter((text) =>
+      text.includes("APPROVED")
+    );
     expect(resolutions).toHaveLength(1);
   });
 
@@ -276,8 +338,17 @@ describe("delivering a decision into its run", () => {
     // attempt is refused by the delivery CAS and reported as in doubt.
     const { run, approvalId } = await parkedRun();
     const outbound = sender("sent");
-    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
-    const notifier = makeRunAgentResolutionNotifier({ env, sender: outbound.port });
+    await decideApproval(
+      env.DB,
+      approvalId,
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
+    const notifier = makeRunAgentResolutionNotifier({
+      env,
+      sender: outbound.port,
+    });
     const notification = {
       runId: run.id,
       approvalId,
@@ -291,47 +362,73 @@ describe("delivering a decision into its run", () => {
     await notifier.notify(notification);
 
     expect(outbound.calls).toHaveLength(1);
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ delivery: "sent" });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      delivery: "sent",
+    });
   });
 
   it("suppresses the send for a shadow run and still resolves it", async () => {
     const { run, approvalId, stub } = await parkedRun({ shadow: true });
     const outbound = sender("sent");
-    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
-
-    await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify({
-      runId: run.id,
+    await decideApproval(
+      env.DB,
       approvalId,
-      decision: "approved",
-      outboundText: "We can refund the last invoice.",
-      rejectReason: null,
-      decidedBy: FIREFIGHTER,
-    });
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
+
+    await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify(
+      {
+        runId: run.id,
+        approvalId,
+        decision: "approved",
+        outboundText: "We can refund the last invoice.",
+        rejectReason: null,
+        decidedBy: FIREFIGHTER,
+      }
+    );
 
     expect(outbound.calls).toEqual([]);
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ delivery: "suppressed" });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      delivery: "suppressed",
+    });
     const resolution = await waitFor("the resolution turn", async () => {
       const texts = await userTexts(stub);
       return texts.find((text) => text.includes("APPROVED")) ?? null;
     });
-    expect(resolution).toContain("shadowing a conversation it must never write to");
+    expect(resolution).toContain(
+      "shadowing a conversation it must never write to"
+    );
   });
 
   it("sends to the run's own pinned thread, never the card's copy of it", async () => {
     const { run, approvalId, channelId, threadTs } = await parkedRun();
     const outbound = sender("sent");
-    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
-
-    await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify({
-      runId: run.id,
+    await decideApproval(
+      env.DB,
       approvalId,
-      decision: "approved",
-      outboundText: "text",
-      rejectReason: null,
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
+
+    await makeRunAgentResolutionNotifier({ env, sender: outbound.port }).notify(
+      {
+        runId: run.id,
+        approvalId,
+        decision: "approved",
+        outboundText: "text",
+        rejectReason: null,
+        decidedBy: FIREFIGHTER,
+      }
+    );
+
+    expect(outbound.calls[0]).toMatchObject({
+      channelId,
+      threadTs,
       decidedBy: FIREFIGHTER,
     });
-
-    expect(outbound.calls[0]).toMatchObject({ channelId, threadTs, decidedBy: FIREFIGHTER });
   });
 });
 
@@ -369,7 +466,13 @@ describe("a resolution that cannot be delivered", () => {
     // approved text into another customer's run.
     const first = await parkedRun();
     const second = await parkedRun();
-    await decideApproval(env.DB, first.approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
+    await decideApproval(
+      env.DB,
+      first.approvalId,
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
 
     const outcome = await makeRunAgentResolutionNotifier({ env }).notify({
       runId: second.run.id,
@@ -380,7 +483,9 @@ describe("a resolution that cannot be delivered", () => {
       decidedBy: FIREFIGHTER,
     });
     expect(outcome).toEqual({ applied: false });
-    expect((await second.stub.runStateForTest()).openApprovalId).toBe(second.approvalId);
+    expect((await second.stub.runStateForTest()).openApprovalId).toBe(
+      second.approvalId
+    );
   });
 });
 
@@ -388,7 +493,10 @@ describe("the route that carries the click", () => {
   async function patch(approvalId: string, body: unknown, token: string) {
     return SELF.fetch(`https://firefighter.test/api/approvals/${approvalId}`, {
       method: "PATCH",
-      headers: { "Cf-Access-Jwt-Assertion": token, "content-type": "application/json" },
+      headers: {
+        "Cf-Access-Jwt-Assertion": token,
+        "content-type": "application/json",
+      },
       body: JSON.stringify(body),
     });
   }
@@ -402,12 +510,17 @@ describe("the route that carries the click", () => {
 
     const res = await patch(approvalId, { action: "approve" }, FIREFIGHTER);
     expect(res.status).toBe(200);
-    const body = await res.json<{ resolutionDelivered: boolean; approval: { delivery: string } }>();
+    const body = await res.json<{
+      resolutionDelivered: boolean;
+      approval: { delivery: string };
+    }>();
     expect(body.resolutionDelivered).toBe(true);
     // The response is re-read AFTER the notify settles, so it reports the
     // delivery state the run actually reached rather than the pre-notify one.
     expect(body.approval.delivery).toBe("blocked");
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ decision: "approved" });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      decision: "approved",
+    });
     expect((await stub.runStateForTest()).openApprovalId).toBeNull();
     expect(run.id).toBeTruthy();
   });
@@ -418,7 +531,9 @@ describe("the route that carries the click", () => {
 
     const res = await patch(approvalId, { action: "approve" }, VIEWER);
     expect(res.status).toBe(403);
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ decision: "pending" });
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      decision: "pending",
+    });
     // The run is still parked: nothing reached it.
     expect((await stub.runStateForTest()).openApprovalId).toBe(approvalId);
   });
@@ -426,32 +541,52 @@ describe("the route that carries the click", () => {
   it("still refuses an unverifiable token", async () => {
     installApprovalApiPorts({ verifier: fakeVerifier() });
     const { approvalId } = await parkedRun();
-    expect((await patch(approvalId, { action: "approve" }, "")).status).toBe(401);
-    expect(await getApproval(env.DB, approvalId)).toMatchObject({ decision: "pending" });
+    expect((await patch(approvalId, { action: "approve" }, "")).status).toBe(
+      401
+    );
+    expect(await getApproval(env.DB, approvalId)).toMatchObject({
+      decision: "pending",
+    });
   });
 
   it("409s a second click, carrying the decision that won", async () => {
     installApprovalApiPorts({ verifier: fakeVerifier() });
     const { approvalId } = await parkedRun();
 
-    expect((await patch(approvalId, { action: "approve" }, FIREFIGHTER)).status).toBe(200);
-    const second = await patch(approvalId, { action: "reject", reason: "no" }, FIREFIGHTER);
+    expect(
+      (await patch(approvalId, { action: "approve" }, FIREFIGHTER)).status
+    ).toBe(200);
+    const second = await patch(
+      approvalId,
+      { action: "reject", reason: "no" },
+      FIREFIGHTER
+    );
     expect(second.status).toBe(409);
-    expect(await second.json<{ decision: string }>()).toMatchObject({ decision: "approved" });
+    expect(await second.json<{ decision: string }>()).toMatchObject({
+      decision: "approved",
+    });
   });
 
   it("re-drives an undelivered resolution from the sweep", async () => {
     installApprovalApiPorts({ verifier: fakeVerifier() });
     const { run, approvalId, stub } = await parkedRun();
     // Decided in D1 with no notify at all: the state a crashed PATCH leaves.
-    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
+    await decideApproval(
+      env.DB,
+      approvalId,
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
 
     // One page per sweep, and this pool's D1 is shared across files, so the
     // row is not guaranteed to be on the first page. Repeating is what the
     // cron does anyway — once a minute, forever.
     await waitFor("the sweep to reach this row", async () => {
       await sweepUndeliveredApprovals(env);
-      return (await stub.runStateForTest()).openApprovalId === null ? true : null;
+      return (await stub.runStateForTest()).openApprovalId === null
+        ? true
+        : null;
     });
 
     const resolution = await waitFor("the swept resolution turn", async () => {
@@ -466,8 +601,17 @@ describe("the route that carries the click", () => {
 describe("a resolved run", () => {
   it("is not re-parked by the resolution it just took", async () => {
     const { run, approvalId, stub } = await parkedRun();
-    await decideApproval(env.DB, approvalId, { action: "approve" }, FIREFIGHTER, Date.now());
-    await makeRunAgentResolutionNotifier({ env, sender: sender("blocked").port }).notify({
+    await decideApproval(
+      env.DB,
+      approvalId,
+      { action: "approve" },
+      FIREFIGHTER,
+      Date.now()
+    );
+    await makeRunAgentResolutionNotifier({
+      env,
+      sender: sender("blocked").port,
+    }).notify({
       runId: run.id,
       approvalId,
       decision: "approved",

@@ -13,7 +13,10 @@ import { classify } from "./rules";
  * Permalink resolution is deliberately absent — Task 4 adds it as a backfill.
  * The D1 write must never depend on a network call succeeding.
  */
-export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: Env): Promise<void> {
+export async function handleIngestBatch(
+  batch: MessageBatch<QueuedEvent>,
+  env: Env
+): Promise<void> {
   for (const message of batch.messages) {
     const { event_id, event, received_at } = message.body;
 
@@ -80,9 +83,15 @@ export async function handleIngestBatch(batch: MessageBatch<QueuedEvent>, env: E
 
     // Insert first, enrich second. A Slack API outage costs permalinks, never
     // messages — getPermalink swallows every failure and returns null.
-    const permalink = await getPermalink(env.SLACK_BOT_TOKEN, event.channel, event.ts);
+    const permalink = await getPermalink(
+      env.SLACK_BOT_TOKEN,
+      event.channel,
+      event.ts
+    );
     if (permalink) {
-      await env.DB.prepare("UPDATE messages SET permalink = ? WHERE event_id = ?")
+      await env.DB.prepare(
+        "UPDATE messages SET permalink = ? WHERE event_id = ?"
+      )
         .bind(permalink, event_id)
         .run();
     }

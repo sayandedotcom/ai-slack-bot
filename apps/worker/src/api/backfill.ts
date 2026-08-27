@@ -11,14 +11,14 @@ import type { MessagesRow } from "../db/schema";
 export async function backfillMemory(
   db: D1Database,
   queue: Queue<MemoryJob>,
-  limit: number,
+  limit: number
 ): Promise<number> {
   const { results } = await db
     .prepare(
       `SELECT m.event_id FROM messages m
        LEFT JOIN zep_episodes z ON z.event_id = m.event_id
        WHERE z.event_id IS NULL
-       ORDER BY m.received_at ASC LIMIT ?`,
+       ORDER BY m.received_at ASC LIMIT ?`
     )
     .bind(limit)
     .all<Pick<MessagesRow, "event_id">>();

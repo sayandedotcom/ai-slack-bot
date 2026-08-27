@@ -36,7 +36,10 @@ export const CAPABILITY_EFFECTS = [
 export type CapabilityEffect = (typeof CAPABILITY_EFFECTS)[number];
 
 export function isCapabilityEffect(value: unknown): value is CapabilityEffect {
-  return typeof value === "string" && (CAPABILITY_EFFECTS as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (CAPABILITY_EFFECTS as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -81,13 +84,15 @@ export function formatZodIssues(error: z.ZodError): string {
   return `the arguments are not valid (${issues})`;
 }
 
-export function defineCapability<I, O>(spec: CapabilitySpec<I, O>): ClassifiedTool {
+export function defineCapability<I, O>(
+  spec: CapabilitySpec<I, O>
+): ClassifiedTool {
   if (!isCapabilityEffect(spec.effect)) {
     // Reachable from JavaScript callers and from a bad cast, so it is a runtime
     // check and not only a type.
     throw new CapabilityError(
       "invalid_context",
-      "capability declares no effect, or an unknown one",
+      "capability declares no effect, or an unknown one"
     );
   }
 
@@ -103,7 +108,10 @@ export function defineCapability<I, O>(spec: CapabilitySpec<I, O>): ClassifiedTo
     run: async (input: unknown) => {
       const parsed = spec.input.safeParse(input);
       if (!parsed.success) {
-        throw new CapabilityError("invalid_input", formatZodIssues(parsed.error));
+        throw new CapabilityError(
+          "invalid_input",
+          formatZodIssues(parsed.error)
+        );
       }
       return spec.run(parsed.data);
     },
@@ -125,12 +133,15 @@ export function capabilityEffectOf(tool: unknown): CapabilityEffect | null {
  * that hand-rolled a tool object — and therefore skipped the audit wrapper and
  * the write guard — fails at construction rather than at the first call.
  */
-export function assertClassified(namespace: string, tools: Record<string, unknown>): void {
+export function assertClassified(
+  namespace: string,
+  tools: Record<string, unknown>
+): void {
   for (const [method, tool] of Object.entries(tools)) {
     if (capabilityEffectOf(tool) === null) {
       throw new CapabilityError(
         "invalid_context",
-        `capability ${namespace}.${method} is not classified`,
+        `capability ${namespace}.${method} is not classified`
       );
     }
   }

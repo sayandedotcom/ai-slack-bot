@@ -17,7 +17,11 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import type { Env } from "../index";
 import { TERMINAL_RUN_STATUSES } from "../run/protocol";
-import { MONOREPO_SLUG, PLACEHOLDER_CREDENTIAL, assertGitSentinel } from "./class";
+import {
+  MONOREPO_SLUG,
+  PLACEHOLDER_CREDENTIAL,
+  assertGitSentinel,
+} from "./class";
 import type { RunsRow } from "../db/schema";
 
 export type BootState = "provisioning" | "ready" | "failed";
@@ -56,7 +60,7 @@ export interface SandboxLifecycle {
 export type SandboxHandle = {
   exec(
     command: string,
-    options?: { timeout?: number; cwd?: string },
+    options?: { timeout?: number; cwd?: string }
   ): Promise<{ exitCode: number; stdout: string; stderr: string }>;
   killAllProcesses(): Promise<number>;
   startProcess(
@@ -66,7 +70,7 @@ export type SandboxHandle = {
       autoCleanup?: boolean;
       cwd?: string;
       env?: Record<string, string | undefined>;
-    },
+    }
   ): Promise<{ id: string }>;
   getProcess(id: string): Promise<ProcessSnapshot | null>;
   getProcessLogs(id: string): Promise<{ stdout: string; stderr: string }>;
@@ -265,12 +269,17 @@ const defaultSleep = (ms: number): Promise<void> =>
  */
 const inflightBoots = new Map<string, Promise<BootStatus>>();
 
-export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}): SandboxLifecycle {
+export function makeSandboxLifecycle(
+  env: Env,
+  deps: SandboxLifecycleDeps = {}
+): SandboxLifecycle {
   const resolve = deps.resolve ?? defaultResolve;
   const sleep = deps.sleep ?? defaultSleep;
   const repoPath = env.SANDBOX_REPO_PATH?.trim() || DEFAULT_REPO_PATH;
 
-  async function startProvisioning(sandbox: SandboxHandle): Promise<BootStatus> {
+  async function startProvisioning(
+    sandbox: SandboxHandle
+  ): Promise<BootStatus> {
     // BEFORE ANYTHING ELSE. A process that failed `waitForPort` on an earlier
     // attempt is not reaped by the SDK: it keeps running, holds its port, and
     // the next attempt dies with EADDRINUSE — masking the real error with a
@@ -329,7 +338,10 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
     };
   }
 
-  async function report(sandbox: SandboxHandle, process: ProcessSnapshot): Promise<BootStatus> {
+  async function report(
+    sandbox: SandboxHandle,
+    process: ProcessSnapshot
+  ): Promise<BootStatus> {
     const logs = await sandbox.getProcessLogs(process.id);
     const progress = readProgress(logs.stdout);
     const elapsedMs = Math.max(0, Date.now() - startedAtMs(process.startTime));
@@ -346,7 +358,13 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
       // "starting up" until the run dies at its step ceiling, which is the
       // silent-failure shape everything in this phase exists to avoid.
       if (progress.step === null && elapsedMs > WEDGED_AFTER_MS) {
-        return { state: "failed", commit: null, repoPath, elapsedMs, note: WEDGED_NOTE };
+        return {
+          state: "failed",
+          commit: null,
+          repoPath,
+          elapsedMs,
+          note: WEDGED_NOTE,
+        };
       }
       // The other hang shape: progress WAS made, then stopped. Terminal and
       // named, not relaunched — a relaunch would redo minutes of work behind an
@@ -361,7 +379,13 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
           note: `provisioning exceeded its ${Math.round(PROVISION_DEADLINE_MS / 60_000)}-minute deadline, last step "${progress.step ?? "none"}"; the machine is unusable for this run`,
         };
       }
-      return { state: "provisioning", commit: null, repoPath, elapsedMs, note: progress.note };
+      return {
+        state: "provisioning",
+        commit: null,
+        repoPath,
+        elapsedMs,
+        note: progress.note,
+      };
     }
     if (process.status === "completed" && (process.exitCode ?? 0) === 0) {
       return {
@@ -399,7 +423,11 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
       // only, tracked per run: a second wedge means the cause is in the current
       // code, and relaunching in a loop would re-create the exact
       // poll-until-step-ceiling death this detection exists to prevent.
-      if (status.state === "failed" && status.note === WEDGED_NOTE && !relaunchedRuns.has(runId)) {
+      if (
+        status.state === "failed" &&
+        status.note === WEDGED_NOTE &&
+        !relaunchedRuns.has(runId)
+      ) {
         relaunchedRuns.add(runId);
         await sandbox.killAllProcesses();
         return startProvisioning(sandbox);
@@ -434,7 +462,10 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
     async waitForPort(runId, port, timeoutMs) {
       assertUsablePort(port);
       const budgetMs = Math.min(Math.max(0, timeoutMs), MAX_WAIT_FOR_PORT_MS);
-      const attempts = Math.max(1, Math.ceil(budgetMs / PORT_PROBE_INTERVAL_MS));
+      const attempts = Math.max(
+        1,
+        Math.ceil(budgetMs / PORT_PROBE_INTERVAL_MS)
+      );
       const result = await resolve(env, runId).exec(tcpProbe(port, attempts), {
         timeout: budgetMs + PORT_PROBE_GRACE_MS,
       });
@@ -449,7 +480,10 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
       for (let attempt = 0; attempt < TUNNEL_PROBE_ATTEMPTS; attempt += 1) {
         if (attempt > 0) await sleep(TUNNEL_PROBE_INTERVAL_MS);
         try {
-          const response = await fetch(url, { method: "GET", redirect: "manual" });
+          const response = await fetch(url, {
+            method: "GET",
+            redirect: "manual",
+          });
           lastStatus = response.status;
           if (response.status !== TUNNEL_PROPAGATING_STATUS) return { url };
         } catch {
@@ -462,7 +496,7 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
       throw new Error(
         `the tunnel for port ${port} never served (last status ${lastStatus ?? "unreachable"}). ` +
           `A fresh tunnel answers ${TUNNEL_PROPAGATING_STATUS} while it propagates, so this was retried for ` +
-          `${(TUNNEL_PROBE_ATTEMPTS * TUNNEL_PROBE_INTERVAL_MS) / 1000}s — check that something is listening on ${port}.`,
+          `${(TUNNEL_PROBE_ATTEMPTS * TUNNEL_PROBE_INTERVAL_MS) / 1000}s — check that something is listening on ${port}.`
       );
     },
   };
@@ -480,7 +514,7 @@ export function makeSandboxLifecycle(env: Env, deps: SandboxLifecycleDeps = {}):
  */
 export async function sweepSandboxes(
   env: Env,
-  deps: SandboxLifecycleDeps = {},
+  deps: SandboxLifecycleDeps = {}
 ): Promise<{ destroyed: number }> {
   if (!sandboxContainersAvailable(env)) return { destroyed: 0 };
 
@@ -490,9 +524,13 @@ export async function sweepSandboxes(
     `SELECT id FROM runs
       WHERE status IN (${placeholders}) AND updated_at >= ?
       ORDER BY updated_at DESC
-      LIMIT ?`,
+      LIMIT ?`
   )
-    .bind(...TERMINAL_RUN_STATUSES, Date.now() - SWEEP_WINDOW_MS, SWEEP_MAX_RUNS)
+    .bind(
+      ...TERMINAL_RUN_STATUSES,
+      Date.now() - SWEEP_WINDOW_MS,
+      SWEEP_MAX_RUNS
+    )
     .all<Pick<RunsRow, "id">>();
 
   let destroyed = 0;
@@ -532,11 +570,13 @@ function assertUsablePort(port: number): void {
     throw new Error(
       "port 3000 is the sandbox's own control server: a readiness check against it succeeds " +
         "whether or not your process is running, so it reports a dev server that never started. " +
-        "Bind somewhere in 4100+ (the monorepo's own apps already claim 3000-3010).",
+        "Bind somewhere in 4100+ (the monorepo's own apps already claim 3000-3010)."
     );
   }
   if (!Number.isInteger(port) || port < MIN_PORT || port > MAX_PORT) {
-    throw new Error(`port ${port} is out of range: it must be an integer in 1024-65535.`);
+    throw new Error(
+      `port ${port} is out of range: it must be an integer in 1024-65535.`
+    );
   }
 }
 
@@ -574,7 +614,8 @@ type Progress = {
  * does both), which is why the note table covers steps that are never announced.
  */
 const STEP_NOTES: Record<string, string> = {
-  clone: "cloning the monorepo (~400 MB even shallow; the largest transfer of a cold boot)",
+  clone:
+    "cloning the monorepo (~400 MB even shallow; the largest transfer of a cold boot)",
   "clone-retry-1": "first clone attempt failed or stalled; retrying",
   "clone-retry-2": "second clone attempt failed or stalled; retrying",
   "set-remote": "pointing the checkout at origin",
@@ -587,7 +628,8 @@ const STEP_NOTES: Record<string, string> = {
   "build-packages": "building the workspace packages",
   browser: "installing the browser (Chromium; non-fatal if it fails)",
   "browser-cached": "browser already installed",
-  "browser-unavailable": "browser install failed; recording is unavailable on this machine",
+  "browser-unavailable":
+    "browser install failed; recording is unavailable on this machine",
   ready: "ready",
 };
 
@@ -612,6 +654,7 @@ function readProgress(stdout: string): Progress {
 }
 
 function startedAtMs(startTime: Date | string): number {
-  const parsed = startTime instanceof Date ? startTime.getTime() : Date.parse(startTime);
+  const parsed =
+    startTime instanceof Date ? startTime.getTime() : Date.parse(startTime);
   return Number.isFinite(parsed) ? parsed : Date.now();
 }

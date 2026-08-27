@@ -3,7 +3,11 @@ import { z } from "zod";
 import type { ClassifiedTool } from "../define";
 import { sha256Bytes } from "../../gateways/hash";
 import { runEffect } from "../effects";
-import { auditedCapability, effectDeps, type BindingContext } from "../registry";
+import {
+  auditedCapability,
+  effectDeps,
+  type BindingContext,
+} from "../registry";
 
 /**
  * Hand-written, and the only namespace that is.
@@ -49,7 +53,9 @@ declare const files: {
  * to hand back an image or a dump has exactly one way to do it, and that way is
  * audited, size-bounded and produces a URL rather than an inline blob.
  */
-export function makeFilesTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeFilesTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     publish: auditedCapability(ctx, "files", "publish", {
       effect: "external_write",
@@ -96,7 +102,7 @@ export function makeFilesTools(ctx: BindingContext): Record<string, ClassifiedTo
                 filename: input.filename,
                 idempotencyKey,
               }),
-          },
+          }
         );
       },
     }),

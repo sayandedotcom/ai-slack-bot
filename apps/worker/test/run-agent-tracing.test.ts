@@ -33,7 +33,10 @@ type TracingPolicy = {
 async function boundRun() {
   const { runId } = await createRunFromChat(env, {});
   const run = await getRunById(env.DB, runId);
-  const stub = (await getAgentByName(env.RUN_AGENTS, run?.key ?? "")) as unknown as {
+  const stub = (await getAgentByName(
+    env.RUN_AGENTS,
+    run?.key ?? ""
+  )) as unknown as {
     tracingPolicyForTest(): Promise<TracingPolicy>;
   };
   return { runId, key: run?.key ?? "", stub };
@@ -69,11 +72,16 @@ describe("whose identity is on a span", () => {
 
   it("names the agent, not the class, as the traced function", async () => {
     const { stub } = await boundRun();
-    expect((await stub.tracingPolicyForTest()).telemetry.functionId).toBe("run-agent");
+    expect((await stub.tracingPolicyForTest()).telemetry.functionId).toBe(
+      "run-agent"
+    );
   });
 
   it("carries the turn id, so a span joins the usage row that billed it", () => {
-    const telemetry = turnTelemetry({ runId: "run-1", turnId: "slack:Ev1" }) as {
+    const telemetry = turnTelemetry({
+      runId: "run-1",
+      turnId: "slack:Ev1",
+    }) as {
       metadata?: Record<string, unknown>;
     };
     expect(telemetry.metadata).toEqual({

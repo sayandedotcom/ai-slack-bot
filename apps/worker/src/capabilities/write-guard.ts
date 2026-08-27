@@ -32,13 +32,13 @@ export type WriteGuardDeps = { db: D1Database };
  */
 export async function assertExternalWritePermitted(
   deps: WriteGuardDeps,
-  scope: RunScope,
+  scope: RunScope
 ): Promise<void> {
   if (scope.origin === "slack") {
     if (scope.slackThread === null) {
       throw new CapabilityError(
         "slack_context_required",
-        "this run has no Slack thread to write to",
+        "this run has no Slack thread to write to"
       );
     }
     const policy = await getChannelPolicy(deps.db, scope.slackThread.channelId);
@@ -46,7 +46,10 @@ export async function assertExternalWritePermitted(
       // Covers observe, internal, and absent-from-the-table alike. `canPost`
       // requires `known && mode === "live"`, so the fail-closed case needs no
       // separate branch here.
-      throw new CapabilityError("channel_read_only", "this channel is not postable");
+      throw new CapabilityError(
+        "channel_read_only",
+        "this channel is not postable"
+      );
     }
   }
 
@@ -54,7 +57,7 @@ export async function assertExternalWritePermitted(
   if (record === null || record.shadow) {
     throw new CapabilityError(
       "shadow_write_denied",
-      "this run may not write to the outside world",
+      "this run may not write to the outside world"
     );
   }
 }
@@ -62,7 +65,7 @@ export async function assertExternalWritePermitted(
 export async function assertEffectPermitted(
   deps: WriteGuardDeps,
   scope: RunScope,
-  effect: CapabilityEffect,
+  effect: CapabilityEffect
 ): Promise<void> {
   if (effect !== "external_write") return;
   await assertExternalWritePermitted(deps, scope);

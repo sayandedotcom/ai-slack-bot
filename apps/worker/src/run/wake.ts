@@ -73,10 +73,12 @@ export type WakeOutcome = { accepted: boolean; runId: string };
  */
 export async function ensureSlackRunRowUnderPolicy(
   env: Env,
-  descriptor: RunDescriptor & { channelId: string },
+  descriptor: RunDescriptor & { channelId: string }
 ): Promise<RunRecord> {
   const policy = await getChannelPolicy(env.DB, descriptor.channelId);
-  return createOrGetRunUnderPolicy(env.DB, descriptor, { mustShadow: !canPost(policy) });
+  return createOrGetRunUnderPolicy(env.DB, descriptor, {
+    mustShadow: !canPost(policy),
+  });
 }
 
 /**
@@ -107,9 +109,12 @@ async function submitTurn(
     text: string;
     idempotencyKey: string;
     metadata?: Record<string, unknown>;
-  },
+  }
 ): Promise<WakeOutcome> {
-  const stub = await getAgentByName<Env, RunAgent>(env.RUN_AGENTS, input.run.key);
+  const stub = await getAgentByName<Env, RunAgent>(
+    env.RUN_AGENTS,
+    input.run.key
+  );
   await stub.bindRun({ runId: input.run.id, channel: input.channel });
   const inputRevision = await stub.noteInput();
 
@@ -154,7 +159,7 @@ export async function wakeRun(
     channelId: string;
     threadTs: string;
     openingPrompt: string;
-  },
+  }
 ): Promise<WakeOutcome> {
   const key = slackRunKey(input.channelId, input.threadTs);
   const run = await ensureSlackRunRowUnderPolicy(env, {
@@ -187,7 +192,10 @@ export async function wakeRun(
  * so a thread whose channel was downgraded after its run was created continues
  * as a shadow draft.
  */
-export async function routeToOwnedRun(env: Env, message: SlackRunMessage): Promise<boolean> {
+export async function routeToOwnedRun(
+  env: Env,
+  message: SlackRunMessage
+): Promise<boolean> {
   const threadTs = canonicalThreadTs(message.ts, message.threadTs);
   const owned = await findOwnedSlackRun(env.DB, message.channelId, threadTs);
   if (owned === null) return false;
@@ -239,7 +247,11 @@ export async function routeToOwnedRun(env: Env, message: SlackRunMessage): Promi
  */
 export async function createRunFromChat(
   env: Env,
-  options: { firstMessage?: string; actorEmail?: string; requestId?: string } = {},
+  options: {
+    firstMessage?: string;
+    actorEmail?: string;
+    requestId?: string;
+  } = {}
 ): Promise<{ runId: string }> {
   const key = await chatKeyFor(options);
   // No channel, so no policy to read: `createOrGetRun` is
@@ -263,12 +275,14 @@ export async function createRunFromChat(
     // client that retries a create it never saw the response to re-delivers one
     // string and the submission queue refuses it.
     idempotencyKey: `steer:${options.requestId ?? run.id}`,
-    metadata: options.actorEmail === undefined ? {} : { actorEmail: options.actorEmail },
+    metadata:
+      options.actorEmail === undefined
+        ? {}
+        : { actorEmail: options.actorEmail },
   });
 
   return { runId: run.id };
 }
-
 
 /**
  * The `chat:{uuid}` key for a dashboard-started run.
@@ -297,15 +311,17 @@ async function chatKeyFor(options: {
 
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(`chat\u0000${actorEmail}\u0000${requestId}`),
+    new TextEncoder().encode(`chat\u0000${actorEmail}\u0000${requestId}`)
   );
   const bytes = new Uint8Array(digest).slice(0, 16);
   // Version 8 ("custom"), RFC 9562's arm for a name-derived value that is not
   // one of the registered namespaces.
   bytes[6] = (bytes[6] & 0x0f) | 0x80;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const hex = [...bytes]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
   return chatRunKey(
-    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`,
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
   );
 }

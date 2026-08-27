@@ -1,4 +1,8 @@
-import { CapabilityError, safeMessage, toCapabilityError } from "../gateways/errors";
+import {
+  CapabilityError,
+  safeMessage,
+  toCapabilityError,
+} from "../gateways/errors";
 import type { CapabilityErrorCode } from "../gateways/errors";
 import { sha256Bytes } from "../gateways/hash";
 import type { RunScope } from "../gateways/scope";
@@ -152,7 +156,7 @@ function canonical(value: unknown, path: Set<object>): unknown {
     const proto = Object.getPrototypeOf(object) as unknown;
     if (proto !== Object.prototype && proto !== null) {
       throw invalidInput(
-        "only plain JSON data can be part of an effect key; format it in the adapter",
+        "only plain JSON data can be part of an effect key; format it in the adapter"
       );
     }
     const source = object as Record<string, unknown>;
@@ -175,7 +179,6 @@ function canonicalJson(value: unknown): string {
   return encoded;
 }
 
-
 async function sha256Hex(input: string): Promise<string> {
   return sha256Bytes(new TextEncoder().encode(input));
 }
@@ -196,7 +199,7 @@ export async function effectKey(
   scope: RunScope,
   namespace: string,
   method: string,
-  args: JsonValue,
+  args: JsonValue
 ): Promise<string> {
   return sha256Hex(
     canonicalJson({
@@ -206,7 +209,7 @@ export async function effectKey(
       namespace,
       method,
       args,
-    }),
+    })
   );
 }
 
@@ -215,7 +218,7 @@ export async function effectKey(
 function inDoubt(): CapabilityError {
   return new CapabilityError(
     "effect_in_doubt",
-    "this effect may already have been performed and could not be confirmed. Do not retry it; report it and let a human check.",
+    "this effect may already have been performed and could not be confirmed. Do not retry it; report it and let a human check."
   );
 }
 
@@ -244,11 +247,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 async function readEffect(
   deps: EffectDeps,
-  key: string,
+  key: string
 ): Promise<EffectRow | null> {
   return deps.db
     .prepare(
-      "SELECT state, safe_result_json FROM codemode_effects WHERE effect_key = ?",
+      "SELECT state, safe_result_json FROM codemode_effects WHERE effect_key = ?"
     )
     .bind(key)
     .first<EffectRow>();
@@ -261,7 +264,7 @@ async function claim(
   scope: RunScope,
   namespace: string,
   method: string,
-  argsHash: string,
+  argsHash: string
 ): Promise<boolean> {
   const now = deps.clock();
   const row = await deps.db
@@ -271,7 +274,7 @@ async function claim(
           state, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
        ON CONFLICT(effect_key) DO NOTHING
-       RETURNING effect_key`,
+       RETURNING effect_key`
     )
     .bind(key, scope.runId, scope.turnId, namespace, method, argsHash, now, now)
     .first<Pick<CodemodeEffectsRow, "effect_key">>();
@@ -289,7 +292,7 @@ async function reclaim(deps: EffectDeps, key: string): Promise<boolean> {
       `UPDATE codemode_effects
           SET state = 'reserved', safe_error = NULL, updated_at = ?
         WHERE effect_key = ? AND state = 'failed'
-        RETURNING effect_key`,
+        RETURNING effect_key`
     )
     .bind(deps.clock(), key)
     .first<Pick<CodemodeEffectsRow, "effect_key">>();
@@ -301,13 +304,13 @@ async function mark(
   key: string,
   state: EffectRow["state"],
   resultJson: string | null,
-  error: string | null,
+  error: string | null
 ): Promise<void> {
   await deps.db
     .prepare(
       `UPDATE codemode_effects
           SET state = ?, safe_result_json = ?, safe_error = ?, updated_at = ?
-        WHERE effect_key = ?`,
+        WHERE effect_key = ?`
     )
     .bind(state, resultJson, error, deps.clock(), key)
     .run();
@@ -324,7 +327,7 @@ async function mark(
 async function performClaimed<T>(
   deps: EffectDeps,
   key: string,
-  options: RunEffectOptions<T>,
+  options: RunEffectOptions<T>
 ): Promise<T> {
   let result: T;
   try {
@@ -353,7 +356,7 @@ async function performClaimed<T>(
       key,
       "in_doubt",
       null,
-      "effect_in_doubt: the effect succeeded but its result could not be recorded",
+      "effect_in_doubt: the effect succeeded but its result could not be recorded"
     );
     throw inDoubt();
   }
@@ -367,7 +370,7 @@ async function performClaimed<T>(
 async function resolveInDoubt<T>(
   deps: EffectDeps,
   key: string,
-  options: RunEffectOptions<T>,
+  options: RunEffectOptions<T>
 ): Promise<T> {
   if (!options.reconcile) throw inDoubt();
 
@@ -393,7 +396,7 @@ export async function runEffect<T>(
   namespace: string,
   method: string,
   args: JsonValue,
-  options: RunEffectOptions<T>,
+  options: RunEffectOptions<T>
 ): Promise<T> {
   // Both hashes are computed before any row is written: an unhashable argument
   // must not leave a reservation behind.

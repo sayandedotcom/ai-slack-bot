@@ -36,7 +36,14 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -89,7 +96,10 @@ function readDevVars(path = DEV_VARS) {
     if (eq <= 0) continue;
     const key = trimmed.slice(0, eq).trim();
     if (!/^[A-Z][A-Z0-9_]*$/.test(key)) continue;
-    out[key] = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+    out[key] = trimmed
+      .slice(eq + 1)
+      .trim()
+      .replace(/^["']|["']$/g, "");
   }
   return out;
 }
@@ -110,7 +120,10 @@ function readWranglerVar(source, key) {
 function patchWranglerVar(source, key, value) {
   const re = new RegExp(`("${key}"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"`);
   if (!re.test(source)) return { source, patched: false };
-  return { source: source.replace(re, `$1${JSON.stringify(value)}`), patched: true };
+  return {
+    source: source.replace(re, `$1${JSON.stringify(value)}`),
+    patched: true,
+  };
 }
 
 function profilePath(name) {
@@ -122,9 +135,11 @@ function profilePath(name) {
 
 function loadProfile(name) {
   const path = profilePath(name);
-  if (!existsSync(path)) fail(`no such profile: ${name}\nrun: pnpm run profile list`);
+  if (!existsSync(path))
+    fail(`no such profile: ${name}\nrun: pnpm run profile list`);
   const parsed = JSON.parse(readFileSync(path, "utf8"));
-  if (!parsed.secrets || !parsed.vars) fail(`${name}.json needs both "secrets" and "vars"`);
+  if (!parsed.secrets || !parsed.vars)
+    fail(`${name}.json needs both "secrets" and "vars"`);
   return parsed;
 }
 
@@ -164,9 +179,15 @@ async function verifySlack(secrets, vars) {
   } catch (err) {
     return [{ level: "error", text: `auth.test failed: ${String(err)}` }];
   }
-  if (!body.ok) return [{ level: "error", text: `auth.test refused: ${body.error}` }];
+  if (!body.ok)
+    return [{ level: "error", text: `auth.test refused: ${body.error}` }];
 
-  const notes = [{ level: "ok", text: `Slack token valid — workspace ${body.team} (${body.team_id})` }];
+  const notes = [
+    {
+      level: "ok",
+      text: `Slack token valid — workspace ${body.team} (${body.team_id})`,
+    },
+  ];
 
   if (vars.SLACK_BOT_USER_ID !== body.user_id) {
     notes.push({
@@ -178,11 +199,17 @@ async function verifySlack(secrets, vars) {
         `replies as customer messages and answers itself.`,
     });
   } else {
-    notes.push({ level: "ok", text: `SLACK_BOT_USER_ID matches the token (${body.user_id})` });
+    notes.push({
+      level: "ok",
+      text: `SLACK_BOT_USER_ID matches the token (${body.user_id})`,
+    });
   }
 
   if (!/^A[A-Z0-9]{8,}$/.test(vars.SLACK_APP_ID ?? "")) {
-    notes.push({ level: "error", text: `SLACK_APP_ID is not an app id: ${vars.SLACK_APP_ID}` });
+    notes.push({
+      level: "error",
+      text: `SLACK_APP_ID is not an app id: ${vars.SLACK_APP_ID}`,
+    });
   } else {
     notes.push({
       level: "warn",
@@ -204,7 +231,12 @@ async function verifyGateway(secrets) {
   const url = secrets.AI_GATEWAY_ANTHROPIC_URL;
   const token = secrets.AI_GATEWAY_TOKEN;
   if (!url || !token) {
-    return [{ level: "warn", text: "AI_GATEWAY_* not set — no turn can call the model" }];
+    return [
+      {
+        level: "warn",
+        text: "AI_GATEWAY_* not set — no turn can call the model",
+      },
+    ];
   }
   try {
     const res = await fetch(`${url.replace(/\/$/, "")}/v1/messages`, {
@@ -218,9 +250,19 @@ async function verifyGateway(secrets) {
       body: "{}",
     });
     if (res.status === 401) {
-      return [{ level: "error", text: "AI_GATEWAY_TOKEN rejected (401) — needs the 'AI Gateway - Run' permission" }];
+      return [
+        {
+          level: "error",
+          text: "AI_GATEWAY_TOKEN rejected (401) — needs the 'AI Gateway - Run' permission",
+        },
+      ];
     }
-    return [{ level: "ok", text: `AI Gateway reachable and authorised (HTTP ${res.status} from the provider)` }];
+    return [
+      {
+        level: "ok",
+        text: `AI Gateway reachable and authorised (HTTP ${res.status} from the provider)`,
+      },
+    ];
   } catch (err) {
     return [{ level: "warn", text: `AI Gateway probe failed: ${String(err)}` }];
   }
@@ -237,9 +279,14 @@ function comparePeers(name, secrets) {
     } catch {
       continue;
     }
-    const missing = Object.keys(peer.secrets ?? {}).filter((k) => !(k in secrets));
+    const missing = Object.keys(peer.secrets ?? {}).filter(
+      (k) => !(k in secrets)
+    );
     if (missing.length > 0) {
-      notes.push({ level: "warn", text: `missing vs "${file}": ${missing.join(", ")}` });
+      notes.push({
+        level: "warn",
+        text: `missing vs "${file}": ${missing.join(", ")}`,
+      });
     }
   }
   return notes;
@@ -278,14 +325,17 @@ function cmdList() {
 function cmdShow(name) {
   const p = loadProfile(name);
   console.log(`profile: ${name}\n\nvars (values are not secret):`);
-  for (const [k, v] of Object.entries(p.vars)) console.log(`  ${k.padEnd(28)} ${v}`);
+  for (const [k, v] of Object.entries(p.vars))
+    console.log(`  ${k.padEnd(28)} ${v}`);
   console.log("\nsecrets (names and sizes only):");
-  for (const k of Object.keys(p.secrets).sort()) console.log(`  ${k.padEnd(28)} ${shape(p.secrets[k])}`);
+  for (const k of Object.keys(p.secrets).sort())
+    console.log(`  ${k.padEnd(28)} ${shape(p.secrets[k])}`);
 }
 
 function cmdCapture(name) {
   const secrets = readDevVars();
-  if (Object.keys(secrets).length === 0) fail(`.dev.vars is empty or missing — nothing to capture`);
+  if (Object.keys(secrets).length === 0)
+    fail(`.dev.vars is empty or missing — nothing to capture`);
 
   const source = readFileSync(WRANGLER, "utf8");
   const vars = {};
@@ -300,12 +350,15 @@ function cmdCapture(name) {
   writeFileSync(
     profilePath(name),
     `${JSON.stringify({ name, capturedAt: new Date().toISOString(), vars, secrets }, null, 2)}\n`,
-    { mode: 0o600 },
+    { mode: 0o600 }
   );
 
-  console.log(`captured ${Object.keys(secrets).length} secrets and ${Object.keys(vars).length} vars`);
+  console.log(
+    `captured ${Object.keys(secrets).length} secrets and ${Object.keys(vars).length} vars`
+  );
   console.log(`wrote ${profilePath(name)} (0600)`);
-  if (absent.length > 0) console.log(`not present in wrangler.jsonc: ${absent.join(", ")}`);
+  if (absent.length > 0)
+    console.log(`not present in wrangler.jsonc: ${absent.join(", ")}`);
 }
 
 async function cmdVerify(name) {
@@ -314,13 +367,16 @@ async function cmdVerify(name) {
     : {
         secrets: readDevVars(),
         vars: Object.fromEntries(
-          TENANT_VARS.map((k) => [k, readWranglerVar(readFileSync(WRANGLER, "utf8"), k)]).filter(
-            ([, v]) => v !== null,
-          ),
+          TENANT_VARS.map((k) => [
+            k,
+            readWranglerVar(readFileSync(WRANGLER, "utf8"), k),
+          ]).filter(([, v]) => v !== null)
         ),
       };
 
-  console.log(`verifying ${name ?? "the current .dev.vars + wrangler.jsonc"}\n`);
+  console.log(
+    `verifying ${name ?? "the current .dev.vars + wrangler.jsonc"}\n`
+  );
   const notes = [
     ...(await verifySlack(secrets, vars)),
     ...(await verifyGateway(secrets)),
@@ -334,8 +390,14 @@ async function cmdApply(name, opts) {
   const profile = loadProfile(name);
 
   if (!opts.skipVerify) {
-    const notes = [...(await verifySlack(profile.secrets, profile.vars)), ...(await verifyGateway(profile.secrets))];
-    if (report(notes)) fail("refusing to apply a profile that does not verify (--skip-verify overrides)");
+    const notes = [
+      ...(await verifySlack(profile.secrets, profile.vars)),
+      ...(await verifyGateway(profile.secrets)),
+    ];
+    if (report(notes))
+      fail(
+        "refusing to apply a profile that does not verify (--skip-verify overrides)"
+      );
     console.log("");
   }
 
@@ -356,7 +418,8 @@ async function cmdApply(name, opts) {
   }
   writeFileSync(WRANGLER, source);
   console.log(`patched ${patchedCount} vars in wrangler.jsonc`);
-  if (missed.length > 0) console.log(`  NOT FOUND (add them by hand): ${missed.join(", ")}`);
+  if (missed.length > 0)
+    console.log(`  NOT FOUND (add them by hand): ${missed.join(", ")}`);
 
   if (opts.localOnly) {
     console.log("\n--local-only: remote secrets untouched.");
@@ -371,14 +434,20 @@ async function cmdApply(name, opts) {
     execFileSync("npx", ["wrangler", "secret", "bulk", tmp], {
       cwd: WORKER_ROOT,
       stdio: "inherit",
-      env: { ...process.env, CF_API_TOKEN: undefined, CLOUDFLARE_API_TOKEN: undefined },
+      env: {
+        ...process.env,
+        CF_API_TOKEN: undefined,
+        CLOUDFLARE_API_TOKEN: undefined,
+      },
     });
   } finally {
     rmSync(tmp, { force: true });
   }
 
   console.log(`\napplied "${name}".`);
-  console.log("Secrets are live now. Patched vars need a deploy:  pnpm run deploy");
+  console.log(
+    "Secrets are live now. Patched vars need a deploy:  pnpm run deploy"
+  );
 }
 
 // ---------------------------------------------------------------- entry
@@ -405,7 +474,8 @@ switch (command) {
     await cmdVerify(arg && !arg.startsWith("--") ? arg : undefined);
     break;
   case "apply":
-    if (!arg || arg.startsWith("--")) fail("usage: profile apply <name> [--local-only] [--skip-verify]");
+    if (!arg || arg.startsWith("--"))
+      fail("usage: profile apply <name> [--local-only] [--skip-verify]");
     await cmdApply(arg, opts);
     break;
   default:
@@ -424,6 +494,6 @@ switch (command) {
         "",
         "Profiles live in config/profiles/ and are gitignored: they hold real",
         "credentials. Capture BEFORE you switch, or the setup you are leaving is gone.",
-      ].join("\n"),
+      ].join("\n")
     );
 }

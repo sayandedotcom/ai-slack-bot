@@ -129,7 +129,7 @@ const ONE_OPEN_INDEX_ERROR = "UNIQUE constraint failed: approvals.run_id";
  */
 export async function insertApproval(
   db: D1Database,
-  card: NewApprovalCard,
+  card: NewApprovalCard
 ): Promise<"created" | "duplicate_open"> {
   try {
     await db
@@ -137,7 +137,7 @@ export async function insertApproval(
         `INSERT INTO approvals
            (id, run_id, generation_id, kind, draft, why, channel_id, thread_ts, shadow,
             decision, delivery, created_at, updated_at)
-         VALUES (?, ?, ?, 'slack_reply', ?, ?, ?, ?, ?, 'pending', 'none', ?, ?)`,
+         VALUES (?, ?, ?, 'slack_reply', ?, ?, ?, ?, ?, 'pending', 'none', ?, ?)`
       )
       .bind(
         card.id,
@@ -149,7 +149,7 @@ export async function insertApproval(
         card.threadTs,
         card.shadow ? 1 : 0,
         card.now,
-        card.now,
+        card.now
       )
       .run();
     return "created";
@@ -161,8 +161,14 @@ export async function insertApproval(
   }
 }
 
-export async function getApproval(db: D1Database, id: string): Promise<ApprovalRow | null> {
-  const row = await db.prepare(`SELECT ${COLUMNS} FROM approvals WHERE id = ?`).bind(id).first<ApprovalRowDb>();
+export async function getApproval(
+  db: D1Database,
+  id: string
+): Promise<ApprovalRow | null> {
+  const row = await db
+    .prepare(`SELECT ${COLUMNS} FROM approvals WHERE id = ?`)
+    .bind(id)
+    .first<ApprovalRowDb>();
   return row ? toRow(row) : null;
 }
 
@@ -186,12 +192,16 @@ export async function decideApproval(
   id: string,
   input: DecisionInput,
   decidedBy: string,
-  now: number,
+  now: number
 ): Promise<DecideApprovalResult> {
   validateDecisionInput(input);
 
   const decision: ApprovalDecision =
-    input.action === "approve" ? "approved" : input.action === "edit" ? "edited" : "rejected";
+    input.action === "approve"
+      ? "approved"
+      : input.action === "edit"
+        ? "edited"
+        : "rejected";
   const editedText = input.action === "edit" ? input.text : null;
   const rejectReason = input.action === "reject" ? input.reason : null;
 
@@ -201,7 +211,7 @@ export async function decideApproval(
         `UPDATE approvals SET
            decision = ?, decided_by = ?, decided_at = ?,
            edited_text = ?, reject_reason = ?, updated_at = ?
-         WHERE id = ? AND decision = 'pending'`,
+         WHERE id = ? AND decision = 'pending'`
       )
       .bind(decision, decidedBy, now, editedText, rejectReason, now, id),
     db.prepare(`SELECT ${COLUMNS} FROM approvals WHERE id = ?`).bind(id),
@@ -226,11 +236,13 @@ export async function decideApproval(
 export async function withdrawApproval(
   db: D1Database,
   id: string,
-  now: number,
+  now: number
 ): Promise<WithdrawApprovalResult> {
   const [updateResult, selectResult] = await db.batch<ApprovalRowDb>([
     db
-      .prepare(`UPDATE approvals SET decision = 'withdrawn', updated_at = ? WHERE id = ? AND decision = 'pending'`)
+      .prepare(
+        `UPDATE approvals SET decision = 'withdrawn', updated_at = ? WHERE id = ? AND decision = 'pending'`
+      )
       .bind(now, id),
     db.prepare(`SELECT ${COLUMNS} FROM approvals WHERE id = ?`).bind(id),
   ]);
@@ -259,14 +271,14 @@ export async function setDelivery(
   from: ApprovalDelivery[],
   to: ApprovalDelivery,
   error: string | null,
-  now: number,
+  now: number
 ): Promise<boolean> {
   if (from.length === 0) return false;
   const placeholders = from.map(() => "?").join(", ");
   const result = await db
     .prepare(
       `UPDATE approvals SET delivery = ?, delivery_error = ?, updated_at = ?
-       WHERE id = ? AND delivery IN (${placeholders})`,
+       WHERE id = ? AND delivery IN (${placeholders})`
     )
     .bind(to, error, now, id, ...from)
     .run();
@@ -279,17 +291,29 @@ export async function setDelivery(
  * Idempotent: calling it again just moves the timestamp forward, which is
  * harmless because `listUndeliveredResolutions` only ever looks for `NULL`.
  */
-export async function markResolutionDelivered(db: D1Database, id: string, now: number): Promise<void> {
-  await db.prepare(`UPDATE approvals SET resolution_delivered_at = ? WHERE id = ?`).bind(now, id).run();
+export async function markResolutionDelivered(
+  db: D1Database,
+  id: string,
+  now: number
+): Promise<void> {
+  await db
+    .prepare(`UPDATE approvals SET resolution_delivered_at = ? WHERE id = ?`)
+    .bind(now, id)
+    .run();
 }
 
 /**
  * The dashboard's open queue: `GET /api/approvals?state=open`. Reads never
  * wake a DO (invariant 7) — this is the whole of that read.
  */
-export async function listOpen(db: D1Database, limit = 50): Promise<ApprovalRow[]> {
+export async function listOpen(
+  db: D1Database,
+  limit = 50
+): Promise<ApprovalRow[]> {
   const { results } = await db
-    .prepare(`SELECT ${COLUMNS} FROM approvals WHERE decision = 'pending' ORDER BY created_at ASC LIMIT ?`)
+    .prepare(
+      `SELECT ${COLUMNS} FROM approvals WHERE decision = 'pending' ORDER BY created_at ASC LIMIT ?`
+    )
     .bind(limit)
     .all<ApprovalRowDb>();
   return (results ?? []).map(toRow);
@@ -303,9 +327,15 @@ export async function listOpen(db: D1Database, limit = 50): Promise<ApprovalRow[
  * pattern as `decideApproval`'s CAS: there is no read-then-write window for
  * a second caller to land in.
  */
-export async function claimNudge(db: D1Database, id: string, now: number): Promise<boolean> {
+export async function claimNudge(
+  db: D1Database,
+  id: string,
+  now: number
+): Promise<boolean> {
   const result = await db
-    .prepare(`UPDATE approvals SET nudged_at = ? WHERE id = ? AND nudged_at IS NULL`)
+    .prepare(
+      `UPDATE approvals SET nudged_at = ? WHERE id = ? AND nudged_at IS NULL`
+    )
     .bind(now, id)
     .run();
   return (result.meta.changes ?? 0) > 0;
@@ -320,10 +350,12 @@ export async function recordNudgeMessage(
   db: D1Database,
   id: string,
   channelId: string,
-  ts: string,
+  ts: string
 ): Promise<void> {
   await db
-    .prepare(`UPDATE approvals SET nudge_channel_id = ?, nudge_ts = ? WHERE id = ?`)
+    .prepare(
+      `UPDATE approvals SET nudge_channel_id = ?, nudge_ts = ? WHERE id = ?`
+    )
     .bind(channelId, ts, id)
     .run();
 }
@@ -338,7 +370,10 @@ export async function recordNudgeMessage(
  * that won the claim ever reaches it.
  */
 export async function releaseNudge(db: D1Database, id: string): Promise<void> {
-  await db.prepare(`UPDATE approvals SET nudged_at = NULL WHERE id = ?`).bind(id).run();
+  await db
+    .prepare(`UPDATE approvals SET nudged_at = NULL WHERE id = ?`)
+    .bind(id)
+    .run();
 }
 
 /**
@@ -346,13 +381,16 @@ export async function releaseNudge(db: D1Database, id: string): Promise<void> {
  * yet reached the DO, for the one-minute `scheduled()` sweeper to re-drive.
  * A `pending` row has nothing to resolve yet and is correctly excluded.
  */
-export async function listUndeliveredResolutions(db: D1Database, limit: number): Promise<ApprovalRow[]> {
+export async function listUndeliveredResolutions(
+  db: D1Database,
+  limit: number
+): Promise<ApprovalRow[]> {
   const { results } = await db
     .prepare(
       `SELECT ${COLUMNS} FROM approvals
        WHERE decision IN ('approved', 'edited', 'rejected') AND resolution_delivered_at IS NULL
        ORDER BY decided_at ASC
-       LIMIT ?`,
+       LIMIT ?`
     )
     .bind(limit)
     .all<ApprovalRowDb>();

@@ -37,7 +37,7 @@ describe("defineCapability", () => {
         input: z.strictObject({}),
         output: z.strictObject({}),
         run: async () => ({}),
-      }),
+      })
     ).toThrow(CapabilityError);
   });
 
@@ -49,7 +49,7 @@ describe("defineCapability", () => {
         input: z.strictObject({}),
         output: z.strictObject({}),
         run: async () => ({}),
-      }),
+      })
     ).toThrow(CapabilityError);
   });
 });
@@ -59,7 +59,11 @@ describe("the audited brand", () => {
     // The brand is a module-private symbol, so a look-alike carrying the right
     // field still reports null — which is what makes assertClassified a check
     // rather than a naming convention.
-    const lookalike = { description: "d", effect: "read", run: async () => null };
+    const lookalike = {
+      description: "d",
+      effect: "read",
+      run: async () => null,
+    };
     expect(capabilityEffectOf(lookalike)).toBeNull();
   });
 
@@ -78,7 +82,10 @@ describe("assertClassified", () => {
     // A binding that hand-rolled a tool skipped the audit wrapper AND the write
     // guard, so this must fail at construction, not at the first call.
     expect(() =>
-      assertClassified("demo", { echo, sneaky: { effect: "read", run: async () => null } }),
+      assertClassified("demo", {
+        echo,
+        sneaky: { effect: "read", run: async () => null },
+      })
     ).toThrow(/demo\.sneaky/);
   });
 });

@@ -1,7 +1,14 @@
 import { SELF, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
-import { installIdentityApiPorts, resetIdentityApiPorts } from "../src/api/identity";
+import {
+  AccessJwtError,
+  type AccessIdentity,
+  type AccessVerifier,
+} from "../src/access/jwt";
+import {
+  installIdentityApiPorts,
+  resetIdentityApiPorts,
+} from "../src/api/identity";
 import { evalApi } from "../src/api/eval";
 import type { AiTell } from "../src/eval/ai-tells";
 import type { TriageScore } from "../src/eval/triage-eval";
@@ -44,7 +51,8 @@ function fakeVerifier(): AccessVerifier {
   return {
     async verify(jwt: string): Promise<AccessIdentity> {
       if (!jwt) throw new AccessJwtError("missing", "no token was supplied");
-      if (!jwt.includes("@")) throw new AccessJwtError("malformed", "not an email-shaped fake token");
+      if (!jwt.includes("@"))
+        throw new AccessJwtError("malformed", "not an email-shaped fake token");
       return { email: jwt };
     },
   };
@@ -165,7 +173,9 @@ describe("eval API authorization", () => {
     it(`401s with no token on ${path}`, async () => {
       const res = await req(path);
       expect(res.status).toBe(401);
-      expect(((await res.json()) as { code: string }).code).toBe("access_jwt_invalid");
+      expect(((await res.json()) as { code: string }).code).toBe(
+        "access_jwt_invalid"
+      );
     });
 
     it(`401s a garbage token on ${path}`, async () => {
@@ -175,7 +185,9 @@ describe("eval API authorization", () => {
     it(`403s an outsider with an otherwise-valid token on ${path}`, async () => {
       const res = await req(path, OUTSIDER);
       expect(res.status).toBe(403);
-      expect(((await res.json()) as { code: string }).code).toBe("not_a_firefighter");
+      expect(((await res.json()) as { code: string }).code).toBe(
+        "not_a_firefighter"
+      );
     });
 
     it(`200s for a viewer on ${path} — reads are for any of the seven`, async () => {
@@ -207,7 +219,9 @@ describe("GET /api/eval/triage", () => {
     expect(ids).not.toContain(scenario.truePositive);
     expect(ids).not.toContain(scenario.trueNegative);
 
-    const fn = body.score.disagreements.find((d) => d.eventId === scenario.falseNegative);
+    const fn = body.score.disagreements.find(
+      (d) => d.eventId === scenario.falseNegative
+    );
     expect(fn).toMatchObject({
       wake: false,
       humanEngaged: true,
@@ -223,7 +237,7 @@ describe("GET /api/eval/triage", () => {
         replyUserId: `U-eng-${tag}`,
         replyAfterMs: 25 * 60 * 60_000,
         replyOutcome: "ingested",
-      }),
+      })
     ).toEqual({ n: 1, truePos: 0, falsePos: 1, falseNeg: 0, trueNeg: 0 });
   });
 
@@ -234,7 +248,7 @@ describe("GET /api/eval/triage", () => {
         replyUserId: `U-cust-${tag}`, // the person who triggered it, bumping their own thread
         replyAfterMs: 60 * 60_000,
         replyOutcome: "ingested",
-      }),
+      })
     ).toEqual({ n: 1, truePos: 0, falsePos: 1, falseNeg: 0, trueNeg: 0 });
   });
 
@@ -258,7 +272,7 @@ describe("GET /api/eval/triage", () => {
         replyUserId: `U-eng-${tag}`,
         replyAfterMs: 60 * 60_000,
         replyOutcome: "ingested_self",
-      }),
+      })
     ).toEqual({ n: 1, truePos: 0, falsePos: 1, falseNeg: 0, trueNeg: 0 });
   });
 
@@ -269,7 +283,7 @@ describe("GET /api/eval/triage", () => {
         replyUserId: `U-eng-${tag}`,
         replyAfterMs: 60 * 60_000,
         replyOutcome: "ingested",
-      }),
+      })
     ).toEqual({ n: 1, truePos: 1, falsePos: 0, falseNeg: 0, trueNeg: 0 });
   });
 
@@ -293,8 +307,12 @@ describe("GET /api/eval/triage", () => {
     // And the invariant itself, stated as an equivalence so it holds whatever
     // the shared database happens to contain: a rate is null EXACTLY when its
     // class is empty. Never 0 for "we never measured it".
-    expect(body.score.precision === null).toBe(body.score.truePos + body.score.falsePos === 0);
-    expect(body.score.recall === null).toBe(body.score.truePos + body.score.falseNeg === 0);
+    expect(body.score.precision === null).toBe(
+      body.score.truePos + body.score.falsePos === 0
+    );
+    expect(body.score.recall === null).toBe(
+      body.score.truePos + body.score.falseNeg === 0
+    );
   });
 
   /**
@@ -396,7 +414,12 @@ describe("GET /api/eval/triage", () => {
       text: "ancient",
       receivedAt: longAgo,
     });
-    await seedDecision({ eventId, wake: true, why: "ancient", createdAt: longAgo });
+    await seedDecision({
+      eventId,
+      wake: true,
+      why: "ancient",
+      createdAt: longAgo,
+    });
 
     // 40 days back: invisible at days=7, counted at days=90.
     expect(delta(beforeNarrow, (await triage("?days=7")).score).n).toBe(0);
@@ -464,9 +487,14 @@ describe("GET /api/eval/shadow", () => {
 
   it("returns suppressed drafts newest first, with tells and the human reply", async () => {
     await seedShadowCorpus();
-    const mine = (await shadow("?limit=50")).filter((p) => p.approvalId.includes(tag));
+    const mine = (await shadow("?limit=50")).filter((p) =>
+      p.approvalId.includes(tag)
+    );
 
-    expect(mine.map((p) => p.approvalId)).toEqual([`apr:${tag}:newer`, `apr:${tag}:older`]);
+    expect(mine.map((p) => p.approvalId)).toEqual([
+      `apr:${tag}:newer`,
+      `apr:${tag}:older`,
+    ]);
     expect(mine[0]!.createdAt).toBeGreaterThan(mine[1]!.createdAt);
     expect(mine[1]).toMatchObject({
       draft: CLEAN,
@@ -484,9 +512,16 @@ describe("GET /api/eval/shadow", () => {
 
   it("annotates each draft with the detector's tells", async () => {
     await seedShadowCorpus();
-    const noisy = (await shadow("?limit=50")).find((p) => p.approvalId === `apr:${tag}:newer`);
+    const noisy = (await shadow("?limit=50")).find(
+      (p) => p.approvalId === `apr:${tag}:newer`
+    );
     expect(noisy!.tells).toEqual(
-      expect.arrayContaining(["great_question", "exclamation", "em_dash", "semicolon"]),
+      expect.arrayContaining([
+        "great_question",
+        "exclamation",
+        "em_dash",
+        "semicolon",
+      ])
     );
   });
 
@@ -498,7 +533,9 @@ describe("GET /api/eval/shadow", () => {
    */
   it("reports humanReply null when the only later message is the agent's own", async () => {
     await seedShadowCorpus();
-    const newer = (await shadow("?limit=50")).find((p) => p.approvalId === `apr:${tag}:newer`);
+    const newer = (await shadow("?limit=50")).find(
+      (p) => p.approvalId === `apr:${tag}:newer`
+    );
     expect(newer!.humanReply).toBeNull();
   });
 
@@ -582,9 +619,11 @@ describe("the eval API is D1-only", () => {
       {
         get(_target, prop) {
           touched.push(String(prop));
-          throw new Error(`env.RUNS.${String(prop)} was read by a read-only eval route`);
+          throw new Error(
+            `env.RUNS.${String(prop)} was read by a read-only eval route`
+          );
         },
-      },
+      }
     );
     const trappedEnv = { ...env, RUNS: boobyTrap } as unknown as Env;
     const headers = new Headers({ "Cf-Access-Jwt-Assertion": FIREFIGHTER });
@@ -603,8 +642,16 @@ describe("the eval API is D1-only", () => {
       createdAt: Date.now(),
     });
 
-    const triageRes = await evalApi.request("/eval/triage?days=90", { headers }, trappedEnv);
-    const shadowRes = await evalApi.request("/eval/shadow?limit=50", { headers }, trappedEnv);
+    const triageRes = await evalApi.request(
+      "/eval/triage?days=90",
+      { headers },
+      trappedEnv
+    );
+    const shadowRes = await evalApi.request(
+      "/eval/shadow?limit=50",
+      { headers },
+      trappedEnv
+    );
 
     expect(triageRes.status).toBe(200);
     expect(shadowRes.status).toBe(200);
@@ -614,7 +661,7 @@ describe("the eval API is D1-only", () => {
     const triageBody = (await triageRes.json()) as TriageBody;
     expect(triageBody.score.n).toBeGreaterThanOrEqual(4);
     expect(triageBody.score.disagreements.map((d) => d.eventId)).toContain(
-      scenario.falsePositive,
+      scenario.falsePositive
     );
     const pairs = ((await shadowRes.json()) as { pairs: ShadowPair[] }).pairs;
     expect(pairs.map((p) => p.approvalId)).toContain(`apr:${tag}:do`);

@@ -46,6 +46,6 @@ const REDACTIONS: Array<[RegExp, string]> = [
 export function redact(message: string): string {
   return REDACTIONS.reduce(
     (acc, [pattern, replacement]) => acc.replace(pattern, replacement),
-    message,
+    message
   );
 }

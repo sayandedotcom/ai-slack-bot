@@ -15,7 +15,7 @@ function row(
   id: string,
   wake: boolean,
   humanEngaged: boolean,
-  extra: Partial<TriageOutcomeRow> = {},
+  extra: Partial<TriageOutcomeRow> = {}
 ): TriageOutcomeRow {
   return {
     eventId: id,
@@ -57,7 +57,11 @@ describe("scoreTriage: precision", () => {
   });
 
   it("is exactly 1.0 when every wake was engaged (not confused with null)", () => {
-    const rows = [row("a", true, true), row("b", true, true), row("c", false, false)];
+    const rows = [
+      row("a", true, true),
+      row("b", true, true),
+      row("c", false, false),
+    ];
     const score = scoreTriage(rows);
     expect(score.precision).toBe(1.0);
     expect(score.precision).not.toBeNull();
@@ -83,7 +87,11 @@ describe("scoreTriage: recall", () => {
   });
 
   it("is exactly 1.0 when every engaged row was woken (not confused with null)", () => {
-    const rows = [row("a", true, true), row("b", true, true), row("c", false, false)];
+    const rows = [
+      row("a", true, true),
+      row("b", true, true),
+      row("c", false, false),
+    ];
     const score = scoreTriage(rows);
     expect(score.recall).toBe(1.0);
     expect(score.recall).not.toBeNull();
@@ -116,7 +124,10 @@ describe("scoreTriage: disagreements", () => {
   });
 
   it("preserves the full row shape for each disagreement", () => {
-    const fp = row("fp1", true, false, { why: "looked urgent", permalink: "https://x/1" });
+    const fp = row("fp1", true, false, {
+      why: "looked urgent",
+      permalink: "https://x/1",
+    });
     const score = scoreTriage([fp]);
     expect(score.disagreements).toEqual([fp]);
   });
@@ -132,18 +143,24 @@ describe("scoreTriage: disagreements", () => {
     for (const fn of fns) {
       expect(ids.has(fn.eventId)).toBe(true);
     }
-    const survivingFps = score.disagreements.filter((r) => r.eventId.startsWith("fp"));
+    const survivingFps = score.disagreements.filter((r) =>
+      r.eventId.startsWith("fp")
+    );
     expect(survivingFps).toHaveLength(1);
   });
 
   it("drops false negatives beyond the cap only when FNs alone exceed it", () => {
-    const fns = ["fn1", "fn2", "fn3", "fn4", "fn5"].map((id) => row(id, false, true));
+    const fns = ["fn1", "fn2", "fn3", "fn4", "fn5"].map((id) =>
+      row(id, false, true)
+    );
     const score = scoreTriage(fns, 3);
     expect(score.disagreements).toHaveLength(3);
   });
 
   it("defaults the cap to 25", () => {
-    const fns = Array.from({ length: 30 }, (_, i) => row(`fn${i}`, false, true));
+    const fns = Array.from({ length: 30 }, (_, i) =>
+      row(`fn${i}`, false, true)
+    );
     const score = scoreTriage(fns);
     expect(score.disagreements).toHaveLength(25);
   });
@@ -157,7 +174,11 @@ describe("scoreTriage: disagreements", () => {
 
 describe("scoreTriage: n and empty input", () => {
   it("sets n to the input length", () => {
-    const rows = [row("a", true, true), row("b", false, false), row("c", true, false)];
+    const rows = [
+      row("a", true, true),
+      row("b", false, false),
+      row("c", true, false),
+    ];
     expect(scoreTriage(rows).n).toBe(3);
   });
 

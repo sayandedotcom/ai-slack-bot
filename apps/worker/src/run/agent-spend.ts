@@ -17,7 +17,12 @@
  * Pure module. No storage, no bindings, no clock — every function is total over
  * integers, so the whole spend policy is testable without a provider.
  */
-import type { LanguageModelUsage, StepResult, StopCondition, ToolSet } from "ai";
+import type {
+  LanguageModelUsage,
+  StepResult,
+  StopCondition,
+  ToolSet,
+} from "ai";
 
 import { NANO_USD_PER_USD } from "./money";
 
@@ -64,9 +69,10 @@ export const FABLE_5_PRICES: ModelPrices = {
  * priced, because the alternative is charging an unknown model at Fable's rate
  * and reporting a confident number that is wrong by an unknown factor.
  */
-export const MODEL_PRICES: Readonly<Record<string, ModelPrices>> = Object.freeze({
-  [FABLE_5_MODEL_ID]: FABLE_5_PRICES,
-});
+export const MODEL_PRICES: Readonly<Record<string, ModelPrices>> =
+  Object.freeze({
+    [FABLE_5_MODEL_ID]: FABLE_5_PRICES,
+  });
 
 /**
  * Thrown when cost is asked for a model with no reviewed price row. A distinct
@@ -86,7 +92,9 @@ export class UnknownModelPriceError extends Error {
 
 /** Prices for a known model, or a throw. Never a fallback rate. */
 export function pricesFor(modelId: string): ModelPrices {
-  const prices = Object.hasOwn(MODEL_PRICES, modelId) ? MODEL_PRICES[modelId] : undefined;
+  const prices = Object.hasOwn(MODEL_PRICES, modelId)
+    ? MODEL_PRICES[modelId]
+    : undefined;
   if (prices === undefined) throw new UnknownModelPriceError(modelId);
   return prices;
 }
@@ -120,7 +128,9 @@ export type NormalizedUsage = {
  * one place that would be wrong — a provider reporting no input detail at all —
  * is handled in `costNanoUsd`, which charges the unclassified remainder.
  */
-export function normalizeUsage(usage: LanguageModelUsage | undefined): NormalizedUsage {
+export function normalizeUsage(
+  usage: LanguageModelUsage | undefined
+): NormalizedUsage {
   const input = usage?.inputTokenDetails;
   const output = usage?.outputTokenDetails;
 
@@ -144,7 +154,8 @@ export function normalizeUsage(usage: LanguageModelUsage | undefined): Normalize
 }
 
 function toCount(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+    return 0;
   return Math.round(value);
 }
 
@@ -202,9 +213,11 @@ export function costBreakdown(input: {
   const prices = pricesFor(input.modelId);
   const { usage } = input;
 
-  const classified = usage.noCacheTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+  const classified =
+    usage.noCacheTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
   const unclassifiedInputTokens = Math.max(0, usage.inputTokens - classified);
-  const cacheWriteRate = input.cacheWriteTtl === "1h" ? prices.cacheWrite1h : prices.cacheWrite5m;
+  const cacheWriteRate =
+    input.cacheWriteTtl === "1h" ? prices.cacheWrite1h : prices.cacheWrite5m;
 
   const breakdown: CostBreakdown = {
     noCacheNanoUsd: usage.noCacheTokens * prices.input,
@@ -228,16 +241,22 @@ export function costBreakdown(input: {
 }
 
 /** What one step cost, as one integer. */
-export function costNanoUsd(modelId: string, usage: LanguageModelUsage | undefined): number {
+export function costNanoUsd(
+  modelId: string,
+  usage: LanguageModelUsage | undefined
+): number {
   return costBreakdown({ modelId, usage: normalizeUsage(usage) }).totalNanoUsd;
 }
 
 /** What the steps completed so far in this turn have cost. */
 export function spentNanoUsd(
   modelId: string,
-  steps: ReadonlyArray<Pick<StepResult<ToolSet>, "usage">>,
+  steps: ReadonlyArray<Pick<StepResult<ToolSet>, "usage">>
 ): number {
-  return steps.reduce((total, step) => total + costNanoUsd(modelId, step.usage), 0);
+  return steps.reduce(
+    (total, step) => total + costNanoUsd(modelId, step.usage),
+    0
+  );
 }
 
 /* ------------------------------------------------------------------ ceilings -- */
@@ -287,9 +306,12 @@ export function worstCaseStepNanoUsd(input: {
   maxOutputTokens: number;
 }): number {
   const prices = pricesFor(input.modelId);
-  const estimatedInputTokens = Math.ceil(input.promptBytes / CONSERVATIVE_BYTES_PER_TOKEN);
+  const estimatedInputTokens = Math.ceil(
+    input.promptBytes / CONSERVATIVE_BYTES_PER_TOKEN
+  );
   return (
-    estimatedInputTokens * worstCaseInputRate(prices) + input.maxOutputTokens * prices.output
+    estimatedInputTokens * worstCaseInputRate(prices) +
+    input.maxOutputTokens * prices.output
   );
 }
 
@@ -327,7 +349,10 @@ export function spendDecision(input: {
  * ceiling — so a turn that blows through the preflight (a single enormous step)
  * still terminates, rather than being asked politely not to continue.
  */
-export function spendStopWhen(modelId: string, ceilingNanoUsd: number): StopCondition<ToolSet> {
+export function spendStopWhen(
+  modelId: string,
+  ceilingNanoUsd: number
+): StopCondition<ToolSet> {
   return ({ steps }) => {
     if (ceilingNanoUsd <= 0) return false;
     return spentNanoUsd(modelId, steps) >= ceilingNanoUsd;
@@ -342,8 +367,10 @@ export function spendStopWhen(modelId: string, ceilingNanoUsd: number): StopCond
  * operator's var must not remove the money bound.
  */
 export function spendCeilingFrom(raw: string | undefined): number {
-  if (raw === undefined || raw.trim() === "") return DEFAULT_SPEND_CEILING_NANO_USD;
+  if (raw === undefined || raw.trim() === "")
+    return DEFAULT_SPEND_CEILING_NANO_USD;
   const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) return DEFAULT_SPEND_CEILING_NANO_USD;
+  if (!Number.isSafeInteger(parsed) || parsed < 0)
+    return DEFAULT_SPEND_CEILING_NANO_USD;
   return parsed;
 }

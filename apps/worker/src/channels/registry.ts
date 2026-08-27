@@ -85,7 +85,7 @@ const DEFAULT_MODE = "live" as const;
  */
 export async function registerChannel(
   env: Env,
-  channelId: string,
+  channelId: string
 ): Promise<ChannelPolicy | null> {
   const existing = await getChannelPolicy(env.DB, channelId);
   if (existing.known) return existing;
@@ -111,12 +111,16 @@ export async function registerChannel(
  * overwrite a slug the winner already derived, still less one a human has since
  * corrected.
  */
-async function insertChannel(db: D1Database, channelId: string, name: string): Promise<void> {
+async function insertChannel(
+  db: D1Database,
+  channelId: string,
+  name: string
+): Promise<void> {
   await db
     .prepare(
       `INSERT INTO channels (channel_id, name, customer_slug, mode)
             VALUES (?, ?, ?, ?)
-       ON CONFLICT(channel_id) DO NOTHING`,
+       ON CONFLICT(channel_id) DO NOTHING`
     )
     .bind(channelId, name, deriveSlug(name, channelId), DEFAULT_MODE)
     .run();
@@ -129,7 +133,9 @@ async function insertChannel(db: D1Database, channelId: string, name: string): P
  * missing from Slack's answer is not evidence the bot was removed (the list is
  * `[]` on any API failure), so absence is never acted on.
  */
-export async function sweepChannelMembership(env: Env): Promise<{ registered: number }> {
+export async function sweepChannelMembership(
+  env: Env
+): Promise<{ registered: number }> {
   const channels = await listBotConversations(env.SLACK_BOT_TOKEN);
   let registered = 0;
 

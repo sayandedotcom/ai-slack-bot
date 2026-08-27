@@ -39,7 +39,7 @@ export async function projectStatus(
   db: D1Database,
   runId: string,
   to: RunStatus,
-  now: number,
+  now: number
 ): Promise<ProjectionOutcome> {
   const run = await getRunById(db, runId);
   if (run === null) return { applied: false, reason: "run_not_found" };
@@ -49,7 +49,9 @@ export async function projectStatus(
   if (!verdict.changed) return { applied: false, reason: "same_status" };
 
   const { applied } = await casRunStatus(db, runId, run.status, to, now);
-  return applied ? { applied: true } : { applied: false, reason: "status_changed_concurrently" };
+  return applied
+    ? { applied: true }
+    : { applied: false, reason: "status_changed_concurrently" };
 }
 
 /**
@@ -95,7 +97,10 @@ export type UsageRow = {
  * one step cannot double its cost, while a different attempt lands as the
  * distinct billed call it was.
  */
-export async function recordUsage(db: D1Database, row: UsageRow): Promise<void> {
+export async function recordUsage(
+  db: D1Database,
+  row: UsageRow
+): Promise<void> {
   await db
     .prepare(
       `INSERT OR IGNORE INTO agent_model_calls (
@@ -104,7 +109,7 @@ export async function recordUsage(db: D1Database, row: UsageRow): Promise<void> 
          input_tokens, no_cache_tokens, cache_read_tokens, cache_write_tokens,
          output_tokens, reasoning_tokens, total_tokens,
          cost_nano_usd, latency_ms, finish_reason, raw_finish_reason, error_code, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       usageRowId(row),
@@ -131,7 +136,7 @@ export async function recordUsage(db: D1Database, row: UsageRow): Promise<void> 
       row.finishReason,
       row.rawFinishReason,
       row.errorCode,
-      row.createdAt,
+      row.createdAt
     )
     .run();
 }
@@ -143,6 +148,8 @@ export async function recordUsage(db: D1Database, row: UsageRow): Promise<void> 
  * retry of the same logical step, so keying on it would record the retry as a
  * second billed call.
  */
-export function usageRowId(row: Pick<UsageRow, "generationId" | "attempt" | "stepIndex">): string {
+export function usageRowId(
+  row: Pick<UsageRow, "generationId" | "attempt" | "stepIndex">
+): string {
   return `usage:${row.generationId}:${row.attempt}:${row.stepIndex}`;
 }

@@ -23,7 +23,10 @@ const POLL_MS = 5_000;
  * on you". These are the only rows that pulse; a pulse on a finished run would
  * train operators to ignore the one signal that matters.
  */
-const LIVE: ReadonlySet<RunStatus> = new Set<RunStatus>(["live", "awaiting_approval"]);
+const LIVE: ReadonlySet<RunStatus> = new Set<RunStatus>([
+  "live",
+  "awaiting_approval",
+]);
 
 const STATUS_LABEL: Record<RunStatus, string> = {
   live: "live",
@@ -35,7 +38,8 @@ const STATUS_LABEL: Record<RunStatus, string> = {
 
 const STATUS_CLASS: Record<RunStatus, string> = {
   live: "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  awaiting_approval: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  awaiting_approval:
+    "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
   idle: "border-border bg-muted text-muted-foreground",
   done: "border-border bg-muted text-muted-foreground",
   failed: "border-destructive/40 bg-destructive/10 text-destructive",
@@ -93,7 +97,15 @@ export function ShadowBadge({ label }: { label?: string }): ReactNode {
   );
 }
 
-function RunRow({ run, now, onSelect }: { run: RunSummary; now: number; onSelect: (id: string) => void }) {
+function RunRow({
+  run,
+  now,
+  onSelect,
+}: {
+  run: RunSummary;
+  now: number;
+  onSelect: (id: string) => void;
+}) {
   // The worker joins these for display; a run started from chat has neither.
   const where = run.channelName ?? run.customerSlug;
 
@@ -109,7 +121,9 @@ function RunRow({ run, now, onSelect }: { run: RunSummary; now: number; onSelect
           <OriginBadge origin={run.origin} />
           {run.shadow ? <ShadowBadge /> : null}
           {where === null ? null : (
-            <span className="truncate text-xs text-muted-foreground">{where}</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {where}
+            </span>
           )}
           <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
             {ago(run.updatedAt, now)}
@@ -118,21 +132,33 @@ function RunRow({ run, now, onSelect }: { run: RunSummary; now: number; onSelect
         <p className="truncate text-sm">
           {/* A run can be woken before it has said anything worth summarising;
               saying so beats an empty row that reads as a rendering bug. */}
-          {run.summary ?? <span className="text-muted-foreground">No summary yet</span>}
+          {run.summary ?? (
+            <span className="text-muted-foreground">No summary yet</span>
+          )}
         </p>
       </button>
     </li>
   );
 }
 
-export function RunList({ onSelect }: { onSelect: (id: string) => void }): ReactNode {
-  const polled = usePoll<RunSummary[]>(useMemo(() => () => fetchRuns(), []), POLL_MS);
+export function RunList({
+  onSelect,
+}: {
+  onSelect: (id: string) => void;
+}): ReactNode {
+  const polled = usePoll<RunSummary[]>(
+    useMemo(() => () => fetchRuns(), []),
+    POLL_MS
+  );
 
   // `Panel` renders `empty` for us but cannot know that an empty array is empty
   // rather than ready — so the emptiness is decided here, once.
   const state: PanelState<RunSummary[]> =
     polled.kind === "ready" && polled.data.length === 0
-      ? { kind: "empty", hint: "No runs yet — the agent wakes when a customer thread needs it." }
+      ? {
+          kind: "empty",
+          hint: "No runs yet — the agent wakes when a customer thread needs it.",
+        }
       : polled;
 
   const now = Date.now();

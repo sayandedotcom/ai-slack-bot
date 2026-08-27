@@ -82,7 +82,10 @@ function boundResult(value: unknown, limits: CapabilityLimits): BoundedResult {
   let safe: JsonValue;
   try {
     // Size is checked below, not here: this pass is only about representability.
-    safe = toSafeJson(value, { ...limits, maxResultChars: Number.MAX_SAFE_INTEGER });
+    safe = toSafeJson(value, {
+      ...limits,
+      maxResultChars: Number.MAX_SAFE_INTEGER,
+    });
   } catch (err) {
     return { ok: false, error: safeMessage(err) };
   }
@@ -114,7 +117,7 @@ function boundResult(value: unknown, limits: CapabilityLimits): BoundedResult {
  */
 function boundLogs(
   logs: string[] | undefined,
-  limits: CapabilityLimits,
+  limits: CapabilityLimits
 ): { logs: string[]; truncated: boolean } {
   if (!logs || logs.length === 0) return { logs: [], truncated: false };
 
@@ -140,7 +143,9 @@ function boundLogs(
   }
 
   if (truncated) {
-    out.push(`… [${TRUNCATION_MARK}: ${logs.length - out.length + 1} of ${logs.length} console lines omitted or cut]`);
+    out.push(
+      `… [${TRUNCATION_MARK}: ${logs.length - out.length + 1} of ${logs.length} console lines omitted or cut]`
+    );
   }
   return { logs: out, truncated };
 }
@@ -176,7 +181,7 @@ export function makeGuardedExecutor(
   loader: WorkerLoader,
   limits: CapabilityLimits,
   clock: () => number,
-  abortSignal?: AbortSignal,
+  abortSignal?: AbortSignal
 ): Executor {
   const inner = new DynamicWorkerExecutor({
     loader,
@@ -194,7 +199,7 @@ export function makeGuardedExecutor(
       providersOrFns:
         | ResolvedProvider[]
         | Record<string, (...args: unknown[]) => Promise<unknown>>,
-      options?: ExecuteOptions,
+      options?: ExecuteOptions
     ): Promise<ExecuteResult> {
       const startedAt = clock();
 
@@ -203,7 +208,7 @@ export function makeGuardedExecutor(
           result: null,
           error: new CapabilityError(
             "invalid_input",
-            `the program is ${code.length} characters; the cap is ${limits.maxCodeChars}`,
+            `the program is ${code.length} characters; the cap is ${limits.maxCodeChars}`
           ).message,
         };
       }
@@ -225,10 +230,10 @@ export function makeGuardedExecutor(
                   // attempt is a genuinely different effect (a reworded message
                   // hashes differently), so the ledger correctly declines to
                   // dedupe it. Naming what survived is what stops the retry.
-                  `the program exceeded its ${limits.wallTimeMs}ms budget and was abandoned. IMPORTANT: any capability call that already returned inside it HAS TAKEN EFFECT — a reply was sent, an issue was filed, a pull request was opened. Do not assume the work was lost and redo it. Read back what exists (the thread, the issue, the pull request) and continue from there, and if you retry anything, retry it with the SAME arguments so the effect ledger can recognise it rather than treating a rewrite as a second, new action.`,
-                ),
+                  `the program exceeded its ${limits.wallTimeMs}ms budget and was abandoned. IMPORTANT: any capability call that already returned inside it HAS TAKEN EFFECT — a reply was sent, an issue was filed, a pull request was opened. Do not assume the work was lost and redo it. Read back what exists (the thread, the issue, the pull request) and continue from there, and if you retry anything, retry it with the SAME arguments so the effect ledger can recognise it rather than treating a rewrite as a second, new action.`
+                )
               ),
-            limits.wallTimeMs,
+            limits.wallTimeMs
           );
         });
         // Swallow the loser. Without this, winning the race leaves a rejected
@@ -239,7 +244,7 @@ export function makeGuardedExecutor(
         const abandoned = () =>
           new CapabilityError(
             "execution_timeout",
-            "the caller stopped waiting for this program, so it was abandoned before it finished.",
+            "the caller stopped waiting for this program, so it was abandoned before it finished."
           );
         const racers: Array<Promise<ExecuteResult>> = [
           inner.execute(code, providersOrFns, options),
@@ -255,7 +260,7 @@ export function makeGuardedExecutor(
               once: true,
             });
           });
-          aborted.catch(() => {});   // same reason as `timeout.catch` above
+          aborted.catch(() => {}); // same reason as `timeout.catch` above
           racers.push(aborted);
         }
 

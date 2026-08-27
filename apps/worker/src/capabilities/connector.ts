@@ -47,7 +47,9 @@ export type CapabilityNamespaceFactory<Ctx> = {
  * the text a human edited in the dashboard. Setting it would also collide with
  * `replay: "reexecute"`, which `describe()` rejects. See spec decision R5/D4.
  */
-export class FirefighterConnector<Ctx = unknown> extends CodemodeConnector<Env> {
+export class FirefighterConnector<
+  Ctx = unknown,
+> extends CodemodeConnector<Env> {
   readonly #factory: CapabilityNamespaceFactory<Ctx>;
   readonly #getContext: (executionId: string) => Promise<Ctx>;
   /**
@@ -69,7 +71,7 @@ export class FirefighterConnector<Ctx = unknown> extends CodemodeConnector<Env> 
     env: Env,
     factory: CapabilityNamespaceFactory<Ctx>,
     /** Builds the context for ONE execution. Called at most once per execution. */
-    getContext: (executionId: string) => Promise<Ctx>,
+    getContext: (executionId: string) => Promise<Ctx>
   ) {
     super(ctx, env);
     this.#factory = factory;
@@ -148,7 +150,10 @@ export class FirefighterConnector<Ctx = unknown> extends CodemodeConnector<Env> 
         // Raw, unvalidated args by design: the tool's own Zod parse inside
         // `defineCapability` is the runtime boundary, and it is the one that
         // produces the `invalid_input` the model knows how to read.
-        execute: async (args: unknown, callCtx?: { executionId?: string }): Promise<unknown> => {
+        execute: async (
+          args: unknown,
+          callCtx?: { executionId?: string }
+        ): Promise<unknown> => {
           // The execution's ONE context. A missing id means the call did not
           // come through the runtime; refuse rather than silently give it a
           // private budget.
@@ -156,10 +161,12 @@ export class FirefighterConnector<Ctx = unknown> extends CodemodeConnector<Env> 
           if (typeof executionId !== "string" || executionId.length === 0) {
             throw new CapabilityError(
               "invalid_context",
-              `${this.#factory.name}.${method} was called outside a codemode execution.`,
+              `${this.#factory.name}.${method} was called outside a codemode execution.`
             );
           }
-          const live = this.#factory.build(await this.#contextFor(executionId))[method];
+          const live = this.#factory.build(await this.#contextFor(executionId))[
+            method
+          ];
           if (!live?.run) {
             // Unreachable through `auditedCapability`, which always attaches
             // one. Loud rather than silent: a tool with no `run` would
@@ -167,7 +174,7 @@ export class FirefighterConnector<Ctx = unknown> extends CodemodeConnector<Env> 
             // looks like a successful no-op.
             throw new CapabilityError(
               "invalid_context",
-              `${this.#factory.name}.${method} has no execute implementation.`,
+              `${this.#factory.name}.${method} has no execute implementation.`
             );
           }
           return live.run(args);

@@ -45,10 +45,11 @@ const DROPPED_SUBTYPES = new Set([
 export function classify(
   event: SlackMessageEvent,
   channelKnown: boolean,
-  self?: SelfIdentity,
+  self?: SelfIdentity
 ): IngestOutcome {
   void channelKnown;
-  if (event.channel_type === "im" || event.channel_type === "mpim") return "dropped_dm";
+  if (event.channel_type === "im" || event.channel_type === "mpim")
+    return "dropped_dm";
   if (event.subtype === "bot_message") return "dropped_bot";
 
   if (event.bot_id) {
@@ -74,10 +75,12 @@ export function classify(
       event.user.length > 0 &&
       event.user !== self.botUserId;
     if (!isSelfPost) return "dropped_bot";
-    if (event.subtype && DROPPED_SUBTYPES.has(event.subtype)) return "dropped_subtype";
+    if (event.subtype && DROPPED_SUBTYPES.has(event.subtype))
+      return "dropped_subtype";
     return "ingested_self";
   }
 
-  if (event.subtype && DROPPED_SUBTYPES.has(event.subtype)) return "dropped_subtype";
+  if (event.subtype && DROPPED_SUBTYPES.has(event.subtype))
+    return "dropped_subtype";
   return "ingested";
 }

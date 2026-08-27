@@ -23,7 +23,9 @@ const EMPTY_HINT =
 function TellBadges({ tells }: { tells: ShadowPair["tells"] }): ReactNode {
   if (tells.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground">clean — no AI tells detected</p>
+      <p className="text-xs text-muted-foreground">
+        clean — no AI tells detected
+      </p>
     );
   }
   return (
@@ -65,7 +67,9 @@ function PairRow({ pair }: { pair: ShadowPair }): ReactNode {
   return (
     <li className="grid grid-cols-1 gap-4 border-b border-border py-3 last:border-b-0 md:grid-cols-2">
       <div className="space-y-2">
-        <p className="text-xs font-medium text-muted-foreground">Agent drafted</p>
+        <p className="text-xs font-medium text-muted-foreground">
+          Agent drafted
+        </p>
         <p className="whitespace-pre-wrap text-sm">{pair.draft}</p>
         <TellBadges tells={pair.tells} />
       </div>

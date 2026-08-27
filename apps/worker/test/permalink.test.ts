@@ -22,12 +22,15 @@ function mockSlack(handler: (req: Request) => Response | Promise<Response>) {
 describe("getPermalink", () => {
   it("returns the permalink Slack gives us", async () => {
     mockSlack(() =>
-      Response.json({ ok: true, permalink: "https://zellify.slack.com/archives/C1/p1700000000000100" }),
+      Response.json({
+        ok: true,
+        permalink: "https://zellify.slack.com/archives/C1/p1700000000000100",
+      })
     );
 
-    await expect(getPermalink("xoxb-test", "C1", "1700000000.000100")).resolves.toBe(
-      "https://zellify.slack.com/archives/C1/p1700000000000100",
-    );
+    await expect(
+      getPermalink("xoxb-test", "C1", "1700000000.000100")
+    ).resolves.toBe("https://zellify.slack.com/archives/C1/p1700000000000100");
   });
 
   it("sends the bot token and the message coordinates", async () => {

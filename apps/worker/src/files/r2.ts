@@ -44,11 +44,15 @@ function invalid(reason: string): CapabilityError {
   return new CapabilityError("invalid_input", reason);
 }
 
-function assertPublishable(bytes: Uint8Array, contentType: string, filename: string): string {
+function assertPublishable(
+  bytes: Uint8Array,
+  contentType: string,
+  filename: string
+): string {
   const extension = CONTENT_TYPES[contentType];
   if (extension === undefined) {
     throw invalid(
-      `"${contentType}" cannot be published. Allowed types: ${Object.keys(CONTENT_TYPES).join(", ")}.`,
+      `"${contentType}" cannot be published. Allowed types: ${Object.keys(CONTENT_TYPES).join(", ")}.`
     );
   }
   if (bytes.byteLength === 0) {
@@ -56,7 +60,7 @@ function assertPublishable(bytes: Uint8Array, contentType: string, filename: str
   }
   if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
     throw invalid(
-      `the file is ${bytes.byteLength} bytes; the cap is ${MAX_ARTIFACT_BYTES}. Summarise or sample it instead.`,
+      `the file is ${bytes.byteLength} bytes; the cap is ${MAX_ARTIFACT_BYTES}. Summarise or sample it instead.`
     );
   }
   // Path separators and control characters never reach an object key — the key
@@ -70,7 +74,9 @@ function assertPublishable(bytes: Uint8Array, contentType: string, filename: str
     throw invalid("the filename cannot contain control characters.");
   }
   if (!/^[\w][\w .()-]{0,199}$/.test(filename)) {
-    throw invalid("the filename may use letters, digits, spaces, dots, dashes, underscores and brackets only.");
+    throw invalid(
+      "the filename may use letters, digits, spaces, dots, dashes, underscores and brackets only."
+    );
   }
   for (const [label, magic] of EXECUTABLE_MAGIC) {
     if (magic.every((byte, i) => bytes[i] === byte)) {
@@ -87,10 +93,16 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     .join("");
 }
 
-export function makeArtifactPublisher(config: ArtifactConfig): ArtifactPublisher {
+export function makeArtifactPublisher(
+  config: ArtifactConfig
+): ArtifactPublisher {
   return {
     async publish(input): Promise<PublishedFile> {
-      const extension = assertPublishable(input.bytes, input.contentType, input.filename);
+      const extension = assertPublishable(
+        input.bytes,
+        input.contentType,
+        input.filename
+      );
       const sha256 = await sha256Hex(input.bytes);
 
       // Derived from the effect key, so a retry writes the same object rather

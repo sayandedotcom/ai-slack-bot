@@ -233,7 +233,7 @@ export function boundActions(actions: readonly string[]): string[] {
 
 /** Bound the descriptor list and drop duplicates, keeping first-seen order. */
 export function boundSources(
-  sources: readonly EpisodeSourceDescriptor[],
+  sources: readonly EpisodeSourceDescriptor[]
 ): EpisodeSourceDescriptor[] {
   const seen = new Set<string>();
   const out: EpisodeSourceDescriptor[] = [];
@@ -248,7 +248,7 @@ export function boundSources(
     out.push(
       source.turnId === undefined
         ? { kind: source.kind, ref }
-        : { kind: source.kind, ref, turnId: source.turnId.slice(0, 200) },
+        : { kind: source.kind, ref, turnId: source.turnId.slice(0, 200) }
     );
     if (out.length >= EPISODE_LIMITS.sources) break;
   }
@@ -274,7 +274,9 @@ export type BuildEpisodeInput = {
   sources: readonly EpisodeSourceDescriptor[];
 };
 
-export function buildAgentEpisode(input: BuildEpisodeInput): AgentEpisodePayload {
+export function buildAgentEpisode(
+  input: BuildEpisodeInput
+): AgentEpisodePayload {
   return {
     episode: {
       asked: boundedEpisodeText(input.asked, EPISODE_LIMITS.asked),
@@ -325,7 +327,9 @@ export function boundedMetadata(raw: Record<string, unknown>): EpisodeMetadata {
     }
     if (Array.isArray(value)) {
       const items = value
-        .filter((item): item is string => typeof item === "string" && item.length > 0)
+        .filter(
+          (item): item is string => typeof item === "string" && item.length > 0
+        )
         .map((item) => redactSecrets(item).slice(0, 200))
         .slice(0, 20);
       // A non-EMPTY scalar array. An empty one is not a supported tag value.

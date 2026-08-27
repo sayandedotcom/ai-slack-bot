@@ -72,20 +72,34 @@ function toolNameOf(part: ChatMessagePart): string {
 function preview(value: unknown): { text: string; truncated: boolean } {
   let full: string;
   try {
-    full = typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value));
+    full =
+      typeof value === "string"
+        ? value
+        : (JSON.stringify(value, null, 2) ?? String(value));
   } catch {
     full = String(value);
   }
-  return { text: full.slice(0, PAYLOAD_MAX_CHARS), truncated: full.length > PAYLOAD_MAX_CHARS };
+  return {
+    text: full.slice(0, PAYLOAD_MAX_CHARS),
+    truncated: full.length > PAYLOAD_MAX_CHARS,
+  };
 }
 
 function Caption({ children }: { children: ReactNode }): ReactNode {
   return (
-    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{children}</div>
+    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+      {children}
+    </div>
   );
 }
 
-function Payload({ label, value }: { label: string; value: unknown }): ReactNode {
+function Payload({
+  label,
+  value,
+}: {
+  label: string;
+  value: unknown;
+}): ReactNode {
   const { text, truncated } = preview(value);
   return (
     <div className="space-y-1">
@@ -137,7 +151,9 @@ function ToolRow({ part }: { part: ChatMessagePart }): ReactNode {
           ) : record.input === undefined ? null : (
             <Payload label="input" value={record.input} />
           )}
-          {record.output === undefined ? null : <Payload label="output" value={record.output} />}
+          {record.output === undefined ? null : (
+            <Payload label="output" value={record.output} />
+          )}
         </div>
       ) : null}
     </div>
@@ -166,7 +182,7 @@ function MessageRow({ message }: { message: ChatMessage }): ReactNode {
         >
           <Caption>{message.role}</Caption>
           <p className="mt-1 text-sm break-words whitespace-pre-wrap">{text}</p>
-        </div>,
+        </div>
       );
       continue;
     }
@@ -259,8 +275,8 @@ export function RunView({
           role="alert"
           className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
         >
-          The run socket was refused. Reload the page — if it keeps happening you are probably
-          signed out of Access.
+          The run socket was refused. Reload the page — if it keeps happening
+          you are probably signed out of Access.
         </div>
       ) : null}
 
@@ -291,13 +307,18 @@ export function RunView({
             Nothing yet — the transcript fills in as the agent works.
           </p>
         ) : (
-          messages.map((message) => <MessageRow key={message.id} message={message} />)
+          messages.map((message) => (
+            <MessageRow key={message.id} message={message} />
+          ))
         )}
 
         {approvals}
 
         {busy ? (
-          <p className="text-center text-xs text-muted-foreground" role="status">
+          <p
+            className="text-center text-xs text-muted-foreground"
+            role="status"
+          >
             Working…
           </p>
         ) : null}

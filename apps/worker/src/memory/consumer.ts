@@ -81,7 +81,11 @@ export function classifyMemoryJob(body: unknown): ClassifiedMemoryJob {
     if (job.kind === "message") {
       return typeof job.eventId === "string" && job.eventId.length > 0
         ? { kind: "message", eventId: job.eventId, legacy: false }
-        : { kind: "unrecognized", retryable: false, reason: "message job without eventId" };
+        : {
+            kind: "unrecognized",
+            retryable: false,
+            reason: "message job without eventId",
+          };
     }
     if (job.kind === "agent_generation") {
       return typeof job.outboxId === "string" && job.outboxId.length > 0
@@ -106,7 +110,11 @@ export function classifyMemoryJob(body: unknown): ClassifiedMemoryJob {
     return { kind: "message", eventId: job.event_id, legacy: true };
   }
 
-  return { kind: "unrecognized", retryable: false, reason: "memory job matched no known shape" };
+  return {
+    kind: "unrecognized",
+    retryable: false,
+    reason: "memory job matched no known shape",
+  };
 }
 
 /* ---------------------------------------------------------- the consumer -- */
@@ -114,7 +122,7 @@ export function classifyMemoryJob(body: unknown): ClassifiedMemoryJob {
 export async function handleMemoryBatch(
   batch: MessageBatch<MemoryJob>,
   env: Env,
-  store: MemoryStore,
+  store: MemoryStore
 ): Promise<void> {
   for (const message of batch.messages) {
     const job = classifyMemoryJob(message.body);
@@ -155,14 +163,20 @@ export async function handleMemoryBatch(
  * this job existed, so every failure path here is safe: retry re-reads the row,
  * and the zep_episodes check makes a duplicate delivery a no-op.
  */
-async function projectOne(eventId: string, env: Env, store: MemoryStore): Promise<void> {
-  const mapped = await env.DB.prepare("SELECT 1 FROM zep_episodes WHERE event_id = ?")
+async function projectOne(
+  eventId: string,
+  env: Env,
+  store: MemoryStore
+): Promise<void> {
+  const mapped = await env.DB.prepare(
+    "SELECT 1 FROM zep_episodes WHERE event_id = ?"
+  )
     .bind(eventId)
     .first();
   if (mapped) return;
 
   const row = await env.DB.prepare(
-    "SELECT event_id, channel_id, user_id, text FROM messages WHERE event_id = ?",
+    "SELECT event_id, channel_id, user_id, text FROM messages WHERE event_id = ?"
   )
     .bind(eventId)
     .first<MessageRow>();
@@ -172,15 +186,21 @@ async function projectOne(eventId: string, env: Env, store: MemoryStore): Promis
   const graphId = graphIdFor(policy);
   if (!graphId) return;
 
-  const { episodeUuid } = await store.addMessage(graphId, `${row.user_id ?? "unknown"}: ${row.text}`);
+  const { episodeUuid } = await store.addMessage(
+    graphId,
+    `${row.user_id ?? "unknown"}: ${row.text}`
+  );
   await env.DB.prepare(
-    "INSERT OR IGNORE INTO zep_episodes (episode_uuid, event_id, graph_id, created_at) VALUES (?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO zep_episodes (episode_uuid, event_id, graph_id, created_at) VALUES (?, ?, ?, ?)"
   )
     .bind(episodeUuid, eventId, graphId, Date.now())
     .run();
 }
 
-type MessageRow = Pick<MessagesRow, "event_id" | "channel_id" | "user_id" | "text">;
+type MessageRow = Pick<
+  MessagesRow,
+  "event_id" | "channel_id" | "user_id" | "text"
+>;
 
 /* ------------------------------------------------- the agent projector -- */
 
@@ -222,7 +242,7 @@ export async function projectAgentEpisode(
   db: D1Database,
   store: MemoryStore,
   outboxId: string,
-  now: number = Date.now(),
+  now: number = Date.now()
 ): Promise<AgentProjectionResult> {
   const claimed = await claimOutboxRow(db, { id: outboxId, now });
   if (claimed.outcome === "unknown_row") {
@@ -232,7 +252,10 @@ export async function projectAgentEpisode(
     throw new Error(`memory outbox row ${outboxId} not found`);
   }
   if (claimed.outcome === "not_claimable") {
-    return { outcome: "noop", reason: "already projected or claimed by another delivery" };
+    return {
+      outcome: "noop",
+      reason: "already projected or claimed by another delivery",
+    };
   }
 
   const claim = claimed.claim;
@@ -242,7 +265,7 @@ export async function projectAgentEpisode(
     episode = parseEpisode(claim.episodeJson);
   } catch (error) {
     const reason = sterileError(
-      error instanceof Error ? error.message : "episode_json did not parse",
+      error instanceof Error ? error.message : "episode_json did not parse"
     );
     // Content that can never be delivered. Terminal, and visible.
     await poisonOutboxRow(db, {
@@ -294,7 +317,9 @@ export async function projectAgentEpisode(
       }
     } catch (error) {
       const message = sterileError(
-        error instanceof Error ? error.message : "the memory store rejected the episode",
+        error instanceof Error
+          ? error.message
+          : "the memory store rejected the episode"
       );
       await retryOutboxRow(db, {
         id: claim.id,
@@ -345,7 +370,7 @@ async function finishProjection(
   db: D1Database,
   claim: OutboxClaim,
   episodeUuid: string,
-  now: number,
+  now: number
 ): Promise<{ outcome: "applied" | "stale_claim" }> {
   const descriptors = parseSourceDescriptors(claim.sourceJson);
   const resolved = await resolveSources(db, descriptors, claim.runId);
@@ -359,7 +384,7 @@ async function finishProjection(
           WHERE EXISTS (
             SELECT 1 FROM agent_memory_outbox
              WHERE id = ? AND claim_token = ? AND state = 'projecting'
-          )`,
+          )`
       )
       .bind(
         episodeUuid,
@@ -371,8 +396,8 @@ async function finishProjection(
         source.permalink,
         now,
         claim.id,
-        claim.claimToken,
-      ),
+        claim.claimToken
+      )
   );
 
   statements.push(
@@ -387,9 +412,9 @@ async function finishProjection(
                 next_attempt_at = NULL,
                 last_error = NULL,
                 updated_at = ?
-          WHERE id = ? AND claim_token = ? AND state = 'projecting'`,
+          WHERE id = ? AND claim_token = ? AND state = 'projecting'`
       )
-      .bind(episodeUuid, now, now, claim.id, claim.claimToken),
+      .bind(episodeUuid, now, now, claim.id, claim.claimToken)
   );
 
   const results = await db.batch(statements);
@@ -422,7 +447,7 @@ function parseEpisode(json: string): AgentEpisode {
  */
 export function episodeMetadata(
   episode: AgentEpisode,
-  claim: Pick<OutboxClaim, "generationId" | "graphId">,
+  claim: Pick<OutboxClaim, "generationId" | "graphId">
 ): EpisodeMetadata {
   return boundedMetadata({
     source: "firefighter_agent",
@@ -441,6 +466,6 @@ export function episodeMetadata(
  */
 export function episodeSourceDescription(episode: AgentEpisode): string {
   return boundedSourceDescription(
-    `Firefighter agent turn ${episode.agent_turn_id} (${episode.outcome}) — what the agent was asked, did, and drafted.`,
+    `Firefighter agent turn ${episode.agent_turn_id} (${episode.outcome}) — what the agent was asked, did, and drafted.`
   );
 }

@@ -41,19 +41,27 @@ const SLACK_USER = "U0NDUTY";
 const FALLBACK = "C_FALLBACK";
 const DM_CHANNEL = "D0PENED";
 
-type Sent = { url: string; body: Record<string, unknown>; authorization: string | null };
+type Sent = {
+  url: string;
+  body: Record<string, unknown>;
+  authorization: string | null;
+};
 let sent: Sent[] = [];
 
 /** Stub every Slack call, answering per API method. */
 function stubSlack(
   reply: (method: string, body: Record<string, unknown>) => unknown,
-  status = 200,
+  status = 200
 ): void {
   sent = [];
   vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
     const method = String(url).split("/").pop() ?? "";
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-    sent.push({ url: String(url), body, authorization: new Headers(init.headers).get("authorization") });
+    sent.push({
+      url: String(url),
+      body,
+      authorization: new Headers(init.headers).get("authorization"),
+    });
     return new Response(JSON.stringify(reply(method, body)), { status });
   });
 }
@@ -91,7 +99,7 @@ async function seedRun(): Promise<string> {
   const runId = `run_${crypto.randomUUID()}`;
   await env.DB.prepare(
     `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
-     VALUES (?, ?, 'slack', 'C_CUST', '1720000000.000100', 'idle', 0, ?, ?)`,
+     VALUES (?, ?, 'slack', 'C_CUST', '1720000000.000100', 'idle', 0, ?, ?)`
   )
     .bind(runId, `slack:${crypto.randomUUID()}`, NOW, NOW)
     .run();
@@ -130,7 +138,7 @@ async function connectSpeaker(): Promise<void> {
         tokenCiphertext: "sealed-opaque",
         connectedAt: NOW,
       },
-      NOW,
+      NOW
     );
   }
 }
@@ -187,7 +195,9 @@ describe("sendNudge", () => {
     expect(sent[0]!.body).toMatchObject({ users: SLACK_USER });
     expect(sent[1]!.body.channel).toBe(DM_CHANNEL);
     expect(Array.isArray(sent[1]!.body.blocks)).toBe(true);
-    expect(JSON.stringify(sent[1]!.body.blocks)).toContain(`https://dash.example/?approval=${row.id}`);
+    expect(JSON.stringify(sent[1]!.body.blocks)).toContain(
+      `https://dash.example/?approval=${row.id}`
+    );
     // The nudge is a BOT-token DM to an engineer. It must never carry a
     // customer-send credential.
     expect(sent[1]!.authorization).toBe(`Bearer ${env.SLACK_BOT_TOKEN}`);
@@ -204,7 +214,9 @@ describe("sendNudge", () => {
 
     expect(await sendNudge(testEnv(), row, NOW)).toBe("sent");
 
-    expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.postMessage"]);
+    expect(sent.map((s) => s.url)).toEqual([
+      "https://slack.com/api/chat.postMessage",
+    ]);
     expect(sent[0]!.body.channel).toBe(FALLBACK);
     const payload = JSON.stringify(sent[0]!.body);
     expect(payload).toContain(SPEAKER);
@@ -222,9 +234,13 @@ describe("sendNudge", () => {
     await connectSpeaker();
     stubSlack(happySlack);
 
-    expect(await sendNudge(testEnv({ NUDGE_MODE: "channel" }), row, NOW)).toBe("sent");
+    expect(await sendNudge(testEnv({ NUDGE_MODE: "channel" }), row, NOW)).toBe(
+      "sent"
+    );
 
-    expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.postMessage"]);
+    expect(sent.map((s) => s.url)).toEqual([
+      "https://slack.com/api/chat.postMessage",
+    ]);
     expect(sent[0]!.body.channel).toBe(FALLBACK);
     expect(JSON.stringify(sent[0]!.body)).toContain(`<@${SLACK_USER}>`);
   });
@@ -233,7 +249,9 @@ describe("sendNudge", () => {
     const row = await seedApproval();
     await connectSpeaker();
     stubSlack((method) =>
-      method === "conversations.open" ? { ok: true, channel: { id: DM_CHANNEL } } : { ok: false, error: "channel_not_found" },
+      method === "conversations.open"
+        ? { ok: true, channel: { id: DM_CHANNEL } }
+        : { ok: false, error: "channel_not_found" }
     );
 
     expect(await sendNudge(testEnv(), row, NOW)).toBe("failed");
@@ -264,7 +282,8 @@ describe("sendNudge", () => {
     vi.spyOn(env.DB, "prepare").mockImplementation((query: string) => {
       // `SET`, not a bare column match: `getApproval`'s SELECT list names the
       // same column and must keep working.
-      if (query.includes("SET nudge_channel_id")) throw new Error("d1 write failed");
+      if (query.includes("SET nudge_channel_id"))
+        throw new Error("d1 write failed");
       return realPrepare(query);
     });
 
@@ -284,7 +303,9 @@ describe("sendNudge", () => {
     const row = await seedApproval();
     stubSlack(happySlack);
 
-    expect(await sendNudge(testEnv({ NUDGE_FALLBACK_CHANNEL_ID: "" }), row, NOW)).toBe("failed");
+    expect(
+      await sendNudge(testEnv({ NUDGE_FALLBACK_CHANNEL_ID: "" }), row, NOW)
+    ).toBe("failed");
     expect(sent).toEqual([]);
     expect((await getApproval(env.DB, row.id))?.nudgedAt).toBeNull();
   });
@@ -309,8 +330,15 @@ describe("updateNudge", () => {
   /** A card with a recorded nudge DM, decided by a human. */
   async function decidedWithNudge(recordMessage = true): Promise<ApprovalRow> {
     const row = await seedApproval();
-    if (recordMessage) await recordNudgeMessage(env.DB, row.id, DM_CHANNEL, NUDGE_TS);
-    const decided = await decideApproval(env.DB, row.id, { action: "approve" }, "ronit@zellify.com", NOW);
+    if (recordMessage)
+      await recordNudgeMessage(env.DB, row.id, DM_CHANNEL, NUDGE_TS);
+    const decided = await decideApproval(
+      env.DB,
+      row.id,
+      { action: "approve" },
+      "ronit@zellify.com",
+      NOW
+    );
     expect(decided.result).toBe("decided");
     return (await getApproval(env.DB, row.id))!;
   }
@@ -321,7 +349,9 @@ describe("updateNudge", () => {
 
     await expect(updateNudge(testEnv(), row)).resolves.toBeUndefined();
 
-    expect(sent.map((s) => s.url)).toEqual(["https://slack.com/api/chat.update"]);
+    expect(sent.map((s) => s.url)).toEqual([
+      "https://slack.com/api/chat.update",
+    ]);
     expect(sent[0]!.body.channel).toBe(DM_CHANNEL);
     expect(sent[0]!.body.ts).toBe(NUDGE_TS);
     const payload = JSON.stringify(sent[0]!.body.blocks);
@@ -337,7 +367,9 @@ describe("updateNudge", () => {
   it("names the withdrawal when the model retracted the draft", async () => {
     const row = await seedApproval();
     await recordNudgeMessage(env.DB, row.id, DM_CHANNEL, NUDGE_TS);
-    expect((await withdrawApproval(env.DB, row.id, NOW)).result).toBe("withdrawn");
+    expect((await withdrawApproval(env.DB, row.id, NOW)).result).toBe(
+      "withdrawn"
+    );
     const withdrawn = (await getApproval(env.DB, row.id))!;
     stubSlack(() => ({ ok: true, ts: NUDGE_TS }));
 
@@ -384,7 +416,9 @@ describe("updateNudge", () => {
 
   it("swallows a non-JSON response", async () => {
     const row = await decidedWithNudge();
-    stubTransport(async () => new Response("<html>gateway timeout</html>", { status: 504 }));
+    stubTransport(
+      async () => new Response("<html>gateway timeout</html>", { status: 504 })
+    );
 
     await expect(updateNudge(testEnv(), row)).resolves.toBeUndefined();
   });
@@ -399,11 +433,12 @@ describe("sweepNudges", () => {
 
     expect(await sweepNudges(testEnv(), NOW)).toBe(1);
 
-    expect((await getApproval(env.DB, old.id))?.nudgeTs).toBe("1723640000.000100");
+    expect((await getApproval(env.DB, old.id))?.nudgeTs).toBe(
+      "1723640000.000100"
+    );
     expect((await getApproval(env.DB, fresh.id))?.nudgedAt).toBeNull();
   });
 });
-
 
 // The `approval_card` projection-hook cases lived here. They drove
 // `makeApprovalCardRunner`, part of the agent layer removed on 2026-08-23: the

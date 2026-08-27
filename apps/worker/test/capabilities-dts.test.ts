@@ -25,10 +25,14 @@ describe("capability declarations", () => {
           new FirefighterConnector(
             {} as ExecutionContext,
             env,
-            { name: ns.name, instructions: ns.instructions, build: () => ns.tools },
-            async () => undefined,
-          ),
-      ),
+            {
+              name: ns.name,
+              instructions: ns.instructions,
+              build: () => ns.tools,
+            },
+            async () => undefined
+          )
+      )
     );
     expect(fromConnectors).toBe(fromRegistry);
   });
@@ -41,10 +45,14 @@ describe("capability declarations", () => {
           new FirefighterConnector(
             {} as ExecutionContext,
             env,
-            { name: ns.name, instructions: ns.instructions, build: () => ns.tools },
-            async () => undefined,
-          ),
-      ),
+            {
+              name: ns.name,
+              instructions: ns.instructions,
+              build: () => ns.tools,
+            },
+            async () => undefined
+          )
+      )
     );
     expect(rendered).toBe(generated);
   });
@@ -53,12 +61,18 @@ describe("capability declarations", () => {
     // A raw Zod schema handed to a connector renders `type XInput = unknown`
     // with the description dropped, and nothing errors. This is the assertion
     // that notices.
-    const rendered = renderCapabilityDeclarations(buildNamespaces(testBindingContext()));
+    const rendered = renderCapabilityDeclarations(
+      buildNamespaces(testBindingContext())
+    );
     expect(rendered).not.toMatch(/=\s*unknown\b/);
   });
 
   it("carries each method's description into the declarations", () => {
-    const rendered = renderCapabilityDeclarations(buildNamespaces(testBindingContext()));
-    expect(rendered).toContain("Read the messages of the conversation this run belongs to");
+    const rendered = renderCapabilityDeclarations(
+      buildNamespaces(testBindingContext())
+    );
+    expect(rendered).toContain(
+      "Read the messages of the conversation this run belongs to"
+    );
   });
 });

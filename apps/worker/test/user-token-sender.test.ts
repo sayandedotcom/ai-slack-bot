@@ -1,9 +1,15 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeUserTokenSender, type ApprovalSendResult } from "../src/approval/sender";
+import {
+  makeUserTokenSender,
+  type ApprovalSendResult,
+} from "../src/approval/sender";
 import { upsertIdentity } from "../src/db/identities";
 import { importIdentityKey, seal, SealError } from "../src/identity/crypto";
-import { makeUserTokenSource, type UserTokenSource } from "../src/identity/user-token";
+import {
+  makeUserTokenSource,
+  type UserTokenSource,
+} from "../src/identity/user-token";
 import { FIREFIGHTERS } from "../src/access/roster";
 import type { Env } from "../src/index";
 
@@ -57,7 +63,7 @@ afterEach(async () => {
 
 async function seedSlack(
   email: string,
-  patch: { token?: string; ciphertext?: string; externalId?: string } = {},
+  patch: { token?: string; ciphertext?: string; externalId?: string } = {}
 ) {
   const key = await importIdentityKey(IDENTITY_KEY);
   await upsertIdentity(
@@ -67,10 +73,11 @@ async function seedSlack(
       provider: "slack",
       externalId: patch.externalId ?? "U0SPEAKER",
       scopes: "chat:write",
-      tokenCiphertext: patch.ciphertext ?? (await seal(key, patch.token ?? TOKEN)),
+      tokenCiphertext:
+        patch.ciphertext ?? (await seal(key, patch.token ?? TOKEN)),
       connectedAt: 1000,
     },
-    1000,
+    1000
   );
   return email;
 }
@@ -93,7 +100,10 @@ describe("makeUserTokenSource", () => {
   it("speaks as whoever HAS connected — roster order only breaks ties, it never blocks", async () => {
     // The old rotation returned null here: the seat belonged to someone else
     // for three days and a connected fire-fighter sat idle. Not any more.
-    await seedSlack(SECOND_FF, { externalId: "U0SECOND", token: "xoxp-second" });
+    await seedSlack(SECOND_FF, {
+      externalId: "U0SECOND",
+      token: "xoxp-second",
+    });
     expect(await makeUserTokenSource(testEnv).speakerToken()).toEqual({
       token: "xoxp-second",
       slackUserId: "U0SECOND",
@@ -101,19 +111,26 @@ describe("makeUserTokenSource", () => {
     });
 
     await seedSlack(FIRST_FF, { externalId: "U0FIRST", token: "xoxp-first" });
-    expect(await makeUserTokenSource(testEnv).speakerToken()).toMatchObject({ email: FIRST_FF });
+    expect(await makeUserTokenSource(testEnv).speakerToken()).toMatchObject({
+      email: FIRST_FF,
+    });
   });
 
   it("speaks as the approver when they are a connected fire-fighter", async () => {
     await seedSlack(FIRST_FF, { externalId: "U0FIRST", token: "xoxp-first" });
-    await seedSlack(SECOND_FF, { externalId: "U0SECOND", token: "xoxp-second" });
+    await seedSlack(SECOND_FF, {
+      externalId: "U0SECOND",
+      token: "xoxp-second",
+    });
     expect(await makeUserTokenSource(testEnv).speakerToken(SECOND_FF)).toEqual({
       token: "xoxp-second",
       slackUserId: "U0SECOND",
       email: SECOND_FF,
     });
     // An approver who has not connected does not silence the reply.
-    expect(await makeUserTokenSource(testEnv).speakerToken("nobody@zellify.app")).toMatchObject({
+    expect(
+      await makeUserTokenSource(testEnv).speakerToken("nobody@zellify.app")
+    ).toMatchObject({
       email: FIRST_FF,
     });
   });
@@ -121,18 +138,35 @@ describe("makeUserTokenSource", () => {
   it("propagates a SealError on corrupt ciphertext instead of reporting not-connected", async () => {
     await seedSlack(FIRST_FF, { ciphertext: "not-a-sealed-value" });
 
-    await expect(makeUserTokenSource(testEnv).speakerToken()).rejects.toBeInstanceOf(SealError);
+    await expect(
+      makeUserTokenSource(testEnv).speakerToken()
+    ).rejects.toBeInstanceOf(SealError);
   });
 });
 
 /** A source that hands back a fixed credential, or nothing. */
-function fixedSource(token: { token: string; slackUserId: string; email: string } | null): UserTokenSource {
-  return { async speakerToken() { return token; } };
+function fixedSource(
+  token: { token: string; slackUserId: string; email: string } | null
+): UserTokenSource {
+  return {
+    async speakerToken() {
+      return token;
+    },
+  };
 }
 
-const CREDENTIAL = { token: TOKEN, slackUserId: "U0ONCALL", email: "ronit@zellify.app" };
+const CREDENTIAL = {
+  token: TOKEN,
+  slackUserId: "U0ONCALL",
+  email: "ronit@zellify.app",
+};
 
-type Sent = { url: string; init: RequestInit; body: Record<string, unknown>; headers: Headers };
+type Sent = {
+  url: string;
+  init: RequestInit;
+  body: Record<string, unknown>;
+  headers: Headers;
+};
 let sent: Sent[] = [];
 
 function stubSlack(respond: () => Response | Promise<Response>) {
@@ -156,8 +190,9 @@ const INPUT = {
   decidedBy: null,
 };
 
-const send = (source: UserTokenSource = fixedSource(CREDENTIAL)): Promise<ApprovalSendResult> =>
-  makeUserTokenSender(source).send(INPUT);
+const send = (
+  source: UserTokenSource = fixedSource(CREDENTIAL)
+): Promise<ApprovalSendResult> => makeUserTokenSender(source).send(INPUT);
 
 describe("makeUserTokenSender", () => {
   it("blocks without calling Slack when no fire-fighter has connected", async () => {
@@ -171,7 +206,10 @@ describe("makeUserTokenSender", () => {
   });
 
   it("asks the source for the approver's token, so the human who clicked is the name on it", async () => {
-    stubSlack(() => new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 }));
+    stubSlack(
+      () =>
+        new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 })
+    );
     const asked: (string | null | undefined)[] = [];
     const source: UserTokenSource = {
       async speakerToken(preferred) {
@@ -180,13 +218,21 @@ describe("makeUserTokenSender", () => {
       },
     };
 
-    await makeUserTokenSender(source).send({ ...INPUT, decidedBy: "luka@zellify.app" });
+    await makeUserTokenSender(source).send({
+      ...INPUT,
+      decidedBy: "luka@zellify.app",
+    });
     await makeUserTokenSender(source).send(INPUT);
     expect(asked).toEqual(["luka@zellify.app", null]);
   });
 
   it("sends under the user token and returns Slack's ts", async () => {
-    stubSlack(() => new Response(JSON.stringify({ ok: true, ts: "1723600123.000200" }), { status: 200 }));
+    stubSlack(
+      () =>
+        new Response(JSON.stringify({ ok: true, ts: "1723600123.000200" }), {
+          status: 200,
+        })
+    );
 
     expect(await send()).toEqual({ result: "sent", ts: "1723600123.000200" });
 
@@ -204,13 +250,20 @@ describe("makeUserTokenSender", () => {
   });
 
   it("treats a definite Slack refusal as blocked, carrying Slack's own error", async () => {
-    stubSlack(() => new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }));
+    stubSlack(
+      () =>
+        new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), {
+          status: 200,
+        })
+    );
 
     expect(await send()).toEqual({ result: "blocked", reason: "invalid_auth" });
   });
 
   it("is in doubt when the request throws", async () => {
-    vi.stubGlobal("fetch", async () => { throw new TypeError("network down"); });
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("network down");
+    });
 
     expect(await send()).toEqual({
       result: "in_doubt",
@@ -219,7 +272,10 @@ describe("makeUserTokenSender", () => {
   });
 
   it("is in doubt on a non-JSON 200", async () => {
-    vi.stubGlobal("fetch", async () => new Response("<html>proxy</html>", { status: 200 }));
+    vi.stubGlobal(
+      "fetch",
+      async () => new Response("<html>proxy</html>", { status: 200 })
+    );
 
     expect(await send()).toEqual({
       result: "in_doubt",
@@ -228,29 +284,47 @@ describe("makeUserTokenSender", () => {
   });
 
   it("uses an injected fetch rather than the global when given one", async () => {
-    vi.stubGlobal("fetch", async () => { throw new Error("the global must not be used"); });
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("the global must not be used");
+    });
     const calls: string[] = [];
     const injected = (async (url: string) => {
       calls.push(String(url));
-      return new Response(JSON.stringify({ ok: true, ts: "1.2" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, ts: "1.2" }), {
+        status: 200,
+      });
     }) as unknown as typeof fetch;
 
-    expect(await makeUserTokenSender(fixedSource(CREDENTIAL), injected).send(INPUT))
-      .toEqual({ result: "sent", ts: "1.2" });
+    expect(
+      await makeUserTokenSender(fixedSource(CREDENTIAL), injected).send(INPUT)
+    ).toEqual({ result: "sent", ts: "1.2" });
     expect(calls).toEqual(["https://slack.com/api/chat.postMessage"]);
   });
 
   it("never puts token material in any outcome it returns", async () => {
     const outcomes: ApprovalSendResult[] = [];
 
-    stubSlack(() => new Response(JSON.stringify({ ok: true, ts: "1723600123.000200" }), { status: 200 }));
+    stubSlack(
+      () =>
+        new Response(JSON.stringify({ ok: true, ts: "1723600123.000200" }), {
+          status: 200,
+        })
+    );
     outcomes.push(await send());
 
     // Slack echoing the token back in an error must not become a reason.
-    stubSlack(() => new Response(JSON.stringify({ ok: false, error: `invalid_auth ${TOKEN}` }), { status: 200 }));
+    stubSlack(
+      () =>
+        new Response(
+          JSON.stringify({ ok: false, error: `invalid_auth ${TOKEN}` }),
+          { status: 200 }
+        )
+    );
     outcomes.push(await send());
 
-    vi.stubGlobal("fetch", async () => { throw new Error(`refused to connect with ${TOKEN}`); });
+    vi.stubGlobal("fetch", async () => {
+      throw new Error(`refused to connect with ${TOKEN}`);
+    });
     outcomes.push(await send());
 
     vi.stubGlobal("fetch", async () => new Response(TOKEN, { status: 200 }));
@@ -259,6 +333,12 @@ describe("makeUserTokenSender", () => {
     outcomes.push(await send(fixedSource(null)));
 
     expect(JSON.stringify(outcomes)).not.toContain(TOKEN);
-    expect(outcomes.map((o) => o.result)).toEqual(["sent", "blocked", "in_doubt", "in_doubt", "blocked"]);
+    expect(outcomes.map((o) => o.result)).toEqual([
+      "sent",
+      "blocked",
+      "in_doubt",
+      "in_doubt",
+      "blocked",
+    ]);
   });
 });

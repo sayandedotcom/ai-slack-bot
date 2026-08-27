@@ -43,6 +43,7 @@ export function agentGraphIdFor(input: {
   if (input.origin !== "slack") return ORG_GRAPH_ID;
   if (input.policy === null || !input.policy.known) return ORG_GRAPH_ID;
   if (input.policy.mode === "internal") return ORG_GRAPH_ID;
-  if (input.policy.customer_slug !== null) return `customer:${input.policy.customer_slug}`;
+  if (input.policy.customer_slug !== null)
+    return `customer:${input.policy.customer_slug}`;
   return ORG_GRAPH_ID;
 }

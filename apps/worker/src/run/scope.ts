@@ -24,11 +24,14 @@ import { getRunById } from "./repository";
 export async function resolveRunScope(
   env: Env,
   runId: string,
-  turnId: string,
+  turnId: string
 ): Promise<RunScope> {
   const run = await getRunById(env.DB, runId);
   if (run === null) {
-    throw new CapabilityError("invalid_context", "this run has no record, so it cannot act");
+    throw new CapabilityError(
+      "invalid_context",
+      "this run has no record, so it cannot act"
+    );
   }
 
   const slackThread =
@@ -39,7 +42,8 @@ export async function resolveRunScope(
   const customerSlug =
     slackThread === null
       ? null
-      : ((await getChannelPolicy(env.DB, slackThread.channelId)).customer_slug ?? null);
+      : ((await getChannelPolicy(env.DB, slackThread.channelId))
+          .customer_slug ?? null);
 
   // The speaker rule, not a rotation: the approver if they clicked and have
   // connected Slack, else the first roster entry who has. Nobody connected
@@ -59,6 +63,9 @@ export async function resolveRunScope(
     actor:
       speaker === null
         ? null
-        : { engineerEmail: speaker.email, slackUserId: speaker.externalId ?? null },
+        : {
+            engineerEmail: speaker.email,
+            slackUserId: speaker.externalId ?? null,
+          },
   };
 }

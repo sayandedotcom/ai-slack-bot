@@ -23,7 +23,12 @@ export type OpenApproval = {
   createdAt: number;
 };
 
-export type Decision = "pending" | "approved" | "edited" | "rejected" | "withdrawn";
+export type Decision =
+  | "pending"
+  | "approved"
+  | "edited"
+  | "rejected"
+  | "withdrawn";
 
 /** The full card: the summary plus everything the decision itself produced. */
 export type ApprovalDetail = OpenApproval & {
@@ -54,13 +59,16 @@ export type DecideResult =
  */
 async function patchJson(
   path: string,
-  body: unknown,
+  body: unknown
 ): Promise<{ status: number; body: unknown }> {
   let response: Response;
   try {
     response = await fetch(path, {
       method: "PATCH",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
       credentials: "same-origin",
       body: JSON.stringify(body),
     });
@@ -86,13 +94,15 @@ function kindFor(status: number): ApiError["kind"] {
 }
 
 export async function fetchOpenApprovals(): Promise<OpenApproval[]> {
-  const body = await getJson<{ approvals: OpenApproval[] }>("/api/approvals?state=open");
+  const body = await getJson<{ approvals: OpenApproval[] }>(
+    "/api/approvals?state=open"
+  );
   return body.approvals;
 }
 
 export async function fetchApproval(id: string): Promise<ApprovalDetail> {
   const body = await getJson<{ approval: ApprovalDetail }>(
-    `/api/approvals/${encodeURIComponent(id)}`,
+    `/api/approvals/${encodeURIComponent(id)}`
   );
   return body.approval;
 }
@@ -103,7 +113,10 @@ export async function fetchApproval(id: string): Promise<ApprovalDetail> {
  * are both ordinary values; only genuinely broken responses become errors, and
  * those carry an `ApiError` that names the path and nothing from the body.
  */
-export async function decide(id: string, action: DecideAction): Promise<DecideResult> {
+export async function decide(
+  id: string,
+  action: DecideAction
+): Promise<DecideResult> {
   const path = `/api/approvals/${encodeURIComponent(id)}`;
 
   let response: { status: number; body: unknown };
@@ -112,7 +125,10 @@ export async function decide(id: string, action: DecideAction): Promise<DecideRe
   } catch (error) {
     return {
       result: "error",
-      error: error instanceof ApiError ? error : new ApiError(0, "unavailable", path),
+      error:
+        error instanceof ApiError
+          ? error
+          : new ApiError(0, "unavailable", path),
     };
   }
 
@@ -120,7 +136,8 @@ export async function decide(id: string, action: DecideAction): Promise<DecideRe
     const body = response.body as { approval?: ApprovalDetail } | null;
     const decision = body?.approval?.decision;
     // A 200 without a usable card is a contract break, not a decision.
-    if (!decision) return { result: "error", error: new ApiError(200, "unavailable", path) };
+    if (!decision)
+      return { result: "error", error: new ApiError(200, "unavailable", path) };
     return { result: "decided", decision };
   }
 
@@ -130,7 +147,8 @@ export async function decide(id: string, action: DecideAction): Promise<DecideRe
     // `decidedBy` on this path, so the winner has no name to show. Kept in the
     // shape as `null` so callers compile against one `DecideResult`.
     const decision = body?.decision;
-    if (!decision) return { result: "error", error: new ApiError(409, "unavailable", path) };
+    if (!decision)
+      return { result: "error", error: new ApiError(409, "unavailable", path) };
     return { result: "already_decided", decision, decidedBy: null };
   }
 

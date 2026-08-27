@@ -20,7 +20,7 @@ beforeEach(async () => {
   await env.DB.prepare("DELETE FROM runs").run();
   await env.DB.prepare("DELETE FROM channels").run();
   await env.DB.prepare(
-    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES ('C1', 'pulsefit-eng', 'pulsefit', 'live')",
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES ('C1', 'pulsefit-eng', 'pulsefit', 'live')"
   ).run();
 });
 
@@ -75,7 +75,7 @@ describe("createOrGetRun", () => {
       const viaPolicy = await createOrGetRunUnderPolicy(
         env.DB,
         chatDescriptor(),
-        { mustShadow: false },
+        { mustShadow: false }
       );
 
       expect(direct.shadow).toBe(false);
@@ -95,7 +95,9 @@ describe("createOrGetRun", () => {
 
     it("NEVER clears an existing shadow", async () => {
       const descriptor = slackDescriptor();
-      const shadowed = await createOrGetRunUnderPolicy(env.DB, descriptor, { mustShadow: true });
+      const shadowed = await createOrGetRunUnderPolicy(env.DB, descriptor, {
+        mustShadow: true,
+      });
       expect(shadowed.shadow).toBe(true);
 
       // The policy-free create, on a row that is already shadowed. The ratchet
@@ -104,7 +106,9 @@ describe("createOrGetRun", () => {
       expect(after.id).toBe(shadowed.id);
       expect(after.shadow).toBe(true);
 
-      const row = await env.DB.prepare('SELECT shadow FROM runs WHERE "key" = ?')
+      const row = await env.DB.prepare(
+        'SELECT shadow FROM runs WHERE "key" = ?'
+      )
         .bind(descriptor.key)
         .first<{ shadow: number }>();
       expect(row?.shadow).toBe(1);
@@ -134,13 +138,21 @@ describe("createOrGetRun", () => {
     expect(b.id).toBe(a.id);
     expect(c.id).toBe(a.id);
 
-    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM runs").first<{ n: number }>();
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM runs").first<{
+      n: number;
+    }>();
     expect(row?.n).toBe(1);
   });
 
   it("gives a second thread in the same channel a second run", async () => {
-    const first = await createOrGetRun(env.DB, slackDescriptor("1720000000.123456"));
-    const second = await createOrGetRun(env.DB, slackDescriptor("1720000099.123456"));
+    const first = await createOrGetRun(
+      env.DB,
+      slackDescriptor("1720000000.123456")
+    );
+    const second = await createOrGetRun(
+      env.DB,
+      slackDescriptor("1720000099.123456")
+    );
     expect(second.id).not.toBe(first.id);
   });
 
@@ -154,7 +166,9 @@ describe("createOrGetRun", () => {
 
   it("returns null rather than throwing for a missing run", async () => {
     expect(await getRunById(env.DB, crypto.randomUUID())).toBeNull();
-    expect(await getRunByKey(env.DB, chatRunKey(crypto.randomUUID()))).toBeNull();
+    expect(
+      await getRunByKey(env.DB, chatRunKey(crypto.randomUUID()))
+    ).toBeNull();
   });
 });
 
@@ -163,10 +177,10 @@ describe("row shape constraints fail closed", () => {
     await expect(
       env.DB.prepare(
         `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
-         VALUES (?, ?, 'slack', NULL, NULL, 'live', 0, 1, 1)`,
+         VALUES (?, ?, 'slack', NULL, NULL, 'live', 0, 1, 1)`
       )
         .bind(crypto.randomUUID(), "slack:C1:1720000000.123456")
-        .run(),
+        .run()
     ).rejects.toThrow();
   });
 
@@ -174,10 +188,10 @@ describe("row shape constraints fail closed", () => {
     await expect(
       env.DB.prepare(
         `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
-         VALUES (?, ?, 'chat', 'C1', '1720000000.123456', 'live', 0, 1, 1)`,
+         VALUES (?, ?, 'chat', 'C1', '1720000000.123456', 'live', 0, 1, 1)`
       )
         .bind(crypto.randomUUID(), chatRunKey(crypto.randomUUID()))
-        .run(),
+        .run()
     ).rejects.toThrow();
   });
 
@@ -185,10 +199,10 @@ describe("row shape constraints fail closed", () => {
     await expect(
       env.DB.prepare(
         `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
-         VALUES (?, ?, 'chat', NULL, NULL, 'running', 0, 1, 1)`,
+         VALUES (?, ?, 'chat', NULL, NULL, 'running', 0, 1, 1)`
       )
         .bind(crypto.randomUUID(), chatRunKey(crypto.randomUUID()))
-        .run(),
+        .run()
     ).rejects.toThrow();
   });
 
@@ -196,10 +210,10 @@ describe("row shape constraints fail closed", () => {
     await expect(
       env.DB.prepare(
         `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
-         VALUES (?, ?, 'chat', NULL, NULL, 'live', 2, 1, 1)`,
+         VALUES (?, ?, 'chat', NULL, NULL, 'live', 2, 1, 1)`
       )
         .bind(crypto.randomUUID(), chatRunKey(crypto.randomUUID()))
-        .run(),
+        .run()
     ).rejects.toThrow();
   });
 
@@ -208,7 +222,7 @@ describe("row shape constraints fail closed", () => {
     const insert = () =>
       env.DB.prepare(
         `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
-         VALUES (?, ?, 'chat', NULL, NULL, 'live', 0, 1, 1)`,
+         VALUES (?, ?, 'chat', NULL, NULL, 'live', 0, 1, 1)`
       )
         .bind(crypto.randomUUID(), key)
         .run();
@@ -228,30 +242,41 @@ describe("findOwnedSlackRun", () => {
 
       const found = await findOwnedSlackRun(env.DB, "C1", descriptor.threadTs);
       expect(found?.id).toBe(run.id);
-    },
+    }
   );
 
-  it.each(["done", "failed"] as const)("releases the thread once %s", async (status) => {
-    const descriptor = slackDescriptor();
-    const run = await createOrGetRun(env.DB, descriptor);
-    await setRunStatus(env.DB, run.id, status);
+  it.each(["done", "failed"] as const)(
+    "releases the thread once %s",
+    async (status) => {
+      const descriptor = slackDescriptor();
+      const run = await createOrGetRun(env.DB, descriptor);
+      await setRunStatus(env.DB, run.id, status);
 
-    // Triage must run again — and may reopen this very run through its key.
-    expect(await findOwnedSlackRun(env.DB, "C1", descriptor.threadTs)).toBeNull();
-    expect((await getRunByKey(env.DB, descriptor.key))?.id).toBe(run.id);
-  });
+      // Triage must run again — and may reopen this very run through its key.
+      expect(
+        await findOwnedSlackRun(env.DB, "C1", descriptor.threadTs)
+      ).toBeNull();
+      expect((await getRunByKey(env.DB, descriptor.key))?.id).toBe(run.id);
+    }
+  );
 
   it("does not match a different thread or channel", async () => {
     const descriptor = slackDescriptor();
     await createOrGetRun(env.DB, descriptor);
 
-    expect(await findOwnedSlackRun(env.DB, "C1", "1720000099.123456")).toBeNull();
-    expect(await findOwnedSlackRun(env.DB, "C9", descriptor.threadTs)).toBeNull();
+    expect(
+      await findOwnedSlackRun(env.DB, "C1", "1720000099.123456")
+    ).toBeNull();
+    expect(
+      await findOwnedSlackRun(env.DB, "C9", descriptor.threadTs)
+    ).toBeNull();
   });
 
   it("never matches a chat run", async () => {
     await createOrGetRun(env.DB, chatDescriptor());
-    expect(await findOwnedSlackRun(env.DB, "C1", "1720000000.123456")).toBeNull();
+    expect(
+      await findOwnedSlackRun(env.DB, "C1", "1720000000.123456")
+    ).toBeNull();
   });
 });
 
@@ -261,8 +286,14 @@ describe("listRuns", () => {
   });
 
   it("orders by updated_at descending", async () => {
-    const older = await createOrGetRun(env.DB, slackDescriptor("1720000000.123456"));
-    const newer = await createOrGetRun(env.DB, slackDescriptor("1720000099.123456"));
+    const older = await createOrGetRun(
+      env.DB,
+      slackDescriptor("1720000000.123456")
+    );
+    const newer = await createOrGetRun(
+      env.DB,
+      slackDescriptor("1720000099.123456")
+    );
 
     await touchRun(env.DB, older.id, 1_000);
     await touchRun(env.DB, newer.id, 2_000);
@@ -289,8 +320,14 @@ describe("listRuns", () => {
   });
 
   it("filters by status", async () => {
-    const live = await createOrGetRun(env.DB, slackDescriptor("1720000000.123456"));
-    const done = await createOrGetRun(env.DB, slackDescriptor("1720000099.123456"));
+    const live = await createOrGetRun(
+      env.DB,
+      slackDescriptor("1720000000.123456")
+    );
+    const done = await createOrGetRun(
+      env.DB,
+      slackDescriptor("1720000099.123456")
+    );
     await setRunStatus(env.DB, live.id, "live");
     await setRunStatus(env.DB, done.id, "done");
 
@@ -336,13 +373,17 @@ describe("touchRun and setRunStatus", () => {
   });
 
   it("tolerates a missing run so a DO mutation is not failed by its index", async () => {
-    await expect(touchRun(env.DB, crypto.randomUUID(), 1_000)).resolves.toBeUndefined();
+    await expect(
+      touchRun(env.DB, crypto.randomUUID(), 1_000)
+    ).resolves.toBeUndefined();
   });
 
   it("records a status change", async () => {
     const run = await createOrGetRun(env.DB, chatDescriptor());
     await setRunStatus(env.DB, run.id, "awaiting_approval");
-    expect((await getRunById(env.DB, run.id))?.status).toBe("awaiting_approval");
+    expect((await getRunById(env.DB, run.id))?.status).toBe(
+      "awaiting_approval"
+    );
   });
 });
 
@@ -359,7 +400,10 @@ describe("projectRunIndex", () => {
     const after = await getRunById(env.DB, run.id);
     // The Phase 08 bug: setSummary only touched updated_at, so the list stayed
     // blank no matter how many summaries the run produced.
-    expect(after).toMatchObject({ status: "live", summary: "chasing a stuck deploy" });
+    expect(after).toMatchObject({
+      status: "live",
+      summary: "chasing a stuck deploy",
+    });
     expect(after?.updatedAt).toBe(run.updatedAt + 1_000);
   });
 
@@ -389,7 +433,11 @@ describe("projectRunIndex", () => {
 
     // Identical timestamps. A projector comparing time would tie here and let
     // whichever write arrived last win, regardless of which was newer.
-    await projectRunIndex(env.DB, run.id, 7, { status: "live", summary: "newer", updatedAt: at });
+    await projectRunIndex(env.DB, run.id, 7, {
+      status: "live",
+      summary: "newer",
+      updatedAt: at,
+    });
     const older = await projectRunIndex(env.DB, run.id, 6, {
       status: "idle",
       summary: "older",
@@ -424,7 +472,7 @@ describe("projectRunIndex", () => {
         status: "live",
         summary: null,
         updatedAt: 1_000,
-      }),
+      })
     ).resolves.toEqual({ applied: false });
   });
 });

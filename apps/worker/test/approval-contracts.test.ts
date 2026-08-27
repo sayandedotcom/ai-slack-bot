@@ -37,23 +37,32 @@ describe("outboundText", () => {
   });
 
   it("returns the draft for an approved row", () => {
-    expect(outboundText(row({ decision: "approved", decidedBy: "a@zellify.app", decidedAt: 2 }))).toBe(
-      "the draft text",
-    );
+    expect(
+      outboundText(
+        row({ decision: "approved", decidedBy: "a@zellify.app", decidedAt: 2 })
+      )
+    ).toBe("the draft text");
   });
 
   it("returns the edited text for an edited row", () => {
     expect(
       outboundText(
-        row({ decision: "edited", editedText: "the corrected text", decidedBy: "a@zellify.app", decidedAt: 2 }),
-      ),
+        row({
+          decision: "edited",
+          editedText: "the corrected text",
+          decidedBy: "a@zellify.app",
+          decidedAt: 2,
+        })
+      )
     ).toBe("the corrected text");
   });
 
   it("falls back to the draft for a decision:edited row with no edited text somehow present", () => {
     // Defensive: repository.ts is the sole writer and never produces this
     // shape, but outboundText must not throw or return null on it.
-    expect(outboundText(row({ decision: "edited", editedText: null }))).toBe("the draft text");
+    expect(outboundText(row({ decision: "edited", editedText: null }))).toBe(
+      "the draft text"
+    );
   });
 });
 
@@ -63,15 +72,21 @@ describe("validateDecisionInput", () => {
   });
 
   it("accepts edit with non-blank text", () => {
-    expect(() => validateDecisionInput({ action: "edit", text: "fixed text" })).not.toThrow();
+    expect(() =>
+      validateDecisionInput({ action: "edit", text: "fixed text" })
+    ).not.toThrow();
   });
 
   it("accepts reject with non-blank reason", () => {
-    expect(() => validateDecisionInput({ action: "reject", reason: "not accurate" })).not.toThrow();
+    expect(() =>
+      validateDecisionInput({ action: "reject", reason: "not accurate" })
+    ).not.toThrow();
   });
 
   it("refuses edit with empty text", () => {
-    expect(() => validateDecisionInput({ action: "edit", text: "" })).toThrow(DecisionInputError);
+    expect(() => validateDecisionInput({ action: "edit", text: "" })).toThrow(
+      DecisionInputError
+    );
     try {
       validateDecisionInput({ action: "edit", text: "" });
       expect.unreachable();
@@ -82,11 +97,15 @@ describe("validateDecisionInput", () => {
   });
 
   it("refuses edit with whitespace-only text", () => {
-    expect(() => validateDecisionInput({ action: "edit", text: "   " })).toThrow(DecisionInputError);
+    expect(() =>
+      validateDecisionInput({ action: "edit", text: "   " })
+    ).toThrow(DecisionInputError);
   });
 
   it("refuses reject with empty reason", () => {
-    expect(() => validateDecisionInput({ action: "reject", reason: "" })).toThrow(DecisionInputError);
+    expect(() =>
+      validateDecisionInput({ action: "reject", reason: "" })
+    ).toThrow(DecisionInputError);
     try {
       validateDecisionInput({ action: "reject", reason: "" });
       expect.unreachable();
@@ -97,6 +116,8 @@ describe("validateDecisionInput", () => {
   });
 
   it("refuses reject with whitespace-only reason", () => {
-    expect(() => validateDecisionInput({ action: "reject", reason: "  \n " })).toThrow(DecisionInputError);
+    expect(() =>
+      validateDecisionInput({ action: "reject", reason: "  \n " })
+    ).toThrow(DecisionInputError);
   });
 });

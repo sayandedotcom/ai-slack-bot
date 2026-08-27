@@ -21,8 +21,10 @@ function batchOf(eventIds: string[]) {
 async function seedMessage(eventId: string, channelId: string, text: string) {
   await env.DB.prepare(
     `INSERT INTO messages (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
-     VALUES (?, ?, '1.1', NULL, 'U1', ?, NULL, 'https://slack.example/p1', 'pulsefit', 1)`,
-  ).bind(eventId, channelId, text).run();
+     VALUES (?, ?, '1.1', NULL, 'U1', ?, NULL, 'https://slack.example/p1', 'pulsefit', 1)`
+  )
+    .bind(eventId, channelId, text)
+    .run();
 }
 
 // The suite shares one D1 instance with every other test file, and these tests
@@ -36,7 +38,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM channels"),
   ]);
   await env.DB.prepare(
-    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES ('C1', 'ext-pulsefit', 'pulsefit', 'live')",
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES ('C1', 'ext-pulsefit', 'pulsefit', 'live')"
   ).run();
 });
 
@@ -51,8 +53,13 @@ describe("handleMemoryBatch", () => {
     expect(store.episodes).toHaveLength(1);
     expect(store.episodes[0].graphId).toBe("customer:pulsefit");
     expect(store.episodes[0].data).toContain("checkout is broken");
-    const row = await env.DB.prepare("SELECT event_id, graph_id FROM zep_episodes WHERE event_id = 'Ev1'").first();
-    expect(row).toMatchObject({ event_id: "Ev1", graph_id: "customer:pulsefit" });
+    const row = await env.DB.prepare(
+      "SELECT event_id, graph_id FROM zep_episodes WHERE event_id = 'Ev1'"
+    ).first();
+    expect(row).toMatchObject({
+      event_id: "Ev1",
+      graph_id: "customer:pulsefit",
+    });
     expect(acked).toEqual(["Ev1"]);
   });
 
@@ -98,7 +105,7 @@ describe("backfillMemory", () => {
     await seedMessage("EvA", "C1", "one");
     await seedMessage("EvB", "C1", "two");
     await env.DB.prepare(
-      "INSERT INTO zep_episodes (episode_uuid, event_id, graph_id, created_at) VALUES ('ep-a', 'EvA', 'customer:pulsefit', 1)",
+      "INSERT INTO zep_episodes (episode_uuid, event_id, graph_id, created_at) VALUES ('ep-a', 'EvA', 'customer:pulsefit', 1)"
     ).run();
     const sent: string[] = [];
     const queue = {

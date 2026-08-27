@@ -82,7 +82,8 @@ export function ConnectPanel({
                 key={engineer.email}
                 className={cn(
                   "flex items-center gap-3 py-2",
-                  isSelf && "-mx-4 border-l-2 border-l-primary bg-accent/40 px-4"
+                  isSelf &&
+                    "-mx-4 border-l-2 border-l-primary bg-accent/40 px-4"
                 )}
               >
                 <span className="truncate">{engineer.email}</span>

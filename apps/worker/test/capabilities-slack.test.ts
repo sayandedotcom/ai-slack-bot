@@ -3,12 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 
 import { makeSlackTools } from "../src/capabilities/namespaces/slack";
 import type { SlackGateway, SlackMessage } from "../src/gateways/ports";
-import { createOrGetRun, createOrGetRunUnderPolicy } from "../src/run/repository";
+import {
+  createOrGetRun,
+  createOrGetRunUnderPolicy,
+} from "../src/run/repository";
 import { testBindingContext } from "./helpers/capabilities";
 
 function messages(): SlackMessage[] {
   return [
-    { ts: "1.1", userId: "U1", text: "hello", permalink: "https://s/1", eventId: "Ev1" },
+    {
+      ts: "1.1",
+      userId: "U1",
+      text: "hello",
+      permalink: "https://s/1",
+      eventId: "Ev1",
+    },
   ] as SlackMessage[];
 }
 
@@ -16,7 +25,7 @@ function messages(): SlackMessage[] {
 async function liveSlackScope() {
   const channelId = `C${crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
   await env.DB.prepare(
-    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'pulsefit', 'live')",
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'pulsefit', 'live')"
   )
     .bind(channelId, `chan-${channelId}`)
     .run();
@@ -38,10 +47,20 @@ async function liveSlackScope() {
 
 describe("slack.thread", () => {
   it("returns only the model-visible fields, never the stored event id", async () => {
-    const slack = { thread: vi.fn(async () => messages()) } as unknown as SlackGateway;
+    const slack = {
+      thread: vi.fn(async () => messages()),
+    } as unknown as SlackGateway;
     const ctx = testBindingContext({ deps: { slack } });
-    const result = (await makeSlackTools(ctx).thread.run({})) as Record<string, unknown>[];
-    expect(result[0]).toEqual({ ts: "1.1", userId: "U1", text: "hello", permalink: "https://s/1" });
+    const result = (await makeSlackTools(ctx).thread.run({})) as Record<
+      string,
+      unknown
+    >[];
+    expect(result[0]).toEqual({
+      ts: "1.1",
+      userId: "U1",
+      text: "hello",
+      permalink: "https://s/1",
+    });
     expect(result[0]).not.toHaveProperty("eventId");
   });
 
@@ -49,8 +68,11 @@ describe("slack.thread", () => {
     // ToolDispatcher.call spreads an empty argument array, so `slack.thread()`
     // reaches execute(undefined). The .default({}) is what makes that work.
     const slack = { thread: vi.fn(async () => []) } as unknown as SlackGateway;
-    await expect(makeSlackTools(testBindingContext({ deps: { slack } })).thread.run(undefined))
-      .resolves.toEqual([]);
+    await expect(
+      makeSlackTools(testBindingContext({ deps: { slack } })).thread.run(
+        undefined
+      )
+    ).resolves.toEqual([]);
   });
 });
 
@@ -67,7 +89,9 @@ describe("slack.reply", () => {
     const ctx = testBindingContext({
       scope: { runId: run.id, origin: "chat", slackThread: null },
     });
-    await expect(makeSlackTools(ctx).reply.run({ text: "hi" })).rejects.toMatchObject({
+    await expect(
+      makeSlackTools(ctx).reply.run({ text: "hi" })
+    ).rejects.toMatchObject({
       code: "slack_context_required",
     });
   });
@@ -76,7 +100,9 @@ describe("slack.reply", () => {
     // The shared guard runs first and refuses an unconfirmable run before any
     // reply-specific check gets a say.
     const ctx = testBindingContext();
-    await expect(makeSlackTools(ctx).reply.run({ text: "hi" })).rejects.toMatchObject({
+    await expect(
+      makeSlackTools(ctx).reply.run({ text: "hi" })
+    ).rejects.toMatchObject({
       code: "shadow_write_denied",
     });
   });
@@ -85,7 +111,9 @@ describe("slack.reply", () => {
     // This product never speaks to a customer without a human behind it.
     const scope = await liveSlackScope();
     const ctx = testBindingContext({ scope: { ...scope, actor: null } });
-    await expect(makeSlackTools(ctx).reply.run({ text: "hi" })).rejects.toMatchObject({
+    await expect(
+      makeSlackTools(ctx).reply.run({ text: "hi" })
+    ).rejects.toMatchObject({
       code: "identity_unavailable",
     });
   });
@@ -93,13 +121,20 @@ describe("slack.reply", () => {
   it("refuses from a shadow run before reaching the gateway", async () => {
     const channelId = `C${crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
     await env.DB.prepare(
-      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, NULL, 'observe')",
-    ).bind(channelId, "obs").run();
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, NULL, 'observe')"
+    )
+      .bind(channelId, "obs")
+      .run();
     const threadTs = `${Math.floor(Date.now() / 1000)}.${crypto.randomUUID().slice(0, 6)}`;
     const run = await createOrGetRunUnderPolicy(
       env.DB,
-      { key: `slack:${channelId}:${threadTs}`, origin: "slack", channelId, threadTs },
-      { mustShadow: true },
+      {
+        key: `slack:${channelId}:${threadTs}`,
+        origin: "slack",
+        channelId,
+        threadTs,
+      },
+      { mustShadow: true }
     );
     const reply = vi.fn();
     const ctx = testBindingContext({
@@ -111,7 +146,9 @@ describe("slack.reply", () => {
       },
       deps: { slack: { reply } as unknown as SlackGateway },
     });
-    await expect(makeSlackTools(ctx).reply.run({ text: "hi" })).rejects.toThrow();
+    await expect(
+      makeSlackTools(ctx).reply.run({ text: "hi" })
+    ).rejects.toThrow();
     expect(reply).not.toHaveBeenCalled();
   });
 
@@ -144,7 +181,9 @@ describe("slack.reply", () => {
   it("takes no destination argument", () => {
     // Where a reply lands is a property of the run, decided by the host before
     // model code ran.
-    const rendered = JSON.stringify(makeSlackTools(testBindingContext()).reply.input);
+    const rendered = JSON.stringify(
+      makeSlackTools(testBindingContext()).reply.input
+    );
     expect(rendered).not.toMatch(/channel|thread|destination/i);
   });
 });
@@ -156,21 +195,30 @@ describe("slack.searchMessages — customer scope", () => {
     const scope = await liveSlackScope();
     const ctx = testBindingContext({ scope });
     await expect(
-      makeSlackTools(ctx).searchMessages.run({ query: "checkout", customerRef: "cust_x" }),
+      makeSlackTools(ctx).searchMessages.run({
+        query: "checkout",
+        customerRef: "cust_x",
+      })
     ).rejects.toMatchObject({ code: "invalid_input" });
   });
 
   it("refuses a guessed reference on a chat run", async () => {
     const ctx = testBindingContext({ scope: { origin: "chat" } });
     await expect(
-      makeSlackTools(ctx).searchMessages.run({ query: "checkout", customerRef: "pulsefit" }),
+      makeSlackTools(ctx).searchMessages.run({
+        query: "checkout",
+        customerRef: "pulsefit",
+      })
     ).rejects.toThrow();
   });
 
   it("refuses when a chat run has no customer scope at all", async () => {
-    const ctx = testBindingContext({ scope: { origin: "chat", customerSlug: null } });
-    await expect(makeSlackTools(ctx).searchMessages.run({ query: "checkout" }))
-      .rejects.toMatchObject({ code: "customer_scope_required" });
+    const ctx = testBindingContext({
+      scope: { origin: "chat", customerSlug: null },
+    });
+    await expect(
+      makeSlackTools(ctx).searchMessages.run({ query: "checkout" })
+    ).rejects.toMatchObject({ code: "customer_scope_required" });
   });
 
   it("passes the channel's pinned slug on a Slack run", async () => {

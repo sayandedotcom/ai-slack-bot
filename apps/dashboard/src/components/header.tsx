@@ -60,20 +60,21 @@ export function useIdentity(): { identity?: Identity; error?: ApiError } {
 }
 
 /** Heading and body per failure kind — the whole page, not a per-panel banner. */
-const SIGNED_OUT: Record<ApiError["kind"], { heading: string; body: string }> = {
-  unauthorized: {
-    heading: "Signed out",
-    body: "Reload to re-authenticate with Access.",
-  },
-  forbidden: {
-    heading: "Not on the roster",
-    body: "This account isn't on the fire-fighter roster.",
-  },
-  unavailable: {
-    heading: "Backend unreachable",
-    body: "The API did not answer. Reload to try again.",
-  },
-};
+const SIGNED_OUT: Record<ApiError["kind"], { heading: string; body: string }> =
+  {
+    unauthorized: {
+      heading: "Signed out",
+      body: "Reload to re-authenticate with Access.",
+    },
+    forbidden: {
+      heading: "Not on the roster",
+      body: "This account isn't on the fire-fighter roster.",
+    },
+    unavailable: {
+      heading: "Backend unreachable",
+      body: "The API did not answer. Reload to try again.",
+    },
+  };
 
 /**
  * Rendered by the shell *instead of* the whole panel grid when identity fails.

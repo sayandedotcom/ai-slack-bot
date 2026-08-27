@@ -12,14 +12,14 @@ const PROJECT_COMPAT_FLAGS: readonly string[] = ["nodejs_compat"];
 
 function assertOnlyExpectedModules(
   modules: WorkerLoaderWorkerCode["modules"],
-  mainModule: string,
+  mainModule: string
 ): void {
   const names = Object.keys(modules);
   if (names.length !== 1 || names[0] !== mainModule) {
     // Naming the count and the expected entry, never the module bodies: those
     // are model-authored and can be arbitrarily long.
     throw new Error(
-      `unexpected module set: expected exactly [${mainModule}], got ${names.length} entr${names.length === 1 ? "y" : "ies"}`,
+      `unexpected module set: expected exactly [${mainModule}], got ${names.length} entr${names.length === 1 ? "y" : "ies"}`
     );
   }
 }
@@ -28,7 +28,7 @@ function assertEmptyEnv(env: unknown): void {
   if (env === undefined || env === null) return;
   if (typeof env !== "object" || Object.keys(env as object).length > 0) {
     throw new Error(
-      "the loaded Worker's env must be empty: capabilities cross as call arguments, never as bindings",
+      "the loaded Worker's env must be empty: capabilities cross as call arguments, never as bindings"
     );
   }
 }
@@ -39,7 +39,7 @@ function assertNoTails(code: WorkerLoaderWorkerCode): void {
     (code.streamingTails && code.streamingTails.length > 0)
   ) {
     throw new Error(
-      "the loaded Worker must not attach a tail consumer: it would stream capability arguments to another Worker",
+      "the loaded Worker must not attach a tail consumer: it would stream capability arguments to another Worker"
     );
   }
 }
@@ -60,7 +60,7 @@ function assertNoTails(code: WorkerLoaderWorkerCode): void {
  */
 export function guardLoader(
   real: WorkerLoader,
-  limits: CapabilityLimits,
+  limits: CapabilityLimits
 ): WorkerLoader {
   return {
     load(code: WorkerLoaderWorkerCode): WorkerStub {
@@ -83,7 +83,7 @@ export function guardLoader(
           cpuMs: Math.min(code.limits?.cpuMs ?? limits.cpuMs, limits.cpuMs),
           subRequests: Math.min(
             code.limits?.subRequests ?? limits.subRequests,
-            limits.subRequests,
+            limits.subRequests
           ),
         },
       });
@@ -91,7 +91,7 @@ export function guardLoader(
 
     get(): never {
       throw new Error(
-        "codemode never uses get(): it is cached by name and would run stale model code",
+        "codemode never uses get(): it is cached by name and would run stale model code"
       );
     },
   };

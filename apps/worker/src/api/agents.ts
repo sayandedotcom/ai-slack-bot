@@ -40,7 +40,9 @@ function fail(code: string, message: string) {
   return { code, message };
 }
 
-async function forwardToAgent(c: Context<{ Bindings: Env }>): Promise<Response> {
+async function forwardToAgent(
+  c: Context<{ Bindings: Env }>
+): Promise<Response> {
   const member = await requireTeamMember(c);
   if (member instanceof Response) return member;
 

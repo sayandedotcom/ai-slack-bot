@@ -69,7 +69,9 @@ function joinBlocks(blocks: string[]): string {
  * path byte for byte — without needing a connector instance, and therefore
  * without being async.
  */
-function descriptorsFor(namespace: CapabilityNamespace): JsonSchemaToolDescriptors {
+function descriptorsFor(
+  namespace: CapabilityNamespace
+): JsonSchemaToolDescriptors {
   const descriptors: JsonSchemaToolDescriptors = {};
   for (const [method, tool] of Object.entries(namespace.tools)) {
     descriptors[method] = {
@@ -101,7 +103,9 @@ function descriptorsFor(namespace: CapabilityNamespace): JsonSchemaToolDescripto
  * drift the check cannot see. `test/capabilities-dts.test.ts` asserts the two
  * render identical bytes.
  */
-export function renderCapabilityDeclarations(namespaces: CapabilityNamespace[]): string {
+export function renderCapabilityDeclarations(
+  namespaces: CapabilityNamespace[]
+): string {
   return joinBlocks(
     namespaces.map((namespace) => {
       const override = DECLARATION_OVERRIDES[namespace.name];
@@ -109,7 +113,7 @@ export function renderCapabilityDeclarations(namespaces: CapabilityNamespace[]):
       return generateTypesFromJsonSchema(descriptorsFor(namespace))
         .replace("declare const codemode", `declare const ${namespace.name}`)
         .trim();
-    }),
+    })
   );
 }
 
@@ -134,7 +138,7 @@ export function renderCapabilityDeclarations(namespaces: CapabilityNamespace[]):
  * built over unreachable gateways.
  */
 export async function renderDeclarationsFromConnectors(
-  connectors: CodemodeConnector[],
+  connectors: CodemodeConnector[]
 ): Promise<string> {
   const blocks = await Promise.all(
     connectors.map(async (connector) => {
@@ -146,7 +150,7 @@ export async function renderDeclarationsFromConnectors(
       return generateTypesFromJsonSchema(descriptors)
         .replace("declare const codemode", `declare const ${name}`)
         .trim();
-    }),
+    })
   );
   return joinBlocks(blocks);
 }

@@ -9,16 +9,29 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { makeChatStarter, startChatRun, type StartedRun } from "../src/chat/api";
+import {
+  makeChatStarter,
+  startChatRun,
+  type StartedRun,
+} from "../src/chat/api";
 import { ChatPage, type ChatPageProps } from "../src/chat/chat-page";
 
 function page(over: Partial<ChatPageProps> = {}): string {
-  const props: ChatPageProps = { starting: false, error: null, onStart: () => {}, ...over };
+  const props: ChatPageProps = {
+    starting: false,
+    error: null,
+    onStart: () => {},
+    ...over,
+  };
   return renderToStaticMarkup(createElement(ChatPage, props));
 }
 
-function stubFetch(impl: (input: string, init?: RequestInit) => Promise<Response> | Response) {
-  const spy = vi.fn((input: unknown, init?: unknown) => impl(String(input), init as RequestInit));
+function stubFetch(
+  impl: (input: string, init?: RequestInit) => Promise<Response> | Response
+) {
+  const spy = vi.fn((input: unknown, init?: unknown) =>
+    impl(String(input), init as RequestInit)
+  );
   vi.stubGlobal("fetch", spy);
   return spy;
 }
@@ -51,11 +64,12 @@ describe("the create form", () => {
 
 describe("starting a run", () => {
   it("posts the message and the client id, and answers with the public id", async () => {
-    const fetchSpy = stubFetch(() =>
-      new Response(JSON.stringify({ id: "run-1" }), {
-        status: 201,
-        headers: { "content-type": "application/json" },
-      }),
+    const fetchSpy = stubFetch(
+      () =>
+        new Response(JSON.stringify({ id: "run-1" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        })
     );
 
     const run = await startChatRun("why is the exporter stuck?", "req-1");
@@ -71,12 +85,17 @@ describe("starting a run", () => {
   });
 
   it("creates once when the same question is submitted twice before it lands", async () => {
-    const post = vi.fn<(text: string, id: string) => Promise<StartedRun>>(async () => ({
-      id: "run-1",
-    }));
+    const post = vi.fn<(text: string, id: string) => Promise<StartedRun>>(
+      async () => ({
+        id: "run-1",
+      })
+    );
     const starter = makeChatStarter(post, () => "req-1");
 
-    const [a, b] = await Promise.all([starter.start("same"), starter.start("same")]);
+    const [a, b] = await Promise.all([
+      starter.start("same"),
+      starter.start("same"),
+    ]);
 
     expect(post).toHaveBeenCalledTimes(1);
     expect(a).toEqual({ id: "run-1" });
@@ -101,9 +120,11 @@ describe("starting a run", () => {
   });
 
   it("mints a different id for a different question", async () => {
-    const post = vi.fn<(text: string, id: string) => Promise<StartedRun>>(async () => ({
-      id: "run-1",
-    }));
+    const post = vi.fn<(text: string, id: string) => Promise<StartedRun>>(
+      async () => ({
+        id: "run-1",
+      })
+    );
     let n = 0;
     const starter = makeChatStarter(post, () => `req-${++n}`);
 
@@ -123,7 +144,11 @@ describe("starting a run", () => {
     // Response bodies can hold stack traces and hostnames; they never reach an
     // Error that might end up in a log or a screenshot.
     stubFetch(() => new Response("nope: secret-token-inside", { status: 403 }));
-    await expect(startChatRun("hello", "req-1")).rejects.toThrow(/\/api\/runs failed \(403\)/);
-    await expect(startChatRun("hello", "req-1")).rejects.not.toThrow(/secret-token-inside/);
+    await expect(startChatRun("hello", "req-1")).rejects.toThrow(
+      /\/api\/runs failed \(403\)/
+    );
+    await expect(startChatRun("hello", "req-1")).rejects.not.toThrow(
+      /secret-token-inside/
+    );
   });
 });

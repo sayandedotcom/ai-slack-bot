@@ -47,7 +47,9 @@ const recordingStatus = z.strictObject({
   durationMs: z.number(),
 });
 
-export function makeBrowserTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeBrowserTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     record: auditedCapability(ctx, "browser", "record", {
       effect: "sandbox_write",
@@ -60,11 +62,14 @@ export function makeBrowserTools(ctx: BindingContext): Record<string, Classified
       }),
       output: z.strictObject({ recordingId: z.string() }),
       run: (input) => {
-        if (input.timeoutMs !== undefined) assertRecordTimeoutInBudget(input.timeoutMs);
+        if (input.timeoutMs !== undefined)
+          assertRecordTimeoutInBudget(input.timeoutMs);
         return ctx.deps.sandbox.record({
           script: input.script,
           label: input.label,
-          ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+          ...(input.timeoutMs === undefined
+            ? {}
+            : { timeoutMs: input.timeoutMs }),
         });
       },
     }),
@@ -72,7 +77,7 @@ export function makeBrowserTools(ctx: BindingContext): Record<string, Classified
     checkRecording: auditedCapability(ctx, "browser", "checkRecording", {
       effect: "sandbox_write",
       description:
-        "Poll a recording record started. state: \"running\" means keep waiting — call again on a later turn, never in a tight loop here. Once it settles (\"passed\" or \"failed\"), url — when present — is a public link to a playable mp4: safe to paste as-is into a pull request body or a Slack message, no signing, no escaping, nothing else to fetch. error carries Playwright's own message when the script threw, trimmed to the useful part, or names browser-unavailable when this run's machine never got a working browser — either way it is a reason you can act on. A FAILED recording is a first-class result, not a dead end: its video is what proves the bug is real, and it is worth linking exactly like a passing one, not discarded in favor of a cleaner rerun.",
+        'Poll a recording record started. state: "running" means keep waiting — call again on a later turn, never in a tight loop here. Once it settles ("passed" or "failed"), url — when present — is a public link to a playable mp4: safe to paste as-is into a pull request body or a Slack message, no signing, no escaping, nothing else to fetch. error carries Playwright\'s own message when the script threw, trimmed to the useful part, or names browser-unavailable when this run\'s machine never got a working browser — either way it is a reason you can act on. A FAILED recording is a first-class result, not a dead end: its video is what proves the bug is real, and it is worth linking exactly like a passing one, not discarded in favor of a cleaner rerun.',
       input: z.strictObject({ recordingId: z.string().min(1).max(200) }),
       output: recordingStatus,
       run: (input) => ctx.deps.sandbox.checkRecording(input.recordingId),
@@ -97,6 +102,6 @@ function assertRecordTimeoutInBudget(timeoutMs: number): void {
   if (timeoutMs <= MAX_RECORDING_TIMEOUT_MS) return;
   throw new CapabilityError(
     "invalid_input",
-    `timeoutMs ${timeoutMs} is above the ${MAX_RECORDING_TIMEOUT_MS}ms ceiling and the recording was NOT started. Use a smaller budget, or split the script into a shorter repro.`,
+    `timeoutMs ${timeoutMs} is above the ${MAX_RECORDING_TIMEOUT_MS}ms ceiling and the recording was NOT started. Use a smaller budget, or split the script into a shorter repro.`
   );
 }

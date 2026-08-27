@@ -126,7 +126,7 @@ type PostMessageResponse = { ok?: unknown; ts?: unknown; error?: unknown };
  */
 export function makeUserTokenSender(
   source: UserTokenSource,
-  fetchImpl?: typeof fetch,
+  fetchImpl?: typeof fetch
 ): ApprovalSender {
   return {
     async send(input): Promise<ApprovalSendResult> {

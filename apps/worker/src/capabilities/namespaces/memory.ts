@@ -39,7 +39,9 @@ const citation = z.strictObject({
  * model-callable write would durably record things the model merely inferred,
  * and the system of record would slowly fill with plausible fiction.
  */
-export function makeMemoryTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeMemoryTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   /**
    * Facts recalled during THIS execution, keyed by the opaque Zep edge id.
    *
@@ -74,7 +76,7 @@ export function makeMemoryTools(ctx: BindingContext): Record<string, ClassifiedT
         const matches = await searchCustomers(
           ctx.deps.db,
           input.query,
-          input.limit ?? 5,
+          input.limit ?? 5
         );
         // Mint AFTER the D1 read, one reference per row D1 actually returned.
         // That ordering is the guarantee: the resolver only ever holds slugs
@@ -102,11 +104,15 @@ export function makeMemoryTools(ctx: BindingContext): Record<string, ClassifiedT
         // HOST minted from a row it read itself. The model cannot name a graph,
         // which is what stops a customer graph being read from a run that
         // belongs to a different customer.
-        const graphId = graphFor(ctx, input.scope ?? "customer", input.customerRef);
+        const graphId = graphFor(
+          ctx,
+          input.scope ?? "customer",
+          input.customerRef
+        );
         const facts = await ctx.deps.memory.search(
           graphId,
           input.query,
-          Math.min(input.limit ?? 10, 50),
+          Math.min(input.limit ?? 10, 50)
         );
         for (const f of facts) recalled.set(f.factId, f);
 
@@ -120,8 +126,8 @@ export function makeMemoryTools(ctx: BindingContext): Record<string, ClassifiedT
         // the store's own response and are never model-supplied.
         ctx.execution.provenance.record(
           facts.flatMap((f) =>
-            f.episodeUuids.map((ref) => ({ kind: "zep_episode" as const, ref })),
-          ),
+            f.episodeUuids.map((ref) => ({ kind: "zep_episode" as const, ref }))
+          )
         );
 
         // Episode UUIDs stay host-side: they are the handle cite() resolves,
@@ -161,7 +167,7 @@ export function makeMemoryTools(ctx: BindingContext): Record<string, ClassifiedT
           // about something you never recalled".
           throw new CapabilityError(
             "invalid_input",
-            `${unknown.length} of ${seen.size} identifiers were not returned by recall in this execution. Cite only facts you recalled here.`,
+            `${unknown.length} of ${seen.size} identifiers were not returned by recall in this execution. Cite only facts you recalled here.`
           );
         }
 
@@ -178,8 +184,8 @@ export function makeMemoryTools(ctx: BindingContext): Record<string, ClassifiedT
         // provenance keeps working rather than quietly going missing.
         ctx.execution.provenance.record(
           wanted.flatMap((f) =>
-            f.episodeUuids.map((ref) => ({ kind: "zep_episode" as const, ref })),
-          ),
+            f.episodeUuids.map((ref) => ({ kind: "zep_episode" as const, ref }))
+          )
         );
         // Drop channel_id: the permalink already locates the message, and a
         // destination identifier is never shown to the model.
@@ -206,13 +212,13 @@ export function makeMemoryTools(ctx: BindingContext): Record<string, ClassifiedT
 function graphFor(
   ctx: BindingContext,
   scope: "customer" | "org",
-  customerRef: string | undefined,
+  customerRef: string | undefined
 ): string {
   if (scope === "org") {
     if (customerRef !== undefined) {
       throw new CapabilityError(
         "invalid_input",
-        "org memory is not customer-scoped; drop customerRef or use scope 'customer'.",
+        "org memory is not customer-scoped; drop customerRef or use scope 'customer'."
       );
     }
     return "org";

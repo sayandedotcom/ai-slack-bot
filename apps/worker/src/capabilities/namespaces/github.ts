@@ -3,7 +3,11 @@ import { z } from "zod";
 import type { ClassifiedTool } from "../define";
 import { CapabilityError } from "../../gateways/errors";
 import { runEffect } from "../effects";
-import { auditedCapability, effectDeps, type BindingContext } from "../registry";
+import {
+  auditedCapability,
+  effectDeps,
+  type BindingContext,
+} from "../registry";
 
 /**
  * The eleventh namespace, and the last one Phase 20 adds: opening a real pull
@@ -97,7 +101,10 @@ const inputSchema = z.strictObject({
     .string()
     .regex(new RegExp(`^(${TYPE_ALTERNATION})/[a-z0-9]+(?:-[a-z0-9]+)*$`))
     .max(45),
-  title: z.string().regex(new RegExp(`^(${TYPE_ALTERNATION}): \\S`)).max(70),
+  title: z
+    .string()
+    .regex(new RegExp(`^(${TYPE_ALTERNATION}): \\S`))
+    .max(70),
   commitMessage: z.string().min(1).max(2000),
   description: z.string().min(1).max(2000),
   acceptanceCriteria: z.array(z.string().min(1).max(200)).min(1).max(10),
@@ -161,14 +168,23 @@ export function renderPrBody(input: {
   const lines: string[] = [];
 
   for (const { identifier } of input.fixes) lines.push(`Fixes ${identifier}`);
-  for (const { identifier } of input.partOf) lines.push(`Part of ${identifier}`);
+  for (const { identifier } of input.partOf)
+    lines.push(`Part of ${identifier}`);
   // A blank line separates the link block from the body — but only when a
   // link block exists. With both lists empty the body legally starts at
   // `## Description` with no leading blank line: a PR may precede its issue.
   if (lines.length > 0) lines.push("");
 
-  lines.push("## Description", "", input.description, "", "## Acceptance Criteria", "");
-  for (const criterion of input.acceptanceCriteria) lines.push(`- [ ] ${criterion}`);
+  lines.push(
+    "## Description",
+    "",
+    input.description,
+    "",
+    "## Acceptance Criteria",
+    ""
+  );
+  for (const criterion of input.acceptanceCriteria)
+    lines.push(`- [ ] ${criterion}`);
 
   if (input.proofUrl !== undefined) {
     lines.push("", "## Screenshots", "", input.proofUrl);
@@ -191,7 +207,7 @@ function assertNoAttribution(field: string, value: string): void {
       throw new CapabilityError(
         "invalid_input",
         `${field} contains an AI attribution pattern and was refused: ${REPO_ATTRIBUTION_RULE}. ` +
-          `Rewrite ${field} without it — nothing is stripped or rewritten for you, because that would hide the rule rather than teach it.`,
+          `Rewrite ${field} without it — nothing is stripped or rewritten for you, because that would hide the rule rather than teach it.`
       );
     }
   }
@@ -211,7 +227,7 @@ function assertNoHeadings(field: string, value: string): void {
     throw new CapabilityError(
       "invalid_input",
       `${field} contains a Markdown heading and was refused: ${REPO_HEADING_RULE}. ` +
-        `Rewrite ${field} as plain text with no line starting "#" — nothing is stripped or rewritten for you, because that would hide the rule rather than teach it.`,
+        `Rewrite ${field} as plain text with no line starting "#" — nothing is stripped or rewritten for you, because that would hide the rule rather than teach it.`
     );
   }
 }
@@ -228,17 +244,19 @@ function assertProofUrl(proofUrl: string | undefined): void {
   if (!proofUrl.startsWith("https://")) {
     throw new CapabilityError(
       "invalid_input",
-      "proofUrl must be an https URL — the recording host and the monorepo's reviewers both expect one, and this one is not.",
+      "proofUrl must be an https URL — the recording host and the monorepo's reviewers both expect one, and this one is not."
     );
   }
 }
 
-export function makeGithubTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeGithubTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     openPR: auditedCapability(ctx, "github", "openPR", {
       effect: "external_write",
       description:
-        "Open a pull request on the monorepo from this run's diffRef, or update the one already open on `branch` — call this again after improving the fix rather than leaving stale content up; a second call on the same branch updates it, it does not open a second PR. `branch` must follow the convention `<type>/<2-4 kebab-case words>` (e.g. `fix/checkout-timeout`) and `title` must be `<type>: <imperative>`, using the same conventional type in both. The `Fixes <identifier>` line is GENERATED from `fixesIssueIds`, which accepts EITHER the id `linear.createIssue` returns OR a human identifier like `FIR-3` typed straight in — if the issue was filed by an EARLIER run and you have no id for it, call `linear.findIssue({ identifier })` first to confirm it exists and is in reach, then pass that identifier through directly — never type the word \"Fixes\" into `description`, `notesForReviewers`, or especially `commitMessage`: this Linear setup has commit-message magic words disabled, so a `Fixes` line inside a commit message links nothing, silently, and only the rendered PR body closes the issue on merge. Use `partOfIssueIds` for an umbrella or epic issue instead — same id/identifier shapes, but it renders `Part of`, which links WITHOUT closing, so a fix that only covers part of the epic cannot close the whole thing. Put the proof recording's URL in `proofUrl` (it lands under `## Screenshots`) and ALSO repeat it in your Slack reply — the reviewer reads the PR, the customer reads Slack, and each needs their own copy of the same link. `title`, `commitMessage`, `description` and `notesForReviewers` are REFUSED, not silently rewritten, if they contain co-authored-by, \"generated with\", the robot emoji, or the word \"claude\" in any case — this repository forbids AI attribution in PRs and their commits, and a silent strip would hide that rule rather than teach it. `description`, `notesForReviewers` and each `acceptanceCriteria` entry are likewise REFUSED if they contain a Markdown heading (a line starting with `#`) — the only headings this PR body ever has are the ones this tool itself renders (Description, Acceptance Criteria, Screenshots, Notes for reviewers), never one smuggled in through free text. After this returns, poll `checkPR` on a later turn until `linearLinkback.commented` is true — that confirms the Fixes/Part of lines actually took; if it never turns true after a few polls, say so instead of assuming the link worked.",
+        'Open a pull request on the monorepo from this run\'s diffRef, or update the one already open on `branch` — call this again after improving the fix rather than leaving stale content up; a second call on the same branch updates it, it does not open a second PR. `branch` must follow the convention `<type>/<2-4 kebab-case words>` (e.g. `fix/checkout-timeout`) and `title` must be `<type>: <imperative>`, using the same conventional type in both. The `Fixes <identifier>` line is GENERATED from `fixesIssueIds`, which accepts EITHER the id `linear.createIssue` returns OR a human identifier like `FIR-3` typed straight in — if the issue was filed by an EARLIER run and you have no id for it, call `linear.findIssue({ identifier })` first to confirm it exists and is in reach, then pass that identifier through directly — never type the word "Fixes" into `description`, `notesForReviewers`, or especially `commitMessage`: this Linear setup has commit-message magic words disabled, so a `Fixes` line inside a commit message links nothing, silently, and only the rendered PR body closes the issue on merge. Use `partOfIssueIds` for an umbrella or epic issue instead — same id/identifier shapes, but it renders `Part of`, which links WITHOUT closing, so a fix that only covers part of the epic cannot close the whole thing. Put the proof recording\'s URL in `proofUrl` (it lands under `## Screenshots`) and ALSO repeat it in your Slack reply — the reviewer reads the PR, the customer reads Slack, and each needs their own copy of the same link. `title`, `commitMessage`, `description` and `notesForReviewers` are REFUSED, not silently rewritten, if they contain co-authored-by, "generated with", the robot emoji, or the word "claude" in any case — this repository forbids AI attribution in PRs and their commits, and a silent strip would hide that rule rather than teach it. `description`, `notesForReviewers` and each `acceptanceCriteria` entry are likewise REFUSED if they contain a Markdown heading (a line starting with `#`) — the only headings this PR body ever has are the ones this tool itself renders (Description, Acceptance Criteria, Screenshots, Notes for reviewers), never one smuggled in through free text. After this returns, poll `checkPR` on a later turn until `linearLinkback.commented` is true — that confirms the Fixes/Part of lines actually took; if it never turns true after a few polls, say so instead of assuming the link worked.',
       input: inputSchema,
       output: pullRequestRefOutput,
       run: async (input: OpenPRInput) => {
@@ -277,7 +295,9 @@ export function makeGithubTools(ctx: BindingContext): Record<string, ClassifiedT
         // than requiring two separate refusal paths that could disagree.
         const combinedIds = [...input.fixesIssueIds, ...input.partOfIssueIds];
         const resolved =
-          combinedIds.length > 0 ? await ctx.deps.linear.resolveLinkTargets(combinedIds) : [];
+          combinedIds.length > 0
+            ? await ctx.deps.linear.resolveLinkTargets(combinedIds)
+            : [];
         const fixes = resolved.slice(0, input.fixesIssueIds.length);
         const partOf = resolved.slice(input.fixesIssueIds.length);
 
@@ -325,7 +345,7 @@ export function makeGithubTools(ctx: BindingContext): Record<string, ClassifiedT
             // branch", because that is the one a retry would otherwise
             // duplicate.
             reconcile: () => ctx.deps.github.findPR(input.branch),
-          },
+          }
         );
       },
     }),
@@ -347,7 +367,7 @@ export function makeGithubTools(ctx: BindingContext): Record<string, ClassifiedT
       // after coming up empty through #1528, and found #1534 in the very next
       // batch. One search call answers that question in one step.
       description:
-        "Find pull requests by free text — words from the title or body, a branch name, an issue identifier — newest activity first, any state (open, closed or merged), in the one repository this deployment is pinned to. This is how you answer \"is there a PR for X?\" and \"did that ship?\": search first, then `checkPR` the number you find for its branch and linkback. Never probe PR numbers one by one to find something. An empty result means nothing MATCHED THESE WORDS, not that no PR exists — try the branch name or the issue id before you tell anyone there is none, and never send that answer in the same block as the search.",
+        'Find pull requests by free text — words from the title or body, a branch name, an issue identifier — newest activity first, any state (open, closed or merged), in the one repository this deployment is pinned to. This is how you answer "is there a PR for X?" and "did that ship?": search first, then `checkPR` the number you find for its branch and linkback. Never probe PR numbers one by one to find something. An empty result means nothing MATCHED THESE WORDS, not that no PR exists — try the branch name or the issue id before you tell anyone there is none, and never send that answer in the same block as the search.',
       input: z.strictObject({
         query: z.string().min(1).max(200),
         limit: z.number().int().min(1).max(20).default(10),
@@ -360,7 +380,7 @@ export function makeGithubTools(ctx: BindingContext): Record<string, ClassifiedT
           url: z.string(),
           author: z.string(),
           updatedAt: z.string(),
-        }),
+        })
       ),
       run: (input) => ctx.deps.github.searchPRs(input.query, input.limit),
     }),

@@ -33,7 +33,9 @@ function routeToHash(runId: string | null): string {
 /** The hash is the state; back, forward and a hand-edited hash are all the
  * same event to us. */
 function useSelectedRun(): [string | null, (runId: string | null) => void] {
-  const [runId, setRunId] = useState<string | null>(() => parseHash(location.hash));
+  const [runId, setRunId] = useState<string | null>(() =>
+    parseHash(location.hash)
+  );
 
   useEffect(() => {
     const onHashChange = () => setRunId(parseHash(location.hash));
@@ -92,7 +94,10 @@ export function App() {
         {/* One create form, above the list it feeds. A chat run is the same
             object a Slack wake produces, so there is no second session shape
             here — starting one selects it and the run view below takes over. */}
-        <div data-slot="chat-panel" className="md:col-span-2 rounded-lg border p-3">
+        <div
+          data-slot="chat-panel"
+          className="md:col-span-2 rounded-lg border p-3"
+        >
           <ChatStarter onStarted={selectRun} />
         </div>
         <div data-slot="runs-panel" className="md:col-span-2">

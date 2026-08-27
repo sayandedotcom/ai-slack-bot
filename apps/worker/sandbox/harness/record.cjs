@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-'use strict';
+"use strict";
 
 /*
  * record.cjs — the in-container Playwright recording harness.
@@ -37,10 +37,10 @@
  * forever while the model is told to keep polling.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
+const fs = require("fs");
+const path = require("path");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 
 // Mirrors MAX_RECORDING_BYTES in apps/worker/src/sandbox/record.ts. Kept as a
@@ -67,7 +67,8 @@ const BROWSER_UNAVAILABLE_MESSAGE =
 // and Playwright's launch can never disagree about the cache; the default is
 // the path provision.sh installs to and checks. Also what lets the harness
 // self-test (record.selftest.mjs) run on a machine that is not the image.
-const PLAYWRIGHT_CACHE = process.env.PLAYWRIGHT_BROWSERS_PATH || '/root/.cache/ms-playwright';
+const PLAYWRIGHT_CACHE =
+  process.env.PLAYWRIGHT_BROWSERS_PATH || "/root/.cache/ms-playwright";
 
 // The transcode's own budget, and the harness's overall wall clock.
 //
@@ -110,8 +111,11 @@ const PAGE_DIAGNOSTIC_CHARS = 300;
 
 function notePageDiagnostic(kind, text) {
   if (pageDiagnosticsLog.length >= PAGE_DIAGNOSTIC_CAP) return;
-  const flat = String(text).replace(/\s+/g, ' ').trim().slice(0, PAGE_DIAGNOSTIC_CHARS);
-  if (flat.length > 0) pageDiagnosticsLog.push(kind + ': ' + flat);
+  const flat = String(text)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, PAGE_DIAGNOSTIC_CHARS);
+  if (flat.length > 0) pageDiagnosticsLog.push(kind + ": " + flat);
 }
 
 /** A copy, so a late listener firing during shutdown cannot mutate what was reported. */
@@ -137,11 +141,13 @@ function emit(result) {
   const diagnostics = pageDiagnostics();
   if (diagnostics.length > 0) {
     process.stdout.write(
-      'PAGE DIAGNOSTICS (' + diagnostics.length + ', browser-side; the recording cannot show these):\n',
+      "PAGE DIAGNOSTICS (" +
+        diagnostics.length +
+        ", browser-side; the recording cannot show these):\n"
     );
-    for (const line of diagnostics) process.stdout.write('  ' + line + '\n');
+    for (const line of diagnostics) process.stdout.write("  " + line + "\n");
   }
-  process.stdout.write('RESULT ' + JSON.stringify(result) + '\n');
+  process.stdout.write("RESULT " + JSON.stringify(result) + "\n");
   process.exitCode = 0;
   // Setting exitCode (not calling process.exit()) lets Node flush stdout
   // naturally instead of risking truncation: process.exit() right after a
@@ -160,8 +166,8 @@ const ERROR_CHAR_CAP = 2000;
 
 // "constructor name + message, trimmed to ~2000 chars" per the harness spec.
 function trimError(err) {
-  if (err === undefined || err === null) return 'unknown error';
-  const name = (err.constructor && err.constructor.name) || err.name || 'Error';
+  if (err === undefined || err === null) return "unknown error";
+  const name = (err.constructor && err.constructor.name) || err.name || "Error";
   const message = err.message !== undefined ? err.message : String(err);
   const full = `${name}: ${message}`;
   return full.length > ERROR_CHAR_CAP ? full.slice(0, ERROR_CHAR_CAP) : full;
@@ -188,7 +194,7 @@ function findChromiumExecutable() {
     // startsWith('chromium-'), not 'chromium_headless_shell-...' — the
     // underscore variant is a different install with a different layout and
     // isn't what provision.sh installs or checks for.
-    if (!entry.startsWith('chromium-')) continue;
+    if (!entry.startsWith("chromium-")) continue;
     const revDir = path.join(PLAYWRIGHT_CACHE, entry);
     let subEntries;
     try {
@@ -197,8 +203,8 @@ function findChromiumExecutable() {
       continue;
     }
     for (const sub of subEntries) {
-      if (!sub.startsWith('chrome-linux')) continue;
-      const exe = path.join(revDir, sub, 'chrome');
+      if (!sub.startsWith("chrome-linux")) continue;
+      const exe = path.join(revDir, sub, "chrome");
       if (fs.existsSync(exe)) return exe;
     }
   }
@@ -230,41 +236,48 @@ async function transcode(webmPath, mp4Path, startOffsetMs) {
   // `-ss` BEFORE `-i` seeks the input; with a re-encode (which this always is,
   // webm to h264) that is frame-accurate, and it discards the lead-in rather
   // than decoding it and throwing it away.
-  const seek = startOffsetMs > 0 ? ['-ss', (startOffsetMs / 1000).toFixed(3)] : [];
+  const seek =
+    startOffsetMs > 0 ? ["-ss", (startOffsetMs / 1000).toFixed(3)] : [];
   try {
     await execFileAsync(
-      'ffmpeg',
+      "ffmpeg",
       [
         // Never wait on a terminal that isn't there: without -nostdin ffmpeg
         // can block reading stdin when it wants to ask about overwriting, and
         // a blocked ffmpeg is a harness that never exits.
-        '-nostdin',
+        "-nostdin",
         // Errors only. The default level narrates every frame, which is what
         // makes the buffer cap below a live concern rather than a formality.
-        '-loglevel',
-        'error',
-        '-y',
+        "-loglevel",
+        "error",
+        "-y",
         ...seek,
-        '-i',
+        "-i",
         webmPath,
-        '-c:v',
-        'libx264',
-        '-pix_fmt',
-        'yuv420p',
-        '-movflags',
-        '+faststart',
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
         mp4Path,
       ],
       // BOUNDED, both ways. `timeout` kills a wedged encode instead of hanging
       // the harness; `maxBuffer` is raised because the 1MB default turns a
       // chatty stderr into an ENOBUFS kill whose message explains nothing.
-      { timeout: TRANSCODE_TIMEOUT_MS, maxBuffer: FFMPEG_MAX_BUFFER },
+      { timeout: TRANSCODE_TIMEOUT_MS, maxBuffer: FFMPEG_MAX_BUFFER }
     );
   } catch (err) {
     // execFile's promisified rejection carries .stderr on it; fall back to
     // the trimmed error if for some reason it doesn't.
-    const tail = err && typeof err.stderr === 'string' && err.stderr.length > 0 ? err.stderr : trimError(err);
-    return { ok: false, error: tail.length > ERROR_CHAR_CAP ? tail.slice(-ERROR_CHAR_CAP) : tail };
+    const tail =
+      err && typeof err.stderr === "string" && err.stderr.length > 0
+        ? err.stderr
+        : trimError(err);
+    return {
+      ok: false,
+      error: tail.length > ERROR_CHAR_CAP ? tail.slice(-ERROR_CHAR_CAP) : tail,
+    };
   }
   return { ok: true };
 }
@@ -276,7 +289,7 @@ async function main() {
   const chromiumExe = findChromiumExecutable();
   if (!chromiumExe) {
     emit({
-      state: 'browser-unavailable',
+      state: "browser-unavailable",
       error: BROWSER_UNAVAILABLE_MESSAGE,
       video: null,
       bytes: null,
@@ -285,15 +298,15 @@ async function main() {
     return;
   }
 
-  const source = fs.readFileSync(scriptPath, 'utf8');
-  const videoDir = path.join(outDir, 'video');
+  const source = fs.readFileSync(scriptPath, "utf8");
+  const videoDir = path.join(outDir, "video");
   fs.mkdirSync(videoDir, { recursive: true });
 
-  const { chromium } = require('playwright');
+  const { chromium } = require("playwright");
 
   let browser = null;
   let context = null;
-  let state = 'passed';
+  let state = "passed";
   let error = null;
   // How long the recording ran before the first real navigation committed —
   // the blank lead-in. Rebound once the page exists; 0 until then and 0 for a
@@ -318,7 +331,8 @@ async function main() {
   // the loop is alive anyway, so it still fires. `emit` is idempotent, so
   // whichever path arrives first wins and the other is a no-op; emit's own
   // unref'd 2s fallback is what actually forces the exit afterwards.
-  const scriptBudgetMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
+  const scriptBudgetMs =
+    Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
   const wallClockMs = scriptBudgetMs + SHUTDOWN_ALLOWANCE_MS;
   const harnessStartedAt = Date.now();
   const wallClock = setTimeout(() => {
@@ -333,7 +347,7 @@ async function main() {
       ? `the recording harness exceeded its overall ${wallClockMs}ms budget after the script's own ${scriptBudgetMs}ms — the browser close or the mp4 transcode did not finish — so no video was published. Nothing is still running to wait for; record it again.`
       : `the recording harness exceeded its overall ${wallClockMs}ms budget without the script ever settling, so there is no verdict and no video. Record a shorter interaction.`;
     emit({
-      state: settled ? state : 'failed',
+      state: settled ? state : "failed",
       error: error ? `${error}; ${stuck}` : stuck,
       video: null,
       bytes: null,
@@ -367,13 +381,14 @@ async function main() {
     // first main-frame commit away from about:blank is where the blank ends.
     const recordingStartedAt = Date.now();
     let firstCommitAt = null;
-    page.on('framenavigated', (frame) => {
+    page.on("framenavigated", (frame) => {
       if (firstCommitAt !== null) return;
       if (frame !== page.mainFrame()) return;
-      if (frame.url() === 'about:blank') return;
+      if (frame.url() === "about:blank") return;
       firstCommitAt = Date.now();
     });
-    leadInMs = () => (firstCommitAt === null ? 0 : firstCommitAt - recordingStartedAt);
+    leadInMs = () =>
+      firstCommitAt === null ? 0 : firstCommitAt - recordingStartedAt;
 
     // BROWSER-SIDE DIAGNOSTICS, because nothing else in this system can see
     // them.
@@ -393,19 +408,20 @@ async function main() {
     // reports. Bounded hard — this rides back inside the RESULT line, which is
     // parsed as a single line of stdout, so an unbounded log would break the
     // protocol rather than merely bloat it.
-    page.on('console', (message) => {
+    page.on("console", (message) => {
       // Warnings are noise in dev (Next.js prints several every boot); errors
       // are the thing the badge counts.
-      if (message.type() === 'error') notePageDiagnostic('console.error', message.text());
+      if (message.type() === "error")
+        notePageDiagnostic("console.error", message.text());
     });
-    page.on('pageerror', (err) => {
-      notePageDiagnostic('pageerror', (err && err.message) || err);
+    page.on("pageerror", (err) => {
+      notePageDiagnostic("pageerror", (err && err.message) || err);
     });
-    page.on('requestfailed', (request) => {
+    page.on("requestfailed", (request) => {
       const failure = request.failure();
       notePageDiagnostic(
-        'requestfailed',
-        request.url() + ' — ' + ((failure && failure.errorText) || 'unknown'),
+        "requestfailed",
+        request.url() + " — " + ((failure && failure.errorText) || "unknown")
       );
     });
 
@@ -426,14 +442,14 @@ async function main() {
     // close this one trivial, extremely common route to silently destroying
     // the RESULT line.
     const runScript = new Function(
-      'page',
-      'process',
-      'require',
-      'module',
-      'exports',
-      '__dirname',
-      '__filename',
-      'return (async () => {\n' + source + '\n})()'
+      "page",
+      "process",
+      "require",
+      "module",
+      "exports",
+      "__dirname",
+      "__filename",
+      "return (async () => {\n" + source + "\n})()"
     );
 
     const scriptPromise = runScript(page);
@@ -447,7 +463,10 @@ async function main() {
 
     let timer;
     const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`script exceeded timeoutMs (${timeoutMs}ms)`)), timeoutMs);
+      timer = setTimeout(
+        () => reject(new Error(`script exceeded timeoutMs (${timeoutMs}ms)`)),
+        timeoutMs
+      );
     });
     try {
       await Promise.race([scriptPromise, timeout]);
@@ -460,7 +479,7 @@ async function main() {
     settled = true;
   } catch (err) {
     settled = true;
-    state = 'failed';
+    state = "failed";
     error = trimError(err);
   } finally {
     // Playwright only finalises the video file on context.close() — a
@@ -495,7 +514,7 @@ async function main() {
   // rather than guessing the name.
   let webmPath = null;
   try {
-    const files = fs.readdirSync(videoDir).filter((f) => f.endsWith('.webm'));
+    const files = fs.readdirSync(videoDir).filter((f) => f.endsWith(".webm"));
     if (files.length > 0) webmPath = path.join(videoDir, files[0]);
   } catch {
     // Missing videoDir here would itself be a harness bug; falls through to
@@ -510,7 +529,7 @@ async function main() {
     // resolve, not join: the contract promises an ABSOLUTE mp4 path in the
     // RESULT line regardless of whether the Worker passed outDir as
     // relative or absolute.
-    const mp4Path = path.resolve(outDir, 'out.mp4');
+    const mp4Path = path.resolve(outDir, "out.mp4");
     // Cut the blank lead-in, keeping LEAD_IN_MARGIN_MS ahead of the commit so
     // the first painted frame is never lost to clock skew between Playwright's
     // screencast start and `recordingStartedAt`. Never cut when it would leave
@@ -518,12 +537,17 @@ async function main() {
     // second — the gain is invisible and the seek is not free.
     let startOffsetMs = 0;
     const measuredLeadIn = leadInMs();
-    if (measuredLeadIn - LEAD_IN_MARGIN_MS >= MIN_LEAD_IN_TRIM_MS && durationMs - measuredLeadIn >= 1000) {
+    if (
+      measuredLeadIn - LEAD_IN_MARGIN_MS >= MIN_LEAD_IN_TRIM_MS &&
+      durationMs - measuredLeadIn >= 1000
+    ) {
       startOffsetMs = measuredLeadIn - LEAD_IN_MARGIN_MS;
       // To stdout, not the RESULT line: the RESULT shape is pinned at five
       // fields, and `stdoutTail` already reaches the model and the operator.
       process.stdout.write(
-        'trimmed ' + startOffsetMs + 'ms of blank lead-in recorded before the first navigation committed\n',
+        "trimmed " +
+          startOffsetMs +
+          "ms of blank lead-in recorded before the first navigation committed\n"
       );
     }
     const result = await transcode(webmPath, mp4Path, startOffsetMs);
@@ -566,10 +590,10 @@ async function main() {
       // loud enough that the model knows its proof link is gone and says so
       // rather than claiming a recording it doesn't have.
     }
-  } else if (state === 'passed') {
+  } else if (state === "passed") {
     // Same reasoning: no video landed at all, but the script itself didn't
     // throw, so state stays "passed" — only the artifact is missing.
-    error = error || 'script completed but no video was produced';
+    error = error || "script completed but no video was produced";
   }
 
   // `error` can grow through several appends by now (a close-time error,
@@ -598,7 +622,7 @@ main().catch((err) => {
   // A bug in the harness itself (not the model's script) still owes the
   // caller a RESULT line rather than an opaque crash.
   emit({
-    state: 'failed',
+    state: "failed",
     error: trimError(err),
     video: null,
     bytes: null,

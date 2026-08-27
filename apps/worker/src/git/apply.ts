@@ -15,12 +15,21 @@ import { CapabilityError } from "../gateways/errors";
  */
 
 export type FileChange =
-  | { kind: "modify" | "create"; path: string; content: string; mode: "100644" | "100755" }
+  | {
+      kind: "modify" | "create";
+      path: string;
+      content: string;
+      mode: "100644" | "100755";
+    }
   | { kind: "delete"; path: string };
 
 type Mode = "100644" | "100755";
 
-type HunkLine = { marker: " " | "+" | "-"; text: string; noNewlineAfter: boolean };
+type HunkLine = {
+  marker: " " | "+" | "-";
+  text: string;
+  noNewlineAfter: boolean;
+};
 
 type Hunk = { oldStart: number; oldCount: number; lines: HunkLine[] };
 
@@ -60,13 +69,13 @@ function invalidInput(reason: string): never {
 function assertSupportedMode(raw: string, displayPath: string): Mode {
   if (raw === "100644" || raw === "100755") return raw;
   invalidInput(
-    `"${displayPath}" has git file mode ${raw}; this applier only writes regular files (100644 and 100755). A symlink (120000), a submodule/gitlink (160000) or any other special entry needs a human PR.`,
+    `"${displayPath}" has git file mode ${raw}; this applier only writes regular files (100644 and 100755). A symlink (120000), a submodule/gitlink (160000) or any other special entry needs a human PR.`
   );
 }
 
 function staleContext(path: string, detail: string): never {
   invalidInput(
-    `the diff for "${path}" ${detail} — the base file has moved since the diff was taken. The diff is stale; re-run diff and try again.`,
+    `the diff for "${path}" ${detail} — the base file has moved since the diff was taken. The diff is stale; re-run diff and try again.`
   );
 }
 
@@ -86,7 +95,9 @@ function splitFileBlocks(patch: string): string[][] {
   return blocks;
 }
 
-function parseHunkHeader(line: string): { oldStart: number; oldCount: number } | null {
+function parseHunkHeader(
+  line: string
+): { oldStart: number; oldCount: number } | null {
   const match = HUNK_HEADER.exec(line);
   if (match === null) return null;
   const oldStart = Number(match[1]);
@@ -97,7 +108,8 @@ function parseHunkHeader(line: string): { oldStart: number; oldCount: number } |
 /** Parses one `diff --git` block into a `ParsedFile`, refusing anything this applier does not support. */
 function parseFileBlock(block: string[]): ParsedFile {
   const headerMatch = DIFF_GIT_HEADER.exec(block[0]);
-  if (headerMatch === null) invalidInput(`unrecognized diff header: "${block[0]}"`);
+  if (headerMatch === null)
+    invalidInput(`unrecognized diff header: "${block[0]}"`);
   const oldPath = headerMatch[1];
   const newPath = headerMatch[2];
   // Named for error messages before we know which side is real: the delete
@@ -116,14 +128,20 @@ function parseFileBlock(block: string[]): ParsedFile {
 
     if (line.startsWith("new file mode ")) {
       kind = "create";
-      mode = assertSupportedMode(line.slice("new file mode ".length).trim(), displayPath);
+      mode = assertSupportedMode(
+        line.slice("new file mode ".length).trim(),
+        displayPath
+      );
       modeSeen = true;
       i += 1;
       continue;
     }
     if (line.startsWith("deleted file mode ")) {
       kind = "delete";
-      mode = assertSupportedMode(line.slice("deleted file mode ".length).trim(), oldPath);
+      mode = assertSupportedMode(
+        line.slice("deleted file mode ".length).trim(),
+        oldPath
+      );
       modeSeen = true;
       i += 1;
       continue;
@@ -143,24 +161,27 @@ function parseFileBlock(block: string[]): ParsedFile {
       continue;
     }
     if (line.startsWith("new mode ")) {
-      mode = assertSupportedMode(line.slice("new mode ".length).trim(), displayPath);
+      mode = assertSupportedMode(
+        line.slice("new mode ".length).trim(),
+        displayPath
+      );
       modeSeen = true;
       i += 1;
       continue;
     }
     if (line.startsWith("rename from ") || line.startsWith("copy from ")) {
       invalidInput(
-        `the diff renames or copies "${oldPath}" to "${newPath}"; this applier only handles create, modify and delete — open a human PR for renames.`,
+        `the diff renames or copies "${oldPath}" to "${newPath}"; this applier only handles create, modify and delete — open a human PR for renames.`
       );
     }
     if (line.startsWith("GIT binary patch")) {
       invalidInput(
-        `"${displayPath}" is a binary patch; binary changes need a human PR, not an automated apply.`,
+        `"${displayPath}" is a binary patch; binary changes need a human PR, not an automated apply.`
       );
     }
     if (line.startsWith("Binary files ") && line.endsWith(" differ")) {
       invalidInput(
-        `"${displayPath}" has binary content ("${line}"); binary changes need a human PR, not an automated apply.`,
+        `"${displayPath}" has binary content ("${line}"); binary changes need a human PR, not an automated apply.`
       );
     }
     if (line.startsWith("index ") && !modeSeen) {
@@ -178,8 +199,15 @@ function parseFileBlock(block: string[]): ParsedFile {
     }
     if (line.startsWith("@@ ")) {
       const header = parseHunkHeader(line);
-      if (header === null) invalidInput(`"${displayPath}" has an unparseable hunk header: "${line}"`);
-      currentHunk = { oldStart: header.oldStart, oldCount: header.oldCount, lines: [] };
+      if (header === null)
+        invalidInput(
+          `"${displayPath}" has an unparseable hunk header: "${line}"`
+        );
+      currentHunk = {
+        oldStart: header.oldStart,
+        oldCount: header.oldCount,
+        lines: [],
+      };
       hunks.push(currentHunk);
       i += 1;
       continue;
@@ -191,7 +219,10 @@ function parseFileBlock(block: string[]): ParsedFile {
       i += 1;
       continue;
     }
-    if (currentHunk !== null && (line.startsWith(" ") || line.startsWith("+") || line.startsWith("-"))) {
+    if (
+      currentHunk !== null &&
+      (line.startsWith(" ") || line.startsWith("+") || line.startsWith("-"))
+    ) {
       currentHunk.lines.push({
         marker: line[0] as " " | "+" | "-",
         text: line.slice(1),
@@ -214,13 +245,18 @@ function parsePatch(patch: string): ParsedFile[] {
   }
   const blocks = splitFileBlocks(patch);
   if (blocks.length === 0) {
-    invalidInput("the diff does not contain any recognizable \"diff --git\" file headers.");
+    invalidInput(
+      'the diff does not contain any recognizable "diff --git" file headers.'
+    );
   }
   return blocks.map(parseFileBlock);
 }
 
 /** A file's text as lines with no trailing-newline characters, plus whether the text ended in one. */
-function splitLines(content: string): { lines: string[]; finalNewline: boolean } {
+function splitLines(content: string): {
+  lines: string[];
+  finalNewline: boolean;
+} {
   if (content === "") return { lines: [], finalNewline: true };
   const parts = content.split("\n");
   if (parts[parts.length - 1] === "") {
@@ -242,7 +278,11 @@ function joinLines(lines: string[], finalNewline: boolean): string {
  * are still verified even though the resulting content is never used, so a
  * stale delete is refused exactly like a stale modify.
  */
-function applyHunks(file: ParsedFile, baseContent: string, displayPath: string): string {
+function applyHunks(
+  file: ParsedFile,
+  baseContent: string,
+  displayPath: string
+): string {
   const base = splitLines(baseContent);
   const result: string[] = [];
   let cursor = 0;
@@ -251,11 +291,17 @@ function applyHunks(file: ParsedFile, baseContent: string, displayPath: string):
   for (const hunk of file.hunks) {
     const startIdx = hunk.oldCount === 0 ? hunk.oldStart : hunk.oldStart - 1;
     if (startIdx < cursor) {
-      staleContext(displayPath, `has out-of-order or overlapping hunks (hunk starting at old line ${hunk.oldStart})`);
+      staleContext(
+        displayPath,
+        `has out-of-order or overlapping hunks (hunk starting at old line ${hunk.oldStart})`
+      );
     }
     for (let i = cursor; i < startIdx; i += 1) {
       if (i >= base.lines.length) {
-        staleContext(displayPath, `references line ${hunk.oldStart}, past the end of the fetched file`);
+        staleContext(
+          displayPath,
+          `references line ${hunk.oldStart}, past the end of the fetched file`
+        );
       }
       result.push(base.lines[i]);
     }
@@ -263,10 +309,13 @@ function applyHunks(file: ParsedFile, baseContent: string, displayPath: string):
 
     for (const hunkLine of hunk.lines) {
       if (hunkLine.marker === " " || hunkLine.marker === "-") {
-        if (cursor >= base.lines.length || base.lines[cursor] !== hunkLine.text) {
+        if (
+          cursor >= base.lines.length ||
+          base.lines[cursor] !== hunkLine.text
+        ) {
           staleContext(
             displayPath,
-            `has a hunk (starting at old line ${hunk.oldStart}) whose context does not match the fetched file`,
+            `has a hunk (starting at old line ${hunk.oldStart}) whose context does not match the fetched file`
           );
         }
         cursor += 1;
@@ -279,7 +328,8 @@ function applyHunks(file: ParsedFile, baseContent: string, displayPath: string):
   }
 
   if (cursor < base.lines.length) {
-    for (let i = cursor; i < base.lines.length; i += 1) result.push(base.lines[i]);
+    for (let i = cursor; i < base.lines.length; i += 1)
+      result.push(base.lines[i]);
     finalNewline = base.finalNewline;
   }
 
@@ -290,7 +340,10 @@ function applyHunks(file: ParsedFile, baseContent: string, displayPath: string):
  * Parse a git unified diff and apply it to base contents. `base` maps path →
  * file text for every path the patch touches (absent key ⇒ created file).
  */
-export function applyUnifiedDiff(patch: string, base: Map<string, string>): FileChange[] {
+export function applyUnifiedDiff(
+  patch: string,
+  base: Map<string, string>
+): FileChange[] {
   const files = parsePatch(patch);
   const changes: FileChange[] = [];
 
@@ -298,21 +351,37 @@ export function applyUnifiedDiff(patch: string, base: Map<string, string>): File
     if (file.kind === "delete") {
       const baseContent = base.get(file.oldPath);
       if (baseContent === undefined) {
-        staleContext(file.oldPath, "deletes a file the fetched base tree does not have");
+        staleContext(
+          file.oldPath,
+          "deletes a file the fetched base tree does not have"
+        );
       }
       applyHunks(file, baseContent, file.oldPath);
       changes.push({ kind: "delete", path: file.oldPath });
     } else if (file.kind === "create") {
       const baseContent = base.get(file.newPath) ?? "";
       const content = applyHunks(file, baseContent, file.newPath);
-      changes.push({ kind: "create", path: file.newPath, content, mode: file.mode });
+      changes.push({
+        kind: "create",
+        path: file.newPath,
+        content,
+        mode: file.mode,
+      });
     } else {
       const baseContent = base.get(file.newPath);
       if (baseContent === undefined) {
-        staleContext(file.newPath, "modifies a file the fetched base tree does not have");
+        staleContext(
+          file.newPath,
+          "modifies a file the fetched base tree does not have"
+        );
       }
       const content = applyHunks(file, baseContent, file.newPath);
-      changes.push({ kind: "modify", path: file.newPath, content, mode: file.mode });
+      changes.push({
+        kind: "modify",
+        path: file.newPath,
+        content,
+        mode: file.mode,
+      });
     }
   }
 
@@ -322,5 +391,7 @@ export function applyUnifiedDiff(patch: string, base: Map<string, string>): File
 /** The paths the patch reads from the base tree (modify+delete; not creates). */
 export function basePaths(patch: string): string[] {
   const files = parsePatch(patch);
-  return files.filter((f) => f.kind !== "create").map((f) => (f.kind === "delete" ? f.oldPath : f.newPath));
+  return files
+    .filter((f) => f.kind !== "create")
+    .map((f) => (f.kind === "delete" ? f.oldPath : f.newPath));
 }

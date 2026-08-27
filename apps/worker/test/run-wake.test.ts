@@ -17,9 +17,11 @@ import { waitFor } from "./helpers/wait";
 let seq = 0;
 function freshChannel(mode: "live" | "observe" | "internal"): Promise<string> {
   seq += 1;
-  const channelId = `CWAKE${seq}${Math.floor(Math.random() * 1e6)}`.toUpperCase().slice(0, 20);
+  const channelId = `CWAKE${seq}${Math.floor(Math.random() * 1e6)}`
+    .toUpperCase()
+    .slice(0, 20);
   return env.DB.prepare(
-    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'pulsefit', ?)",
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'pulsefit', ?)"
   )
     .bind(channelId, `ext-${channelId.toLowerCase()}`, mode)
     .run()
@@ -77,7 +79,9 @@ describe("waking a slack run", () => {
         threadTs,
         openingPrompt: "look at this",
       });
-      expect(await getRunByKey(env.DB, slackRunKey(channelId, threadTs))).toMatchObject({ shadow });
+      expect(
+        await getRunByKey(env.DB, slackRunKey(channelId, threadTs))
+      ).toMatchObject({ shadow });
     }
   });
 
@@ -90,7 +94,9 @@ describe("waking a slack run", () => {
       threadTs,
       openingPrompt: "look at this",
     });
-    expect(await getRunByKey(env.DB, slackRunKey("CUNMAPPED0", threadTs))).toMatchObject({
+    expect(
+      await getRunByKey(env.DB, slackRunKey("CUNMAPPED0", threadTs))
+    ).toMatchObject({
       shadow: true,
     });
   });
@@ -100,7 +106,12 @@ describe("waking a slack run", () => {
     const threadTs = freshThreadTs();
     const eventId = `Ev${crypto.randomUUID()}`;
     const wake = () =>
-      wakeRun(env, { eventId, channelId, threadTs, openingPrompt: "the exporter is stuck" });
+      wakeRun(env, {
+        eventId,
+        channelId,
+        threadTs,
+        openingPrompt: "the exporter is stuck",
+      });
 
     expect((await wake()).accepted).toBe(true);
     // The queue is at-least-once and the stored triage decision is replayed on
@@ -108,7 +119,8 @@ describe("waking a slack run", () => {
     expect((await wake()).accepted).toBe(false);
     expect((await wake()).accepted).toBe(false);
 
-    const runId = (await getRunByKey(env.DB, slackRunKey(channelId, threadTs)))?.id ?? "";
+    const runId =
+      (await getRunByKey(env.DB, slackRunKey(channelId, threadTs)))?.id ?? "";
     const usage = await waitFor("the wake's usage row", async () => {
       const rows = await readRunUsage(env.DB, runId);
       return rows.length > 0 ? rows : null;
@@ -119,7 +131,11 @@ describe("waking a slack run", () => {
 });
 
 describe("a message in a thread a run already owns", () => {
-  function message(channelId: string, threadTs: string, over: Record<string, unknown> = {}) {
+  function message(
+    channelId: string,
+    threadTs: string,
+    over: Record<string, unknown> = {}
+  ) {
     return {
       eventId: `Ev${crypto.randomUUID()}`,
       channelId,
@@ -158,10 +174,16 @@ describe("a message in a thread a run already owns", () => {
         openingPrompt: "opening",
       });
       const key = slackRunKey(channelId, threadTs);
-      await setRunStatus(env.DB, (await getRunByKey(env.DB, key))?.id ?? "", status);
+      await setRunStatus(
+        env.DB,
+        (await getRunByKey(env.DB, key))?.id ?? "",
+        status
+      );
 
       // Back to triage, which may reopen this same key and keep the history.
-      expect(await routeToOwnedRun(env, message(channelId, threadTs))).toBe(false);
+      expect(await routeToOwnedRun(env, message(channelId, threadTs))).toBe(
+        false
+      );
     }
   });
 
@@ -177,7 +199,10 @@ describe("a message in a thread a run already owns", () => {
       threadTs,
       openingPrompt: "opening",
     });
-    const stub = await getAgentByName(env.RUN_AGENTS, slackRunKey(channelId, threadTs));
+    const stub = await getAgentByName(
+      env.RUN_AGENTS,
+      slackRunKey(channelId, threadTs)
+    );
     const before = (await stub.runStateForTest()).inputRevision;
 
     await routeToOwnedRun(env, message(channelId, threadTs));
@@ -188,7 +213,9 @@ describe("a message in a thread a run already owns", () => {
 
   it("finds nothing when no run owns the thread", async () => {
     const channelId = await freshChannel("live");
-    expect(await routeToOwnedRun(env, message(channelId, freshThreadTs()))).toBe(false);
+    expect(
+      await routeToOwnedRun(env, message(channelId, freshThreadTs()))
+    ).toBe(false);
   });
 
   it("ratchets a continuing run to shadow when its channel was downgraded", async () => {
@@ -205,7 +232,9 @@ describe("a message in a thread a run already owns", () => {
     const key = slackRunKey(channelId, threadTs);
     expect(await getRunByKey(env.DB, key)).toMatchObject({ shadow: false });
 
-    await env.DB.prepare("UPDATE channels SET mode = 'observe' WHERE channel_id = ?")
+    await env.DB.prepare(
+      "UPDATE channels SET mode = 'observe' WHERE channel_id = ?"
+    )
       .bind(channelId)
       .run();
     await routeToOwnedRun(env, message(channelId, threadTs));
@@ -225,12 +254,16 @@ describe("a message in a thread a run already owns", () => {
       threadTs,
       openingPrompt: "opening",
     });
-    await env.DB.prepare("UPDATE channels SET mode = 'live' WHERE channel_id = ?")
+    await env.DB.prepare(
+      "UPDATE channels SET mode = 'live' WHERE channel_id = ?"
+    )
       .bind(channelId)
       .run();
     await routeToOwnedRun(env, message(channelId, threadTs));
 
-    expect(await getRunByKey(env.DB, slackRunKey(channelId, threadTs))).toMatchObject({
+    expect(
+      await getRunByKey(env.DB, slackRunKey(channelId, threadTs))
+    ).toMatchObject({
       shadow: true,
     });
   });
@@ -238,8 +271,12 @@ describe("a message in a thread a run already owns", () => {
 
 describe("a run started from the dashboard", () => {
   it("mints a chat key whose public id is a different value", async () => {
-    const { runId } = await createRunFromChat(env, { firstMessage: "why is the exporter stuck?" });
-    const { results } = await env.DB.prepare('SELECT "key", origin FROM runs WHERE id = ?')
+    const { runId } = await createRunFromChat(env, {
+      firstMessage: "why is the exporter stuck?",
+    });
+    const { results } = await env.DB.prepare(
+      'SELECT "key", origin FROM runs WHERE id = ?'
+    )
       .bind(runId)
       .all<{ key: string; origin: string }>();
 
@@ -256,7 +293,9 @@ describe("a run started from the dashboard", () => {
 
   it("is never shadowed, because a chat run has no channel to police", async () => {
     const { runId } = await createRunFromChat(env, {});
-    const { results } = await env.DB.prepare("SELECT shadow FROM runs WHERE id = ?")
+    const { results } = await env.DB.prepare(
+      "SELECT shadow FROM runs WHERE id = ?"
+    )
       .bind(runId)
       .all<{ shadow: number }>();
     expect(results?.[0].shadow).toBe(0);
@@ -270,7 +309,9 @@ describe("an object that was never told who it is", () => {
     // object without going through a wake.
     const { runId } = await createRunFromChat(env, {});
     const key = (
-      await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?').bind(runId).first<{ key: string }>()
+      await env.DB.prepare('SELECT "key" FROM runs WHERE id = ?')
+        .bind(runId)
+        .first<{ key: string }>()
     )?.key;
 
     const stub = await getAgentByName(env.RUN_AGENTS, key ?? "");
@@ -281,7 +322,10 @@ describe("an object that was never told who it is", () => {
     // Not an error and not a guess: `#runId()` refuses honestly until a wake
     // writes the row, and a throw out of onStart would make the object
     // permanently unreachable rather than temporarily unbound.
-    const stub = await getAgentByName(env.RUN_AGENTS, `chat:${crypto.randomUUID()}`);
+    const stub = await getAgentByName(
+      env.RUN_AGENTS,
+      `chat:${crypto.randomUUID()}`
+    );
     expect((await stub.runStateForTest()).runId).toBeNull();
   });
 });

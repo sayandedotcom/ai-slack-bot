@@ -1,12 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { buildTriagePrompt, TRIAGE_SYSTEM, type TriageInput } from "../src/triage/prompt";
+import {
+  buildTriagePrompt,
+  TRIAGE_SYSTEM,
+  type TriageInput,
+} from "../src/triage/prompt";
 
 const base: TriageInput = {
   channelName: "ext-pulsefit",
   customerSlug: "pulsefit",
-  message: { user_id: "U1", text: "how do I add a second language variant?", permalink: "https://x/p1" },
+  message: {
+    user_id: "U1",
+    text: "how do I add a second language variant?",
+    permalink: "https://x/p1",
+  },
   thread: [{ user_id: "U2", text: "earlier context" }],
-  recall: [{ factId: "f1", fact: "PulseFit complained about checkout in June", episodeUuids: ["ep1"] }],
+  recall: [
+    {
+      factId: "f1",
+      fact: "PulseFit complained about checkout in June",
+      episodeUuids: ["ep1"],
+    },
+  ],
 };
 
 describe("buildTriagePrompt", () => {
@@ -34,12 +48,21 @@ describe("buildTriagePrompt", () => {
    * memory gets, the more direct questions this drops.
    */
   it("says a direct question wakes even when the answer is already known", () => {
-    expect(TRIAGE_SYSTEM).toContain("Knowing the answer is not the same as the customer having received it");
-    expect(TRIAGE_SYSTEM).toContain("even when the answer is obvious or already known to us");
+    expect(TRIAGE_SYSTEM).toContain(
+      "Knowing the answer is not the same as the customer having received it"
+    );
+    expect(TRIAGE_SYSTEM).toContain(
+      "even when the answer is obvious or already known to us"
+    );
   });
 
   it("never mentions ticket types in the system prompt", () => {
-    for (const banned of ["bug report", "feature request", "ticket type", "categor"]) {
+    for (const banned of [
+      "bug report",
+      "feature request",
+      "ticket type",
+      "categor",
+    ]) {
       expect(TRIAGE_SYSTEM.toLowerCase()).not.toContain(banned);
     }
   });

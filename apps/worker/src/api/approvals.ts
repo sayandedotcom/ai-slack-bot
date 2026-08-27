@@ -1,7 +1,12 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { AccessJwtError, makeAccessVerifier, type AccessIdentity, type AccessVerifier } from "../access/jwt";
+import {
+  AccessJwtError,
+  makeAccessVerifier,
+  type AccessIdentity,
+  type AccessVerifier,
+} from "../access/jwt";
 import { isFirefighter, isTeamMember } from "../access/roster";
 import {
   decideApproval,
@@ -10,7 +15,12 @@ import {
   listUndeliveredResolutions,
   markResolutionDelivered,
 } from "../approval/repository";
-import { DecisionInputError, outboundText, type ApprovalRow, type DecisionInput } from "../approval/contracts";
+import {
+  DecisionInputError,
+  outboundText,
+  type ApprovalRow,
+  type DecisionInput,
+} from "../approval/contracts";
 import { makeRunAgentResolutionNotifier } from "../approval/notifier";
 
 /**
@@ -67,7 +77,9 @@ type ApprovalApiPorts = {
 let GLOBAL_PORTS: Partial<ApprovalApiPorts> = {};
 
 /** Test seam: override either port before a request reaches `resolvePorts`. */
-export function installApprovalApiPorts(ports: Partial<ApprovalApiPorts>): void {
+export function installApprovalApiPorts(
+  ports: Partial<ApprovalApiPorts>
+): void {
   GLOBAL_PORTS = { ...GLOBAL_PORTS, ...ports };
 }
 
@@ -91,17 +103,27 @@ export function resetApprovalApiPorts(): void {
  * gets the real thing, built from the same `ACCESS_TEAM_DOMAIN`/`ACCESS_APP_AUD`
  * vars Task 2 defined.
  */
-function resolvePorts(env: Env): Partial<ApprovalApiPorts> & { verifier: AccessVerifier } {
+function resolvePorts(
+  env: Env
+): Partial<ApprovalApiPorts> & { verifier: AccessVerifier } {
   if (GLOBAL_PORTS.verifier === undefined) {
     GLOBAL_PORTS = {
       ...GLOBAL_PORTS,
-      verifier: makeAccessVerifier({ teamDomain: env.ACCESS_TEAM_DOMAIN, aud: env.ACCESS_APP_AUD }),
+      verifier: makeAccessVerifier({
+        teamDomain: env.ACCESS_TEAM_DOMAIN,
+        aud: env.ACCESS_APP_AUD,
+      }),
     };
   }
   if (GLOBAL_PORTS.notifier === undefined) {
-    GLOBAL_PORTS = { ...GLOBAL_PORTS, notifier: makeRunAgentResolutionNotifier({ env }) };
+    GLOBAL_PORTS = {
+      ...GLOBAL_PORTS,
+      notifier: makeRunAgentResolutionNotifier({ env }),
+    };
   }
-  return GLOBAL_PORTS as Partial<ApprovalApiPorts> & { verifier: AccessVerifier };
+  return GLOBAL_PORTS as Partial<ApprovalApiPorts> & {
+    verifier: AccessVerifier;
+  };
 }
 
 /* ------------------------------------------------------------ authz ---- */
@@ -131,14 +153,19 @@ function fail(code: string, message: string) {
  * operation (the JWKS fetch) directly rather than refusing traffic on this
  * route as a proxy for it.
  */
-async function requireIdentity(c: Context<{ Bindings: Env }>): Promise<AccessIdentity | Response> {
+async function requireIdentity(
+  c: Context<{ Bindings: Env }>
+): Promise<AccessIdentity | Response> {
   const { verifier } = resolvePorts(c.env);
   const jwt = c.req.header("Cf-Access-Jwt-Assertion") ?? "";
   try {
     return await verifier.verify(jwt);
   } catch (err) {
     const reason = err instanceof AccessJwtError ? err.code : "invalid";
-    return c.json(fail("access_jwt_invalid", `token failed verification: ${reason}`), 401);
+    return c.json(
+      fail("access_jwt_invalid", `token failed verification: ${reason}`),
+      401
+    );
   }
 }
 
@@ -187,7 +214,10 @@ approvalsApi.get("/approvals", async (c) => {
   const identity = await requireIdentity(c);
   if (identity instanceof Response) return identity;
   if (!isTeamMember(identity.email)) {
-    return c.json(fail("not_a_firefighter", "not a recognized team member"), 403);
+    return c.json(
+      fail("not_a_firefighter", "not a recognized team member"),
+      403
+    );
   }
 
   const stateParam = c.req.query("state");
@@ -204,7 +234,10 @@ approvalsApi.get("/approvals/:id", async (c) => {
   const identity = await requireIdentity(c);
   if (identity instanceof Response) return identity;
   if (!isTeamMember(identity.email)) {
-    return c.json(fail("not_a_firefighter", "not a recognized team member"), 403);
+    return c.json(
+      fail("not_a_firefighter", "not a recognized team member"),
+      403
+    );
   }
 
   const row = await getApproval(c.env.DB, c.req.param("id"));
@@ -224,15 +257,20 @@ approvalsApi.get("/approvals/:id", async (c) => {
  * land on the same `422 invalid_action` response.
  */
 function parseDecisionInput(body: unknown): DecisionInput | null {
-  if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
+  if (body === null || typeof body !== "object" || Array.isArray(body))
+    return null;
   const record = body as Record<string, unknown>;
 
   if (record.action === "approve") return { action: "approve" };
   if (record.action === "edit") {
-    return typeof record.text === "string" ? { action: "edit", text: record.text } : null;
+    return typeof record.text === "string"
+      ? { action: "edit", text: record.text }
+      : null;
   }
   if (record.action === "reject") {
-    return typeof record.reason === "string" ? { action: "reject", reason: record.reason } : null;
+    return typeof record.reason === "string"
+      ? { action: "reject", reason: record.reason }
+      : null;
   }
   return null;
 }
@@ -248,7 +286,10 @@ approvalsApi.patch("/approvals/:id", async (c) => {
   const identity = await requireIdentity(c);
   if (identity instanceof Response) return identity;
   if (!isFirefighter(identity.email)) {
-    return c.json(fail("not_a_firefighter", "decisions are fire-fighters only"), 403);
+    return c.json(
+      fail("not_a_firefighter", "decisions are fire-fighters only"),
+      403
+    );
   }
 
   let body: unknown;
@@ -260,12 +301,24 @@ approvalsApi.patch("/approvals/:id", async (c) => {
 
   const input = parseDecisionInput(body);
   if (!input) {
-    return c.json(fail("invalid_action", "unknown action, or edit/reject missing its field"), 422);
+    return c.json(
+      fail(
+        "invalid_action",
+        "unknown action, or edit/reject missing its field"
+      ),
+      422
+    );
   }
 
   let result;
   try {
-    result = await decideApproval(c.env.DB, c.req.param("id"), input, identity.email, Date.now());
+    result = await decideApproval(
+      c.env.DB,
+      c.req.param("id"),
+      input,
+      identity.email,
+      Date.now()
+    );
   } catch (err) {
     if (err instanceof DecisionInputError) {
       return c.json(fail("invalid_action", err.code), 422);
@@ -279,7 +332,13 @@ approvalsApi.patch("/approvals/:id", async (c) => {
   if (result.result === "already_decided") {
     // The CAS's loser (invariant 8): carries the WINNING decision, so the
     // dashboard can show what actually happened instead of a bare conflict.
-    return c.json({ ...fail("already_decided", "already decided"), decision: result.row.decision }, 409);
+    return c.json(
+      {
+        ...fail("already_decided", "already decided"),
+        decision: result.row.decision,
+      },
+      409
+    );
   }
 
   const row = result.row;
@@ -289,7 +348,11 @@ approvalsApi.patch("/approvals/:id", async (c) => {
   // branch a plain literal union instead of re-narrowing `ApprovalRow.decision`
   // (whose type also allows `pending`/`withdrawn`, which cannot be true here).
   const decision: "approved" | "edited" | "rejected" =
-    input.action === "approve" ? "approved" : input.action === "edit" ? "edited" : "rejected";
+    input.action === "approve"
+      ? "approved"
+      : input.action === "edit"
+        ? "edited"
+        : "rejected";
 
   /**
    * INVARIANT 9, the subtlest rule in this task: the D1 decision above already
@@ -330,10 +393,13 @@ approvalsApi.patch("/approvals/:id", async (c) => {
     // needs to know is now riding on the sweeper — and until this line existed,
     // the only trace of it was a `resolutionDelivered:false` in a response
     // nobody keeps. Ids only: no draft, no edited text, no decider.
-    console.warn("approval notify did not apply; the sweeper will re-drive it", {
-      approvalId: row.id,
-      runId: row.runId,
-    });
+    console.warn(
+      "approval notify did not apply; the sweeper will re-drive it",
+      {
+        approvalId: row.id,
+        runId: row.runId,
+      }
+    );
   }
 
   // `row` is the SELECT from `decideApproval`'s own batch — taken BEFORE
@@ -350,7 +416,10 @@ approvalsApi.patch("/approvals/:id", async (c) => {
   // unreachable DO still returns 200 with `resolutionDelivered:false` and the
   // decided row exactly as `decideApproval` left it, delivery included.
   const fresh = await getApproval(c.env.DB, row.id);
-  return c.json({ approval: publicApprovalCard(fresh ?? row), resolutionDelivered: delivered });
+  return c.json({
+    approval: publicApprovalCard(fresh ?? row),
+    resolutionDelivered: delivered,
+  });
 });
 
 /* ------------------------------------------------------------- sweeper --- */
@@ -380,10 +449,13 @@ export type ApprovalSweepResult = {
  */
 export async function sweepUndeliveredApprovals(
   env: Env,
-  now: number = Date.now(),
+  now: number = Date.now()
 ): Promise<ApprovalSweepResult> {
   const { notifier } = resolvePorts(env);
-  const due = await listUndeliveredResolutions(env.DB, APPROVAL_SWEEP_PAGE_SIZE);
+  const due = await listUndeliveredResolutions(
+    env.DB,
+    APPROVAL_SWEEP_PAGE_SIZE
+  );
   let delivered = 0;
   let failed = 0;
 

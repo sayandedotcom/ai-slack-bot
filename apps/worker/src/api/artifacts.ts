@@ -52,12 +52,12 @@ export const artifactsApi = new Hono<{ Bindings: Env }>();
 
 /** The exact shape `makeArtifactPublisher` writes: sha256 hex + allowed extension. */
 const ARTIFACT_KEY = new RegExp(
-  `^[0-9a-f]{64}\\.(?:${Object.values(CONTENT_TYPES).join("|")})$`,
+  `^[0-9a-f]{64}\\.(?:${Object.values(CONTENT_TYPES).join("|")})$`
 );
 
 /** Extension → content type, inverted from the publisher's single allowlist. */
 const TYPE_FOR_EXTENSION: ReadonlyMap<string, string> = new Map(
-  Object.entries(CONTENT_TYPES).map(([type, extension]) => [extension, type]),
+  Object.entries(CONTENT_TYPES).map(([type, extension]) => [extension, type])
 );
 
 export function isArtifactKey(key: string): boolean {
@@ -82,10 +82,13 @@ function hasBody(object: R2Object | R2ObjectBody): object is R2ObjectBody {
  * which 64-character strings name a real artifact.
  */
 function missing(): Response {
-  return new Response(JSON.stringify({ code: "not_found", message: "no such artifact" }), {
-    status: 404,
-    headers: { "content-type": "application/json" },
-  });
+  return new Response(
+    JSON.stringify({ code: "not_found", message: "no such artifact" }),
+    {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    }
+  );
 }
 
 // GET and HEAD together. Registering only GET would leave HEAD falling through
@@ -117,7 +120,9 @@ artifactsApi.on(["GET", "HEAD"], "/artifacts/:key", async (c) => {
   // `get()` whose body we then cancel would work, but it asks R2 for bytes we
   // have already decided not to send.
   const isHead = c.req.method === "HEAD";
-  const object = isHead ? await c.env.ARTIFACTS.head(key) : await c.env.ARTIFACTS.get(key);
+  const object = isHead
+    ? await c.env.ARTIFACTS.head(key)
+    : await c.env.ARTIFACTS.get(key);
   if (object === null) return missing();
 
   /** Refuse, releasing the body we are not going to send. */

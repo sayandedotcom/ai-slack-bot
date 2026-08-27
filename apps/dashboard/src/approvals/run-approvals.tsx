@@ -39,7 +39,11 @@ export function RunApprovals({
 }): ReactNode {
   if (state.kind === "loading") {
     return (
-      <div role="status" aria-label="Loading approvals" className="space-y-2 rounded-lg border p-3">
+      <div
+        role="status"
+        aria-label="Loading approvals"
+        className="space-y-2 rounded-lg border p-3"
+      >
         <div className="h-3 w-1/3 animate-pulse rounded bg-muted" />
         <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
       </div>
@@ -52,8 +56,8 @@ export function RunApprovals({
         role="alert"
         className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
       >
-        Could not load this run&apos;s approvals — the queue in the dashboard behind this drawer is
-        the fallback.
+        Could not load this run&apos;s approvals — the queue in the dashboard
+        behind this drawer is the fallback.
       </div>
     );
   }
@@ -61,12 +65,17 @@ export function RunApprovals({
   // `empty` is the shell's word for "nothing anywhere", which says nothing
   // about this run; either way there is no card here, and a run with no
   // pending decision should show no chrome at all rather than an empty box.
-  const cards = state.kind === "ready" ? state.data.filter((entry) => entry.card.runId === runId) : [];
+  const cards =
+    state.kind === "ready"
+      ? state.data.filter((entry) => entry.card.runId === runId)
+      : [];
   if (cards.length === 0) return null;
 
   return (
     <section aria-label="Waiting on you" className="space-y-2">
-      <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">Waiting on you</h3>
+      <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        Waiting on you
+      </h3>
       <ul className="space-y-3">
         {[...cards]
           .sort((a, b) => b.card.createdAt - a.card.createdAt)

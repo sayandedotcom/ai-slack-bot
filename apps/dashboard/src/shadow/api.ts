@@ -36,6 +36,8 @@ export type ShadowPair = {
 };
 
 export async function fetchShadowPairs(): Promise<ShadowPair[]> {
-  const body = await getJson<{ pairs: ShadowPair[] }>("/api/eval/shadow?limit=20");
+  const body = await getJson<{ pairs: ShadowPair[] }>(
+    "/api/eval/shadow?limit=20"
+  );
   return body.pairs;
 }

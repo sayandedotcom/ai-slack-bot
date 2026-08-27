@@ -41,7 +41,6 @@ export { RunAgent } from "./run/agent";
 // throws "Incorrect type for the 'class' field on 'StartupOptions'".
 export { CodemodeRuntime } from "@cloudflare/codemode";
 
-
 /**
  * Wrangler-generated bindings, plus the two narrow refinements the application
  * genuinely needs.
@@ -265,7 +264,6 @@ app.route("/api", evalApi);
 // argument and for everything that guards it.
 app.route("/", proofsApi);
 
-
 /**
  * An unmatched API or WebSocket path is a 404, and it stops HERE — it must
  * never reach the asset bundle.
@@ -285,8 +283,12 @@ app.route("/", proofsApi);
  * Placed below every `/api` and `/ws` mount and above the catch-all, so it
  * only ever sees paths nothing else claimed.
  */
-app.all("/api/*", (c) => c.json({ code: "not_found", message: "no such route" }, 404));
-app.all("/ws/*", (c) => c.json({ code: "not_found", message: "no such route" }, 404));
+app.all("/api/*", (c) =>
+  c.json({ code: "not_found", message: "no such route" }, 404)
+);
+app.all("/ws/*", (c) =>
+  c.json({ code: "not_found", message: "no such route" }, 404)
+);
 
 // The Worker runs first on every request; anything unmatched falls through to
 // the static asset bundle. Explicit, rather than relying on route-ordering
@@ -319,12 +321,19 @@ export default {
   fetch: app.fetch,
   // One handler serves every queue; `batch.queue` is the only thing that says
   // which one delivered. A new queue that forgets a case here fails silently.
-  async queue(batch: MessageBatch<QueuedEvent | MemoryJob | TriageJob>, env: Env): Promise<void> {
+  async queue(
+    batch: MessageBatch<QueuedEvent | MemoryJob | TriageJob>,
+    env: Env
+  ): Promise<void> {
     switch (batch.queue) {
       case "firefighter-ingest":
         return handleIngestBatch(batch as MessageBatch<QueuedEvent>, env);
       case "firefighter-memory":
-        return handleMemoryBatch(batch as MessageBatch<MemoryJob>, env, new ZepMemory(env.ZEP_API_KEY));
+        return handleMemoryBatch(
+          batch as MessageBatch<MemoryJob>,
+          env,
+          new ZepMemory(env.ZEP_API_KEY)
+        );
       case "firefighter-triage":
         return handleTriageBatch(batch as MessageBatch<TriageJob>, env, {
           triage: makeTriageRunner(env),
@@ -423,11 +432,13 @@ export default {
     if (channels?.status === "fulfilled" && channels.value.registered > 0) {
       console.warn("channel sweep", { registered: channels.value.registered });
     }
-    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const failures = results.filter(
+      (r): r is PromiseRejectedResult => r.status === "rejected"
+    );
     if (failures.length > 0) {
       throw new AggregateError(
         failures.map((f) => f.reason),
-        "one or more scheduled sweeps failed",
+        "one or more scheduled sweeps failed"
       );
     }
   },

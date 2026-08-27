@@ -34,7 +34,8 @@ import { waitFor } from "./helpers/wait";
  */
 
 /** Binding NAMES whose values are credential-shaped. Values never appear here. */
-const SECRET_NAME = /token|secret|password|passwd|api[_-]?key|_key$|credential|_pat$|signing/i;
+const SECRET_NAME =
+  /token|secret|password|passwd|api[_-]?key|_key$|credential|_pat$|signing/i;
 
 /** Too short to be a credential, and short strings collide with real content. */
 const MIN_CANARY_CHARS = 12;
@@ -50,7 +51,9 @@ type Canary = { name: string; value: string };
  */
 function canaries(): Canary[] {
   const out: Canary[] = [];
-  for (const [name, value] of Object.entries(env as unknown as Record<string, unknown>)) {
+  for (const [name, value] of Object.entries(
+    env as unknown as Record<string, unknown>
+  )) {
     if (!SECRET_NAME.test(name)) continue;
     if (typeof value !== "string" || value.length < MIN_CANARY_CHARS) continue;
     out.push({ name, value });
@@ -60,15 +63,19 @@ function canaries(): Canary[] {
 
 /** Which canaries appear in `haystack`. Reported by NAME. */
 function leaked(haystack: string, found: Canary[] = canaries()): string[] {
-  return found.filter((canary) => haystack.includes(canary.value)).map((canary) => canary.name);
+  return found
+    .filter((canary) => haystack.includes(canary.value))
+    .map((canary) => canary.name);
 }
 
 let channelSeq = 0;
 async function liveChannel(): Promise<string> {
   channelSeq += 1;
-  const channelId = `CCAN${channelSeq}${Math.floor(Math.random() * 1e5)}`.toUpperCase().slice(0, 20);
+  const channelId = `CCAN${channelSeq}${Math.floor(Math.random() * 1e5)}`
+    .toUpperCase()
+    .slice(0, 20);
   await env.DB.prepare(
-    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'pulsefit', 'live')",
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, 'pulsefit', 'live')"
   )
     .bind(channelId, `ext-${channelId.toLowerCase()}`)
     .run();
@@ -111,13 +118,17 @@ describe("the canary set", () => {
   it("catches a leak when there is one", () => {
     // The sweep's own smoke test: a detector that cannot fail proves nothing.
     const [first] = canaries();
-    expect(leaked(`prefix ${first?.value ?? ""} suffix`)).toContain(first?.name);
+    expect(leaked(`prefix ${first?.value ?? ""} suffix`)).toContain(
+      first?.name
+    );
   });
 });
 
 describe("one full run, then the sweep", () => {
   it("leaves no credential in any durable store it touched", async () => {
-    installTestModel(toolCallingModel({ program: PROGRAM, text: "Asked a human first." }));
+    installTestModel(
+      toolCallingModel({ program: PROGRAM, text: "Asked a human first." })
+    );
 
     // 1. WAKE — the D1 row, the shadow ratchet, the opening turn.
     const channelId = await liveChannel();
@@ -126,13 +137,17 @@ describe("one full run, then the sweep", () => {
       eventId: `Ev${crypto.randomUUID()}`,
       channelId,
       threadTs,
-      openingPrompt: "pulsefit says the exporter is stuck and asked us to confirm the cause",
+      openingPrompt:
+        "pulsefit says the exporter is stuck and asked us to confirm the cause",
     });
 
     const key = slackRunKey(channelId, threadTs);
     const run = await getRunByKey(env.DB, key);
     if (run === null) throw new Error("the wake wrote no run row");
-    const stub = (await getAgentByName(env.RUN_AGENTS, key)) as unknown as SweepStub;
+    const stub = (await getAgentByName(
+      env.RUN_AGENTS,
+      key
+    )) as unknown as SweepStub;
 
     // 2. RUN_CODE + a real capability call. The program runs in a loader
     //    isolate and calls `approval.escalate` through the connector, so the
@@ -147,9 +162,12 @@ describe("one full run, then the sweep", () => {
     await decideApproval(
       env.DB,
       card.id,
-      { action: "edit", text: "The exporter ran out of memory; we have restarted it." },
+      {
+        action: "edit",
+        text: "The exporter ran out of memory; we have restarted it.",
+      },
       "ronit@zellify.app",
-      Date.now(),
+      Date.now()
     );
     await makeRunAgentResolutionNotifier({ env }).notify({
       runId: run.id,
@@ -169,8 +187,10 @@ describe("one full run, then the sweep", () => {
     // --- the agent's own SQLite: Think's session tree, submissions, fibers,
     //     the cached prompt store, the stream chunks. Enumerated, not listed.
     for (const canary of found) {
-      expect({ binding: canary.name, tables: await stub.sweepForCanaryForTest(canary.value) })
-        .toEqual({ binding: canary.name, tables: [] });
+      expect({
+        binding: canary.name,
+        tables: await stub.sweepForCanaryForTest(canary.value),
+      }).toEqual({ binding: canary.name, tables: [] });
     }
 
     // --- Code Mode's audit trail: the model-authored program, every call's
@@ -179,7 +199,7 @@ describe("one full run, then the sweep", () => {
 
     // --- D1, every table, enumerated the same way.
     const { results: tables } = await env.DB.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table'",
+      "SELECT name FROM sqlite_master WHERE type = 'table'"
     ).all<{ name: string }>();
 
     const swept: string[] = [];
@@ -192,7 +212,10 @@ describe("one full run, then the sweep", () => {
       if (name.startsWith("_cf_")) continue;
       const { results } = await env.DB.prepare(`SELECT * FROM "${name}"`).all();
       swept.push(name);
-      expect({ table: name, leaked: leaked(JSON.stringify(results ?? []), found) }).toEqual({
+      expect({
+        table: name,
+        leaked: leaked(JSON.stringify(results ?? []), found),
+      }).toEqual({
         table: name,
         leaked: [],
       });
@@ -208,7 +231,7 @@ describe("one full run, then the sweep", () => {
         "codemode_effects",
         "agent_memory_outbox",
         "channels",
-      ]),
+      ])
     );
   });
 });
@@ -220,7 +243,9 @@ describe("what a read leaves in the durable log", () => {
     // else's bytes — a whole Slack thread, a page of production logs — so every
     // `read` capability is `replay: "reexecute"` and its result is never
     // stored. This pins the classification, which is what the connector reads.
-    const { NAMESPACE_FACTORIES } = await import("../src/capabilities/registry");
+    const { NAMESPACE_FACTORIES } = await import(
+      "../src/capabilities/registry"
+    );
     const { testBindingContext } = await import("./helpers/capabilities");
     const ctx = testBindingContext();
 
@@ -228,7 +253,9 @@ describe("what a read leaves in the durable log", () => {
     const writes: string[] = [];
     for (const factory of NAMESPACE_FACTORIES) {
       for (const [method, tool] of Object.entries(factory.build(ctx))) {
-        (tool.effect === "read" ? reads : writes).push(`${factory.name}.${method}`);
+        (tool.effect === "read" ? reads : writes).push(
+          `${factory.name}.${method}`
+        );
       }
     }
     expect(reads.length).toBeGreaterThan(10);

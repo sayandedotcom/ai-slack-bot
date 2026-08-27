@@ -42,7 +42,7 @@ function ev(overrides: Partial<QueuedEvent> = {}): QueuedEvent {
 // is still written.
 beforeEach(() => {
   vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-    Response.json({ ok: false, error: "message_not_found" }),
+    Response.json({ ok: false, error: "message_not_found" })
   );
 });
 
@@ -65,7 +65,9 @@ describe("handleIngestBatch", () => {
   it("writes an events_seen row and a messages row", async () => {
     await handleIngestBatch(batchOf([ev()]), env);
 
-    const seen = await env.DB.prepare("SELECT * FROM events_seen").first<{ outcome: string }>();
+    const seen = await env.DB.prepare("SELECT * FROM events_seen").first<{
+      outcome: string;
+    }>();
     expect(seen?.outcome).toBe("ingested");
 
     const msg = await env.DB.prepare("SELECT * FROM messages").first<{
@@ -82,8 +84,12 @@ describe("handleIngestBatch", () => {
     await handleIngestBatch(batchOf([ev()]), env);
     await handleIngestBatch(batchOf([ev()]), env);
 
-    const seen = await env.DB.prepare("SELECT COUNT(*) AS n FROM events_seen").first<{ n: number }>();
-    const msgs = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages").first<{ n: number }>();
+    const seen = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM events_seen"
+    ).first<{ n: number }>();
+    const msgs = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages"
+    ).first<{ n: number }>();
     expect(seen?.n).toBe(1);
     expect(msgs?.n).toBe(1);
   });
@@ -93,12 +99,16 @@ describe("handleIngestBatch", () => {
     dm.event.channel_type = "im";
     await handleIngestBatch(batchOf([dm]), env);
 
-    const seen = await env.DB.prepare("SELECT outcome FROM events_seen WHERE event_id = ?")
+    const seen = await env.DB.prepare(
+      "SELECT outcome FROM events_seen WHERE event_id = ?"
+    )
       .bind("Ev_dm")
       .first<{ outcome: string }>();
     expect(seen?.outcome).toBe("dropped_dm");
 
-    const msgs = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages").first<{ n: number }>();
+    const msgs = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages"
+    ).first<{ n: number }>();
     expect(msgs?.n).toBe(0);
   });
 
@@ -107,14 +117,18 @@ describe("handleIngestBatch", () => {
     unknown.event.channel = "C_NOT_MAPPED";
     await handleIngestBatch(batchOf([unknown]), env);
 
-    const seen = await env.DB.prepare("SELECT outcome FROM events_seen WHERE event_id = ?")
+    const seen = await env.DB.prepare(
+      "SELECT outcome FROM events_seen WHERE event_id = ?"
+    )
       .bind("Ev_unknown")
       .first<{ outcome: string }>();
     expect(seen?.outcome).toBe("ingested");
 
     // Heard and stored, but attributed to no customer — so shouldTriage() is
     // false and canPost() is false. Core requirement 1 wants the message kept.
-    const msg = await env.DB.prepare("SELECT channel_id, customer_slug FROM messages WHERE event_id = ?")
+    const msg = await env.DB.prepare(
+      "SELECT channel_id, customer_slug FROM messages WHERE event_id = ?"
+    )
       .bind("Ev_unknown")
       .first<{ channel_id: string; customer_slug: string | null }>();
     expect(msg?.channel_id).toBe("C_NOT_MAPPED");
@@ -126,7 +140,9 @@ describe("handleIngestBatch", () => {
     reply.event.thread_ts = "1700000000.000000";
     await handleIngestBatch(batchOf([reply]), env);
 
-    const msg = await env.DB.prepare("SELECT thread_ts FROM messages WHERE event_id = ?")
+    const msg = await env.DB.prepare(
+      "SELECT thread_ts FROM messages WHERE event_id = ?"
+    )
       .bind("Ev_reply")
       .first<{ thread_ts: string }>();
     expect(msg?.thread_ts).toBe("1700000000.000000");
@@ -140,7 +156,9 @@ describe("handleIngestBatch", () => {
     refMsg.event.channel = "C_REF";
     await handleIngestBatch(batchOf([refMsg]), env);
 
-    const msg = await env.DB.prepare("SELECT customer_slug FROM messages WHERE event_id = ?")
+    const msg = await env.DB.prepare(
+      "SELECT customer_slug FROM messages WHERE event_id = ?"
+    )
       .bind("Ev_ref")
       .first<{ customer_slug: string }>();
     expect(msg?.customer_slug).toBe("pulsefit");
@@ -151,7 +169,9 @@ describe("handleIngestBatch", () => {
     bad.event.channel_type = "im";
     await handleIngestBatch(batchOf([bad, ev({ event_id: "Ev_good" })]), env);
 
-    const msgs = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages").first<{ n: number }>();
+    const msgs = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages"
+    ).first<{ n: number }>();
     expect(msgs?.n).toBe(1);
   });
 
@@ -164,8 +184,12 @@ describe("handleIngestBatch", () => {
    * is a loop.
    */
   it("stores a self-post and fans it to memory, but never to triage", async () => {
-    const memorySend = vi.spyOn(env.MEMORY_QUEUE, "send").mockResolvedValue({} as QueueSendResponse);
-    const triageSend = vi.spyOn(env.TRIAGE_QUEUE, "send").mockResolvedValue({} as QueueSendResponse);
+    const memorySend = vi
+      .spyOn(env.MEMORY_QUEUE, "send")
+      .mockResolvedValue({} as QueueSendResponse);
+    const triageSend = vi
+      .spyOn(env.TRIAGE_QUEUE, "send")
+      .mockResolvedValue({} as QueueSendResponse);
 
     const selfReply = ev({ event_id: "Ev_self" });
     selfReply.event.bot_id = "B_WHATEVER"; // bot ids are not stable; the pin is app_id
@@ -174,12 +198,17 @@ describe("handleIngestBatch", () => {
     selfReply.event.thread_ts = "1700000000.000100";
     await handleIngestBatch(batchOf([selfReply]), env);
 
-    const seen = await env.DB.prepare("SELECT outcome FROM events_seen WHERE event_id = 'Ev_self'")
-      .first<{ outcome: string }>();
+    const seen = await env.DB.prepare(
+      "SELECT outcome FROM events_seen WHERE event_id = 'Ev_self'"
+    ).first<{ outcome: string }>();
     expect(seen?.outcome).toBe("ingested_self");
-    const msg = await env.DB.prepare("SELECT user_id, thread_ts FROM messages WHERE event_id = 'Ev_self'")
-      .first<{ user_id: string; thread_ts: string }>();
-    expect(msg).toEqual({ user_id: "U_HUMAN_ENGINEER", thread_ts: "1700000000.000100" });
+    const msg = await env.DB.prepare(
+      "SELECT user_id, thread_ts FROM messages WHERE event_id = 'Ev_self'"
+    ).first<{ user_id: string; thread_ts: string }>();
+    expect(msg).toEqual({
+      user_id: "U_HUMAN_ENGINEER",
+      thread_ts: "1700000000.000100",
+    });
     expect(memorySend).toHaveBeenCalledWith({ event_id: "Ev_self" });
     expect(triageSend).not.toHaveBeenCalled();
   });
@@ -191,10 +220,13 @@ describe("handleIngestBatch", () => {
     nudge.event.user = env.SLACK_BOT_USER_ID; // bot-token posts speak as the bot user
     await handleIngestBatch(batchOf([nudge]), env);
 
-    const seen = await env.DB.prepare("SELECT outcome FROM events_seen WHERE event_id = 'Ev_nudge'")
-      .first<{ outcome: string }>();
+    const seen = await env.DB.prepare(
+      "SELECT outcome FROM events_seen WHERE event_id = 'Ev_nudge'"
+    ).first<{ outcome: string }>();
     expect(seen?.outcome).toBe("dropped_bot");
-    const msgs = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages").first<{ n: number }>();
+    const msgs = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages"
+    ).first<{ n: number }>();
     expect(msgs?.n).toBe(0);
   });
 });

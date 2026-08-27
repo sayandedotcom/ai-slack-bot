@@ -24,7 +24,9 @@ import { auditedCapability, type BindingContext } from "../registry";
  * belongs to the port's real implementation (a later task), and Task 3's
  * tests run this file against a plain in-memory double of the port.
  */
-export function makeApprovalTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeApprovalTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     escalate: auditedCapability(ctx, "approval", "escalate", {
       effect: "control_write",
@@ -47,7 +49,7 @@ export function makeApprovalTools(ctx: BindingContext): Record<string, Classifie
         if (ctx.deps.approval.openApprovalId() !== null) {
           throw new CapabilityError(
             "approval_already_open",
-            "an approval is already open for this run. Withdraw it first, or wait for the human decision, before escalating again.",
+            "an approval is already open for this run. Withdraw it first, or wait for the human decision, before escalating again."
           );
         }
         const { approvalId } = await ctx.deps.approval.open({
@@ -79,7 +81,7 @@ export function makeApprovalTools(ctx: BindingContext): Record<string, Classifie
         if (ctx.deps.approval.openApprovalId() === null) {
           throw new CapabilityError(
             "approval_not_open",
-            "there is no open approval on this run to withdraw.",
+            "there is no open approval on this run to withdraw."
           );
         }
         return ctx.deps.approval.withdraw();

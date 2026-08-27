@@ -75,7 +75,7 @@ export type SteerSender = {
  */
 export function makeSteerSender(
   send: (text: string, requestId: string) => Promise<unknown>,
-  mintId: () => string = () => crypto.randomUUID(),
+  mintId: () => string = () => crypto.randomUUID()
 ): SteerSender {
   const inFlight = new Map<string, Promise<void>>();
 
@@ -154,8 +154,11 @@ export function useRunAgent(runId: string): RunAgentView {
   // renamed" into a runtime crash instead of a compile error. `call` names the
   // method as data and is the same RPC over the same socket.
   const steer = useMemo(
-    () => makeSteerSender((text, requestId) => agent.call("steer", [text, requestId])),
-    [agent],
+    () =>
+      makeSteerSender((text, requestId) =>
+        agent.call("steer", [text, requestId])
+      ),
+    [agent]
   );
 
   const send = useCallback(
@@ -165,12 +168,17 @@ export function useRunAgent(runId: string): RunAgentView {
         setSendError("Could not send that. Try again.");
       });
     },
-    [steer],
+    [steer]
   );
 
   return {
-    connection: connected ? "live" : droppedRef.current ? "reconnecting" : "connecting",
-    connectionError: chat.connectionError !== null && chat.connectionError !== undefined,
+    connection: connected
+      ? "live"
+      : droppedRef.current
+        ? "reconnecting"
+        : "connecting",
+    connectionError:
+      chat.connectionError !== null && chat.connectionError !== undefined,
     messages: chat.messages,
     status: agent.state?.status ?? null,
     busy: chat.isStreaming || chat.isRecovering || chat.status === "submitted",

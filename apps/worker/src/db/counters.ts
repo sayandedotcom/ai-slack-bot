@@ -9,20 +9,25 @@ export type Counters = {
   escalated: number;
 };
 
-export async function getCounters(db: D1Database, sinceMs: number): Promise<Counters> {
+export async function getCounters(
+  db: D1Database,
+  sinceMs: number
+): Promise<Counters> {
   const row = await db
     .prepare(
       `SELECT
          COUNT(*) AS heard,
          SUM(CASE WHEN outcome = 'ingested' THEN 1 ELSE 0 END) AS ingested
        FROM events_seen
-       WHERE received_at >= ?`,
+       WHERE received_at >= ?`
     )
     .bind(sinceMs)
     .first<{ heard: number; ingested: number | null }>();
 
   const triagedRow = await db
-    .prepare("SELECT COUNT(*) AS triaged FROM triage_decisions WHERE created_at >= ?")
+    .prepare(
+      "SELECT COUNT(*) AS triaged FROM triage_decisions WHERE created_at >= ?"
+    )
     .bind(sinceMs)
     .first<{ triaged: number }>();
 
@@ -31,7 +36,9 @@ export async function getCounters(db: D1Database, sinceMs: number): Promise<Coun
   // regardless of what a human later decided. A plain D1 read, matching
   // invariant 7: reads never wake a DO.
   const escalatedRow = await db
-    .prepare("SELECT COUNT(*) AS escalated FROM approvals WHERE created_at >= ?")
+    .prepare(
+      "SELECT COUNT(*) AS escalated FROM approvals WHERE created_at >= ?"
+    )
     .bind(sinceMs)
     .first<{ escalated: number }>();
 

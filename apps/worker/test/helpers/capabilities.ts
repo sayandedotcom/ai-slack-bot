@@ -20,12 +20,14 @@ import type { CapabilityDependencies } from "../../src/gateways/ports";
 import type { RunScope } from "../../src/gateways/scope";
 
 export function unreachableDependencies(
-  overrides: Partial<CapabilityDependencies> = {},
+  overrides: Partial<CapabilityDependencies> = {}
 ): CapabilityDependencies {
   const gateway = (name: string) =>
     new Proxy({} as Record<string, unknown>, {
       get: (_t, method) => () => {
-        throw new Error(`test reached ${name}.${String(method)} without stubbing it`);
+        throw new Error(
+          `test reached ${name}.${String(method)} without stubbing it`
+        );
       },
     });
 
@@ -59,12 +61,14 @@ export function testScope(overrides: Partial<RunScope> = {}): RunScope {
   };
 }
 
-export function testBindingContext(options: {
-  scope?: Partial<RunScope>;
-  deps?: Partial<CapabilityDependencies>;
-  guard?: AgentExecutionGuard;
-  events?: CapabilityEvent[];
-} = {}): BindingContext {
+export function testBindingContext(
+  options: {
+    scope?: Partial<RunScope>;
+    deps?: Partial<CapabilityDependencies>;
+    guard?: AgentExecutionGuard;
+    events?: CapabilityEvent[];
+  } = {}
+): BindingContext {
   const events = options.events ?? [];
   return {
     scope: testScope(options.scope),

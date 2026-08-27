@@ -106,7 +106,7 @@ export const POLICY_BLOCK = [
   "`approval.escalate({draft, why})` with the reply you would have sent and why it",
   "needs review, instead of sending it yourself.",
   "",
-  'Never promise a future message. "I\'ll post here when it\'s out" is a',
+  "Never promise a future message. \"I'll post here when it's out\" is a",
   "commitment, and nothing wakes you when a pull request merges or a deploy",
   "lands, so it is one you cannot keep. Say what is true now — the fix is in",
   "review, here is the link — and stop. If someone needs to know when it ships,",
@@ -203,7 +203,7 @@ export const VOICE_BLOCK = [
   "",
   ...VOICE_CONTRASTS().map(
     (example, index) =>
-      `${index + 1}. Not this: ${JSON.stringify(example.bad)}\n   This: ${JSON.stringify(example.good)}`,
+      `${index + 1}. Not this: ${JSON.stringify(example.bad)}\n   This: ${JSON.stringify(example.good)}`
   ),
 ].join("\n");
 
@@ -263,8 +263,8 @@ export const CAPABILITY_RULES_BLOCK = [
   "would otherwise be guessing: logs, traces, database rows, Slack history,",
   "memory, issues. Use it again to verify a claim before you make it.",
   "",
-  "Discover before you call. `codemode.search(\"short intent phrase\")` ranks",
-  "matches across every namespace, and `codemode.describe(\"namespace.method\")`",
+  'Discover before you call. `codemode.search("short intent phrase")` ranks',
+  'matches across every namespace, and `codemode.describe("namespace.method")`',
   "returns the TypeScript declarations. Never guess a method name or an argument",
   "shape.",
   "",
@@ -364,7 +364,10 @@ export function configureRunSession(session: Session): Session {
  * Not a nicety: `beforeTurn`'s `instructions` REPLACES `ctx.system`, so this
  * join is what keeps the blocks and Think's capability preamble in the request.
  */
-export function composeInstructions(assembledSystem: string, perTurn: string): string {
+export function composeInstructions(
+  assembledSystem: string,
+  perTurn: string
+): string {
   return `${assembledSystem.trimEnd()}\n\n${perTurn}`;
 }
 
@@ -374,7 +377,11 @@ export function composeInstructions(assembledSystem: string, perTurn: string): s
 export const EVIDENCE_ENVELOPE_VERSION = 1;
 
 /** Where an untrusted value came from. Assigned by the host, never parsed out. */
-export type EvidenceSource = "slack_thread" | "memory" | "triage" | "approval_draft";
+export type EvidenceSource =
+  | "slack_thread"
+  | "memory"
+  | "triage"
+  | "approval_draft";
 
 /**
  * Frame one untrusted value.
@@ -406,7 +413,9 @@ export function encodeUntrusted(input: {
 }
 
 /** The inverse. Null rather than a throw for anything that is not our shape. */
-export function decodeUntrusted(text: string): { source: string; body: string } | null {
+export function decodeUntrusted(
+  text: string
+): { source: string; body: string } | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -417,7 +426,8 @@ export function decodeUntrusted(text: string): { source: string; body: string } 
   const inner = (parsed as { untrusted_input?: unknown }).untrusted_input;
   if (typeof inner !== "object" || inner === null) return null;
   const record = inner as Record<string, unknown>;
-  if (typeof record.body !== "string" || typeof record.source !== "string") return null;
+  if (typeof record.body !== "string" || typeof record.source !== "string")
+    return null;
   return { source: record.source, body: record.body };
 }
 
@@ -518,13 +528,15 @@ export function turnInstructions(input: TurnInstructionsInput): string {
       `- approval: ${input.pendingApproval.approvalId}`,
       ...(input.pendingApproval.why === undefined
         ? []
-        : [`- why you escalated it: ${JSON.stringify(input.pendingApproval.why)}`]),
+        : [
+            `- why you escalated it: ${JSON.stringify(input.pendingApproval.why)}`,
+          ]),
       `- the draft awaiting a decision: ${JSON.stringify(input.pendingApproval.draft)}`,
       "",
       "If the conversation has moved on and that draft is now wrong, call",
       "`approval.withdraw()`. If a human has already decided, you get their decision",
       "back instead of a withdrawal. Do NOT escalate a second reply while this one",
-      "is open, and do not send the draft yourself.",
+      "is open, and do not send the draft yourself."
     );
   }
 
@@ -541,9 +553,13 @@ export function turnInstructions(input: TurnInstructionsInput): string {
           source: "slack_thread",
           turnId: scope.turnId,
           body: message.text,
-          meta: { ts: message.ts, author: message.userId, permalink: message.permalink },
-        }),
-      ),
+          meta: {
+            ts: message.ts,
+            author: message.userId,
+            permalink: message.permalink,
+          },
+        })
+      )
     );
   }
 
@@ -561,8 +577,8 @@ export function turnInstructions(input: TurnInstructionsInput): string {
           turnId: scope.turnId,
           body: fact.fact,
           meta: { citation: fact.citation },
-        }),
-      ),
+        })
+      )
     );
   }
 

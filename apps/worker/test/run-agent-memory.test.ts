@@ -21,14 +21,21 @@ import { createRunFromChat, wakeRun } from "../src/run/wake";
 import { cannedModel } from "./helpers/canned-model";
 import { waitFor } from "./helpers/wait";
 
-beforeEach(() => installTestModel(cannedModel({ text: "The exporter was out of memory." })));
+beforeEach(() =>
+  installTestModel(cannedModel({ text: "The exporter was out of memory." }))
+);
 afterEach(() => resetTestModel());
 
-type OutboxRow = { id: string; graph_id: string; episode_json: string; source_json: string };
+type OutboxRow = {
+  id: string;
+  graph_id: string;
+  episode_json: string;
+  source_json: string;
+};
 
 async function outboxFor(runId: string): Promise<OutboxRow[]> {
   const { results } = await env.DB.prepare(
-    "SELECT id, graph_id, episode_json, source_json FROM agent_memory_outbox WHERE run_id = ?",
+    "SELECT id, graph_id, episode_json, source_json FROM agent_memory_outbox WHERE run_id = ?"
   )
     .bind(runId)
     .all<OutboxRow>();
@@ -40,15 +47,21 @@ function episodeOf(row: OutboxRow): AgentEpisode {
 }
 
 function userMessage(text: string): UIMessage {
-  return { id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text }] } as UIMessage;
+  return {
+    id: crypto.randomUUID(),
+    role: "user",
+    parts: [{ type: "text", text }],
+  } as UIMessage;
 }
 
 let channelSeq = 0;
 async function liveChannel(slug: string): Promise<string> {
   channelSeq += 1;
-  const channelId = `CMEM${channelSeq}${Math.floor(Math.random() * 1e5)}`.toUpperCase().slice(0, 20);
+  const channelId = `CMEM${channelSeq}${Math.floor(Math.random() * 1e5)}`
+    .toUpperCase()
+    .slice(0, 20);
   await env.DB.prepare(
-    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, 'live')",
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, 'live')"
   )
     .bind(channelId, `ext-${channelId.toLowerCase()}`, slug)
     .run();
@@ -63,7 +76,9 @@ function freshThreadTs(): string {
 
 describe("one episode per finished turn", () => {
   it("writes exactly one outbox row when a turn completes", async () => {
-    const { runId } = await createRunFromChat(env, { firstMessage: "why is the exporter stuck?" });
+    const { runId } = await createRunFromChat(env, {
+      firstMessage: "why is the exporter stuck?",
+    });
 
     const rows = await waitFor("the turn's episode", async () => {
       const found = await outboxFor(runId);
@@ -116,9 +131,11 @@ describe("one episode per finished turn", () => {
     });
     const run = await getRunById(
       env.DB,
-      (await env.DB.prepare('SELECT id FROM runs WHERE "key" = ?')
-        .bind(slackRunKey(channelId, threadTs))
-        .first<{ id: string }>())?.id ?? "",
+      (
+        await env.DB.prepare('SELECT id FROM runs WHERE "key" = ?')
+          .bind(slackRunKey(channelId, threadTs))
+          .first<{ id: string }>()
+      )?.id ?? ""
     );
 
     const rows = await waitFor("the wake's episode", async () => {
@@ -129,7 +146,9 @@ describe("one episode per finished turn", () => {
   });
 
   it("puts a chat run's episode in the org graph, never a customer's", async () => {
-    const { runId } = await createRunFromChat(env, { firstMessage: "an internal question" });
+    const { runId } = await createRunFromChat(env, {
+      firstMessage: "an internal question",
+    });
     const rows = await waitFor("the turn's episode", async () => {
       const found = await outboxFor(runId);
       return found.length > 0 ? found : null;
@@ -152,7 +171,7 @@ describe("one episode per finished turn", () => {
         record: newTurnRecord(),
         draft: "",
         now: Date.now(),
-      }),
+      })
     ).toEqual({ enqueued: false, reason: "empty_turn" });
     expect(await outboxFor(runId)).toEqual([]);
   });
@@ -205,7 +224,10 @@ describe("what an episode is made of", () => {
 
     // A `started` is not an action: a call that began and then refused is one
     // line saying it refused, not two.
-    expect(record.actions).toEqual(["slack.thread", "slack.reply refused: identity_unavailable"]);
+    expect(record.actions).toEqual([
+      "slack.thread",
+      "slack.reply refused: identity_unavailable",
+    ]);
   });
 
   it("keeps the host-produced ids a read returned", async () => {
@@ -214,7 +236,10 @@ describe("what an episode is made of", () => {
       { kind: "slack_message", ref: "Ev123" },
       { kind: "zep_episode", ref: "uuid-1" },
     ]);
-    expect(record.sources.map((source) => source.ref)).toEqual(["Ev123", "uuid-1"]);
+    expect(record.sources.map((source) => source.ref)).toEqual([
+      "Ev123",
+      "uuid-1",
+    ]);
   });
 
   it("takes what was asked from the LAST user message", async () => {
@@ -224,9 +249,13 @@ describe("what an episode is made of", () => {
     expect(
       askedFrom([
         userMessage("the opening briefing"),
-        { id: "a", role: "assistant", parts: [{ type: "text", text: "on it" }] } as UIMessage,
+        {
+          id: "a",
+          role: "assistant",
+          parts: [{ type: "text", text: "on it" }],
+        } as UIMessage,
         userMessage("actually check the deploy"),
-      ]),
+      ])
     ).toBe("actually check the deploy");
     expect(askedFrom([])).toBe("");
   });
@@ -242,14 +271,15 @@ describe("what an episode is made of", () => {
           { type: "text", text: "the answer" },
           { type: "tool-run_code", input: { code: "secret()" } },
         ],
-      } as unknown as UIMessage),
+      } as unknown as UIMessage)
     ).toBe("the answer");
   });
 
   it("redacts a credential-shaped string the customer pasted", async () => {
     const { runId } = await createRunFromChat(env, {});
     const record = newTurnRecord();
-    record.asked = "the webhook uses xoxb-1234567890-abcdefghijklmnop and it broke";
+    record.asked =
+      "the webhook uses xoxb-1234567890-abcdefghijklmnop and it broke";
     await enqueueTurnEpisode(env, {
       runId,
       turnId: `turn-${crypto.randomUUID()}`,
@@ -262,7 +292,9 @@ describe("what an episode is made of", () => {
     });
 
     const rows = await outboxFor(runId);
-    expect(rows[0].episode_json).not.toContain("xoxb-1234567890-abcdefghijklmnop");
+    expect(rows[0].episode_json).not.toContain(
+      "xoxb-1234567890-abcdefghijklmnop"
+    );
   });
 });
 
@@ -270,17 +302,33 @@ describe("how a turn ended", () => {
   it("calls a refusal a refusal, not a failure", () => {
     // "This model would not answer that" is a different lesson from "this run
     // broke", and memory needs the distinction.
-    expect(episodeOutcomeFor({ status: "failed", refused: true, budgetExhausted: false })).toBe(
-      "refused",
-    );
-    expect(episodeOutcomeFor({ status: "failed", refused: false, budgetExhausted: false })).toBe(
-      "failed",
-    );
-    expect(episodeOutcomeFor({ status: "idle", refused: false, budgetExhausted: true })).toBe(
-      "budget_exhausted",
-    );
     expect(
-      episodeOutcomeFor({ status: "awaiting_approval", refused: false, budgetExhausted: false }),
+      episodeOutcomeFor({
+        status: "failed",
+        refused: true,
+        budgetExhausted: false,
+      })
+    ).toBe("refused");
+    expect(
+      episodeOutcomeFor({
+        status: "failed",
+        refused: false,
+        budgetExhausted: false,
+      })
+    ).toBe("failed");
+    expect(
+      episodeOutcomeFor({
+        status: "idle",
+        refused: false,
+        budgetExhausted: true,
+      })
+    ).toBe("budget_exhausted");
+    expect(
+      episodeOutcomeFor({
+        status: "awaiting_approval",
+        refused: false,
+        budgetExhausted: false,
+      })
     ).toBe("completed");
   });
 });
@@ -288,7 +336,10 @@ describe("how a turn ended", () => {
 describe("an unbound run", () => {
   it("remembers nothing rather than throwing into the turn", async () => {
     // The customer's answer was durable and broadcast before memory ran.
-    const stub = await getAgentByName(env.RUN_AGENTS, chatRunKey(crypto.randomUUID()));
+    const stub = await getAgentByName(
+      env.RUN_AGENTS,
+      chatRunKey(crypto.randomUUID())
+    );
     await stub.onChatResponse({
       message: { id: "m", role: "assistant", parts: [] },
       requestId: "r",

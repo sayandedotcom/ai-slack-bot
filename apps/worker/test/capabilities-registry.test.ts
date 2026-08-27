@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { capabilityEffectOf } from "../src/capabilities/define";
-import { buildNamespaces, CAPABILITY_NAMESPACES } from "../src/capabilities/registry";
+import {
+  buildNamespaces,
+  CAPABILITY_NAMESPACES,
+} from "../src/capabilities/registry";
 import { testBindingContext } from "./helpers/capabilities";
 
 describe("capability registry", () => {
@@ -22,7 +25,10 @@ describe("capability registry", () => {
     for (const ns of buildNamespaces(testBindingContext())) {
       for (const method of Object.keys(ns.tools)) {
         const pascal = method.slice(0, 1).toUpperCase() + method.slice(1);
-        expect(seen.has(pascal), `${pascal} also from ${seen.get(pascal)}`).toBe(false);
+        expect(
+          seen.has(pascal),
+          `${pascal} also from ${seen.get(pascal)}`
+        ).toBe(false);
         seen.set(pascal, ns.name);
       }
     }
@@ -32,7 +38,9 @@ describe("capability registry", () => {
     // Order is the order the model reads its API in, and the order the
     // committed .d.ts renders. A reshuffle is a reviewable diff, not a nit.
     const built = buildNamespaces(testBindingContext()).map((n) => n.name);
-    expect(built).toEqual(CAPABILITY_NAMESPACES.filter((n) => built.includes(n)));
+    expect(built).toEqual(
+      CAPABILITY_NAMESPACES.filter((n) => built.includes(n))
+    );
   });
 
   it("does not share a call budget between two contexts", () => {

@@ -14,7 +14,10 @@ import type { MessagesRow } from "../db/schema";
  * flexibility is how a bounded read surface becomes an arbitrary one.
  */
 
-type MessageRow = Pick<MessagesRow, "event_id" | "ts" | "user_id" | "text" | "permalink">;
+type MessageRow = Pick<
+  MessagesRow,
+  "event_id" | "ts" | "user_id" | "text" | "permalink"
+>;
 
 /**
  * Drop the raw row shape at the boundary. Callers never see D1 column names.
@@ -44,7 +47,7 @@ export async function readThread(
   db: D1Database,
   channelId: string,
   threadTs: string,
-  limit: number,
+  limit: number
 ): Promise<SlackMessage[]> {
   const { results } = await db
     .prepare(
@@ -52,7 +55,7 @@ export async function readThread(
          FROM messages
         WHERE channel_id = ? AND (ts = ? OR thread_ts = ?)
         ORDER BY ts ASC
-        LIMIT ?`,
+        LIMIT ?`
     )
     .bind(channelId, threadTs, threadTs, limit)
     .all<MessageRow>();
@@ -82,7 +85,7 @@ export function isWildcardOnly(query: string): boolean {
  */
 export async function searchStoredMessages(
   db: D1Database,
-  input: { customerSlug: string; query: string; limit: number },
+  input: { customerSlug: string; query: string; limit: number }
 ): Promise<SlackMessage[]> {
   const { results } = await db
     .prepare(
@@ -90,7 +93,7 @@ export async function searchStoredMessages(
          FROM messages
         WHERE customer_slug = ? AND text LIKE ? ESCAPE '\\'
         ORDER BY ts DESC
-        LIMIT ?`,
+        LIMIT ?`
     )
     .bind(input.customerSlug, `%${escapeLike(input.query)}%`, input.limit)
     .all<MessageRow>();

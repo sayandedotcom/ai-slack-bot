@@ -40,7 +40,7 @@ function github(): GithubGateway {
 function linear(): LinearGateway {
   return {
     resolveLinkTargets: vi.fn(async (ids: string[]) =>
-      ids.map((id) => ({ id, identifier: "FF-1" })),
+      ids.map((id) => ({ id, identifier: "FF-1" }))
     ),
   } as unknown as LinearGateway;
 }
@@ -61,34 +61,42 @@ describe("github.openPR", () => {
     const scope = await actingScope();
     const gh = github();
     const tools = makeGithubTools(
-      testBindingContext({ scope, deps: { github: gh, linear: linear() } }),
+      testBindingContext({ scope, deps: { github: gh, linear: linear() } })
     );
     const out = await tools.openPR.run(validPR);
     expect(out).toMatchObject({ number: 7, author: "ronit" });
   });
 
   it("takes no repo or base argument — both are pinned server-side", () => {
-    const rendered = JSON.stringify(makeGithubTools(testBindingContext()).openPR.input);
+    const rendered = JSON.stringify(
+      makeGithubTools(testBindingContext()).openPR.input
+    );
     expect(rendered).not.toMatch(/"repo"|"baseRef"|"owner"/);
   });
 
   it("refuses a branch that does not follow the repo's convention", async () => {
     const scope = await actingScope();
     const tools = makeGithubTools(
-      testBindingContext({ scope, deps: { github: github(), linear: linear() } }),
+      testBindingContext({
+        scope,
+        deps: { github: github(), linear: linear() },
+      })
     );
     await expect(
-      tools.openPR.run({ ...validPR, branch: "My_Branch" }),
+      tools.openPR.run({ ...validPR, branch: "My_Branch" })
     ).rejects.toMatchObject({ code: "invalid_input" });
   });
 
   it("refuses a title that does not follow the repo's convention", async () => {
     const scope = await actingScope();
     const tools = makeGithubTools(
-      testBindingContext({ scope, deps: { github: github(), linear: linear() } }),
+      testBindingContext({
+        scope,
+        deps: { github: github(), linear: linear() },
+      })
     );
     await expect(
-      tools.openPR.run({ ...validPR, title: "copy id button" }),
+      tools.openPR.run({ ...validPR, title: "copy id button" })
     ).rejects.toMatchObject({ code: "invalid_input" });
   });
 
@@ -98,13 +106,14 @@ describe("github.openPR", () => {
     const scope = await actingScope();
     const gh = github();
     const tools = makeGithubTools(
-      testBindingContext({ scope, deps: { github: gh, linear: linear() } }),
+      testBindingContext({ scope, deps: { github: gh, linear: linear() } })
     );
     await expect(
       tools.openPR.run({
         ...validPR,
-        commitMessage: "fix: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
-      }),
+        commitMessage:
+          "fix: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+      })
     ).rejects.toThrow();
     expect(gh.openPR).not.toHaveBeenCalled();
   });
@@ -113,7 +122,7 @@ describe("github.openPR", () => {
     const scope = await actingScope();
     const gh = github();
     const tools = makeGithubTools(
-      testBindingContext({ scope, deps: { github: gh, linear: linear() } }),
+      testBindingContext({ scope, deps: { github: gh, linear: linear() } })
     );
     await tools.openPR.run(validPR);
     await tools.openPR.run(validPR);
@@ -123,7 +132,7 @@ describe("github.openPR", () => {
   it("refuses from a run that cannot be confirmed", async () => {
     const gh = github();
     const tools = makeGithubTools(
-      testBindingContext({ deps: { github: gh, linear: linear() } }),
+      testBindingContext({ deps: { github: gh, linear: linear() } })
     );
     await expect(tools.openPR.run(validPR)).rejects.toMatchObject({
       code: "shadow_write_denied",
@@ -135,7 +144,7 @@ describe("github.openPR", () => {
 describe("github reads", () => {
   it("reports whether the Linear linkback landed", async () => {
     const tools = makeGithubTools(
-      testBindingContext({ deps: { github: github(), linear: linear() } }),
+      testBindingContext({ deps: { github: github(), linear: linear() } })
     );
     const out = (await tools.checkPR.run({ number: 7 })) as {
       linearLinkback: { commented: boolean };

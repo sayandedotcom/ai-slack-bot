@@ -11,7 +11,10 @@ import { postJson } from "../runs/api";
 
 export type StartedRun = { id: string };
 
-export function startChatRun(firstMessage: string, clientRequestId: string): Promise<StartedRun> {
+export function startChatRun(
+  firstMessage: string,
+  clientRequestId: string
+): Promise<StartedRun> {
   return postJson<StartedRun>("/api/runs", { firstMessage, clientRequestId });
 }
 
@@ -34,7 +37,7 @@ export type ChatStarter = {
  */
 export function makeChatStarter(
   post: (text: string, clientRequestId: string) => Promise<StartedRun>,
-  mintId: () => string = () => crypto.randomUUID(),
+  mintId: () => string = () => crypto.randomUUID()
 ): ChatStarter {
   const idFor = new Map<string, string>();
   const inFlight = new Map<string, Promise<StartedRun>>();

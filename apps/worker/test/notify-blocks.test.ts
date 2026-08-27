@@ -118,21 +118,30 @@ describe("nudgeBlocks", () => {
 
 describe("resolvedBlocks", () => {
   it("renders a one-line approved status naming who decided", () => {
-    const blocks = resolvedBlocks({ decision: "approved", decidedBy: "ronit@zellify.app" });
+    const blocks = resolvedBlocks({
+      decision: "approved",
+      decidedBy: "ronit@zellify.app",
+    });
     const text = JSON.stringify(blocks);
     expect(text).toContain("ronit@zellify.app");
     expect(text.toLowerCase()).toContain("approved");
   });
 
   it("renders a one-line edited status naming who decided", () => {
-    const blocks = resolvedBlocks({ decision: "edited", decidedBy: "ronit@zellify.app" });
+    const blocks = resolvedBlocks({
+      decision: "edited",
+      decidedBy: "ronit@zellify.app",
+    });
     const text = JSON.stringify(blocks);
     expect(text).toContain("ronit@zellify.app");
     expect(text.toLowerCase()).toContain("edited");
   });
 
   it("renders a one-line rejected status naming who decided", () => {
-    const blocks = resolvedBlocks({ decision: "rejected", decidedBy: "ronit@zellify.app" });
+    const blocks = resolvedBlocks({
+      decision: "rejected",
+      decidedBy: "ronit@zellify.app",
+    });
     const text = JSON.stringify(blocks);
     expect(text).toContain("ronit@zellify.app");
     expect(text.toLowerCase()).toContain("rejected");
@@ -146,7 +155,12 @@ describe("resolvedBlocks", () => {
   });
 
   it("contains no actions/button block", () => {
-    for (const decision of ["approved", "edited", "rejected", "withdrawn"] as const) {
+    for (const decision of [
+      "approved",
+      "edited",
+      "rejected",
+      "withdrawn",
+    ] as const) {
       const blocks = resolvedBlocks({
         decision,
         decidedBy: decision === "withdrawn" ? null : "ronit@zellify.app",
@@ -157,7 +171,10 @@ describe("resolvedBlocks", () => {
   });
 
   it("is JSON-serializable", () => {
-    const blocks = resolvedBlocks({ decision: "approved", decidedBy: "ronit@zellify.app" });
+    const blocks = resolvedBlocks({
+      decision: "approved",
+      decidedBy: "ronit@zellify.app",
+    });
     expect(JSON.parse(JSON.stringify(blocks))).toEqual(blocks);
   });
 });

@@ -48,7 +48,9 @@ export interface UserTokenSource {
  */
 export function makeUserTokenSource(env: Env): UserTokenSource {
   return {
-    async speakerToken(preferredEmail?: string | null): Promise<UserToken | null> {
+    async speakerToken(
+      preferredEmail?: string | null
+    ): Promise<UserToken | null> {
       const speaker = await resolveSpeaker(env.DB, "slack", preferredEmail);
       if (!speaker) return null;
 

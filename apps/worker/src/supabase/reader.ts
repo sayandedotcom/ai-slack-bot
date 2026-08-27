@@ -5,10 +5,7 @@ import type {
   Row,
   SupabaseReader,
 } from "../gateways/ports";
-import {
-  findResource,
-  type SupabaseAllowlist,
-} from "./allowlist";
+import { findResource, type SupabaseAllowlist } from "./allowlist";
 
 /** PostgREST operator names, keyed by the operators the schema advertises. */
 const OPERATORS: Record<string, string> = {
@@ -71,7 +68,11 @@ function encodeValue(op: string, value: unknown): string {
 /** Flatten whatever PostgREST returns into the scalars the protocol can store. */
 function normalizeCell(value: unknown): string | number | boolean | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return value;
   }
   // Dates arrive as strings already; objects and arrays are JSON columns, which
@@ -81,7 +82,7 @@ function normalizeCell(value: unknown): string | number | boolean | null {
 
 export function makeSupabaseReader(
   config: SupabaseConfig,
-  scope: RunScope,
+  scope: RunScope
 ): SupabaseReader {
   return {
     async describe(resource): Promise<ResourceDescription[]> {
@@ -89,7 +90,7 @@ export function makeSupabaseReader(
         resource === null
           ? config.allowlist
           : [findResource(config.allowlist, resource)].filter(
-              (e): e is NonNullable<typeof e> => e !== null,
+              (e): e is NonNullable<typeof e> => e !== null
             );
 
       if (resource !== null && entries.length === 0) {
@@ -114,7 +115,7 @@ export function makeSupabaseReader(
       for (const column of projection) {
         if (!allowedColumns.has(column)) {
           throw invalid(
-            `unknown column "${column}" on ${entry.resource}. Call schema() to see what is readable.`,
+            `unknown column "${column}" on ${entry.resource}. Call schema() to see what is readable.`
           );
         }
       }
@@ -125,19 +126,26 @@ export function makeSupabaseReader(
       for (const filter of input.filters) {
         if (!allowedColumns.has(filter.column)) {
           throw invalid(
-            `unknown column "${filter.column}" on ${entry.resource}.`,
+            `unknown column "${filter.column}" on ${entry.resource}.`
           );
         }
         // A model filter on the tenant column is dropped, not honoured. Letting
         // it through would let a caller widen or redirect its own scope.
-        if (entry.tenantColumn !== null && filter.column === entry.tenantColumn) {
+        if (
+          entry.tenantColumn !== null &&
+          filter.column === entry.tenantColumn
+        ) {
           throw invalid(
-            `"${filter.column}" is scoped automatically and cannot be filtered here.`,
+            `"${filter.column}" is scoped automatically and cannot be filtered here.`
           );
         }
         const op = OPERATORS[filter.op];
-        if (op === undefined) throw invalid(`unsupported operator "${filter.op}".`);
-        params.append(filter.column, `${op}.${encodeValue(filter.op, filter.value)}`);
+        if (op === undefined)
+          throw invalid(`unsupported operator "${filter.op}".`);
+        params.append(
+          filter.column,
+          `${op}.${encodeValue(filter.op, filter.value)}`
+        );
       }
 
       // The tenant predicate goes on last and unconditionally.
@@ -145,7 +153,7 @@ export function makeSupabaseReader(
         if (scope.customerSlug === null) {
           throw new CapabilityError(
             "customer_scope_required",
-            `reads from ${entry.resource} are per-customer and this run has no customer. Ask which customer this concerns.`,
+            `reads from ${entry.resource} are per-customer and this run has no customer. Ask which customer this concerns.`
           );
         }
         params.append(entry.tenantColumn, `eq.${scope.customerSlug}`);
@@ -153,7 +161,9 @@ export function makeSupabaseReader(
 
       if (input.order !== null) {
         if (!allowedColumns.has(input.order.column)) {
-          throw invalid(`cannot order by unknown column "${input.order.column}".`);
+          throw invalid(
+            `cannot order by unknown column "${input.order.column}".`
+          );
         }
         params.set("order", `${input.order.column}.${input.order.direction}`);
       }
@@ -175,14 +185,14 @@ export function makeSupabaseReader(
       } catch {
         throw new CapabilityError(
           "upstream_unavailable",
-          "the product database could not be reached.",
+          "the product database could not be reached."
         );
       }
 
       if (!response.ok) {
         throw new CapabilityError(
           "upstream_unavailable",
-          `the product database refused the read (status ${response.status}).`,
+          `the product database refused the read (status ${response.status}).`
         );
       }
 
@@ -192,13 +202,13 @@ export function makeSupabaseReader(
       } catch {
         throw new CapabilityError(
           "upstream_unavailable",
-          "the product database returned something unreadable.",
+          "the product database returned something unreadable."
         );
       }
       if (!Array.isArray(rows)) {
         throw new CapabilityError(
           "upstream_unavailable",
-          "the product database returned an unexpected shape.",
+          "the product database returned an unexpected shape."
         );
       }
 
@@ -219,7 +229,7 @@ export function makeSupabaseReader(
 
 function unknownResourceMessage(
   allowlist: SupabaseAllowlist,
-  resource: string,
+  resource: string
 ): string {
   const names = allowlist.map((e) => e.resource).join(", ");
   return names.length === 0

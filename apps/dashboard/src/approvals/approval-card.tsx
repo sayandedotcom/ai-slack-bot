@@ -78,18 +78,20 @@ const VERB: Record<Decision, string> = {
 function resolvedLine(
   decision: Decision,
   decidedBy: string | null,
-  mine: boolean,
+  mine: boolean
 ): string {
   // Withdrawal is the agent's own doing — no human decided it, so neither the
   // "you" nor the "someone else" framing is true.
-  if (decision === "withdrawn") return "The agent withdrew this — the thread moved on";
+  if (decision === "withdrawn")
+    return "The agent withdrew this — the thread moved on";
   if (mine) {
     if (decision === "approved") return "You approved this";
     if (decision === "edited") return "You edited this";
     if (decision === "rejected") return "You rejected this";
     return "You closed this";
   }
-  if (decidedBy !== null) return `${decidedBy} ${VERB[decision]} this before you`;
+  if (decidedBy !== null)
+    return `${decidedBy} ${VERB[decision]} this before you`;
   return `Someone else ${VERB[decision]} this first`;
 }
 
@@ -100,7 +102,9 @@ function Meta({ card, now }: { card: OpenApproval; now: number }): ReactNode {
         #{card.channelId}
       </span>
       <span className="tabular-nums">thread {card.threadTs}</span>
-      <span className="ml-auto shrink-0 tabular-nums">{ago(card.createdAt, now)}</span>
+      <span className="ml-auto shrink-0 tabular-nums">
+        {ago(card.createdAt, now)}
+      </span>
     </div>
   );
 }
@@ -118,7 +122,11 @@ function Draft({ text }: { text: string }): ReactNode {
   );
 }
 
-export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): ReactNode {
+export function ApprovalCard({
+  state,
+  role,
+  onDecide,
+}: ApprovalCardProps): ReactNode {
   const card = state.card;
   const viewer = role === "viewer";
 
@@ -136,7 +144,9 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
         <p className="text-sm text-muted-foreground">
           {resolvedLine(state.decision, state.decidedBy, state.mine)}
         </p>
-        <p className="mt-1 truncate text-xs text-muted-foreground/80">{card.why}</p>
+        <p className="mt-1 truncate text-xs text-muted-foreground/80">
+          {card.why}
+        </p>
       </li>
     );
   }
@@ -229,7 +239,11 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
           </>
         ) : (
           <>
-            <Button size="sm" disabled={locked} onClick={() => onDecide({ action: "approve" })}>
+            <Button
+              size="sm"
+              disabled={locked}
+              onClick={() => onDecide({ action: "approve" })}
+            >
               Approve
             </Button>
             <Button
@@ -252,7 +266,9 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
         )}
 
         {viewer ? (
-          <span className="text-[11px] text-muted-foreground">{VIEWER_CAPTION}</span>
+          <span className="text-[11px] text-muted-foreground">
+            {VIEWER_CAPTION}
+          </span>
         ) : deciding ? (
           // Deliberately quiet: the locked buttons already say "in flight", and
           // a spinner on a sub-second PATCH is more flicker than feedback.

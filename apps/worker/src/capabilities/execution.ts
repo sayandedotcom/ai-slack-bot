@@ -8,10 +8,21 @@
  * the same isolate must not share a call budget, a citation cache, or an audit
  * stream with colliding ids.
  */
-import { CapabilityError, STALE_GENERATION_MESSAGE, toCapabilityError } from "../gateways/errors";
+import {
+  CapabilityError,
+  STALE_GENERATION_MESSAGE,
+  toCapabilityError,
+} from "../gateways/errors";
 import type { RunScope } from "../gateways/scope";
-import { discardingProvenanceSink, type ProvenanceSink } from "../memory/episode";
-import { type CapabilityAuditSink, redactArgs, serializedLength } from "./audit";
+import {
+  discardingProvenanceSink,
+  type ProvenanceSink,
+} from "../memory/episode";
+import {
+  type CapabilityAuditSink,
+  redactArgs,
+  serializedLength,
+} from "./audit";
 
 /* ------------------------------------------------------------- limits -- */
 
@@ -126,7 +137,7 @@ export function newCustomerReferenceResolver(): CustomerReferenceResolver {
         // guesses was closer is itself an oracle.
         throw new CapabilityError(
           "invalid_input",
-          "that customer reference was not produced in this execution. Use only references returned to you here.",
+          "that customer reference was not produced in this execution. Use only references returned to you here."
         );
       }
       return slug;
@@ -222,7 +233,7 @@ export async function withCapabilityAudit<T>(
    * `Uint8Array`. `redactArgs` is what narrows this to JSON before it is
    * recorded — see `summarizeNonData`.
    */
-  args?: Record<string, unknown>,
+  args?: Record<string, unknown>
 ): Promise<T> {
   const { audit, clock, counter } = execution;
   const seq = counter.next();
@@ -259,8 +270,8 @@ export async function withCapabilityAudit<T>(
     return fail(
       new CapabilityError(
         "capability_unavailable",
-        `this execution has used its budget of ${counter.limit} capability calls. Collect what you need in fewer calls.`,
-      ),
+        `this execution has used its budget of ${counter.limit} capability calls. Collect what you need in fewer calls.`
+      )
     );
   }
 

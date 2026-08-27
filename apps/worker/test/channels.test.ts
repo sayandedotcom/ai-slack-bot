@@ -5,26 +5,53 @@ import { canPost, getChannelPolicy, shouldTriage } from "../src/db/channels";
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM channels").run();
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind("C_REF", "pulsefit-zellify", "pulsefit", "observe"),
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind("C_TEST", "test-firedrill", "firedrill", "live"),
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind("C_ENG", "eng-firefighter", null, "internal"),
+    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
+      "C_REF",
+      "pulsefit-zellify",
+      "pulsefit",
+      "observe"
+    ),
+    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
+      "C_TEST",
+      "test-firedrill",
+      "firedrill",
+      "live"
+    ),
+    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
+      "C_ENG",
+      "eng-firefighter",
+      null,
+      "internal"
+    ),
   ]);
 });
 
 describe("getChannelPolicy", () => {
   it("returns the stored policy for a known channel", async () => {
     const p = await getChannelPolicy(env.DB, "C_REF");
-    expect(p).toMatchObject({ mode: "observe", customer_slug: "pulsefit", known: true });
+    expect(p).toMatchObject({
+      mode: "observe",
+      customer_slug: "pulsefit",
+      known: true,
+    });
   });
 
   it("returns the stored policy for a live channel", async () => {
     const p = await getChannelPolicy(env.DB, "C_TEST");
-    expect(p).toMatchObject({ mode: "live", customer_slug: "firedrill", known: true });
+    expect(p).toMatchObject({
+      mode: "live",
+      customer_slug: "firedrill",
+      known: true,
+    });
   });
 
   it("returns internal channels with a null customer", async () => {
     const p = await getChannelPolicy(env.DB, "C_ENG");
-    expect(p).toMatchObject({ mode: "internal", customer_slug: null, known: true });
+    expect(p).toMatchObject({
+      mode: "internal",
+      customer_slug: null,
+      known: true,
+    });
   });
 
   it("fails closed for an unknown channel", async () => {
@@ -64,6 +91,8 @@ describe("shouldTriage", () => {
   });
 
   it("does not triage unmapped channels", async () => {
-    expect(shouldTriage(await getChannelPolicy(env.DB, "C_UNKNOWN"))).toBe(false);
+    expect(shouldTriage(await getChannelPolicy(env.DB, "C_UNKNOWN"))).toBe(
+      false
+    );
   });
 });

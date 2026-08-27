@@ -105,7 +105,7 @@ function toRecord(row: RunRow): RunRecord {
 export async function createOrGetRun(
   db: D1Database,
   descriptor: RunDescriptor,
-  now = Date.now(),
+  now = Date.now()
 ): Promise<RunRecord> {
   return createOrGetRunUnderPolicy(db, descriptor, { mustShadow: false }, now);
 }
@@ -149,7 +149,7 @@ export async function createOrGetRunUnderPolicy(
   db: D1Database,
   descriptor: RunDescriptor,
   options: { mustShadow: boolean },
-  now = Date.now(),
+  now = Date.now()
 ): Promise<RunRecord> {
   const shadow = options.mustShadow ? 1 : 0;
   await db.batch([
@@ -161,7 +161,7 @@ export async function createOrGetRunUnderPolicy(
       .prepare(
         `INSERT OR IGNORE INTO runs
            (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, ?, ?)`
       )
       .bind(
         crypto.randomUUID(),
@@ -171,23 +171,29 @@ export async function createOrGetRunUnderPolicy(
         descriptor.threadTs,
         shadow,
         now,
-        now,
+        now
       ),
     // `AND shadow = 0` rather than an unconditional SET, so the common case
     // writes no row at all — and so the statement can only ever move the flag
     // in the safe direction, whatever it is handed. There is no companion
     // statement that sets it to 0; see the note above.
     db
-      .prepare(`UPDATE runs SET shadow = 1 WHERE "key" = ? AND shadow = 0 AND ? = 1`)
+      .prepare(
+        `UPDATE runs SET shadow = 1 WHERE "key" = ? AND shadow = 0 AND ? = 1`
+      )
       .bind(descriptor.key, shadow),
   ]);
 
   const run = await getRunByKey(db, descriptor.key);
-  if (!run) throw new Error(`run vanished immediately after insert: ${descriptor.key}`);
+  if (!run)
+    throw new Error(`run vanished immediately after insert: ${descriptor.key}`);
   return run;
 }
 
-export async function getRunById(db: D1Database, id: string): Promise<RunRecord | null> {
+export async function getRunById(
+  db: D1Database,
+  id: string
+): Promise<RunRecord | null> {
   const row = await db
     .prepare(`SELECT ${COLUMNS} FROM runs WHERE id = ?`)
     .bind(id)
@@ -195,7 +201,10 @@ export async function getRunById(db: D1Database, id: string): Promise<RunRecord 
   return row ? toRecord(row) : null;
 }
 
-export async function getRunByKey(db: D1Database, key: string): Promise<RunRecord | null> {
+export async function getRunByKey(
+  db: D1Database,
+  key: string
+): Promise<RunRecord | null> {
   const row = await db
     .prepare(`SELECT ${COLUMNS} FROM runs WHERE "key" = ?`)
     .bind(key)
@@ -211,7 +220,7 @@ export async function getRunByKey(db: D1Database, key: string): Promise<RunRecor
 export async function findOwnedSlackRun(
   db: D1Database,
   channelId: string,
-  threadTs: string,
+  threadTs: string
 ): Promise<RunRecord | null> {
   const placeholders = ACTIVE_RUN_STATUSES.map(() => "?").join(", ");
   const row = await db
@@ -219,7 +228,7 @@ export async function findOwnedSlackRun(
       `SELECT ${COLUMNS} FROM runs
        WHERE origin = 'slack' AND channel_id = ? AND thread_ts = ?
          AND status IN (${placeholders})
-       LIMIT 1`,
+       LIMIT 1`
     )
     .bind(channelId, threadTs, ...ACTIVE_RUN_STATUSES)
     .first<RunRow>();
@@ -228,11 +237,11 @@ export async function findOwnedSlackRun(
 
 export async function listRuns(
   db: D1Database,
-  options: { status?: RunStatus; limit?: number },
+  options: { status?: RunStatus; limit?: number }
 ): Promise<RunListItem[]> {
   const limit = Math.min(
     Math.max(1, Math.floor(options.limit ?? RUN_LIST_DEFAULT_LIMIT)),
-    RUN_LIST_MAX_LIMIT,
+    RUN_LIST_MAX_LIMIT
   );
 
   const where = options.status ? "WHERE r.status = ?" : "";
@@ -246,7 +255,7 @@ export async function listRuns(
        LEFT JOIN channels c ON c.channel_id = r.channel_id
        ${where}
        ORDER BY r.updated_at DESC
-       LIMIT ?`,
+       LIMIT ?`
     )
     .bind(...bindings)
     .all<
@@ -310,7 +319,7 @@ export type RunUsageAggregate = {
 
 export async function readRunUsage(
   db: D1Database,
-  runId: string,
+  runId: string
 ): Promise<RunUsageAggregate[]> {
   const { results } = await db
     .prepare(
@@ -324,7 +333,7 @@ export async function readRunUsage(
          FROM agent_model_calls
         WHERE run_id = ?
         GROUP BY model
-        ORDER BY model ASC`,
+        ORDER BY model ASC`
     )
     .bind(runId)
     .all<{
@@ -370,15 +379,22 @@ export async function projectRunIndex(
   db: D1Database,
   id: string,
   revision: number,
-  snapshot: { status: RunStatus; summary: string | null; updatedAt: number },
+  snapshot: { status: RunStatus; summary: string | null; updatedAt: number }
 ): Promise<{ applied: boolean }> {
   const result = await db
     .prepare(
       `UPDATE runs SET
          status = ?, summary = ?, updated_at = MAX(updated_at, ?), projection_seq = ?
-       WHERE id = ? AND projection_seq < ?`,
+       WHERE id = ? AND projection_seq < ?`
     )
-    .bind(snapshot.status, snapshot.summary, snapshot.updatedAt, revision, id, revision)
+    .bind(
+      snapshot.status,
+      snapshot.summary,
+      snapshot.updatedAt,
+      revision,
+      id,
+      revision
+    )
     .run();
   return { applied: (result.meta.changes ?? 0) > 0 };
 }
@@ -390,7 +406,11 @@ export async function projectRunIndex(
  * path projects a bundled revision through `projectRunIndex` instead, so a
  * summary reaches D1 at all and two async writes cannot land out of order.
  */
-export async function touchRun(db: D1Database, id: string, at: number): Promise<void> {
+export async function touchRun(
+  db: D1Database,
+  id: string,
+  at: number
+): Promise<void> {
   await db
     .prepare("UPDATE runs SET updated_at = ? WHERE id = ? AND updated_at < ?")
     .bind(at, id, at)
@@ -401,10 +421,12 @@ export async function setRunStatus(
   db: D1Database,
   id: string,
   status: RunStatus,
-  at = Date.now(),
+  at = Date.now()
 ): Promise<void> {
   await db
-    .prepare("UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ?")
+    .prepare(
+      "UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ?"
+    )
     .bind(status, at, id)
     .run();
 }
@@ -425,17 +447,24 @@ export async function casRunStatus(
   id: string,
   from: RunStatus,
   to: RunStatus,
-  at = Date.now(),
+  at = Date.now()
 ): Promise<{ applied: boolean }> {
   const result = await db
     .prepare(
-      "UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ? AND status = ?",
+      "UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ? AND status = ?"
     )
     .bind(to, at, id, from)
     .run();
   return { applied: (result.meta.changes ?? 0) > 0 };
 }
 
-export async function setRunSummary(db: D1Database, id: string, summary: string): Promise<void> {
-  await db.prepare("UPDATE runs SET summary = ? WHERE id = ?").bind(summary, id).run();
+export async function setRunSummary(
+  db: D1Database,
+  id: string,
+  summary: string
+): Promise<void> {
+  await db
+    .prepare("UPDATE runs SET summary = ? WHERE id = ?")
+    .bind(summary, id)
+    .run();
 }

@@ -94,7 +94,8 @@ function seedApprovals(now: number): StubApproval[] {
       // otherwise very hard to see by hand.
       ...base,
       id: "apr:dev-withdrawn",
-      draft: "Thanks for flagging it — I've reopened the ticket and someone will pick it up today.",
+      draft:
+        "Thanks for flagging it — I've reopened the ticket and someone will pick it up today.",
       why: "The thread moved on while this was waiting, so the agent is likely to retract it.",
       channelId: "C0GAMMA",
       threadTs: "1786652222.000300",
@@ -103,7 +104,6 @@ function seedApprovals(now: number): StubApproval[] {
     },
   ];
 }
-
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
@@ -128,7 +128,9 @@ export function devAccessStubs(): Plugin {
     apply: "serve",
     configureServer(server) {
       const bootedAt = Date.now();
-      const approvals = new Map(seedApprovals(bootedAt).map((row) => [row.id, row]));
+      const approvals = new Map(
+        seedApprovals(bootedAt).map((row) => [row.id, row])
+      );
       /**
        * The agent's retraction. Armed by the FIRST list request rather than by
        * server boot, so it fires 45s after someone actually opens the page —
@@ -169,16 +171,33 @@ export function devAccessStubs(): Plugin {
             githubSpeaker: { email: DEV_EMAIL },
             pool: [DEV_EMAIL, "dana@example.com"],
             engineers: [
-              { email: DEV_EMAIL, role: "firefighter", slack: true, github: true },
-              { email: "dana@example.com", role: "firefighter", slack: true, github: false },
-              { email: "ravi@example.com", role: "viewer", slack: false, github: false },
+              {
+                email: DEV_EMAIL,
+                role: "firefighter",
+                slack: true,
+                github: true,
+              },
+              {
+                email: "dana@example.com",
+                role: "firefighter",
+                slack: true,
+                github: false,
+              },
+              {
+                email: "ravi@example.com",
+                role: "viewer",
+                slack: false,
+                github: false,
+              },
             ],
           });
         }
 
         if (path === "/api/approvals" && request.method === "GET") {
           armWithdrawal();
-          const open = [...approvals.values()].filter((row) => row.decision === "pending");
+          const open = [...approvals.values()].filter(
+            (row) => row.decision === "pending"
+          );
           return send(response, 200, {
             approvals: open.map((row) => ({
               id: row.id,
@@ -196,13 +215,20 @@ export function devAccessStubs(): Plugin {
         if (detail) {
           const id = decodeURIComponent(detail[1] as string);
           const row = approvals.get(id);
-          if (!row) return send(response, 404, { code: "unknown_approval", message: "no such approval" });
+          if (!row)
+            return send(response, 404, {
+              code: "unknown_approval",
+              message: "no such approval",
+            });
 
-          if (request.method === "GET") return send(response, 200, { approval: row });
+          if (request.method === "GET")
+            return send(response, 200, { approval: row });
 
           if (request.method === "PATCH") {
             void readBody(request).then((body) => {
-              const action = (body as { action?: string; text?: string; reason?: string }) ?? {};
+              const action =
+                (body as { action?: string; text?: string; reason?: string }) ??
+                {};
 
               if (row.decision !== "pending") {
                 // The 409 the whole phase is built around. Note what it does
@@ -222,22 +248,40 @@ export function devAccessStubs(): Plugin {
               row.delivery = "blocked";
               if (action.action === "approve") row.decision = "approved";
               else if (action.action === "edit") {
-                if (typeof action.text !== "string" || action.text.trim() === "") {
-                  return send(response, 422, { code: "invalid_action", message: "edit needs text" });
+                if (
+                  typeof action.text !== "string" ||
+                  action.text.trim() === ""
+                ) {
+                  return send(response, 422, {
+                    code: "invalid_action",
+                    message: "edit needs text",
+                  });
                 }
                 row.decision = "edited";
                 row.editedText = action.text;
               } else if (action.action === "reject") {
-                if (typeof action.reason !== "string" || action.reason.trim() === "") {
-                  return send(response, 422, { code: "invalid_action", message: "reject needs a reason" });
+                if (
+                  typeof action.reason !== "string" ||
+                  action.reason.trim() === ""
+                ) {
+                  return send(response, 422, {
+                    code: "invalid_action",
+                    message: "reject needs a reason",
+                  });
                 }
                 row.decision = "rejected";
                 row.rejectReason = action.reason;
               } else {
-                return send(response, 422, { code: "invalid_action", message: "unknown action" });
+                return send(response, 422, {
+                  code: "invalid_action",
+                  message: "unknown action",
+                });
               }
 
-              return send(response, 200, { approval: row, resolutionDelivered: false });
+              return send(response, 200, {
+                approval: row,
+                resolutionDelivered: false,
+              });
             });
             return;
           }

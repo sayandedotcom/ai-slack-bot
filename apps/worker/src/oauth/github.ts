@@ -63,12 +63,15 @@ function fail(code: string, message: string) {
  * `installIdentityApiPorts`, whatever route it is exercising.
  */
 async function requireFirefighter(
-  c: Context<{ Bindings: Env }>,
+  c: Context<{ Bindings: Env }>
 ): Promise<{ email: string } | Response> {
   const member = await requireTeamMember(c);
   if (member instanceof Response) return member;
   if (member.role !== "firefighter") {
-    return c.json(fail("not_a_firefighter", "connecting an account is fire-fighters only"), 403);
+    return c.json(
+      fail("not_a_firefighter", "connecting an account is fire-fighters only"),
+      403
+    );
   }
   return { email: member.email };
 }
@@ -88,8 +91,14 @@ function missingConfig(env: Env, names: readonly (keyof Env)[]): string | null {
   return null;
 }
 
-function unconfigured(c: Context<{ Bindings: Env }>, variable: string): Response {
-  return c.json(fail("not_configured", `missing configuration: ${variable}`), 503);
+function unconfigured(
+  c: Context<{ Bindings: Env }>,
+  variable: string
+): Response {
+  return c.json(
+    fail("not_configured", `missing configuration: ${variable}`),
+    503
+  );
 }
 
 /** Derived from the request, not from a config knob, so it is right per env. */
@@ -117,7 +126,7 @@ githubOAuth.get("/oauth/github/start", async (c) => {
     await importStateKey(c.env.IDENTITY_KEY!),
     identity.email,
     "github",
-    Date.now(),
+    Date.now()
   );
 
   const authorize = new URL(GITHUB_AUTHORIZE_URL);
@@ -136,28 +145,50 @@ githubOAuth.get("/oauth/github/start", async (c) => {
  * to spend a `code` first.
  */
 githubOAuth.get("/oauth/github/callback", async (c) => {
-  const missing = missingConfig(c.env, ["IDENTITY_KEY", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"]);
+  const missing = missingConfig(c.env, [
+    "IDENTITY_KEY",
+    "GITHUB_CLIENT_ID",
+    "GITHUB_CLIENT_SECRET",
+  ]);
   if (missing) return unconfigured(c, missing);
 
   const verified = await verifyState(
     await importStateKey(c.env.IDENTITY_KEY!),
     c.req.query("state") ?? "",
     "github",
-    Date.now(),
+    Date.now()
   );
   if (!verified) {
     // One message for forged, expired, foreign-provider and absent alike --
     // same discipline as `verifyState`'s single `null`.
-    return c.json(fail("invalid_state", "the connect link is invalid or has expired"), 403);
+    return c.json(
+      fail("invalid_state", "the connect link is invalid or has expired"),
+      403
+    );
   }
 
   const code = c.req.query("code") ?? "";
-  if (!code) return c.json(fail("invalid_state", "the connect link is invalid or has expired"), 403);
+  if (!code)
+    return c.json(
+      fail("invalid_state", "the connect link is invalid or has expired"),
+      403
+    );
 
   const exchangeFailed = () =>
-    c.json(fail("github_exchange_failed", "GitHub could not complete the connection"), 502);
+    c.json(
+      fail(
+        "github_exchange_failed",
+        "GitHub could not complete the connection"
+      ),
+      502
+    );
 
-  let payload: { access_token?: string; scope?: string; token_type?: string; error?: string };
+  let payload: {
+    access_token?: string;
+    scope?: string;
+    token_type?: string;
+    error?: string;
+  };
   try {
     const response = await fetch(GITHUB_ACCESS_TOKEN_URL, {
       method: "POST",
@@ -214,10 +245,13 @@ githubOAuth.get("/oauth/github/callback", async (c) => {
       provider: "github",
       externalId: login,
       scopes: payload.scope ?? GITHUB_SCOPE,
-      tokenCiphertext: await seal(await importIdentityKey(c.env.IDENTITY_KEY!), token),
+      tokenCiphertext: await seal(
+        await importIdentityKey(c.env.IDENTITY_KEY!),
+        token
+      ),
       connectedAt: now,
     },
-    now,
+    now
   );
 
   return c.redirect("/", 302);

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SealError, importIdentityKey, open, seal } from "../src/identity/crypto";
+import {
+  SealError,
+  importIdentityKey,
+  open,
+  seal,
+} from "../src/identity/crypto";
 
 // Real WebCrypto throughout -- the workerd pool gives us the same `crypto`
 // production runs on, so nothing here is mocked. A test that stubbed

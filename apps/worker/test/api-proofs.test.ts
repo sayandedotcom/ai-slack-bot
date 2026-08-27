@@ -32,12 +32,18 @@ const fetchProof = (key: string, init?: RequestInit) =>
 /** Put an object where the route will look for it, without going near a container. */
 async function seed(
   key: string,
-  options?: { bytes?: Uint8Array; label?: string; contentType?: string },
+  options?: { bytes?: Uint8Array; label?: string; contentType?: string }
 ): Promise<string> {
-  await env.ARTIFACTS.put(`proofs/${key}`, (options?.bytes ?? new Uint8Array([1, 2, 3, 4])) as BufferSource, {
-    httpMetadata: { contentType: options?.contentType ?? "video/mp4" },
-    ...(options?.label === undefined ? {} : { customMetadata: { label: options.label } }),
-  });
+  await env.ARTIFACTS.put(
+    `proofs/${key}`,
+    (options?.bytes ?? new Uint8Array([1, 2, 3, 4])) as BufferSource,
+    {
+      httpMetadata: { contentType: options?.contentType ?? "video/mp4" },
+      ...(options?.label === undefined
+        ? {}
+        : { customMetadata: { label: options.label } }),
+    }
+  );
   return key;
 }
 
@@ -89,7 +95,10 @@ describe("the key shape is decided before R2 is touched", () => {
   it("never serves an artifacts-shaped key, even one that really exists", async () => {
     // The two key spaces share a bucket. A `.png` under the artifacts root is
     // real and readable — through the AUTHENTICATED route only.
-    await env.ARTIFACTS.put(`${hex("d")}.png`, new Uint8Array([9, 9]) as BufferSource);
+    await env.ARTIFACTS.put(
+      `${hex("d")}.png`,
+      new Uint8Array([9, 9]) as BufferSource
+    );
 
     const response = await fetchProof(`${hex("d")}.png`);
     expect(response.status).toBe(404);
@@ -98,15 +107,22 @@ describe("the key shape is decided before R2 is touched", () => {
 
 describe("a published recording plays", () => {
   it("serves the bytes as inline video/mp4", async () => {
-    const key = await seed(`${hex("b")}.mp4`, { bytes: new Uint8Array([1, 2, 3, 4]), label: "checkout" });
+    const key = await seed(`${hex("b")}.mp4`, {
+      bytes: new Uint8Array([1, 2, 3, 4]),
+      label: "checkout",
+    });
     const response = await fetchProof(key);
 
     expect(response.status).toBe(200);
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3, 4])
+    );
     // `inline`, not `attachment`: the whole point is that it plays in a browser
     // tab and unfurls in Slack. This is the one place this Worker deliberately
     // does the opposite of `src/api/artifacts.ts`.
-    expect(response.headers.get("content-disposition")).toBe('inline; filename="checkout.mp4"');
+    expect(response.headers.get("content-disposition")).toBe(
+      'inline; filename="checkout.mp4"'
+    );
     expect(response.headers.get("content-type")).toBe("video/mp4");
     expect(response.headers.get("content-length")).toBe("4");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
@@ -130,19 +146,21 @@ describe("a published recording plays", () => {
     // The opposite of the artifacts route on purpose. Slack's unfurler and the
     // team's browsers should all be able to keep this; what protects it is that
     // nobody can name it.
-    expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(response.headers.get("cache-control")).toBe(
+      "public, max-age=31536000, immutable"
+    );
   });
 
   it("falls back to a safe filename when the stored label is missing or hostile", async () => {
     const plain = await seed(`${hex("f")}.mp4`);
     expect((await fetchProof(plain)).headers.get("content-disposition")).toBe(
-      'inline; filename="proof.mp4"',
+      'inline; filename="proof.mp4"'
     );
 
     // A `"` in the label would break out of the quoted disposition parameter.
     const hostile = await seed(`${hex("1")}.mp4`, { label: 'x" ; attachment' });
     expect((await fetchProof(hostile)).headers.get("content-disposition")).toBe(
-      'inline; filename="proof.mp4"',
+      'inline; filename="proof.mp4"'
     );
   });
 
@@ -158,9 +176,15 @@ describe("a published recording plays", () => {
     // catch-all, which answers index.html with a 200 — a route whose HEAD and
     // GET disagree is one somebody will probe for exactly that.
     expect(head.status).toBe(body.status);
-    expect(head.headers.get("content-type")).toBe(body.headers.get("content-type"));
-    expect(head.headers.get("content-length")).toBe(body.headers.get("content-length"));
-    expect(head.headers.get("content-disposition")).toBe(body.headers.get("content-disposition"));
+    expect(head.headers.get("content-type")).toBe(
+      body.headers.get("content-type")
+    );
+    expect(head.headers.get("content-length")).toBe(
+      body.headers.get("content-length")
+    );
+    expect(head.headers.get("content-disposition")).toBe(
+      body.headers.get("content-disposition")
+    );
     expect(await head.text()).toBe("");
   });
 
@@ -193,16 +217,23 @@ describe("Range, because Safari and iOS will not start an mp4 without it", () =>
   });
 
   it("answers a range with 206, the right bytes, and a content-range naming the full size", async () => {
-    const key = await seed(`${hex("ac")}.mp4`, { bytes: BYTES, label: "checkout" });
+    const key = await seed(`${hex("ac")}.mp4`, {
+      bytes: BYTES,
+      label: "checkout",
+    });
     const response = await fetchProof(key, { headers: { range: "bytes=2-5" } });
 
     expect(response.status).toBe(206);
     expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
     expect(response.headers.get("content-length")).toBe("4");
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES.slice(2, 6));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      BYTES.slice(2, 6)
+    );
     // Every refusal-side property survives a partial response.
     expect(response.headers.get("content-type")).toBe("video/mp4");
-    expect(response.headers.get("content-disposition")).toBe('inline; filename="checkout.mp4"');
+    expect(response.headers.get("content-disposition")).toBe(
+      'inline; filename="checkout.mp4"'
+    );
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
@@ -212,7 +243,9 @@ describe("Range, because Safari and iOS will not start an mp4 without it", () =>
 
     expect(response.status).toBe(206);
     expect(response.headers.get("content-range")).toBe("bytes 7-9/10");
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES.slice(7));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      BYTES.slice(7)
+    );
   });
 
   it("serves a suffix range, which is how a player reads an mp4's trailing atoms", async () => {
@@ -221,12 +254,16 @@ describe("Range, because Safari and iOS will not start an mp4 without it", () =>
 
     expect(response.status).toBe(206);
     expect(response.headers.get("content-range")).toBe("bytes 7-9/10");
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES.slice(7));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      BYTES.slice(7)
+    );
   });
 
   it("clamps an end past the last byte instead of refusing it", async () => {
     const key = await seed(`${hex("af")}.mp4`, { bytes: BYTES });
-    const response = await fetchProof(key, { headers: { range: "bytes=8-9999" } });
+    const response = await fetchProof(key, {
+      headers: { range: "bytes=8-9999" },
+    });
 
     expect(response.status).toBe(206);
     expect(response.headers.get("content-range")).toBe("bytes 8-9/10");
@@ -234,7 +271,10 @@ describe("Range, because Safari and iOS will not start an mp4 without it", () =>
 
   it("answers HEAD with a range the same way, and with no body", async () => {
     const key = await seed(`${hex("ba")}.mp4`, { bytes: BYTES });
-    const response = await fetchProof(key, { method: "HEAD", headers: { range: "bytes=2-5" } });
+    const response = await fetchProof(key, {
+      method: "HEAD",
+      headers: { range: "bytes=2-5" },
+    });
 
     expect(response.status).toBe(206);
     expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
@@ -251,7 +291,9 @@ describe("Range, because Safari and iOS will not start an mp4 without it", () =>
       // 404 exists to prevent.
       expect(response.status).toBe(404);
       expect(response.headers.get("content-range")).toBeNull();
-      expect(await response.text()).toBe(await (await fetchProof("nonsense")).text());
+      expect(await response.text()).toBe(
+        await (await fetchProof("nonsense")).text()
+      );
     }
   });
 
@@ -260,7 +302,12 @@ describe("Range, because Safari and iOS will not start an mp4 without it", () =>
 
     // RFC 9110: an unparseable Range is ignored, not refused. Multi-range and
     // non-`bytes` units land here too.
-    for (const range of ["bytes=5-3", "items=0-1", "bytes=0-1,4-5", "garbage"]) {
+    for (const range of [
+      "bytes=5-3",
+      "items=0-1",
+      "bytes=0-1,4-5",
+      "garbage",
+    ]) {
       const response = await fetchProof(key, { headers: { range } });
       expect(response.status).toBe(200);
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
@@ -275,7 +322,9 @@ describe("Range, because Safari and iOS will not start an mp4 without it", () =>
       `${hex("f")}.png`,
       `${hex("9")}.mp4`,
     ]) {
-      const response = await fetchProof(key, { headers: { range: "bytes=0-1" } });
+      const response = await fetchProof(key, {
+        headers: { range: "bytes=0-1" },
+      });
       expect(response.status).toBe(404);
     }
   });
@@ -343,7 +392,9 @@ describe("every failure is the same 404", () => {
     }
   });
 
-  it("refuses an object above the ceiling independently of the publisher", { timeout: 60_000 }, async () => {
+  it("refuses an object above the ceiling independently of the publisher", {
+    timeout: 60_000,
+  }, async () => {
     const key = `${hex("7")}.mp4`;
     const size = MAX_RECORDING_BYTES + 1;
     // A FixedLengthStream, because `R2Bucket.put` refuses a stream whose length
@@ -365,7 +416,9 @@ describe("every failure is the same 404", () => {
 
     await env.ARTIFACTS.put(`proofs/${key}`, fixed.readable);
     await pumped;
-    expect((await env.ARTIFACTS.head(`proofs/${key}`))!.size).toBeGreaterThan(MAX_RECORDING_BYTES);
+    expect((await env.ARTIFACTS.head(`proofs/${key}`))!.size).toBeGreaterThan(
+      MAX_RECORDING_BYTES
+    );
 
     // Nothing this Worker writes can be this big, so an object that is could
     // only have been written by some other path — and serving it would make

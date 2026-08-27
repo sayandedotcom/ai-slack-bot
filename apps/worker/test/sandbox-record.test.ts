@@ -71,7 +71,9 @@ const streamOf = (bytes: Uint8Array): ReadableStream<Uint8Array> =>
 function unreadableStream(): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     pull() {
-      throw new Error("the publisher read bytes it had already been told to refuse");
+      throw new Error(
+        "the publisher read bytes it had already been told to refuse"
+      );
     },
   });
 }
@@ -85,10 +87,13 @@ function stub(
     devEnv?: Record<string, string>;
     bucket?: R2Bucket;
     now?: () => number;
-  } = {},
+  } = {}
 ) {
   const files = new Map<string, string>();
-  const spawns: Array<{ command: string; options?: { processId?: string; cwd?: string } }> = [];
+  const spawns: Array<{
+    command: string;
+    options?: { processId?: string; cwd?: string };
+  }> = [];
   const processes = new Map<string, StubProcess>();
   const reads: string[] = [];
   /** Every container file operation, in order — `mkdir` must precede the
@@ -132,7 +137,9 @@ function stub(
       // reports it: authoritative, free, and known before a byte is read.
       return {
         content: video instanceof ReadableStream ? video : streamOf(video),
-        size: options.size ?? (video instanceof ReadableStream ? 0 : video.byteLength),
+        size:
+          options.size ??
+          (video instanceof ReadableStream ? 0 : video.byteLength),
       };
     },
     bucket: options.bucket ?? env.ARTIFACTS,
@@ -145,7 +152,7 @@ function stub(
   const finish = (
     recordingId: string,
     result: Partial<HarnessResult>,
-    extra?: { stdout?: string; stderr?: string; exitCode?: number },
+    extra?: { stdout?: string; stderr?: string; exitCode?: number }
   ): void => {
     const process = processes.get(recordingId)!;
     const line = `RESULT ${JSON.stringify({
@@ -170,13 +177,20 @@ function stub(
   /** Terminate without ever printing a RESULT line — a harness that died. */
   const crash = (recordingId: string, stderr: string, exitCode = 1): void => {
     const process = processes.get(recordingId)!;
-    processes.set(recordingId, { ...process, status: "completed", exitCode, stderr });
+    processes.set(recordingId, {
+      ...process,
+      status: "completed",
+      exitCode,
+      stderr,
+    });
   };
 
   return { deps, files, fileOps, spawns, processes, reads, finish, crash };
 }
 
-const MP4 = new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+const MP4 = new Uint8Array([
+  0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32,
+]);
 
 /** The key the URL names, for reading the object back out of the bucket. */
 const keyOf = (url: string): string => `proofs/${url.slice(`${BASE}/`.length)}`;
@@ -189,7 +203,10 @@ describe("startRecording writes the script and spawns the harness", () => {
     // resulting error as a browser problem.
     const { deps, fileOps } = stub({ video: MP4 });
 
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
 
     const workdir = `${RECORDING_WORKDIR_ROOT}/${recordingId}`;
     expect(fileOps).toEqual([
@@ -202,7 +219,10 @@ describe("startRecording writes the script and spawns the harness", () => {
     const { deps, files, spawns } = stub({ video: MP4 });
     const script = "await page.goto('http://localhost:4100');";
 
-    const { recordingId } = await startRecording(deps, { script, label: "Checkout flow" });
+    const { recordingId } = await startRecording(deps, {
+      script,
+      label: "Checkout flow",
+    });
 
     const workdir = `${RECORDING_WORKDIR_ROOT}/${recordingId}`;
     expect(files.get(`${workdir}/script.js`)).toBe(script);
@@ -223,7 +243,7 @@ describe("startRecording writes the script and spawns the harness", () => {
     const workdir = `${RECORDING_WORKDIR_ROOT}/${recordingId}`;
     expect(spawns).toHaveLength(1);
     expect(spawns[0]!.command).toBe(
-      `node ${RECORDING_HARNESS_PATH} ${workdir}/script.js ${workdir} 45000`,
+      `node ${RECORDING_HARNESS_PATH} ${workdir}/script.js ${workdir} 45000`
     );
     // The process id IS the recording id, which is what lets `checkRecording`
     // find the run again without this module remembering anything.
@@ -239,7 +259,11 @@ describe("startRecording writes the script and spawns the harness", () => {
     // Clamping would tell the model it had three minutes, kill the browser at
     // one, and hand back a failure it would try to debug.
     await expect(
-      startRecording(deps, { script: "x", label: "checkout", timeoutMs: 600_000 }),
+      startRecording(deps, {
+        script: "x",
+        label: "checkout",
+        timeoutMs: 600_000,
+      })
     ).rejects.toThrow(new RegExp(String(MAX_RECORDING_TIMEOUT_MS)));
     expect(spawns).toHaveLength(1);
   });
@@ -248,7 +272,10 @@ describe("startRecording writes the script and spawns the harness", () => {
 describe("a passing run publishes the video and hands back a public URL", () => {
   it("streams the mp4 into R2 and returns the /proofs URL for it", async () => {
     const { deps, finish, reads } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, { state: "passed" });
 
     const status = await checkRecording(deps, recordingId);
@@ -259,7 +286,9 @@ describe("a passing run publishes the video and hands back a public URL", () => 
     expect(status.url).toMatch(new RegExp(`^${BASE}/[0-9a-f]{64}\\.mp4$`));
 
     // The bytes the harness produced are the bytes in the bucket.
-    expect(reads).toEqual([`${RECORDING_WORKDIR_ROOT}/${recordingId}/video.mp4`]);
+    expect(reads).toEqual([
+      `${RECORDING_WORKDIR_ROOT}/${recordingId}/video.mp4`,
+    ]);
     const object = await env.ARTIFACTS.get(keyOf(status.url!));
     expect(new Uint8Array(await object!.arrayBuffer())).toEqual(MP4);
     expect(object!.httpMetadata?.contentType).toBe("video/mp4");
@@ -267,7 +296,10 @@ describe("a passing run publishes the video and hands back a public URL", () => 
 
   it("keys the object unguessably, under proofs/ and never under _internal/", async () => {
     const { deps, finish } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, { state: "passed" });
 
     const status = await checkRecording(deps, recordingId);
@@ -285,8 +317,14 @@ describe("a passing run publishes the video and hands back a public URL", () => 
 
   it("gives two recordings of the same label two different keys", async () => {
     const { deps, finish } = stub({ video: MP4 });
-    const first = await startRecording(deps, { script: "x", label: "checkout" });
-    const second = await startRecording(deps, { script: "x", label: "checkout" });
+    const first = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
+    const second = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(first.recordingId, {});
     finish(second.recordingId, {});
 
@@ -311,7 +349,10 @@ describe("a passing run publishes the video and hands back a public URL", () => 
     }) as R2Bucket;
 
     const { deps, finish } = stub({ video: MP4, bucket });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {});
 
     const first = await checkRecording(deps, recordingId);
@@ -328,7 +369,10 @@ describe("a passing run publishes the video and hands back a public URL", () => 
 describe("a failing run publishes the video AND surfaces the error", () => {
   it("keeps both halves: the failure the model must act on and the evidence a human watches", async () => {
     const { deps, finish } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {
       state: "failed",
       error: "TimeoutError: locator.click: Timeout 5000ms exceeded.",
@@ -347,7 +391,10 @@ describe("a failing run publishes the video AND surfaces the error", () => {
 
   it("surfaces browser-unavailable as a failure carrying the token the model is told to look for", async () => {
     const { deps, finish } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {
       state: "browser-unavailable",
       error: BROWSER_UNAVAILABLE_MESSAGE,
@@ -382,7 +429,10 @@ describe("a failing run publishes the video AND surfaces the error", () => {
     // promise has to hold against one, so the token is enforced here rather
     // than trusted from across the boundary.
     const { deps, finish } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {
       state: "browser-unavailable",
       error: "the boot-time Chromium install did not complete on this machine",
@@ -398,8 +448,15 @@ describe("a failing run publishes the video AND surfaces the error", () => {
 
   it("reports a harness that died without a RESULT line, naming the exit code", async () => {
     const { deps, crash } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
-    crash(recordingId, "node: cannot find module '/usr/local/bin/record-harness.cjs'\n", 127);
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
+    crash(
+      recordingId,
+      "node: cannot find module '/usr/local/bin/record-harness.cjs'\n",
+      127
+    );
 
     const status = await checkRecording(deps, recordingId);
 
@@ -417,8 +474,15 @@ describe("a failing run publishes the video AND surfaces the error", () => {
     // terminal throws away a recording that SUCCEEDED.
     const { deps, processes, recordingId, reads } = await (async () => {
       const s = stub({ video: MP4 });
-      const { recordingId: id } = await startRecording(s.deps, { script: "x", label: "checkout" });
-      s.processes.set(id, { ...s.processes.get(id)!, status: "completed", exitCode: 0 });
+      const { recordingId: id } = await startRecording(s.deps, {
+        script: "x",
+        label: "checkout",
+      });
+      s.processes.set(id, {
+        ...s.processes.get(id)!,
+        status: "completed",
+        exitCode: 0,
+      });
       return { ...s, recordingId: id };
     })();
 
@@ -429,7 +493,8 @@ describe("a failing run publishes the video AND surfaces the error", () => {
         logReads += 1;
         // The line lands between the first read and the second, which is
         // exactly the shape of the race.
-        if (logReads === 1) return { stdout: "step 1: signed in\n", stderr: "" };
+        if (logReads === 1)
+          return { stdout: "step 1: signed in\n", stderr: "" };
         const line = `RESULT ${JSON.stringify({
           state: "passed",
           error: null,
@@ -452,7 +517,10 @@ describe("a failing run publishes the video AND surfaces the error", () => {
 
   it("gives up after the second read, and says the exit was clean so a human recognises the race", async () => {
     const { deps, processes } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     processes.set(recordingId, {
       ...processes.get(recordingId)!,
       status: "completed",
@@ -468,7 +536,10 @@ describe("a failing run publishes the video AND surfaces the error", () => {
 
   it("does not re-read the logs for a nonzero exit, which is a real crash", async () => {
     const { deps, crash } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     crash(recordingId, "segfault\n", 139);
 
     let logReads = 0;
@@ -488,7 +559,10 @@ describe("a failing run publishes the video AND surfaces the error", () => {
 
   it("reports an id the container has never heard of as a failure, not a hang", async () => {
     const { deps } = stub({ video: MP4 });
-    const status = await checkRecording(deps, "checkout_00000000-0000-4000-8000-000000000000");
+    const status = await checkRecording(
+      deps,
+      "checkout_00000000-0000-4000-8000-000000000000"
+    );
 
     // "running forever" is the one answer that costs the agent every remaining
     // turn, so an unknown id must be terminal.
@@ -501,7 +575,10 @@ describe("a failing run publishes the video AND surfaces the error", () => {
 describe("a run still in the browser is running", () => {
   it("reports running with no URL and the elapsed time so far", async () => {
     const { deps } = stub({ video: MP4, now: () => 12_000 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
 
     const status = await checkRecording(deps, recordingId);
 
@@ -514,7 +591,10 @@ describe("a run still in the browser is running", () => {
 
   it("shows the script's own output while it runs, without the machine protocol line", async () => {
     const { deps, processes } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     processes.set(recordingId, {
       ...processes.get(recordingId)!,
       stdout: "step 1: signed in\nstep 2: added to cart\n",
@@ -526,7 +606,10 @@ describe("a run still in the browser is running", () => {
 
   it("keeps the RESULT protocol line out of the tail the model reads", async () => {
     const { deps, finish } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {}, { stdout: "step 1: signed in\n" });
 
     const status = await checkRecording(deps, recordingId);
@@ -543,11 +626,19 @@ describe("an over-ceiling video is refused readably", () => {
     // The container tells us how big the file is on the same call that hands
     // back the stream, so a 50MB refusal costs one metadata round trip instead
     // of 50MB of transfer. `unreadableStream` throws if anything pulls it.
-    const { deps, finish } = stub({ video: unreadableStream(), size: MAX_RECORDING_BYTES + 1 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { deps, finish } = stub({
+      video: unreadableStream(),
+      size: MAX_RECORDING_BYTES + 1,
+    });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, { state: "passed" });
 
-    const before = (await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects.length;
+    const before = (
+      await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })
+    ).objects.length;
     const status = await checkRecording(deps, recordingId);
 
     // The RUN passed and saying otherwise would be a lie; what failed is the
@@ -557,9 +648,10 @@ describe("an over-ceiling video is refused readably", () => {
     expect(status.error).toContain(String(MAX_RECORDING_BYTES));
     expect(status.error).toMatch(/shorter|trim|too large/i);
     // Nothing half-written is left behind for the route to find.
-    expect((await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects.length).toBe(
-      before,
-    );
+    expect(
+      (await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects
+        .length
+    ).toBe(before);
   });
 });
 
@@ -575,7 +667,10 @@ describe("a poll reports a publish failure, it never throws one", () => {
   it("survives a container read that fails, keeping the verdict and the tail", async () => {
     // The stub's readBinary throws when no video is configured.
     const { deps, finish } = stub({});
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, { state: "passed" }, { stdout: "step 1: signed in\n" });
 
     const status = await checkRecording(deps, recordingId);
@@ -590,7 +685,10 @@ describe("a poll reports a publish failure, it never throws one", () => {
 
   it("survives a bucket read that fails, and does NOT delete an already-published proof", async () => {
     const { deps, finish } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {});
 
     const published = await checkRecording(deps, recordingId);
@@ -602,7 +700,8 @@ describe("a poll reports a publish failure, it never throws one", () => {
     // transient R2 blip would destroy the proof an earlier poll published.
     const failing = new Proxy(env.ARTIFACTS, {
       get(target, property) {
-        if (property === "head") return () => Promise.reject(new Error("R2 unavailable"));
+        if (property === "head")
+          return () => Promise.reject(new Error("R2 unavailable"));
         const value = Reflect.get(target, property, target);
         return typeof value === "function"
           ? (value as (...args: unknown[]) => unknown).bind(target)
@@ -610,7 +709,10 @@ describe("a poll reports a publish failure, it never throws one", () => {
       },
     }) as R2Bucket;
 
-    const status = await checkRecording({ ...deps, bucket: failing }, recordingId);
+    const status = await checkRecording(
+      { ...deps, bucket: failing },
+      recordingId
+    );
 
     expect(status.state).toBe("passed");
     expect(status.url).toBeNull();
@@ -633,11 +735,19 @@ describe("a stream that ends early is refused, not published", () => {
    * `FixedLengthStream`, so a short body fails the `put` itself.
    */
   it("refuses when fewer bytes arrive than the container said the file holds", async () => {
-    const { deps, finish } = stub({ video: new Uint8Array([1, 2, 3]), size: 4_096 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { deps, finish } = stub({
+      video: new Uint8Array([1, 2, 3]),
+      size: 4_096,
+    });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, { state: "passed" });
 
-    const before = (await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects.length;
+    const before = (
+      await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })
+    ).objects.length;
     const status = await checkRecording(deps, recordingId);
 
     expect(status.state).toBe("passed");
@@ -645,14 +755,18 @@ describe("a stream that ends early is refused, not published", () => {
     expect(status.error).toContain("could not be published");
     expect(status.error).toMatch(/partly transferred|partial mp4/i);
     // Nothing partial is left for the route to find and serve as evidence.
-    expect((await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects.length).toBe(
-      before,
-    );
+    expect(
+      (await env.ARTIFACTS.list({ prefix: "proofs/", limit: 1000 })).objects
+        .length
+    ).toBe(before);
   });
 
   it("refuses an empty file rather than publishing a zero-byte proof", async () => {
     const { deps, finish } = stub({ video: new Uint8Array(0) });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, { state: "passed" });
 
     const status = await checkRecording(deps, recordingId);
@@ -664,7 +778,10 @@ describe("a stream that ends early is refused, not published", () => {
     // `bytes` is no longer consulted: the container's own figure is
     // authoritative, so a harness that under-reports cannot block a publish.
     const { deps, finish } = stub({ video: MP4 });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, { state: "passed", bytes: null });
 
     const status = await checkRecording(deps, recordingId);
@@ -682,12 +799,17 @@ describe("the URL checkRecording hands back is the URL the route serves", () => 
    * the drill depends on: somebody clicks the link the agent reported.
    */
   it("fetches the published recording back through the real route", async () => {
-    const bytes = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 9, 9, 9, 9, 7, 7]);
+    const bytes = new Uint8Array([
+      0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 9, 9, 9, 9, 7, 7,
+    ]);
     // `BASE` is this Worker's own origin plus `/proofs`, which is what
     // `PROOFS_BASE_URL` holds in production — so the URL below is fetched from
     // the real route rather than from a shape a test invented.
     const { deps, finish } = stub({ video: bytes });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, { state: "passed" });
 
     const status = await checkRecording(deps, recordingId);
@@ -697,7 +819,9 @@ describe("the URL checkRecording hands back is the URL the route serves", () => 
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("video/mp4");
-    expect(response.headers.get("content-disposition")).toBe('inline; filename="checkout.mp4"');
+    expect(response.headers.get("content-disposition")).toBe(
+      'inline; filename="checkout.mp4"'
+    );
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
   });
 });
@@ -708,7 +832,10 @@ describe("dev-env values never reach the model", () => {
 
   it("redacts them from stdoutTail", async () => {
     const { deps, finish } = stub({ video: MP4, devEnv });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {}, { stdout: `logged in with ${SECRET}\n` });
 
     const status = await checkRecording(deps, recordingId);
@@ -719,7 +846,10 @@ describe("dev-env values never reach the model", () => {
 
   it("redacts them from the error, which is where a stack trace puts them", async () => {
     const { deps, finish } = stub({ video: MP4, devEnv });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {
       state: "failed",
       error: `Error: request failed with apikey=${SECRET}`,
@@ -739,13 +869,18 @@ describe("dev-env values never reach the model", () => {
     // that the embedded message is scrubbed like every other string that
     // reaches `RecordingStatus.error`, not just `result.error`.
     const { deps, finish } = stub({ video: MP4, devEnv });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     finish(recordingId, {});
 
     const failing: RecordDeps = {
       ...deps,
       async readBinary() {
-        throw new Error(`upload rejected by upstream, saw Authorization: Bearer ${SECRET}`);
+        throw new Error(
+          `upload rejected by upstream, saw Authorization: Bearer ${SECRET}`
+        );
       },
     };
 
@@ -760,7 +895,10 @@ describe("dev-env values never reach the model", () => {
 
   it("scrubs before it trims, so a value straddling the cut cannot survive it", async () => {
     const { deps, processes } = stub({ video: MP4, devEnv });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     // Positioned so that the LAST seven characters of the value fall inside the
     // kept tail. Trimming first and scrubbing second would leave them there —
     // a leak that every "does the output contain the secret" assertion written
@@ -773,12 +911,17 @@ describe("dev-env values never reach the model", () => {
     const status = await checkRecording(deps, recordingId);
 
     expect(status.stdoutTail).not.toContain(SECRET.slice(-7));
-    expect(status.stdoutTail.length).toBeLessThanOrEqual(RECORDING_TAIL_CHARS + 200);
+    expect(status.stdoutTail.length).toBeLessThanOrEqual(
+      RECORDING_TAIL_CHARS + 200
+    );
   });
 
   it("scrubs the error before it trims it, too", async () => {
     const { deps, finish } = stub({ video: MP4, devEnv });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     // Straddling the head-clamp boundary: trimming first would keep the value's
     // first characters and drop the rest, which reads as a scrub that worked.
     finish(recordingId, {
@@ -797,8 +940,14 @@ describe("dev-env values never reach the model", () => {
     // joined string would drop the half this module wrote, which is the half
     // that explains why there is no URL.
     const { deps, finish } = stub({});
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
-    finish(recordingId, { state: "failed", error: "E".repeat(RECORDING_ERROR_CHARS * 3) });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
+    finish(recordingId, {
+      state: "failed",
+      error: "E".repeat(RECORDING_ERROR_CHARS * 3),
+    });
 
     const status = await checkRecording(deps, recordingId);
 
@@ -808,7 +957,10 @@ describe("dev-env values never reach the model", () => {
 
   it("redacts a running run's tail too, not only a terminal one", async () => {
     const { deps, processes } = stub({ video: MP4, devEnv });
-    const { recordingId } = await startRecording(deps, { script: "x", label: "checkout" });
+    const { recordingId } = await startRecording(deps, {
+      script: "x",
+      label: "checkout",
+    });
     processes.set(recordingId, {
       ...processes.get(recordingId)!,
       stdout: `env dump: ${SECRET}\n`,

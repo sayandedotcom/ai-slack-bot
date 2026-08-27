@@ -40,7 +40,10 @@ export class ErrorBoundary extends Component<Props, State> {
     return { failed: true };
   }
 
-  static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
+  static getDerivedStateFromProps(
+    props: Props,
+    state: State
+  ): Partial<State> | null {
     if (props.resetKey === state.resetKey) return null;
     return { failed: false, resetKey: props.resetKey };
   }

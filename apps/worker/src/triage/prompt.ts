@@ -25,7 +25,9 @@ export function buildTriagePrompt(input: TriageInput): string {
   const thread =
     input.thread.length === 0
       ? "(no earlier messages in this thread)"
-      : input.thread.map((m) => `${m.user_id ?? "unknown"}: ${m.text}`).join("\n");
+      : input.thread
+          .map((m) => `${m.user_id ?? "unknown"}: ${m.text}`)
+          .join("\n");
   const recall =
     input.recall.length === 0
       ? "(no stored context for this customer)"

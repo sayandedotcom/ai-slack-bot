@@ -7,7 +7,9 @@ import { MockLanguageModelV4 } from "ai/test";
  * keeps the parts below checked against the installed spec version.
  */
 type StreamPart =
-  Awaited<ReturnType<MockLanguageModelV4["doStream"]>>["stream"] extends ReadableStream<infer Part>
+  Awaited<
+    ReturnType<MockLanguageModelV4["doStream"]>
+  >["stream"] extends ReadableStream<infer Part>
     ? Part
     : never;
 
@@ -27,7 +29,9 @@ type StreamPart =
  * said. The prompts it was called with are on `doStreamCalls`, which is how a
  * test reads what actually reached the provider.
  */
-export function cannedModel(options: { text?: string; modelId?: string } = {}): MockLanguageModelV4 {
+export function cannedModel(
+  options: { text?: string; modelId?: string } = {}
+): MockLanguageModelV4 {
   const text = options.text ?? "Looked at it.";
   const modelId = options.modelId ?? "claude-fable-5";
 
@@ -65,7 +69,6 @@ function streamOf(parts: StreamPart[]): ReadableStream<StreamPart> {
   });
 }
 
-
 /**
  * A model that calls `run_code` once with `program`, then answers with text.
  *
@@ -94,7 +97,11 @@ export function toolCallingModel(options: {
     { type: "stream-start", warnings: [] },
     { type: "response-metadata", id: "req_tool", modelId },
     { type: "tool-input-start", id: "call-1", toolName: "run_code" },
-    { type: "tool-input-delta", id: "call-1", delta: JSON.stringify({ code: options.program }) },
+    {
+      type: "tool-input-delta",
+      id: "call-1",
+      delta: JSON.stringify({ code: options.program }),
+    },
     { type: "tool-input-end", id: "call-1" },
     {
       type: "tool-call",
@@ -102,7 +109,11 @@ export function toolCallingModel(options: {
       toolName: "run_code",
       input: JSON.stringify({ code: options.program }),
     },
-    { type: "finish", finishReason: { unified: "tool-calls", raw: "tool_use" }, usage },
+    {
+      type: "finish",
+      finishReason: { unified: "tool-calls", raw: "tool_use" },
+      usage,
+    },
   ];
 
   const answerParts: StreamPart[] = [
@@ -111,13 +122,19 @@ export function toolCallingModel(options: {
     { type: "text-start", id: "t0" },
     { type: "text-delta", id: "t0", delta: options.text ?? "Done." },
     { type: "text-end", id: "t0" },
-    { type: "finish", finishReason: { unified: "stop", raw: "end_turn" }, usage },
+    {
+      type: "finish",
+      finishReason: { unified: "stop", raw: "end_turn" },
+      usage,
+    },
   ];
 
   let pass = 0;
   return new MockLanguageModelV4({
     provider: "anthropic",
     modelId,
-    doStream: async () => ({ stream: streamOf(pass++ === 0 ? callParts : answerParts) }),
+    doStream: async () => ({
+      stream: streamOf(pass++ === 0 ? callParts : answerParts),
+    }),
   });
 }

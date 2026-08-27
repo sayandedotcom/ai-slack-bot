@@ -21,7 +21,9 @@ const resourceDescription = z.strictObject({
  * is the publishable one and therefore subject to row-level policy. This is the
  * only vendor in the phase with a credential-level backstop.
  */
-export function makeSupabaseTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeSupabaseTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     schema: auditedCapability(ctx, "supabase", "schema", {
       effect: "read",
@@ -56,8 +58,11 @@ export function makeSupabaseTools(ctx: BindingContext): Record<string, Classifie
                 "is",
                 "like",
               ]),
-              value: z.union([scalar, z.array(z.union([z.string(), z.number()])).max(100)]),
-            }),
+              value: z.union([
+                scalar,
+                z.array(z.union([z.string(), z.number()])).max(100),
+              ]),
+            })
           )
           .max(10)
           .optional(),

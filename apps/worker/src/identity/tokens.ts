@@ -35,7 +35,7 @@ import { SealError, importIdentityKey, open } from "../identity/crypto";
 export async function getDecryptedToken(
   env: Env,
   email: string,
-  provider: Provider,
+  provider: Provider
 ): Promise<string | null> {
   const row = await getIdentity(env.DB, email, provider);
   if (!row) return null;

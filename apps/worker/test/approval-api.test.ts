@@ -2,14 +2,21 @@ import { SELF, createScheduledController, env } from "cloudflare:test";
 import { getAgentByName } from "agents";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
-import { AccessJwtError, type AccessIdentity, type AccessVerifier } from "../src/access/jwt";
+import {
+  AccessJwtError,
+  type AccessIdentity,
+  type AccessVerifier,
+} from "../src/access/jwt";
 import {
   installApprovalApiPorts,
   resetApprovalApiPorts,
   type ResolutionNotifier,
 } from "../src/api/approvals";
-import { insertApproval, setDelivery, type NewApprovalCard } from "../src/approval/repository";
-
+import {
+  insertApproval,
+  setDelivery,
+  type NewApprovalCard,
+} from "../src/approval/repository";
 
 /**
  * Real D1 through the workerd vitest pool, no `isolatedStorage` — same
@@ -38,7 +45,8 @@ function fakeVerifier(): AccessVerifier {
   return {
     async verify(jwt: string): Promise<AccessIdentity> {
       if (!jwt) throw new AccessJwtError("missing", "no token was supplied");
-      if (!jwt.includes("@")) throw new AccessJwtError("malformed", "not an email-shaped fake token");
+      if (!jwt.includes("@"))
+        throw new AccessJwtError("malformed", "not an email-shaped fake token");
       return { email: jwt };
     },
   };
@@ -68,14 +76,21 @@ function recordingNotifier(): ResolutionNotifier & { calls: NotifyCall[] } {
  */
 function notifierThatDelivers(
   to: "blocked" | "sent" | "in_doubt" = "blocked",
-  error: string | null = "identity_unavailable",
+  error: string | null = "identity_unavailable"
 ): ResolutionNotifier & { calls: NotifyCall[] } {
   const calls: NotifyCall[] = [];
   return {
     calls,
     async notify(input) {
       calls.push(input);
-      await setDelivery(env.DB, input.approvalId, ["none"], to, error, Date.now());
+      await setDelivery(
+        env.DB,
+        input.approvalId,
+        ["none"],
+        to,
+        error,
+        Date.now()
+      );
       return { applied: true };
     },
   };
@@ -98,14 +113,17 @@ async function seedRun(): Promise<{ runId: string; key: string }> {
   const key = `chat:${crypto.randomUUID()}`;
   await env.DB.prepare(
     `INSERT INTO runs (id, "key", origin, channel_id, thread_ts, status, shadow, created_at, updated_at)
-     VALUES (?, ?, 'chat', NULL, NULL, 'idle', 0, ?, ?)`,
+     VALUES (?, ?, 'chat', NULL, NULL, 'idle', 0, ?, ?)`
   )
     .bind(runId, key, Date.now(), Date.now())
     .run();
   return { runId, key };
 }
 
-function card(runId: string, overrides: Partial<NewApprovalCard> = {}): NewApprovalCard {
+function card(
+  runId: string,
+  overrides: Partial<NewApprovalCard> = {}
+): NewApprovalCard {
   return {
     id: `apr:${crypto.randomUUID()}`,
     runId,
@@ -121,7 +139,7 @@ function card(runId: string, overrides: Partial<NewApprovalCard> = {}): NewAppro
 }
 
 async function seedApproval(
-  overrides: Partial<NewApprovalCard> = {},
+  overrides: Partial<NewApprovalCard> = {}
 ): Promise<{ runId: string; runKey: string; id: string }> {
   let runId = overrides.runId;
   let runKey = "";
@@ -139,7 +157,10 @@ const FIREFIGHTER = "ronit@zellify.app";
 const VIEWER = "marcus@zellify.app";
 const OUTSIDER = "nobody@example.com";
 
-function req(path: string, init: RequestInit & { token?: string } = {}): Promise<Response> {
+function req(
+  path: string,
+  init: RequestInit & { token?: string } = {}
+): Promise<Response> {
   const { token, headers, ...rest } = init;
   const h = new Headers(headers);
   if (token !== undefined) h.set("Cf-Access-Jwt-Assertion", token);
@@ -153,7 +174,9 @@ describe("GET /api/approvals", () => {
     installApprovalApiPorts({ verifier: fakeVerifier() });
     const res = await req("/api/approvals");
     expect(res.status).toBe(401);
-    expect((await res.json<{ code: string }>()).code).toBe("access_jwt_invalid");
+    expect((await res.json<{ code: string }>()).code).toBe(
+      "access_jwt_invalid"
+    );
   });
 
   it("401s a garbage token", async () => {
@@ -181,9 +204,15 @@ describe("GET /api/approvals", () => {
 
     const res = await req("/api/approvals", { token: FIREFIGHTER });
     expect(res.status).toBe(200);
-    const body = await res.json<{ approvals: Array<Record<string, unknown>> }>();
+    const body = await res.json<{
+      approvals: Array<Record<string, unknown>>;
+    }>();
     expect(body.approvals).toHaveLength(1);
-    expect(body.approvals[0]).toMatchObject({ id, runId, draft: "We can refund the last invoice." });
+    expect(body.approvals[0]).toMatchObject({
+      id,
+      runId,
+      draft: "We can refund the last invoice.",
+    });
 
     // THE OTHER HALF, restored against the chassis that replaced the RunDO
     // (invariant 7): the route wrote nothing into the run's session. Reading it
@@ -202,7 +231,9 @@ describe("GET /api/approvals", () => {
 
   it("rejects a state value other than 'open'", async () => {
     installApprovalApiPorts({ verifier: fakeVerifier() });
-    const res = await req("/api/approvals?state=closed", { token: FIREFIGHTER });
+    const res = await req("/api/approvals?state=closed", {
+      token: FIREFIGHTER,
+    });
     expect(res.status).toBe(400);
   });
 });
@@ -210,7 +241,9 @@ describe("GET /api/approvals", () => {
 describe("GET /api/approvals/:id", () => {
   it("404s an unknown id", async () => {
     installApprovalApiPorts({ verifier: fakeVerifier() });
-    const res = await req(`/api/approvals/apr:${crypto.randomUUID()}`, { token: FIREFIGHTER });
+    const res = await req(`/api/approvals/apr:${crypto.randomUUID()}`, {
+      token: FIREFIGHTER,
+    });
     expect(res.status).toBe(404);
     expect((await res.json<{ code: string }>()).code).toBe("unknown_approval");
   });
@@ -228,7 +261,12 @@ describe("GET /api/approvals/:id", () => {
     const res = await req(`/api/approvals/${id}`, { token: VIEWER });
     expect(res.status).toBe(200);
     const body = await res.json<{ approval: Record<string, unknown> }>();
-    expect(body.approval).toMatchObject({ id, decision: "pending", delivery: "none", decidedBy: null });
+    expect(body.approval).toMatchObject({
+      id,
+      decision: "pending",
+      delivery: "none",
+      decidedBy: null,
+    });
   });
 });
 
@@ -236,7 +274,10 @@ describe("GET /api/approvals/:id", () => {
 
 describe("PATCH /api/approvals/:id — authorization", () => {
   it("403s a viewer, and the row stays untouched", async () => {
-    installApprovalApiPorts({ verifier: fakeVerifier(), notifier: recordingNotifier() });
+    installApprovalApiPorts({
+      verifier: fakeVerifier(),
+      notifier: recordingNotifier(),
+    });
     const { id } = await seedApproval();
 
     const res = await req(`/api/approvals/${id}`, {
@@ -248,7 +289,9 @@ describe("PATCH /api/approvals/:id — authorization", () => {
     expect(res.status).toBe(403);
     expect((await res.json<{ code: string }>()).code).toBe("not_a_firefighter");
 
-    const row = await env.DB.prepare("SELECT decision, decided_by FROM approvals WHERE id = ?")
+    const row = await env.DB.prepare(
+      "SELECT decision, decided_by FROM approvals WHERE id = ?"
+    )
       .bind(id)
       .first<{ decision: string; decided_by: string | null }>();
     expect(row).toMatchObject({ decision: "pending", decided_by: null });
@@ -265,7 +308,9 @@ describe("PATCH /api/approvals/:id — authorization", () => {
     });
     expect(res.status).toBe(401);
 
-    const row = await env.DB.prepare("SELECT decision FROM approvals WHERE id = ?")
+    const row = await env.DB.prepare(
+      "SELECT decision FROM approvals WHERE id = ?"
+    )
       .bind(id)
       .first<{ decision: string }>();
     expect(row?.decision).toBe("pending");
@@ -291,7 +336,10 @@ describe("PATCH /api/approvals/:id — deciding", () => {
       body: JSON.stringify({ action: "approve" }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json<{ approval: { decision: string; delivery: string }; resolutionDelivered: boolean }>();
+    const body = await res.json<{
+      approval: { decision: string; delivery: string };
+      resolutionDelivered: boolean;
+    }>();
     expect(body.approval.decision).toBe("approved");
     expect(body.resolutionDelivered).toBe(true);
     // THE PROPERTY THIS ASSERTS: the body reports the delivery state the
@@ -310,9 +358,15 @@ describe("PATCH /api/approvals/:id — deciding", () => {
       decidedBy: FIREFIGHTER,
     });
 
-    const row = await env.DB.prepare("SELECT decision, decided_by, resolution_delivered_at FROM approvals WHERE id = ?")
+    const row = await env.DB.prepare(
+      "SELECT decision, decided_by, resolution_delivered_at FROM approvals WHERE id = ?"
+    )
       .bind(id)
-      .first<{ decision: string; decided_by: string; resolution_delivered_at: number | null }>();
+      .first<{
+        decision: string;
+        decided_by: string;
+        resolution_delivered_at: number | null;
+      }>();
     expect(row?.decision).toBe("approved");
     expect(row?.decided_by).toBe(FIREFIGHTER);
     expect(row?.resolution_delivered_at).not.toBeNull();
@@ -327,10 +381,15 @@ describe("PATCH /api/approvals/:id — deciding", () => {
       method: "PATCH",
       token: FIREFIGHTER,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "edit", text: "We can refund the last two invoices." }),
+      body: JSON.stringify({
+        action: "edit",
+        text: "We can refund the last two invoices.",
+      }),
     });
     expect(res.status).toBe(200);
-    expect(notifier.calls[0].outboundText).toBe("We can refund the last two invoices.");
+    expect(notifier.calls[0].outboundText).toBe(
+      "We can refund the last two invoices."
+    );
   });
 
   it("rejects with a reason, and outboundText is null", async () => {
@@ -345,11 +404,18 @@ describe("PATCH /api/approvals/:id — deciding", () => {
       body: JSON.stringify({ action: "reject", reason: "not accurate" }),
     });
     expect(res.status).toBe(200);
-    expect(notifier.calls[0]).toMatchObject({ decision: "rejected", outboundText: null, rejectReason: "not accurate" });
+    expect(notifier.calls[0]).toMatchObject({
+      decision: "rejected",
+      outboundText: null,
+      rejectReason: "not accurate",
+    });
   });
 
   it("422s an edit with no text", async () => {
-    installApprovalApiPorts({ verifier: fakeVerifier(), notifier: recordingNotifier() });
+    installApprovalApiPorts({
+      verifier: fakeVerifier(),
+      notifier: recordingNotifier(),
+    });
     const { id } = await seedApproval();
     const res = await req(`/api/approvals/${id}`, {
       method: "PATCH",
@@ -362,7 +428,10 @@ describe("PATCH /api/approvals/:id — deciding", () => {
   });
 
   it("422s an edit with a blank text", async () => {
-    installApprovalApiPorts({ verifier: fakeVerifier(), notifier: recordingNotifier() });
+    installApprovalApiPorts({
+      verifier: fakeVerifier(),
+      notifier: recordingNotifier(),
+    });
     const { id } = await seedApproval();
     const res = await req(`/api/approvals/${id}`, {
       method: "PATCH",
@@ -374,7 +443,10 @@ describe("PATCH /api/approvals/:id — deciding", () => {
   });
 
   it("422s a reject with no reason", async () => {
-    installApprovalApiPorts({ verifier: fakeVerifier(), notifier: recordingNotifier() });
+    installApprovalApiPorts({
+      verifier: fakeVerifier(),
+      notifier: recordingNotifier(),
+    });
     const { id } = await seedApproval();
     const res = await req(`/api/approvals/${id}`, {
       method: "PATCH",
@@ -386,7 +458,10 @@ describe("PATCH /api/approvals/:id — deciding", () => {
   });
 
   it("422s an unknown action", async () => {
-    installApprovalApiPorts({ verifier: fakeVerifier(), notifier: recordingNotifier() });
+    installApprovalApiPorts({
+      verifier: fakeVerifier(),
+      notifier: recordingNotifier(),
+    });
     const { id } = await seedApproval();
     const res = await req(`/api/approvals/${id}`, {
       method: "PATCH",
@@ -398,7 +473,10 @@ describe("PATCH /api/approvals/:id — deciding", () => {
   });
 
   it("404s an unknown id", async () => {
-    installApprovalApiPorts({ verifier: fakeVerifier(), notifier: recordingNotifier() });
+    installApprovalApiPorts({
+      verifier: fakeVerifier(),
+      notifier: recordingNotifier(),
+    });
     const res = await req(`/api/approvals/apr:${crypto.randomUUID()}`, {
       method: "PATCH",
       token: FIREFIGHTER,
@@ -409,7 +487,10 @@ describe("PATCH /api/approvals/:id — deciding", () => {
   });
 
   it("races approve vs reject: exactly one 200, the loser gets 409 with the winning decision", async () => {
-    installApprovalApiPorts({ verifier: fakeVerifier(), notifier: recordingNotifier() });
+    installApprovalApiPorts({
+      verifier: fakeVerifier(),
+      notifier: recordingNotifier(),
+    });
     const { id } = await seedApproval();
 
     const approve = () =>
@@ -439,7 +520,9 @@ describe("PATCH /api/approvals/:id — deciding", () => {
     const winnerBody = await winner.json<{ approval: { decision: string } }>();
     expect(loserBody.decision).toBe(winnerBody.approval.decision);
 
-    const row = await env.DB.prepare("SELECT decision FROM approvals WHERE id = ?")
+    const row = await env.DB.prepare(
+      "SELECT decision FROM approvals WHERE id = ?"
+    )
       .bind(id)
       .first<{ decision: string }>();
     expect(["approved", "rejected"]).toContain(row?.decision);
@@ -457,12 +540,15 @@ describe("PATCH /api/approvals/:id — deciding", () => {
       body: JSON.stringify({ action: "approve" }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json<{ approval: { decision: string }; resolutionDelivered: boolean }>();
+    const body = await res.json<{
+      approval: { decision: string };
+      resolutionDelivered: boolean;
+    }>();
     expect(body.approval.decision).toBe("approved");
     expect(body.resolutionDelivered).toBe(false);
 
     const row = await env.DB.prepare(
-      "SELECT decision, resolution_delivered_at FROM approvals WHERE id = ?",
+      "SELECT decision, resolution_delivered_at FROM approvals WHERE id = ?"
     )
       .bind(id)
       .first<{ decision: string; resolution_delivered_at: number | null }>();
@@ -493,7 +579,10 @@ describe("the extended scheduled() sweeper", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "approve" }),
     });
-    expect((await patchRes.json<{ resolutionDelivered: boolean }>()).resolutionDelivered).toBe(false);
+    expect(
+      (await patchRes.json<{ resolutionDelivered: boolean }>())
+        .resolutionDelivered
+    ).toBe(false);
 
     // Swap in a working notifier — same shape as the DO coming back up —
     // and let the sweep re-drive the row the PATCH left undelivered.
@@ -503,9 +592,14 @@ describe("the extended scheduled() sweeper", () => {
     await runScheduled();
 
     expect(recovered.calls).toHaveLength(1);
-    expect(recovered.calls[0]).toMatchObject({ approvalId: id, decision: "approved" });
+    expect(recovered.calls[0]).toMatchObject({
+      approvalId: id,
+      decision: "approved",
+    });
 
-    const row = await env.DB.prepare("SELECT resolution_delivered_at FROM approvals WHERE id = ?")
+    const row = await env.DB.prepare(
+      "SELECT resolution_delivered_at FROM approvals WHERE id = ?"
+    )
       .bind(id)
       .first<{ resolution_delivered_at: number | null }>();
     expect(row?.resolution_delivered_at).not.toBeNull();
@@ -525,7 +619,9 @@ describe("the extended scheduled() sweeper", () => {
 
     await runScheduled();
 
-    const row = await env.DB.prepare("SELECT resolution_delivered_at FROM approvals WHERE id = ?")
+    const row = await env.DB.prepare(
+      "SELECT resolution_delivered_at FROM approvals WHERE id = ?"
+    )
       .bind(id)
       .first<{ resolution_delivered_at: number | null }>();
     expect(row?.resolution_delivered_at).toBeNull();
@@ -574,7 +670,9 @@ describe("the extended scheduled() sweeper", () => {
     installApprovalApiPorts({ notifier: recovered });
 
     const brokenEnv = { ...env, DB: dbThatBreaksTheMemorySweep(env.DB) };
-    await expect(worker.scheduled(createScheduledController(), brokenEnv)).rejects.toThrow();
+    await expect(
+      worker.scheduled(createScheduledController(), brokenEnv)
+    ).rejects.toThrow();
 
     // The memory sweep threw first (it runs via the same `Promise.allSettled`
     // entry, and its query is the one rigged to fail) — but the approval
@@ -584,10 +682,11 @@ describe("the extended scheduled() sweeper", () => {
     expect(recovered.calls).toHaveLength(1);
     expect(recovered.calls[0]).toMatchObject({ approvalId: id });
 
-    const row = await env.DB.prepare("SELECT resolution_delivered_at FROM approvals WHERE id = ?")
+    const row = await env.DB.prepare(
+      "SELECT resolution_delivered_at FROM approvals WHERE id = ?"
+    )
       .bind(id)
       .first<{ resolution_delivered_at: number | null }>();
     expect(row?.resolution_delivered_at).not.toBeNull();
   });
 });
-

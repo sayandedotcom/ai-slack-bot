@@ -25,7 +25,11 @@ export type ApprovalsPanelProps = {
   onDecide: (id: string, action: DecideAction) => void;
 };
 
-export function ApprovalsPanel({ state, role, onDecide }: ApprovalsPanelProps): ReactNode {
+export function ApprovalsPanel({
+  state,
+  role,
+  onDecide,
+}: ApprovalsPanelProps): ReactNode {
   // `Panel` renders `empty` but cannot distinguish a ready-empty list from a
   // ready one, so the emptiness is decided here — same idiom as `RunList`.
   const resolved: PanelState<CardState[]> =

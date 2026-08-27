@@ -8,25 +8,40 @@ type GraphClient = {
   graph: { search: (req: unknown) => Promise<{ edges?: unknown[] }> };
 };
 
-function withFakeClient(memory: ZepMemory, graph: GraphClient["graph"]): ZepMemory {
+function withFakeClient(
+  memory: ZepMemory,
+  graph: GraphClient["graph"]
+): ZepMemory {
   (memory as unknown as { client: GraphClient }).client = { graph };
   return memory;
 }
 
 describe("isGraphNotFound", () => {
   it("recognises the SDK's 404", () => {
-    expect(isGraphNotFound(new ZepError({ message: "not found", statusCode: 404 }))).toBe(true);
+    expect(
+      isGraphNotFound(new ZepError({ message: "not found", statusCode: 404 }))
+    ).toBe(true);
   });
 
   it("does not treat other Zep failures as absence", () => {
-    expect(isGraphNotFound(new ZepError({ message: "rate limited", statusCode: 429 }))).toBe(false);
-    expect(isGraphNotFound(new ZepError({ message: "server error", statusCode: 500 }))).toBe(false);
+    expect(
+      isGraphNotFound(
+        new ZepError({ message: "rate limited", statusCode: 429 })
+      )
+    ).toBe(false);
+    expect(
+      isGraphNotFound(
+        new ZepError({ message: "server error", statusCode: 500 })
+      )
+    ).toBe(false);
     expect(isGraphNotFound(new Error("socket hang up"))).toBe(false);
     expect(isGraphNotFound("not an error")).toBe(false);
   });
 
   it("trusts a plain Error only when it names the condition", () => {
-    expect(isGraphNotFound(new Error("Status code: 404. Body: not found"))).toBe(true);
+    expect(
+      isGraphNotFound(new Error("Status code: 404. Body: not found"))
+    ).toBe(true);
     expect(isGraphNotFound(new Error("404"))).toBe(false);
   });
 });
@@ -50,6 +65,8 @@ describe("ZepMemory.search on a graph nobody has written to", () => {
         throw new ZepError({ message: "server error", statusCode: 500 });
       },
     });
-    await expect(memory.search("org", "anything")).rejects.toThrow(/server error/);
+    await expect(memory.search("org", "anything")).rejects.toThrow(
+      /server error/
+    );
   });
 });

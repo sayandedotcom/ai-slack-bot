@@ -63,7 +63,7 @@ describe("files.publish", () => {
         bytes: new Uint8Array([1]),
         contentType: "text/plain",
         filename: "a.txt",
-      }),
+      })
     ).rejects.toMatchObject({ code: "shadow_write_denied" });
     expect(files.publish).not.toHaveBeenCalled();
   });
@@ -71,7 +71,11 @@ describe("files.publish", () => {
   it("keeps the binary out of the audit record", async () => {
     const scope = await liveChatScope();
     const events: import("../src/capabilities/audit").CapabilityEvent[] = [];
-    const ctx = testBindingContext({ scope, deps: { files: publisher() }, events });
+    const ctx = testBindingContext({
+      scope,
+      deps: { files: publisher() },
+      events,
+    });
     await makeFilesTools(ctx).publish.run({
       bytes: new Uint8Array(4096),
       contentType: "image/png",

@@ -18,7 +18,9 @@ import { testBindingContext } from "./helpers/capabilities";
 describe("supabase", () => {
   it("passes structured filters through, never free text", () => {
     // A `query` string would be an injection surface into prod data.
-    const rendered = JSON.stringify(makeSupabaseTools(testBindingContext()).select.input);
+    const rendered = JSON.stringify(
+      makeSupabaseTools(testBindingContext()).select.input
+    );
     expect(rendered).not.toMatch(/"sql"|"rawQuery"|"where"/);
   });
 
@@ -28,7 +30,9 @@ describe("supabase", () => {
       select: vi.fn(async () => [{ id: 1 }]),
     } as unknown as SupabaseReader;
     const tools = makeSupabaseTools(testBindingContext({ deps: { supabase } }));
-    await expect(tools.select.run({ resource: "users", limit: 5 })).resolves.toEqual([{ id: 1 }]);
+    await expect(
+      tools.select.run({ resource: "users", limit: 5 })
+    ).resolves.toEqual([{ id: 1 }]);
   });
 
   it("refuses an unknown filter operator before querying", async () => {
@@ -41,7 +45,7 @@ describe("supabase", () => {
       tools.select.run({
         resource: "users",
         filters: [{ column: "id", op: "DROP", value: 1 }],
-      }),
+      })
     ).rejects.toMatchObject({ code: "invalid_input" });
     expect(supabase.select).not.toHaveBeenCalled();
   });
@@ -63,7 +67,9 @@ describe("langsmith", () => {
       trace: vi.fn(async () => ({ traceId: "t1", root: null, nodes: [] })),
       searchTraces: vi.fn(async () => []),
     } as unknown as LangSmithReader;
-    const tools = makeLangSmithTools(testBindingContext({ deps: { langsmith } }));
+    const tools = makeLangSmithTools(
+      testBindingContext({ deps: { langsmith } })
+    );
     await tools.trace.run({ traceId: "t1" });
     expect(langsmith.trace).toHaveBeenCalledWith("t1");
   });
@@ -81,16 +87,25 @@ describe("langsmith", () => {
 describe("betterstack", () => {
   it("reads logs through the reader", async () => {
     const betterstack = {
-      logs: vi.fn(async () => [{ at: "2026-08-24T00:00:00Z", level: "error", message: "boom" }]),
+      logs: vi.fn(async () => [
+        { at: "2026-08-24T00:00:00Z", level: "error", message: "boom" },
+      ]),
       monitors: vi.fn(async () => []),
     } as unknown as BetterStackReader;
-    const tools = makeBetterStackTools(testBindingContext({ deps: { betterstack } }));
-    const out = (await tools.logs.run({ query: "boom", since: "1h" })) as unknown[];
+    const tools = makeBetterStackTools(
+      testBindingContext({ deps: { betterstack } })
+    );
+    const out = (await tools.logs.run({
+      query: "boom",
+      since: "1h",
+    })) as unknown[];
     expect(out).toHaveLength(1);
   });
 
   it("takes no source id argument — the sources are pinned", () => {
-    const rendered = JSON.stringify(makeBetterStackTools(testBindingContext()).logs.input);
+    const rendered = JSON.stringify(
+      makeBetterStackTools(testBindingContext()).logs.input
+    );
     expect(rendered).not.toMatch(/sourceId|source_ids/i);
   });
 });

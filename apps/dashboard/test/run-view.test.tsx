@@ -14,7 +14,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { RunView, type RunViewProps } from "../src/runs/run-view";
-import { agentBasePath, makeSteerSender, type ChatMessage } from "../src/runs/use-run-agent";
+import {
+  agentBasePath,
+  makeSteerSender,
+  type ChatMessage,
+} from "../src/runs/use-run-agent";
 
 function view(over: Partial<RunViewProps> = {}): string {
   const props: RunViewProps = {
@@ -100,7 +104,9 @@ describe("the four states", () => {
 describe("the status pill", () => {
   it("says what the run is doing, in the operator's words", () => {
     expect(view({ status: "live" })).toContain("Working");
-    expect(view({ status: "awaiting_approval" })).toContain("Waiting on a human");
+    expect(view({ status: "awaiting_approval" })).toContain(
+      "Waiting on a human"
+    );
     expect(view({ status: "failed" })).toContain("Failed");
     expect(view({ status: "done" })).toContain("Closed");
   });
@@ -184,11 +190,16 @@ describe("sending a steer", () => {
   });
 
   it("steers twice for two different things typed quickly", async () => {
-    const send = vi.fn<(text: string, requestId: string) => Promise<unknown>>(async () => undefined);
+    const send = vi.fn<(text: string, requestId: string) => Promise<unknown>>(
+      async () => undefined
+    );
     let n = 0;
     const steer = makeSteerSender(send, () => `req-${++n}`);
 
-    await Promise.all([steer.submit("look again"), steer.submit("and check the deploy")]);
+    await Promise.all([
+      steer.submit("look again"),
+      steer.submit("and check the deploy"),
+    ]);
 
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls.map((call) => call[1])).toEqual(["req-1", "req-2"]);
@@ -203,7 +214,10 @@ describe("sending a steer", () => {
   it("trims before it dedupes, so spacing is not a second steer", async () => {
     const send = vi.fn(async () => undefined);
     const steer = makeSteerSender(send, () => "req-1");
-    await Promise.all([steer.submit("look again"), steer.submit("  look again  ")]);
+    await Promise.all([
+      steer.submit("look again"),
+      steer.submit("  look again  "),
+    ]);
     expect(send).toHaveBeenCalledTimes(1);
   });
 
@@ -231,11 +245,13 @@ describe("where the socket connects", () => {
     // `${host}/${basePath}`. Under `/api` so it inherits the dashboard's own
     // Access application.
     expect(agentBasePath("11111111-2222-3333-4444-555555555555")).toBe(
-      "api/runs/11111111-2222-3333-4444-555555555555/agent",
+      "api/runs/11111111-2222-3333-4444-555555555555/agent"
     );
   });
 
   it("escapes anything that is not a plain id", () => {
-    expect(agentBasePath("chat:abc/../..")).toBe("api/runs/chat%3Aabc%2F..%2F../agent");
+    expect(agentBasePath("chat:abc/../..")).toBe(
+      "api/runs/chat%3Aabc%2F..%2F../agent"
+    );
   });
 });

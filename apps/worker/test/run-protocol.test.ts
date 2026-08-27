@@ -16,11 +16,7 @@ import {
   type RunEvent,
   type RunStatus,
 } from "../src/run/protocol";
-import {
-  canonicalThreadTs,
-  chatRunKey,
-  slackRunKey,
-} from "../src/run/keys";
+import { canonicalThreadTs, chatRunKey, slackRunKey } from "../src/run/keys";
 
 describe("run statuses", () => {
   it("is exactly the five documented statuses, in order", () => {
@@ -90,9 +86,15 @@ describe("status transitions", () => {
     expect(result.ok).toBe(false);
   });
 
-  it.each(RUN_STATUSES)("treats %s -> itself as idempotent and eventless", (status) => {
-    expect(evaluateTransition(status, status)).toEqual({ ok: true, changed: false });
-  });
+  it.each(RUN_STATUSES)(
+    "treats %s -> itself as idempotent and eventless",
+    (status) => {
+      expect(evaluateTransition(status, status)).toEqual({
+        ok: true,
+        changed: false,
+      });
+    }
+  );
 
   it("rejects an unknown target without throwing", () => {
     const result = evaluateTransition("live", "archived" as RunStatus);
@@ -103,39 +105,44 @@ describe("status transitions", () => {
 describe("slack run keys", () => {
   it("builds the documented shape", () => {
     expect(slackRunKey("C123", "1720000000.123456")).toBe(
-      "slack:C123:1720000000.123456",
+      "slack:C123:1720000000.123456"
     );
   });
 
   it("canonicalises a root message to its own ts", () => {
     // A root message has thread_ts = null; its ts IS the thread.
-    expect(canonicalThreadTs("1720000000.123456", null)).toBe("1720000000.123456");
+    expect(canonicalThreadTs("1720000000.123456", null)).toBe(
+      "1720000000.123456"
+    );
   });
 
   it("canonicalises a reply to the root thread_ts", () => {
     expect(canonicalThreadTs("1720000009.999999", "1720000000.123456")).toBe(
-      "1720000000.123456",
+      "1720000000.123456"
     );
   });
 
   it("gives a root message and its reply the same key", () => {
-    const root = slackRunKey("C123", canonicalThreadTs("1720000000.123456", null));
+    const root = slackRunKey(
+      "C123",
+      canonicalThreadTs("1720000000.123456", null)
+    );
     const reply = slackRunKey(
       "C123",
-      canonicalThreadTs("1720000009.999999", "1720000000.123456"),
+      canonicalThreadTs("1720000009.999999", "1720000000.123456")
     );
     expect(reply).toBe(root);
   });
 
   it("does not collide across threads in one channel", () => {
     expect(slackRunKey("C123", "1720000000.123456")).not.toBe(
-      slackRunKey("C123", "1720000001.123456"),
+      slackRunKey("C123", "1720000001.123456")
     );
   });
 
   it("does not collide across channels on one thread ts", () => {
     expect(slackRunKey("C123", "1720000000.123456")).not.toBe(
-      slackRunKey("C999", "1720000000.123456"),
+      slackRunKey("C999", "1720000000.123456")
     );
   });
 
@@ -163,15 +170,20 @@ describe("chat run keys", () => {
 
   it("cannot collide with a slack key", () => {
     expect(chatRunKey(uuid).startsWith("chat:")).toBe(true);
-    expect(slackRunKey("C123", "1720000000.123456").startsWith("slack:")).toBe(true);
+    expect(slackRunKey("C123", "1720000000.123456").startsWith("slack:")).toBe(
+      true
+    );
   });
 
-  it.each(["", "not-a-uuid", "3f2504e0-4f89-11d3-9a0c", `chat:${uuid}`, "3f2504e04f8911d39a0c0305e82c3301"])(
-    "rejects %j",
-    (bad) => {
-      expect(() => chatRunKey(bad)).toThrow();
-    },
-  );
+  it.each([
+    "",
+    "not-a-uuid",
+    "3f2504e0-4f89-11d3-9a0c",
+    `chat:${uuid}`,
+    "3f2504e04f8911d39a0c0305e82c3301",
+  ])("rejects %j", (bad) => {
+    expect(() => chatRunKey(bad)).toThrow();
+  });
 });
 
 // The `runStubForKey` cases lived here. It was the codebase's only
@@ -187,15 +199,27 @@ describe("client message parser", () => {
   }
 
   it("accepts a well-formed steer", () => {
-    const result = steer({ type: "steer", requestId: "r-1", content: "try the other branch" });
+    const result = steer({
+      type: "steer",
+      requestId: "r-1",
+      content: "try the other branch",
+    });
     expect(result).toEqual({
       ok: true,
-      message: { type: "steer", requestId: "r-1", content: "try the other branch" },
+      message: {
+        type: "steer",
+        requestId: "r-1",
+        content: "try the other branch",
+      },
     });
   });
 
   it("trims surrounding whitespace but keeps the body", () => {
-    const result = steer({ type: "steer", requestId: "r-1", content: "  hello  " });
+    const result = steer({
+      type: "steer",
+      requestId: "r-1",
+      content: "  hello  ",
+    });
     expect(result.ok && result.message.content).toBe("hello");
   });
 
@@ -248,18 +272,37 @@ describe("client message parser", () => {
   it("refuses a client-supplied role", () => {
     // The server assigns role/source. A browser must not be able to claim it is
     // the customer or an approval decision.
-    const result = steer({ type: "steer", requestId: "r-1", content: "x", role: "assistant" });
+    const result = steer({
+      type: "steer",
+      requestId: "r-1",
+      content: "x",
+      role: "assistant",
+    });
     expect(result.ok).toBe(false);
   });
 
   it("refuses a client-supplied source", () => {
-    const result = steer({ type: "steer", requestId: "r-1", content: "x", source: "approval" });
+    const result = steer({
+      type: "steer",
+      requestId: "r-1",
+      content: "x",
+      source: "approval",
+    });
     expect(result.ok).toBe(false);
   });
 
   it("refuses a client-supplied id or seq", () => {
-    expect(steer({ type: "steer", requestId: "r-1", content: "x", id: "triage:evil" }).ok).toBe(false);
-    expect(steer({ type: "steer", requestId: "r-1", content: "x", seq: 99 }).ok).toBe(false);
+    expect(
+      steer({
+        type: "steer",
+        requestId: "r-1",
+        content: "x",
+        id: "triage:evil",
+      }).ok
+    ).toBe(false);
+    expect(
+      steer({ type: "steer", requestId: "r-1", content: "x", seq: 99 }).ok
+    ).toBe(false);
   });
 
   it("returns a stable machine-readable code on every rejection", () => {
@@ -327,9 +370,16 @@ describe("assistant updates", () => {
     };
     // The shape is closed. Anything a provider chunk carries has nowhere to go.
     expect(Object.keys(update).sort()).toEqual(
-      ["attempt", "createdAt", "delta", "generationId", "id", "state"].sort(),
+      ["attempt", "createdAt", "delta", "generationId", "id", "state"].sort()
     );
-    for (const banned of ["reasoning", "thinking", "signature", "raw", "metadata", "providerBody"]) {
+    for (const banned of [
+      "reasoning",
+      "thinking",
+      "signature",
+      "raw",
+      "metadata",
+      "providerBody",
+    ]) {
       expect(banned in update).toBe(false);
     }
   });
@@ -338,7 +388,13 @@ describe("assistant updates", () => {
     // Structural: an assistant update IS a RunEvent, so reconnect replays it
     // through the existing `since` cursor rather than a second protocol.
     const events: RunEvent[] = [
-      { seq: 1, type: "status", previousStatus: "idle", status: "live", createdAt: 1 },
+      {
+        seq: 1,
+        type: "status",
+        previousStatus: "idle",
+        status: "live",
+        createdAt: 1,
+      },
       {
         seq: 2,
         type: "assistant_update",
@@ -359,16 +415,32 @@ describe("assistant updates", () => {
     // server-owned event by naming it.
     expect(
       parseClientMessage(
-        JSON.stringify({ type: "assistant_update", requestId: "r-1", content: "hi" }),
-      ),
+        JSON.stringify({
+          type: "assistant_update",
+          requestId: "r-1",
+          content: "hi",
+        })
+      )
     ).toMatchObject({ ok: false, code: "unknown_type" });
 
     // Nor by smuggling the server-owned identity fields onto a legal steer.
-    for (const field of ["id", "seq", "createdAt", "metadata", "role", "source"]) {
+    for (const field of [
+      "id",
+      "seq",
+      "createdAt",
+      "metadata",
+      "role",
+      "source",
+    ]) {
       expect(
         parseClientMessage(
-          JSON.stringify({ type: "steer", requestId: "r-1", content: "hi", [field]: "x" }),
-        ),
+          JSON.stringify({
+            type: "steer",
+            requestId: "r-1",
+            content: "hi",
+            [field]: "x",
+          })
+        )
       ).toMatchObject({ ok: false, code: "server_owned_field" });
     }
   });

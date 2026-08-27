@@ -7,7 +7,12 @@
 
 import { ApiError, getJson } from "../lib/api";
 
-export type RunStatus = "live" | "awaiting_approval" | "idle" | "done" | "failed";
+export type RunStatus =
+  | "live"
+  | "awaiting_approval"
+  | "idle"
+  | "done"
+  | "failed";
 
 /**
  * A row in the runs list. The worker's `listRuns` joins the channel and
@@ -50,7 +55,10 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   try {
     response = await fetch(path, {
       method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
       credentials: "same-origin",
       body: JSON.stringify(body),
     });
@@ -62,7 +70,11 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   // Creating a turn answers 201, so the gate is `ok`, not an equality on 200.
   if (!response.ok) {
     const kind =
-      response.status === 401 ? "unauthorized" : response.status === 403 ? "forbidden" : "unavailable";
+      response.status === 401
+        ? "unauthorized"
+        : response.status === 403
+          ? "forbidden"
+          : "unavailable";
     throw new ApiError(response.status, kind, path);
   }
 
@@ -74,7 +86,9 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function fetchRuns(limit = 50): Promise<RunSummary[]> {
-  const body = await getJson<{ runs: RunSummary[] }>(`/api/runs?limit=${limit}`);
+  const body = await getJson<{ runs: RunSummary[] }>(
+    `/api/runs?limit=${limit}`
+  );
   return body.runs;
 }
 
@@ -83,6 +97,8 @@ export async function fetchRuns(limit = 50): Promise<RunSummary[]> {
  * untouched — `Number()` here would silently round money.
  */
 export async function fetchRunUsageTotal(id: string): Promise<string> {
-  const body = await getJson<{ totalCostUsd: string }>(`/api/runs/${encodeURIComponent(id)}/usage`);
+  const body = await getJson<{ totalCostUsd: string }>(
+    `/api/runs/${encodeURIComponent(id)}/usage`
+  );
   return body.totalCostUsd;
 }

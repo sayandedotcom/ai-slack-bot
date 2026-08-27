@@ -46,7 +46,20 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const CHECKED_EXTENSIONS = new Set([
-  "ts", "tsx", "js", "mjs", "cjs", "json", "jsonc", "md", "sql", "yml", "yaml", "css", "html", "sh",
+  "ts",
+  "tsx",
+  "js",
+  "mjs",
+  "cjs",
+  "json",
+  "jsonc",
+  "md",
+  "sql",
+  "yml",
+  "yaml",
+  "css",
+  "html",
+  "sh",
 ]);
 
 /**
@@ -100,7 +113,10 @@ for (const relativePath of trackedFiles()) {
     if (!isForbiddenByte(contents[offset])) continue;
     // Report the location, never the surrounding content: this runs over every
     // file in the repo and its output goes to CI logs.
-    const line = contents.subarray(0, offset).toString("utf8").split("\n").length;
+    const line = contents
+      .subarray(0, offset)
+      .toString("utf8")
+      .split("\n").length;
     const byte = `0x${contents[offset].toString(16).padStart(2, "0")}`;
     failures.push(`${relativePath}:${line}: control byte ${byte}`);
     break;
@@ -110,7 +126,7 @@ for (const relativePath of trackedFiles()) {
 if (failures.length > 0) {
   console.error(
     `Control bytes found in ${failures.length} source file(s). Git renders these as binary,\n` +
-      "which hides the whole file from code review. Use an escape sequence instead.\n",
+      "which hides the whole file from code review. Use an escape sequence instead.\n"
   );
   for (const failure of failures) console.error(`  ${failure}`);
   process.exit(1);

@@ -213,7 +213,7 @@ export type RecordDeps = {
   writeFile(path: string, content: string): Promise<unknown>;
   startProcess(
     command: string,
-    options?: { processId?: string; autoCleanup?: boolean; cwd?: string },
+    options?: { processId?: string; autoCleanup?: boolean; cwd?: string }
   ): Promise<{ id: string }>;
   getProcess(id: string): Promise<RecordProcessSnapshot | null>;
   getProcessLogs(id: string): Promise<{ stdout: string; stderr: string }>;
@@ -225,7 +225,9 @@ export type RecordDeps = {
    * before a byte moves and the whole video be published in ONE `put` over a
    * `FixedLengthStream`. Never buffered on this side either way.
    */
-  readBinary(path: string): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
+  readBinary(
+    path: string
+  ): Promise<{ content: ReadableStream<Uint8Array>; size: number }>;
   bucket: R2Bucket;
   /** `PROOFS_BASE_URL` — this Worker's own origin plus `/proofs`. */
   proofsBaseUrl: string;
@@ -333,7 +335,9 @@ function parseResult(stdout: string): HarnessResult | null {
     const line = lines[i]!;
     if (!line.startsWith(RESULT_PREFIX)) continue;
     try {
-      const parsed = JSON.parse(line.slice(RESULT_PREFIX.length)) as Partial<HarnessResult>;
+      const parsed = JSON.parse(
+        line.slice(RESULT_PREFIX.length)
+      ) as Partial<HarnessResult>;
       if (
         parsed.state !== "passed" &&
         parsed.state !== "failed" &&
@@ -344,12 +348,18 @@ function parseResult(stdout: string): HarnessResult | null {
       return {
         state: parsed.state,
         error: typeof parsed.error === "string" ? parsed.error : null,
-        video: typeof parsed.video === "string" && parsed.video.length > 0 ? parsed.video : null,
+        video:
+          typeof parsed.video === "string" && parsed.video.length > 0
+            ? parsed.video
+            : null,
         bytes:
-          typeof parsed.bytes === "number" && Number.isInteger(parsed.bytes) && parsed.bytes >= 0
+          typeof parsed.bytes === "number" &&
+          Number.isInteger(parsed.bytes) &&
+          parsed.bytes >= 0
             ? parsed.bytes
             : null,
-        durationMs: typeof parsed.durationMs === "number" ? parsed.durationMs : 0,
+        durationMs:
+          typeof parsed.durationMs === "number" ? parsed.durationMs : 0,
       };
     } catch {
       // A truncated or interleaved line is not the result; keep looking back.
@@ -369,7 +379,8 @@ function parseResult(stdout: string): HarnessResult | null {
  * of the recording, and never absurd.
  */
 function startedAtMs(startTime: Date | string, now: () => number): number {
-  const parsed = startTime instanceof Date ? startTime.getTime() : Date.parse(startTime);
+  const parsed =
+    startTime instanceof Date ? startTime.getTime() : Date.parse(startTime);
   return Number.isNaN(parsed) ? now() : parsed;
 }
 
@@ -382,13 +393,17 @@ function startedAtMs(startTime: Date | string, now: () => number): number {
  */
 export async function startRecording(
   deps: RecordDeps,
-  input: { script: string; label: string; timeoutMs?: number },
+  input: { script: string; label: string; timeoutMs?: number }
 ): Promise<{ recordingId: string }> {
   const timeoutMs = input.timeoutMs ?? DEFAULT_RECORDING_TIMEOUT_MS;
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_RECORDING_TIMEOUT_MS) {
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > MAX_RECORDING_TIMEOUT_MS
+  ) {
     throw new CapabilityError(
       "invalid_input",
-      `timeoutMs must be a whole number of milliseconds between 1 and ${MAX_RECORDING_TIMEOUT_MS}, and nothing was recorded. A proof is a short journey through the fix, not a soak test — record the one interaction that demonstrates it.`,
+      `timeoutMs must be a whole number of milliseconds between 1 and ${MAX_RECORDING_TIMEOUT_MS}, and nothing was recorded. A proof is a short journey through the fix, not a soak test — record the one interaction that demonstrates it.`
     );
   }
 
@@ -422,7 +437,7 @@ export async function startRecording(
       // WITHOUT THIS the SDK drops the process record on exit, so a finished
       // recording reads as "never started" and its RESULT line is unreachable.
       autoCleanup: false,
-    },
+    }
   );
 
   return { recordingId };
@@ -437,7 +452,7 @@ export async function startRecording(
  */
 export async function checkRecording(
   deps: RecordDeps,
-  recordingId: string,
+  recordingId: string
 ): Promise<RecordingStatus> {
   const now = deps.now ?? Date.now;
   const redact = makeRedactor(deps.devEnv);
@@ -470,7 +485,10 @@ export async function checkRecording(
       state: "running",
       url: null,
       error: null,
-      stdoutTail: clampTail(redact(scriptOutput(logs.stdout)), RECORDING_TAIL_CHARS),
+      stdoutTail: clampTail(
+        redact(scriptOutput(logs.stdout)),
+        RECORDING_TAIL_CHARS
+      ),
       durationMs: elapsedMs,
     };
   }
@@ -490,7 +508,10 @@ export async function checkRecording(
     result = parseResult(logs.stdout);
   }
 
-  const stdoutTail = clampTail(redact(scriptOutput(logs.stdout)), RECORDING_TAIL_CHARS);
+  const stdoutTail = clampTail(
+    redact(scriptOutput(logs.stdout)),
+    RECORDING_TAIL_CHARS
+  );
 
   if (result === null) {
     // The harness died before it could report. Its stderr is the only thing
@@ -517,13 +538,17 @@ export async function checkRecording(
   // is the canonical wording and it is substituted whenever the harness's own
   // message does not already carry the token — an older image is a real
   // possibility, and the promise in the .d.ts must hold against one.
-  const state: RecordingStatus["state"] = result.state === "passed" ? "passed" : "failed";
+  const state: RecordingStatus["state"] =
+    result.state === "passed" ? "passed" : "failed";
   const harnessError =
     result.state === "browser-unavailable" &&
     !(result.error ?? "").includes(BROWSER_UNAVAILABLE_TOKEN)
       ? BROWSER_UNAVAILABLE_MESSAGE
       : result.error;
-  const published = result.video === null ? null : await publish(deps, recordingId, result.video);
+  const published =
+    result.video === null
+      ? null
+      : await publish(deps, recordingId, result.video);
 
   // BOUNDED PER PART, NOT ACROSS THE JOIN. The harness's error can be 2000
   // characters on its own, and a single `slice` over the joined string would
@@ -538,9 +563,14 @@ export async function checkRecording(
   // `harnessError` is redacted before it is bounded, for the reason stated
   // above `stdoutTail`; `published.problem` arrives already redacted.
   const reasons = [
-    harnessError === null ? null : clampHead(redact(harnessError), RECORDING_ERROR_CHARS),
+    harnessError === null
+      ? null
+      : clampHead(redact(harnessError), RECORDING_ERROR_CHARS),
     published?.problem ?? null,
-  ].filter((reason): reason is string => typeof reason === "string" && reason.trim().length > 0);
+  ].filter(
+    (reason): reason is string =>
+      typeof reason === "string" && reason.trim().length > 0
+  );
 
   return {
     state,
@@ -596,7 +626,7 @@ export async function checkRecording(
 async function publish(
   deps: RecordDeps,
   recordingId: string,
-  videoPath: string,
+  videoPath: string
 ): Promise<{ url: string | null; problem: string | null }> {
   const key = await proofKeyFor(recordingId);
   const url = `${deps.proofsBaseUrl}/${key.slice(PROOF_KEY_PREFIX.length)}`;
@@ -621,18 +651,21 @@ async function publish(
     const { content, size } = await deps.readBinary(videoPath);
 
     /** Refuse readably, letting go of the stream we are not going to send. */
-    const refuse = async (problem: string): Promise<{ url: null; problem: string }> => {
+    const refuse = async (
+      problem: string
+    ): Promise<{ url: null; problem: string }> => {
       await content.cancel().catch(() => {});
       return { url: null, problem };
     };
 
     // BEFORE A BYTE IS READ. The container told us how big the file is, so a
     // 50MB refusal costs one metadata round trip instead of 50MB of transfer.
-    if (size > MAX_RECORDING_BYTES) return await refuse(overCeilingProblem(size));
+    if (size > MAX_RECORDING_BYTES)
+      return await refuse(overCeilingProblem(size));
 
     if (size === 0) {
       return await refuse(
-        "the recording harness reported a video file that turned out to be empty, so there is nothing to share. The browser most likely closed before the page painted; record the interaction again.",
+        "the recording harness reported a video file that turned out to be empty, so there is nothing to share. The browser most likely closed before the page painted; record the interaction again."
       );
     }
 
@@ -641,15 +674,19 @@ async function publish(
     // `FixedLengthStream` gives `put` the known length it demands while the
     // stream stays a stream. `test/api-proofs.test.ts` uses the same pattern to
     // write an over-ceiling fixture without holding 50MB.
-    await deps.bucket.put(key, content.pipeThrough(new FixedLengthStream(size)), {
-      httpMetadata: {
-        contentType: "video/mp4",
-        // Stored for completeness; the route re-derives both of these rather
-        // than echoing metadata back to a browser.
-        contentDisposition: `inline; filename="${label}.mp4"`,
-      },
-      customMetadata: { label, recordedAt: new Date().toISOString() },
-    });
+    await deps.bucket.put(
+      key,
+      content.pipeThrough(new FixedLengthStream(size)),
+      {
+        httpMetadata: {
+          contentType: "video/mp4",
+          // Stored for completeness; the route re-derives both of these rather
+          // than echoing metadata back to a browser.
+          contentDisposition: `inline; filename="${label}.mp4"`,
+        },
+        customMetadata: { label, recordedAt: new Date().toISOString() },
+      }
+    );
   } catch (error) {
     // A `put` that threw commits nothing, but a delete is one call and the
     // alternative is a half-written proof the route might later serve.
@@ -658,7 +695,8 @@ async function publish(
     // `readBinary`. A transient failure reading the bucket must never delete a
     // recording an earlier poll successfully published.
     if (wrote) await deps.bucket.delete(key).catch(() => {});
-    const message = error instanceof Error ? error.message : "unknown upload failure";
+    const message =
+      error instanceof Error ? error.message : "unknown upload failure";
     return {
       url: null,
       // REDACTED, THEN BOUNDED — same order as `stdoutTail` and the harness

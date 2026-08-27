@@ -49,7 +49,8 @@ export function SpeakerStrip({ state }: { state: PanelState<Roster> }) {
                 </span>
                 <span className="font-medium">{nameOf(speaker.email)}</span>
                 <span className="text-muted-foreground">speaks by default</span>
-                {githubSpeaker !== null && githubSpeaker.email !== speaker.email ? (
+                {githubSpeaker !== null &&
+                githubSpeaker.email !== speaker.email ? (
                   <span className="text-muted-foreground">
                     · PRs as {nameOf(githubSpeaker.email)}
                   </span>
@@ -62,10 +63,17 @@ export function SpeakerStrip({ state }: { state: PanelState<Roster> }) {
                 {others.map((email, i) => {
                   const slack = connected.get(email)?.slack ?? false;
                   return (
-                    <span key={email} title={slack ? "connected Slack" : "not connected"}>
+                    <span
+                      key={email}
+                      title={slack ? "connected Slack" : "not connected"}
+                    >
                       {i > 0 ? <span className="mr-2">·</span> : null}
-                      <span className={slack ? "text-foreground" : undefined}>{nameOf(email)}</span>
-                      {slack ? null : <span className="ml-1 text-xs">(not connected)</span>}
+                      <span className={slack ? "text-foreground" : undefined}>
+                        {nameOf(email)}
+                      </span>
+                      {slack ? null : (
+                        <span className="ml-1 text-xs">(not connected)</span>
+                      )}
                     </span>
                   );
                 })}

@@ -104,7 +104,9 @@ const diffResult = z.strictObject({
  */
 const noArgs = z.strictObject({}).default({});
 
-export function makeSandboxTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeSandboxTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   // Execution-scoped on purpose — `makeSandboxTools` runs once per `run_code`
   // execution (fresh registry per execution, Phase 10 Task 1), so this grants
   // ONE ~14s provisioning wait per code block, however many times the block
@@ -288,7 +290,7 @@ function assertTimeoutInBudget(timeoutMs: number): void {
   if (timeoutMs <= EXEC_TIMEOUT_CEILING_MS) return;
   throw new CapabilityError(
     "invalid_input",
-    `timeoutMs ${timeoutMs} is above the ${EXEC_TIMEOUT_CEILING_MS}ms ceiling and the command was NOT run. One execution has 20 seconds in total, so a longer exec could not return whatever it found. Use sandbox.spawn and poll it with sandbox.checkProcess instead.`,
+    `timeoutMs ${timeoutMs} is above the ${EXEC_TIMEOUT_CEILING_MS}ms ceiling and the command was NOT run. One execution has 20 seconds in total, so a longer exec could not return whatever it found. Use sandbox.spawn and poll it with sandbox.checkProcess instead.`
   );
 }
 
@@ -301,13 +303,13 @@ function assertUsablePort(port: number): void {
   if (port === CONTROL_PORT) {
     throw new CapabilityError(
       "invalid_input",
-      "port 3000 is the container's own control server: a check against it succeeds whether or not your process is running, so it reports a server that never started. Bind somewhere at 4100 or above — this repo's own apps already claim 3000-3010.",
+      "port 3000 is the container's own control server: a check against it succeeds whether or not your process is running, so it reports a server that never started. Bind somewhere at 4100 or above — this repo's own apps already claim 3000-3010."
     );
   }
   if (!Number.isInteger(port) || port < MIN_PORT || port > MAX_PORT) {
     throw new CapabilityError(
       "invalid_input",
-      `port ${port} is out of range: it must be a whole number in ${MIN_PORT}-${MAX_PORT}, and 4100 or above is the range to use here.`,
+      `port ${port} is out of range: it must be a whole number in ${MIN_PORT}-${MAX_PORT}, and 4100 or above is the range to use here.`
     );
   }
 }
@@ -319,7 +321,10 @@ function assertUsablePort(port: number): void {
  * gap: output that merely stops looks like output that ended, and a build log
  * that "ended" without an error reads as a build that passed.
  */
-function clampHead(text: string, cap: number): { text: string; truncated: boolean } {
+function clampHead(
+  text: string,
+  cap: number
+): { text: string; truncated: boolean } {
   if (text.length <= cap) return { text, truncated: false };
   return {
     truncated: true,

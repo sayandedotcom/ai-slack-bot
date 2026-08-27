@@ -28,7 +28,12 @@ function sandbox(overrides: Partial<SandboxGateway> = {}): SandboxGateway {
     readFile: vi.fn(async () => ({ content: "x" })),
     writeFile: vi.fn(async () => ({ bytesWritten: 1 })),
     preview: vi.fn(async () => ({ url: "https://preview.test" })),
-    diff: vi.fn(async () => ({ diffRef: "d1", files: 1, insertions: 1, deletions: 0 })),
+    diff: vi.fn(async () => ({
+      diffRef: "d1",
+      files: 1,
+      insertions: 1,
+      deletions: 0,
+    })),
     readBinary: vi.fn(),
     record: vi.fn(async () => ({ recordingId: "r1" })),
     checkRecording: vi.fn(async () => ({
@@ -46,7 +51,9 @@ describe("sandbox", () => {
   it("addresses this run's machine — no method takes a container or run id", () => {
     const tools = makeSandboxTools(testBindingContext());
     for (const [method, tool] of Object.entries(tools)) {
-      expect(JSON.stringify(tool.input), method).not.toMatch(/containerId|sandboxId|"runId"/);
+      expect(JSON.stringify(tool.input), method).not.toMatch(
+        /containerId|sandboxId|"runId"/
+      );
     }
   });
 
@@ -59,8 +66,14 @@ describe("sandbox", () => {
 
   it("runs a command through the gateway", async () => {
     const gw = sandbox();
-    const tools = makeSandboxTools(testBindingContext({ deps: { sandbox: gw } }));
-    await tools.exec.run({ cmd: "pnpm test", timeoutMs: 1000, injectDevEnv: false });
+    const tools = makeSandboxTools(
+      testBindingContext({ deps: { sandbox: gw } })
+    );
+    await tools.exec.run({
+      cmd: "pnpm test",
+      timeoutMs: 1000,
+      injectDevEnv: false,
+    });
     expect(gw.exec).toHaveBeenCalled();
   });
 });
@@ -74,13 +87,17 @@ describe("browser", () => {
 
   it("returns a handle and polls, rather than blocking past the budget", async () => {
     const gw = sandbox();
-    const tools = makeBrowserTools(testBindingContext({ deps: { sandbox: gw } }));
+    const tools = makeBrowserTools(
+      testBindingContext({ deps: { sandbox: gw } })
+    );
     const started = (await tools.record.run({
       script: "await page.goto('/')",
       label: "repro",
     })) as { recordingId: string };
     expect(started.recordingId).toBe("r1");
-    const status = (await tools.checkRecording.run({ recordingId: "r1" })) as { url: string };
+    const status = (await tools.checkRecording.run({ recordingId: "r1" })) as {
+      url: string;
+    };
     expect(status.url).toBe("https://proofs.test/r1");
   });
 });
@@ -98,7 +115,10 @@ describe("approval", () => {
   it("opens an escalation and returns its id", async () => {
     const approval = port();
     const tools = makeApprovalTools(testBindingContext({ deps: { approval } }));
-    const out = await tools.escalate.run({ draft: "we are on it", why: "commits us" });
+    const out = await tools.escalate.run({
+      draft: "we are on it",
+      why: "commits us",
+    });
     expect(out).toMatchObject({ approvalId: "apr:1" });
   });
 
@@ -108,13 +128,17 @@ describe("approval", () => {
     const approval = port({ openApprovalId: vi.fn(() => "apr:1") });
     const tools = makeApprovalTools(testBindingContext({ deps: { approval } }));
     await expect(
-      tools.escalate.run({ draft: "d", why: "w" }),
+      tools.escalate.run({ draft: "d", why: "w" })
     ).rejects.toMatchObject({ code: "approval_already_open" });
   });
 
   it("refuses a withdraw when nothing is open", async () => {
-    const tools = makeApprovalTools(testBindingContext({ deps: { approval: port() } }));
-    await expect(tools.withdraw.run({})).rejects.toMatchObject({ code: "approval_not_open" });
+    const tools = makeApprovalTools(
+      testBindingContext({ deps: { approval: port() } })
+    );
+    await expect(tools.withdraw.run({})).rejects.toMatchObject({
+      code: "approval_not_open",
+    });
   });
 
   it("returns the human's real decision when the human won the race", async () => {
@@ -122,7 +146,10 @@ describe("approval", () => {
     // about cards the human had approved.
     const approval = port({
       openApprovalId: vi.fn(() => "apr:1"),
-      withdraw: vi.fn(async () => ({ withdrawn: false as const, decision: "approved" as const })),
+      withdraw: vi.fn(async () => ({
+        withdrawn: false as const,
+        decision: "approved" as const,
+      })),
     });
     const tools = makeApprovalTools(testBindingContext({ deps: { approval } }));
     await expect(tools.withdraw.run({})).resolves.toMatchObject({
@@ -133,6 +160,7 @@ describe("approval", () => {
 
   it("is control_write, so a shadow run may still escalate", () => {
     const tools = makeApprovalTools(testBindingContext());
-    for (const tool of Object.values(tools)) expect(tool.effect).toBe("control_write");
+    for (const tool of Object.values(tools))
+      expect(tool.effect).toBe("control_write");
   });
 });

@@ -14,7 +14,7 @@
 export async function waitFor<T>(
   what: string,
   read: () => Promise<T | null | undefined>,
-  options: { attempts?: number; intervalMs?: number } = {},
+  options: { attempts?: number; intervalMs?: number } = {}
 ): Promise<T> {
   const attempts = options.attempts ?? 80;
   const intervalMs = options.intervalMs ?? 25;

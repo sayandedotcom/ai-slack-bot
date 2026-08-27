@@ -57,12 +57,15 @@ function fail(code: string, message: string) {
  * `installIdentityApiPorts`, whatever route it is exercising.
  */
 async function requireFirefighter(
-  c: Context<{ Bindings: Env }>,
+  c: Context<{ Bindings: Env }>
 ): Promise<{ email: string } | Response> {
   const member = await requireTeamMember(c);
   if (member instanceof Response) return member;
   if (member.role !== "firefighter") {
-    return c.json(fail("not_a_firefighter", "connecting an account is fire-fighters only"), 403);
+    return c.json(
+      fail("not_a_firefighter", "connecting an account is fire-fighters only"),
+      403
+    );
   }
   return { email: member.email };
 }
@@ -82,8 +85,14 @@ function missingConfig(env: Env, names: readonly (keyof Env)[]): string | null {
   return null;
 }
 
-function unconfigured(c: Context<{ Bindings: Env }>, variable: string): Response {
-  return c.json(fail("not_configured", `missing configuration: ${variable}`), 503);
+function unconfigured(
+  c: Context<{ Bindings: Env }>,
+  variable: string
+): Response {
+  return c.json(
+    fail("not_configured", `missing configuration: ${variable}`),
+    503
+  );
 }
 
 /** Derived from the request, not from a config knob, so it is right per env. */
@@ -111,7 +120,7 @@ slackOAuth.get("/oauth/slack/start", async (c) => {
     await importStateKey(c.env.IDENTITY_KEY!),
     identity.email,
     "slack",
-    Date.now(),
+    Date.now()
   );
 
   const authorize = new URL(SLACK_AUTHORIZE_URL);
@@ -130,23 +139,34 @@ slackOAuth.get("/oauth/slack/start", async (c) => {
  * to spend a `code` first.
  */
 slackOAuth.get("/oauth/slack/callback", async (c) => {
-  const missing = missingConfig(c.env, ["IDENTITY_KEY", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET"]);
+  const missing = missingConfig(c.env, [
+    "IDENTITY_KEY",
+    "SLACK_CLIENT_ID",
+    "SLACK_CLIENT_SECRET",
+  ]);
   if (missing) return unconfigured(c, missing);
 
   const verified = await verifyState(
     await importStateKey(c.env.IDENTITY_KEY!),
     c.req.query("state") ?? "",
     "slack",
-    Date.now(),
+    Date.now()
   );
   if (!verified) {
     // One message for forged, expired, foreign-provider and absent alike --
     // same discipline as `open`'s single `tampered`.
-    return c.json(fail("invalid_state", "the connect link is invalid or has expired"), 403);
+    return c.json(
+      fail("invalid_state", "the connect link is invalid or has expired"),
+      403
+    );
   }
 
   const code = c.req.query("code") ?? "";
-  if (!code) return c.json(fail("invalid_state", "the connect link is invalid or has expired"), 403);
+  if (!code)
+    return c.json(
+      fail("invalid_state", "the connect link is invalid or has expired"),
+      403
+    );
 
   let payload: {
     ok?: boolean;
@@ -165,7 +185,10 @@ slackOAuth.get("/oauth/slack/callback", async (c) => {
     });
     payload = (await response.json()) as typeof payload;
   } catch {
-    return c.json(fail("slack_exchange_failed", "Slack could not complete the connection"), 502);
+    return c.json(
+      fail("slack_exchange_failed", "Slack could not complete the connection"),
+      502
+    );
   }
 
   const token = payload.authed_user?.access_token;
@@ -173,7 +196,10 @@ slackOAuth.get("/oauth/slack/callback", async (c) => {
   if (payload.ok !== true || !token || !externalId) {
     // Slack's own `error` string is dropped rather than forwarded: it quotes
     // back what we sent, which includes the code and can include the client id.
-    return c.json(fail("slack_exchange_failed", "Slack could not complete the connection"), 502);
+    return c.json(
+      fail("slack_exchange_failed", "Slack could not complete the connection"),
+      502
+    );
   }
 
   const now = Date.now();
@@ -185,10 +211,13 @@ slackOAuth.get("/oauth/slack/callback", async (c) => {
       provider: "slack",
       externalId,
       scopes: payload.authed_user?.scope ?? SLACK_USER_SCOPE,
-      tokenCiphertext: await seal(await importIdentityKey(c.env.IDENTITY_KEY!), token),
+      tokenCiphertext: await seal(
+        await importIdentityKey(c.env.IDENTITY_KEY!),
+        token
+      ),
       connectedAt: now,
     },
-    now,
+    now
   );
 
   return c.redirect("/", 302);

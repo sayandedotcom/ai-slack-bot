@@ -87,7 +87,7 @@ export const PRODUCTION_ALLOWLIST: SupabaseAllowlist = [
 
 export function findResource(
   allowlist: SupabaseAllowlist,
-  resource: string,
+  resource: string
 ): AllowedResource | null {
   return allowlist.find((entry) => entry.resource === resource) ?? null;
 }

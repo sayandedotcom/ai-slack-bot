@@ -4,7 +4,11 @@ import { CapabilityError } from "../../gateways/errors";
 import type { SlackMessage } from "../../gateways/ports";
 import type { ClassifiedTool } from "../define";
 import { runEffect } from "../effects";
-import { auditedCapability, effectDeps, type BindingContext } from "../registry";
+import {
+  auditedCapability,
+  effectDeps,
+  type BindingContext,
+} from "../registry";
 import { resolveCustomerScope } from "./customers";
 
 const message = z.strictObject({
@@ -48,7 +52,9 @@ function visible(messages: readonly SlackMessage[]): {
   }));
 }
 
-export function makeSlackTools(ctx: BindingContext): Record<string, ClassifiedTool> {
+export function makeSlackTools(
+  ctx: BindingContext
+): Record<string, ClassifiedTool> {
   return {
     thread: auditedCapability(ctx, "slack", "thread", {
       effect: "read",
@@ -56,7 +62,8 @@ export function makeSlackTools(ctx: BindingContext): Record<string, ClassifiedTo
         "Read the messages of the conversation this run belongs to, oldest first.",
       input: threadInput,
       output: z.array(message),
-      run: async (input) => visible(await ctx.deps.slack.thread(input.limit ?? 50)),
+      run: async (input) =>
+        visible(await ctx.deps.slack.thread(input.limit ?? 50)),
     }),
 
     searchMessages: auditedCapability(ctx, "slack", "searchMessages", {
@@ -79,7 +86,7 @@ export function makeSlackTools(ctx: BindingContext): Record<string, ClassifiedTo
         const found = await ctx.deps.slack.searchMessages(
           input.query,
           input.limit ?? 20,
-          resolveCustomerScope(ctx, input.customerRef),
+          resolveCustomerScope(ctx, input.customerRef)
         );
 
         // Provenance from what this read RETURNED, registered before the result
@@ -87,8 +94,11 @@ export function makeSlackTools(ctx: BindingContext): Record<string, ClassifiedTo
         // the messages, not the Chat prompt that went looking for them.
         ctx.execution.provenance.record(
           found
-            .filter((m): m is typeof m & { eventId: string } => typeof m.eventId === "string")
-            .map((m) => ({ kind: "slack_message" as const, ref: m.eventId })),
+            .filter(
+              (m): m is typeof m & { eventId: string } =>
+                typeof m.eventId === "string"
+            )
+            .map((m) => ({ kind: "slack_message" as const, ref: m.eventId }))
         );
 
         return visible(found);
@@ -141,7 +151,7 @@ export function makeSlackTools(ctx: BindingContext): Record<string, ClassifiedTo
           {
             execute: (idempotencyKey) =>
               ctx.deps.slack.reply(input.text, idempotencyKey),
-          },
+          }
         );
       },
     }),
@@ -174,14 +184,14 @@ async function assertMayReply(ctx: BindingContext): Promise<void> {
   if (ctx.scope.slackThread === null) {
     throw new CapabilityError(
       "slack_context_required",
-      "this run is not attached to a conversation, so there is nowhere to reply.",
+      "this run is not attached to a conversation, so there is nowhere to reply."
     );
   }
 
   if (ctx.scope.actor === null) {
     throw new CapabilityError(
       "identity_unavailable",
-      "no on-duty engineer is resolved, and this product never speaks to a customer without a human identity behind it.",
+      "no on-duty engineer is resolved, and this product never speaks to a customer without a human identity behind it."
     );
   }
 }

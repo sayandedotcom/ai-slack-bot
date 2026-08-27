@@ -13,7 +13,7 @@ const MAX_SEARCH = 100;
 function identityUnavailable(): CapabilityError {
   return new CapabilityError(
     "identity_unavailable",
-    "no on-duty engineer has a connected Slack account, so nothing was sent. Summarise the reply for a human to post.",
+    "no on-duty engineer has a connected Slack account, so nothing was sent. Summarise the reply for a human to post."
   );
 }
 
@@ -43,7 +43,7 @@ function identityUnavailable(): CapabilityError {
 export function makeSlackGateway(
   db: D1Database,
   scope: RunScope,
-  identity: UserTokenSource | null = null,
+  identity: UserTokenSource | null = null
 ): SlackGateway {
   const sender = identity === null ? null : makeUserTokenSender(identity);
 
@@ -52,21 +52,21 @@ export function makeSlackGateway(
       if (scope.slackThread === null) {
         throw new CapabilityError(
           "slack_context_required",
-          "this run is not attached to a conversation, so there is nothing to read.",
+          "this run is not attached to a conversation, so there is nothing to read."
         );
       }
       return readThread(
         db,
         scope.slackThread.channelId,
         scope.slackThread.threadTs,
-        Math.min(limit, MAX_THREAD),
+        Math.min(limit, MAX_THREAD)
       );
     },
 
     async searchMessages(
       query: string,
       limit: number,
-      customerSlug: string,
+      customerSlug: string
     ): Promise<SlackMessage[]> {
       // The caller resolved this. It is either the run's own pinned slug or one
       // the host read out of D1 for this execution — never a model string, and
@@ -74,7 +74,7 @@ export function makeSlackGateway(
       if (isWildcardOnly(query)) {
         throw new CapabilityError(
           "invalid_input",
-          "the search needs actual terms; a wildcard-only query would return everything.",
+          "the search needs actual terms; a wildcard-only query would return everything."
         );
       }
       return searchStoredMessages(db, {
@@ -105,14 +105,16 @@ export function makeSlackGateway(
      *    the vocabulary, and a retried send that already landed is a duplicate
      *    message to a customer, which is not recoverable.
      */
-    async reply(text: string): Promise<{ ts: string; permalink: string | null }> {
+    async reply(
+      text: string
+    ): Promise<{ ts: string; permalink: string | null }> {
       // Destination first, then identity — the same escalating order the
       // binding's write-policy matrix documents, so a direct caller and a
       // capability call report the same first unanswerable question.
       if (scope.slackThread === null) {
         throw new CapabilityError(
           "slack_context_required",
-          "this run is not attached to a conversation, so there is nowhere to reply.",
+          "this run is not attached to a conversation, so there is nowhere to reply."
         );
       }
       if (sender === null) throw identityUnavailable();
@@ -142,13 +144,13 @@ export function makeSlackGateway(
             // Slack's own snake_case code, already shape-validated by the
             // sender, so an upstream that echoed a credential cannot get one
             // into this message.
-            `Slack refused the send (${outcome.reason}), so nothing was posted.`,
+            `Slack refused the send (${outcome.reason}), so nothing was posted.`
           );
 
         case "in_doubt":
           throw new CapabilityError(
             "effect_in_doubt",
-            `${outcome.reason}. Do not retry it; report it and let a human check.`,
+            `${outcome.reason}. Do not retry it; report it and let a human check.`
           );
       }
     },
