@@ -245,6 +245,24 @@
       "linter": {
         "rules": { "suspicious": { "noConsole": "off" } }
       }
+    },
+    {
+      // THE ONE `!important` IN THE REPOSITORY, and it is load-bearing.
+      //
+      // apps/web/app/globals.css carries the prefers-reduced-motion reset,
+      // whose whole job is to beat utility classes and inline styles it cannot
+      // enumerate — `animate-ping` on the live-run dot among them. An
+      // accessibility preference the reader set at the OS level outranks any
+      // of them, so the declarations have to win the cascade outright.
+      //
+      // Scoped to the file and the rule rather than suppressed inline: four
+      // identical `biome-ignore` comments inside a four-line block is worse to
+      // read than the block itself, and this is never going to shrink, so it
+      // does not belong in the warn-level ratchet either.
+      "includes": ["apps/web/app/globals.css"],
+      "linter": {
+        "rules": { "complexity": { "noImportantStyles": "off" } }
+      }
     }
   ]
 }

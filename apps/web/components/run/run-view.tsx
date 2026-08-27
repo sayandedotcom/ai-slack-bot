@@ -1,14 +1,22 @@
 "use client";
 
-import { AlertTriangle, PlugZap, SendHorizontal, WifiOff } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
 import { Textarea } from "@workspace/ui/components/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
-
-import { Transcript, type TranscriptMessage } from "./transcript";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
+import { AlertTriangle, PlugZap, SendHorizontal, WifiOff } from "lucide-react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import type { ConnectionState } from "@/lib/hooks/use-run-agent";
+import { Transcript, type TranscriptMessage } from "./transcript";
 
 /**
  * One run, as the reader sees it.
@@ -83,9 +91,14 @@ export function RunView({
   const streamRef = useRef<HTMLDivElement>(null);
   const count = messages.length;
   useEffect(() => {
+    // Read rather than merely depended on: an empty, idle transcript has
+    // nothing to scroll to, and saying so here is what makes both values
+    // honest dependencies instead of a hook keyed on something it ignores.
+    if (count === 0 && !busy) return;
     const node = streamRef.current;
     if (node === null) return;
-    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    const distanceFromBottom =
+      node.scrollHeight - node.scrollTop - node.clientHeight;
     // One viewport of slack, so a short new message still counts as "at the end".
     if (distanceFromBottom > node.clientHeight) return;
     node.scrollTop = node.scrollHeight;
@@ -120,8 +133,9 @@ export function RunView({
 
       {connectionError ? (
         <Notice tone="destructive" icon={PlugZap} role="alert">
-          The run socket was refused. Reload the page — if it keeps happening you are probably
-          signed out of Access, or this origin cannot reach the Worker. See BACKEND-GAPS.md §4.
+          The run socket was refused. Reload the page — if it keeps happening
+          you are probably signed out of Access, or this origin cannot reach the
+          Worker. See BACKEND-GAPS.md §4.
         </Notice>
       ) : null}
 
@@ -147,7 +161,7 @@ export function RunView({
         className="min-h-0 flex-1 space-y-4 overflow-y-auto rounded-lg border bg-background p-4"
       >
         {messages.length === 0 && !busy ? (
-          <p className="py-10 text-center text-sm text-muted-foreground">
+          <p className="py-10 text-center text-muted-foreground text-sm">
             Nothing yet — the transcript fills in as the agent works.
           </p>
         ) : (
@@ -157,7 +171,10 @@ export function RunView({
         {approvals}
 
         {busy ? (
-          <p role="status" className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground">
+          <p
+            role="status"
+            className="flex items-center justify-center gap-2 py-2 text-muted-foreground text-xs"
+          >
             <span className="relative flex size-1.5" aria-hidden="true">
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-70" />
               <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
@@ -177,7 +194,9 @@ export function RunView({
             rows={2}
             aria-label="Steer the agent"
             placeholder={
-              disabled ? steerDisabledReason : "Steer the agent — Enter to send, Shift+Enter for a newline"
+              disabled
+                ? steerDisabledReason
+                : "Steer the agent — Enter to send, Shift+Enter for a newline"
             }
             className="resize-none text-sm"
           />
@@ -191,14 +210,19 @@ export function RunView({
               <TooltipContent>{steerDisabledReason}</TooltipContent>
             </Tooltip>
           ) : (
-            <Button onClick={send} disabled={draft.trim() === ""} aria-label="Steer">
+            <Button
+              onClick={send}
+              disabled={draft.trim() === ""}
+              aria-label="Steer"
+            >
               <SendHorizontal />
             </Button>
           )}
         </div>
-        <p className="text-xs text-pretty text-muted-foreground">
-          A steer is spliced into the agent&rsquo;s next step, so you can correct it mid-answer. A
-          customer-facing Slack reply still waits for approval, and the speaker still gets a nudge.
+        <p className="text-pretty text-muted-foreground text-xs">
+          A steer is spliced into the agent&rsquo;s next step, so you can
+          correct it mid-answer. A customer-facing Slack reply still waits for
+          approval, and the speaker still gets a nudge.
         </p>
       </div>
     </div>
@@ -222,7 +246,10 @@ function Notice({
   children: ReactNode;
 }) {
   return (
-    <div role={role} className={`flex items-start gap-2.5 rounded-md border px-3 py-2 text-sm ${TONE[tone]}`}>
+    <div
+      role={role}
+      className={`flex items-start gap-2.5 rounded-md border px-3 py-2 text-sm ${TONE[tone]}`}
+    >
       <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden={true} />
       <span className="min-w-0 flex-1 text-pretty">{children}</span>
     </div>

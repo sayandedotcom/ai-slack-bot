@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { OpenApproval } from "@/lib/api/approvals";
-import { RESOLVED_TTL_MS, useApprovalsOverlay } from "@/lib/store/approvals-overlay";
+import {
+  RESOLVED_TTL_MS,
+  useApprovalsOverlay,
+} from "@/lib/store/approvals-overlay";
 
 /**
  * The overlay is a plain store, so its state machine is testable without
@@ -42,12 +45,18 @@ describe("the approvals overlay", () => {
 
     const entry = store().cards.get(card.id);
     // "We don't know" must not render as "done".
-    expect(entry).toMatchObject({ kind: "open", error: "Could not send that decision. Try again." });
+    expect(entry).toMatchObject({
+      kind: "open",
+      error: "Could not send that decision. Try again.",
+    });
   });
 
   it("expires a resolved card after the TTL", () => {
     store().resolve(card, "approved", null, true);
-    expect(store().cards.get(card.id)).toMatchObject({ kind: "resolved", mine: true });
+    expect(store().cards.get(card.id)).toMatchObject({
+      kind: "resolved",
+      mine: true,
+    });
 
     vi.advanceTimersByTime(RESOLVED_TTL_MS - 1);
     expect(store().cards.has(card.id)).toBe(true);
@@ -91,7 +100,9 @@ describe("the approvals overlay", () => {
     store().resolve(card, "approved", "luka@zellify.app", false);
     store().nameDecider(card.id, "zurab@zellify.app");
 
-    expect(store().cards.get(card.id)).toMatchObject({ decidedBy: "luka@zellify.app" });
+    expect(store().cards.get(card.id)).toMatchObject({
+      decidedBy: "luka@zellify.app",
+    });
   });
 
   it("lets exactly one caller claim an id for reconciliation", () => {

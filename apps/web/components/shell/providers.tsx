@@ -1,10 +1,9 @@
 "use client";
 
 import { QueryClientProvider } from "@tanstack/react-query";
-import { ThemeProvider } from "next-themes";
-import { useState, type ReactNode } from "react";
-
 import { TooltipProvider } from "@workspace/ui/components/tooltip";
+import { ThemeProvider } from "next-themes";
+import { type ReactNode, useState } from "react";
 
 import { makeQueryClient } from "@/lib/query/client";
 
@@ -21,7 +20,12 @@ export function Providers({ children }: { children: ReactNode }) {
         window that is already dark, but light is a real supported theme —
         every colour in `app/globals.css` is defined for both.
       */}
-      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+      <ThemeProvider
+        attribute="class"
+        defaultTheme="dark"
+        enableSystem
+        disableTransitionOnChange
+      >
         {/* One provider at the root: tooltips are used throughout, and nesting
             a provider per panel would give each its own open/close timing. */}
         <TooltipProvider delay={250}>{children}</TooltipProvider>

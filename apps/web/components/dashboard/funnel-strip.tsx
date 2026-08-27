@@ -1,13 +1,16 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
-
 import { Card, CardContent } from "@workspace/ui/components/card";
 import { Skeleton } from "@workspace/ui/components/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
 import { cn } from "@workspace/ui/lib/utils";
+import { ChevronRight } from "lucide-react";
 
-import { deriveFunnel, type Counters, type Funnel } from "@/lib/api/counters";
+import { type Counters, deriveFunnel, type Funnel } from "@/lib/api/counters";
 import type { PanelState } from "@/lib/panel-state";
 
 /**
@@ -33,12 +36,14 @@ const STAGES: Stage[] = [
   {
     key: "seen",
     label: "heard",
-    meaning: "Every message in a channel the agent watches. Stored verbatim with its permalink.",
+    meaning:
+      "Every message in a channel the agent watches. Stored verbatim with its permalink.",
   },
   {
     key: "triaged",
     label: "triaged",
-    meaning: "Read by the cheap model, which decides only whether the expensive one should wake.",
+    meaning:
+      "Read by the cheap model, which decides only whether the expensive one should wake.",
   },
   {
     key: "dropped",
@@ -55,7 +60,8 @@ const STAGES: Stage[] = [
   {
     key: "escalated",
     label: "escalated",
-    meaning: "Drafts a human was asked to approve. The only stage that costs somebody's attention.",
+    meaning:
+      "Drafts a human was asked to approve. The only stage that costs somebody's attention.",
     accent: true,
   },
 ];
@@ -66,7 +72,7 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
       <Card>
         <CardContent>
           {state.kind === "error" ? (
-            <p className="text-sm text-muted-foreground" role="alert">
+            <p className="text-muted-foreground text-sm" role="alert">
               Counters didn&apos;t load.
             </p>
           ) : (
@@ -94,14 +100,16 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
               <div key={stage.key} className="flex flex-1 items-end gap-1">
                 <Tooltip>
                   <TooltipTrigger
-                    render={<div className="min-w-0 flex-1 cursor-default space-y-1" />}
+                    render={
+                      <div className="min-w-0 flex-1 cursor-default space-y-1" />
+                    }
                   >
                     {/* Number over label, not beside it: at five stages across
                         one row, sharing a line clips the longer labels. */}
                     <div
                       className={cn(
-                        "machine text-2xl leading-none font-medium tabular-nums",
-                        stage.accent && "text-primary",
+                        "machine font-medium text-2xl tabular-nums leading-none",
+                        stage.accent && "text-primary"
                       )}
                     >
                       {value}
@@ -111,7 +119,7 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
                         "pb-1 text-xs",
                         stage.derived
                           ? "text-muted-foreground/70 italic"
-                          : "text-muted-foreground",
+                          : "text-muted-foreground"
                       )}
                     >
                       {stage.label}
@@ -129,7 +137,7 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
                             ? "bg-primary"
                             : stage.derived
                               ? "bg-muted-foreground/30"
-                              : "bg-muted-foreground/60",
+                              : "bg-muted-foreground/60"
                         )}
                         style={{ width: `${Math.max(ratio * 100, 0.8)}%` }}
                       />
@@ -149,9 +157,12 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
           })}
         </div>
 
-        <p className="text-xs text-muted-foreground">
+        <p className="text-muted-foreground text-xs">
           Last 24 hours, since{" "}
-          <time className="machine" dateTime={new Date(state.data.since).toISOString()}>
+          <time
+            className="machine"
+            dateTime={new Date(state.data.since).toISOString()}
+          >
             {new Date(state.data.since).toLocaleString()}
           </time>
         </p>

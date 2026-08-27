@@ -22,7 +22,11 @@ let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   fetchSpy = vi.fn(() =>
-    Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ runs: [] }) } as Response),
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ runs: [] }),
+    } as Response)
   );
   vi.stubGlobal("fetch", fetchSpy);
 });
@@ -50,7 +54,9 @@ describe("the demo transport switch", () => {
 
   it("keeps a run's usage total as the decimal string the ledger returned", async () => {
     const { runs } = await loadWith(true);
-    const total = await runs.getRunUsageTotal("7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258");
+    const total = await runs.getRunUsageTotal(
+      "7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258"
+    );
 
     // Not 0.9042 the number: a float here is a rounded invoice.
     expect(total).toBe("0.9042");
@@ -79,7 +85,9 @@ describe("starting a run", () => {
       json: () => Promise.resolve({ id: "run-1" }),
     } as Response);
 
-    await expect(chat.startChatRun("hello", "req-9")).resolves.toEqual({ id: "run-1" });
+    await expect(chat.startChatRun("hello", "req-9")).resolves.toEqual({
+      id: "run-1",
+    });
 
     const [path, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(path).toBe("/api/runs");
@@ -107,7 +115,9 @@ describe("the demo roster is internally consistent with speaker selection", () =
     const { roster } = await loadWith(true);
     const { pool, engineers, speaker } = await roster.getRoster();
 
-    const connected = new Map(engineers.map((engineer) => [engineer.email, engineer]));
+    const connected = new Map(
+      engineers.map((engineer) => [engineer.email, engineer])
+    );
     const expected = pool.find((email) => connected.get(email)?.slack === true);
 
     expect(speaker?.email).toBe(expected);
@@ -117,8 +127,12 @@ describe("the demo roster is internally consistent with speaker selection", () =
     const { roster } = await loadWith(true);
     const { pool, engineers, githubSpeaker } = await roster.getRoster();
 
-    const connected = new Map(engineers.map((engineer) => [engineer.email, engineer]));
-    const expected = pool.find((email) => connected.get(email)?.github === true);
+    const connected = new Map(
+      engineers.map((engineer) => [engineer.email, engineer])
+    );
+    const expected = pool.find(
+      (email) => connected.get(email)?.github === true
+    );
 
     expect(githubSpeaker?.email).toBe(expected);
   });
@@ -132,7 +146,9 @@ describe("deciding a demo approval", () => {
     expect(open.length).toBeGreaterThan(0);
     const first = open[0]!;
 
-    await expect(approvals.decide(first.id, { action: "approve" })).resolves.toEqual({
+    await expect(
+      approvals.decide(first.id, { action: "approve" })
+    ).resolves.toEqual({
       result: "decided",
       decision: "approved",
     });
@@ -140,7 +156,9 @@ describe("deciding a demo approval", () => {
     const remaining = await approvals.getOpenApprovals();
     expect(remaining.map((card) => card.id)).not.toContain(first.id);
 
-    await expect(approvals.decide(first.id, { action: "approve" })).resolves.toEqual({
+    await expect(
+      approvals.decide(first.id, { action: "approve" })
+    ).resolves.toEqual({
       result: "already_decided",
       decision: "approved",
       decidedBy: null,

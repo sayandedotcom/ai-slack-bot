@@ -1,13 +1,12 @@
 "use client";
 
-import type { LucideIcon } from "lucide-react";
-import { RotateCw } from "lucide-react";
-import type { ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent, CardHeader } from "@workspace/ui/components/card";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { cn } from "@workspace/ui/lib/utils";
+import type { LucideIcon } from "lucide-react";
+import { RotateCw } from "lucide-react";
+import type { ReactNode } from "react";
 
 import type { ApiError } from "@/lib/api/errors";
 import type { PanelState } from "@/lib/panel-state";
@@ -70,15 +69,20 @@ export function Panel<T>({
         <PanelSkeleton />
       </div>
     ) : state.kind === "error" ? (
-      <div role="alert" className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">{REASON[state.error.kind]}</p>
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-between gap-3"
+      >
+        <p className="text-muted-foreground text-sm">
+          {REASON[state.error.kind]}
+        </p>
         <Button variant="outline" size="sm" onClick={state.retry}>
           <RotateCw />
           Try again
         </Button>
       </div>
     ) : state.kind === "empty" ? (
-      <p className="text-sm text-balance text-muted-foreground">{state.hint}</p>
+      <p className="text-balance text-muted-foreground text-sm">{state.hint}</p>
     ) : (
       children(state.data)
     );
@@ -89,12 +93,19 @@ export function Panel<T>({
     <Card className={cn("gap-3", className)}>
       <CardHeader className="gap-1.5">
         <div className="flex items-center gap-2">
-          {Icon ? <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" /> : null}
+          {Icon ? (
+            <Icon
+              className="size-3.5 text-muted-foreground"
+              aria-hidden="true"
+            />
+          ) : null}
           <h2 className="eyebrow">{title}</h2>
-          {aside ? <div className="ml-auto flex items-center gap-2">{aside}</div> : null}
+          {aside ? (
+            <div className="ml-auto flex items-center gap-2">{aside}</div>
+          ) : null}
         </div>
         {description ? (
-          <p className="text-xs text-muted-foreground">{description}</p>
+          <p className="text-muted-foreground text-xs">{description}</p>
         ) : null}
       </CardHeader>
       <CardContent>{body}</CardContent>

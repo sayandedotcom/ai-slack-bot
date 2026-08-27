@@ -1,17 +1,24 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { Card, CardContent } from "@workspace/ui/components/card";
+import { Skeleton } from "@workspace/ui/components/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
 import { ArrowLeft, FlaskConical, Hash } from "lucide-react";
 import Link from "next/link";
 import { use } from "react";
 
-import { Card, CardContent } from "@workspace/ui/components/card";
-import { Skeleton } from "@workspace/ui/components/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
-
 import { CopyId } from "@/components/common/copy-id";
 import { ErrorBoundary } from "@/components/common/error-boundary";
-import { OriginBadge, ShadowBadge, StatusChip } from "@/components/common/status-chip";
+import {
+  OriginBadge,
+  ShadowBadge,
+  StatusChip,
+} from "@/components/common/status-chip";
 import { RunApprovals } from "@/components/run/run-approvals";
 import { RunPanel } from "@/components/run/run-panel";
 import { isDemo } from "@/lib/api/client";
@@ -34,7 +41,11 @@ import { POLL_MS, queryKeys } from "@/lib/query/keys";
  * Durable Object over its own socket. The two are separate on purpose: the
  * header still renders when the socket cannot connect.
  */
-export default function RunPage({ params }: { params: Promise<{ id: string }> }) {
+export default function RunPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { id } = use(params);
   const { identity } = useIdentityQuery();
   const now = useNow();
@@ -53,7 +64,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
       <div className="space-y-3">
         <Link
           href="/"
-          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          className="inline-flex items-center gap-1.5 text-muted-foreground text-xs underline-offset-4 hover:text-foreground hover:underline"
         >
           <ArrowLeft className="size-3" aria-hidden="true" />
           Back to the dashboard
@@ -61,8 +72,9 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
 
         {run.data === undefined ? (
           run.isError ? (
-            <p className="text-sm text-muted-foreground">
-              This run could not be loaded. It may not exist, or you may not be on the roster.
+            <p className="text-muted-foreground text-sm">
+              This run could not be loaded. It may not exist, or you may not be
+              on the roster.
             </p>
           ) : (
             <Skeleton className="h-10 w-2/3" />
@@ -84,14 +96,14 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                     {run.data.channelId}
                   </TooltipTrigger>
                   <TooltipContent>
-                    The Slack channel this run was woken from. The Worker resolves the name; a run
-                    row carries the id.
+                    The Slack channel this run was woken from. The Worker
+                    resolves the name; a run row carries the id.
                   </TooltipContent>
                 </Tooltip>
               ) : null}
             </div>
 
-            <h1 className="text-lg leading-snug font-semibold text-balance">
+            <h1 className="text-balance font-semibold text-lg leading-snug">
               {run.data.summary ?? (
                 <span className="text-muted-foreground italic">
                   No summary — the agent was woken but has not written one yet.
@@ -99,7 +111,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
               )}
             </h1>
 
-            <dl className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
+            <dl className="flex flex-wrap items-center gap-x-5 gap-y-1 text-muted-foreground text-xs">
               <Fact label="Run">
                 <CopyId value={run.data.id} label="run id" truncate />
               </Fact>
@@ -129,7 +141,9 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           <ErrorBoundary message="This transcript could not be rendered.">
             <RunPanel
               runId={id}
-              approvals={<RunApprovals runId={id} role={identity?.role ?? "viewer"} />}
+              approvals={
+                <RunApprovals runId={id} role={identity?.role ?? "viewer"} />
+              }
             />
           </ErrorBoundary>
         </CardContent>
@@ -138,7 +152,13 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   );
 }
 
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+function Fact({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex items-center gap-1.5">
       <dt className="eyebrow">{label}</dt>
@@ -149,11 +169,13 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 
 function DemoNotice() {
   return (
-    <div className="flex items-start gap-2.5 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+    <div className="flex items-start gap-2.5 rounded-md border border-dashed px-3 py-2 text-muted-foreground text-sm">
       <FlaskConical className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
       <span className="text-pretty">
-        A fixture transcript, in the shape the socket broadcasts. A live build opens a WebSocket to{" "}
-        <code className="machine text-xs">/api/runs/:id/agent</code> and steering works from here.
+        A fixture transcript, in the shape the socket broadcasts. A live build
+        opens a WebSocket to{" "}
+        <code className="machine text-xs">/api/runs/:id/agent</code> and
+        steering works from here.
       </span>
     </div>
   );

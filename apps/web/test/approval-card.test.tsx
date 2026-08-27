@@ -1,8 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-
 import { TooltipProvider } from "@workspace/ui/components/tooltip";
+import { describe, expect, it, vi } from "vitest";
 
 import { ApprovalCard } from "@/components/dashboard/approval-card";
 import type { OpenApproval } from "@/lib/api/approvals";
@@ -18,14 +17,17 @@ const card: OpenApproval = {
   createdAt: Date.now() - 90_000,
 };
 
-function renderCard(state: CardState, role: "firefighter" | "viewer" = "firefighter") {
+function renderCard(
+  state: CardState,
+  role: "firefighter" | "viewer" = "firefighter"
+) {
   const onDecide = vi.fn();
   render(
     <TooltipProvider>
       <ul>
         <ApprovalCard state={state} role={role} onDecide={onDecide} />
       </ul>
-    </TooltipProvider>,
+    </TooltipProvider>
   );
   return { onDecide };
 }
@@ -55,7 +57,10 @@ describe("ApprovalCard", () => {
     const send = screen.getByRole("button", { name: /^reject$/i });
     expect(send).toBeDisabled();
 
-    await user.type(screen.getByLabelText(/rejection reason/i), "We haven't agreed to a rollback.");
+    await user.type(
+      screen.getByLabelText(/rejection reason/i),
+      "We haven't agreed to a rollback."
+    );
     expect(screen.getByRole("button", { name: /^reject$/i })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: /^reject$/i }));
@@ -79,7 +84,9 @@ describe("ApprovalCard", () => {
   it("gives a viewer no way to act, and says who does", () => {
     renderCard({ kind: "open", card }, "viewer");
 
-    expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /approve/i })
+    ).not.toBeInTheDocument();
     expect(screen.getByText(/fire-fighters decide/i)).toBeInTheDocument();
   });
 
@@ -91,10 +98,18 @@ describe("ApprovalCard", () => {
   });
 
   it("shows a failed decision as open with a sentence, never as done", () => {
-    renderCard({ kind: "open", card, error: "Could not send that decision. Try again." });
+    renderCard({
+      kind: "open",
+      card,
+      error: "Could not send that decision. Try again.",
+    });
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Could not send that decision.");
-    expect(screen.getByRole("button", { name: /approve & send/i })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not send that decision."
+    );
+    expect(
+      screen.getByRole("button", { name: /approve & send/i })
+    ).toBeEnabled();
   });
 
   it("names the winner of a race when it knows one", () => {
@@ -105,18 +120,34 @@ describe("ApprovalCard", () => {
       decidedBy: "zurab@zellify.app",
       mine: false,
     });
-    expect(screen.getByText(/zurab@zellify\.app approved this before you/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/zurab@zellify\.app approved this before you/i)
+    ).toBeInTheDocument();
   });
 
   it("stays truthful when the 409 carried no name", () => {
     // The worker's conflict body has `decision` and no `decidedBy`, so this is
     // the COMMON path, not an edge case.
-    renderCard({ kind: "resolved", card, decision: "edited", decidedBy: null, mine: false });
-    expect(screen.getByText(/someone else edited this first/i)).toBeInTheDocument();
+    renderCard({
+      kind: "resolved",
+      card,
+      decision: "edited",
+      decidedBy: null,
+      mine: false,
+    });
+    expect(
+      screen.getByText(/someone else edited this first/i)
+    ).toBeInTheDocument();
   });
 
   it("blames nobody when the agent withdrew its own ask", () => {
-    renderCard({ kind: "resolved", card, decision: "withdrawn", decidedBy: null, mine: false });
+    renderCard({
+      kind: "resolved",
+      card,
+      decision: "withdrawn",
+      decidedBy: null,
+      mine: false,
+    });
     expect(screen.getByText(/the agent withdrew this/i)).toBeInTheDocument();
   });
 });

@@ -19,8 +19,12 @@ export function Empty({
   return (
     <div className="flex flex-col items-center gap-2 px-6 py-8 text-center">
       <Icon className="size-5 text-muted-foreground/60" aria-hidden="true" />
-      <p className="text-sm font-medium">{title}</p>
-      {hint ? <p className="max-w-sm text-xs text-balance text-muted-foreground">{hint}</p> : null}
+      <p className="font-medium text-sm">{title}</p>
+      {hint ? (
+        <p className="max-w-sm text-balance text-muted-foreground text-xs">
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

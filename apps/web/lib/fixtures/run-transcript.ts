@@ -82,12 +82,14 @@ const chatTranscript: DemoMessage[] = [
           {
             day: "Jul 28",
             quote: "annual shows $9.999??",
-            permalink: "https://zellify.slack.com/archives/C0PULSEFIT/p1785283200000100",
+            permalink:
+              "https://zellify.slack.com/archives/C0PULSEFIT/p1785283200000100",
           },
           {
             day: "Jul 12",
             quote: "renewal double-count",
-            permalink: "https://zellify.slack.com/archives/C0PULSEFIT/p1783900800000300",
+            permalink:
+              "https://zellify.slack.com/archives/C0PULSEFIT/p1783900800000300",
           },
         ],
       },
@@ -149,7 +151,9 @@ const approvalTranscript: DemoMessage[] = [
         type: "tool-run_code",
         state: "output-available",
         input: { code: DRAFT_CODE },
-        output: { cited: ["docs/funnels/localisation.md", "docs/funnels/variants.md"] },
+        output: {
+          cited: ["docs/funnels/localisation.md", "docs/funnels/variants.md"],
+        },
       },
       {
         type: "text",
@@ -172,7 +176,11 @@ function openingTranscript(runId: string): DemoMessage[] {
   if (opening === undefined || opening === null) return [];
 
   return [
-    { id: `${runId}:1`, role: "user", parts: [{ type: "text", text: opening }] },
+    {
+      id: `${runId}:1`,
+      role: "user",
+      parts: [{ type: "text", text: opening }],
+    },
     {
       id: `${runId}:2`,
       role: "assistant",

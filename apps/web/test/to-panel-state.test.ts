@@ -33,21 +33,30 @@ describe("toPanelState", () => {
     // data. A panel that already has something to show must not blink to an
     // error banner because one poll in the background failed.
     const state = toPanelState(
-      query({ data: ["a"], isError: true, error: new ApiError(503, "unavailable", "/api/runs") }),
+      query({
+        data: ["a"],
+        isError: true,
+        error: new ApiError(503, "unavailable", "/api/runs"),
+      })
     );
     expect(state).toEqual({ kind: "ready", data: ["a"] });
   });
 
   it("is an error only for a cold visitor with nothing better to render", () => {
     const state = toPanelState(
-      query<string[]>({ isError: true, error: new ApiError(403, "forbidden", "/api/runs") }),
+      query<string[]>({
+        isError: true,
+        error: new ApiError(403, "forbidden", "/api/runs"),
+      })
     );
     expect(state.kind).toBe("error");
     expect(state.kind === "error" && state.error.kind).toBe("forbidden");
   });
 
   it("wraps a non-ApiError rejection rather than letting it reach a panel untyped", () => {
-    const state = toPanelState<string[]>(query({ isError: true, error: new Error("boom") }));
+    const state = toPanelState<string[]>(
+      query({ isError: true, error: new Error("boom") })
+    );
     expect(state.kind === "error" && state.error).toBeInstanceOf(ApiError);
     expect(state.kind === "error" && state.error.kind).toBe("unavailable");
   });

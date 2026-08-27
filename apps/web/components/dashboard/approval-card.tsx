@@ -1,15 +1,18 @@
 "use client";
 
-import { Check, Hash, Pencil, X } from "lucide-react";
-import { useState } from "react";
-import type { ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
 import { Textarea } from "@workspace/ui/components/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
 import { cn } from "@workspace/ui/lib/utils";
+import { Check, Hash, Pencil, X } from "lucide-react";
+import type { ReactNode } from "react";
+import { useState } from "react";
 
-import type { Decision, DecideAction, OpenApproval } from "@/lib/api/approvals";
+import type { DecideAction, Decision, OpenApproval } from "@/lib/api/approvals";
 import { ago, shortThread } from "@/lib/format";
 import { useNow } from "@/lib/hooks/use-now";
 import type { CardState } from "@/lib/store/approvals-overlay";
@@ -58,17 +61,23 @@ const VERB: Record<Decision, string> = {
  * with `decidedBy: null` far more often than not. Copy that assumed a name
  * would read as a bug on the most common conflict path.
  */
-function resolvedLine(decision: Decision, decidedBy: string | null, mine: boolean): string {
+function resolvedLine(
+  decision: Decision,
+  decidedBy: string | null,
+  mine: boolean
+): string {
   // Withdrawal is the agent's own doing — no human decided it, so neither the
   // "you" nor the "someone else" framing is true.
-  if (decision === "withdrawn") return "The agent withdrew this — the thread moved on";
+  if (decision === "withdrawn")
+    return "The agent withdrew this — the thread moved on";
   if (mine) {
     if (decision === "approved") return "You approved this";
     if (decision === "edited") return "You edited and sent this";
     if (decision === "rejected") return "You rejected this";
     return "You closed this";
   }
-  if (decidedBy !== null) return `${decidedBy} ${VERB[decision]} this before you`;
+  if (decidedBy !== null)
+    return `${decidedBy} ${VERB[decision]} this before you`;
   return `Someone else ${VERB[decision]} this first`;
 }
 
@@ -90,7 +99,11 @@ function Meta({ card, now }: { card: OpenApproval; now: number }): ReactNode {
   );
 }
 
-export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): ReactNode {
+export function ApprovalCard({
+  state,
+  role,
+  onDecide,
+}: ApprovalCardProps): ReactNode {
   const card = state.card;
   const viewer = role === "viewer";
 
@@ -105,11 +118,16 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
   if (state.kind === "resolved") {
     return (
       <li className="rounded-lg border bg-card px-3 py-2.5">
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />
+        <p className="flex items-center gap-2 text-muted-foreground text-sm">
+          <Check
+            className="size-3.5 shrink-0 text-success"
+            aria-hidden="true"
+          />
           {resolvedLine(state.decision, state.decidedBy, state.mine)}
         </p>
-        <p className="mt-1 truncate pl-5.5 text-xs text-muted-foreground/70">{card.why}</p>
+        <p className="mt-1 truncate pl-5.5 text-muted-foreground/70 text-xs">
+          {card.why}
+        </p>
       </li>
     );
   }
@@ -127,7 +145,7 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
 
       {/* The `why` leads. It is the answer to "why am I being interrupted?",
           and an operator who skips it is deciding blind. */}
-      <p className="text-sm font-medium text-pretty">{card.why}</p>
+      <p className="text-pretty font-medium text-sm">{card.why}</p>
 
       {editing ? (
         <Textarea
@@ -148,7 +166,7 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
          * able to read all of it, but a long draft must not push the actions
          * below the fold on a card they are meant to act on quickly.
          */
-        <blockquote className="max-h-52 overflow-y-auto border-l-2 border-primary/40 bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap">
+        <blockquote className="max-h-52 overflow-y-auto whitespace-pre-wrap border-primary/40 border-l-2 bg-muted/40 px-3 py-2 text-sm">
           {card.draft}
         </blockquote>
       )}
@@ -164,13 +182,14 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
             className="resize-y text-sm"
           />
           <p className="text-[11px] text-muted-foreground">
-            The reason is what teaches the agent not to write this again. It&apos;s required.
+            The reason is what teaches the agent not to write this again.
+            It&apos;s required.
           </p>
         </div>
       ) : null}
 
       {state.kind === "open" && state.error !== undefined ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-destructive text-xs">
           {state.error}
         </p>
       ) : null}
@@ -187,7 +206,11 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
               <Check data-icon="inline-start" />
               Send edited
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setComposer("none")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setComposer("none")}
+            >
               Cancel
             </Button>
           </>
@@ -202,13 +225,18 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
               <X data-icon="inline-start" />
               Reject
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setComposer("none")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setComposer("none")}
+            >
               Cancel
             </Button>
           </>
         ) : viewer ? (
-          <p className="text-xs text-muted-foreground">
-            Fire-fighters decide. You can read the draft and the reason it was escalated.
+          <p className="text-muted-foreground text-xs">
+            Fire-fighters decide. You can read the draft and the reason it was
+            escalated.
           </p>
         ) : (
           <>
@@ -239,7 +267,10 @@ export function ApprovalCard({ state, role, onDecide }: ApprovalCardProps): Reac
               size="sm"
               disabled={locked}
               onClick={() => setComposer("reject")}
-              className={cn("text-muted-foreground", !locked && "hover:text-destructive")}
+              className={cn(
+                "text-muted-foreground",
+                !locked && "hover:text-destructive"
+              )}
             >
               Reject
             </Button>

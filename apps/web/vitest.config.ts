@@ -13,7 +13,10 @@ export default defineConfig({
   esbuild: { jsx: "automatic" },
   resolve: {
     alias: [
-      { find: /^@workspace\/ui\/(.*)$/, replacement: `${here}../../packages/ui/src/$1` },
+      {
+        find: /^@workspace\/ui\/(.*)$/,
+        replacement: `${here}../../packages/ui/src/$1`,
+      },
       { find: /^@\/(.*)$/, replacement: `${here}$1` },
     ],
   },

@@ -1,9 +1,5 @@
 "use client";
 
-import { Flame, Inbox, MessageSquare, type LucideIcon } from "lucide-react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-
 import {
   Sidebar,
   SidebarContent,
@@ -17,6 +13,9 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@workspace/ui/components/sidebar";
+import { Flame, Inbox, type LucideIcon, MessageSquare } from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 import { useApprovals } from "@/lib/hooks/use-approvals";
 import { NavUser } from "./nav-user";
@@ -68,7 +67,9 @@ export function AppSidebar() {
                 <Flame className="size-4" />
               </span>
               <span className="grid flex-1 text-left leading-tight">
-                <span className="truncate text-sm font-semibold tracking-tight">Fire-Fighter</span>
+                <span className="truncate font-semibold text-sm tracking-tight">
+                  Fire-Fighter
+                </span>
                 <span className="eyebrow truncate">Zellify internal</span>
               </span>
             </SidebarMenuButton>

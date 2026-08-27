@@ -1,5 +1,5 @@
-import { fixture, getJson, isDemo } from "./client";
 import { demoRoster } from "../fixtures/roster";
+import { fixture, getJson, isDemo } from "./client";
 import type { Role } from "./identity";
 
 export type ConnectStatus = {

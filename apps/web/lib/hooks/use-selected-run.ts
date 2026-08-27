@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback } from "react";
 
 /**
  * Which run the dashboard has selected, kept in the URL rather than in React
@@ -13,7 +13,10 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
  * same way, and unlike a hash it survives being handed to a server. Back and
  * forward are the router's problem, not ours.
  */
-export function useSelectedRun(): [string | null, (runId: string | null) => void] {
+export function useSelectedRun(): [
+  string | null,
+  (runId: string | null) => void,
+] {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -27,9 +30,11 @@ export function useSelectedRun(): [string | null, (runId: string | null) => void
       const query = next.toString();
       // `scroll: false` — opening the detail sheet must not throw the reader
       // back to the top of a dashboard they had scrolled through.
-      router.replace(query.length > 0 ? `${pathname}?${query}` : pathname, { scroll: false });
+      router.replace(query.length > 0 ? `${pathname}?${query}` : pathname, {
+        scroll: false,
+      });
     },
-    [params, pathname, router],
+    [params, pathname, router]
   );
 
   return [selected, select];

@@ -1,8 +1,7 @@
 "use client";
 
-import { Flame, RotateCw } from "lucide-react";
-
 import { Button } from "@workspace/ui/components/button";
+import { Flame, RotateCw } from "lucide-react";
 
 import type { ApiError } from "@/lib/api/errors";
 
@@ -15,20 +14,21 @@ import type { ApiError } from "@/lib/api/errors";
  * because Access gates the origin: this app can display an identity, never
  * grant one.
  */
-const SIGNED_OUT: Record<ApiError["kind"], { heading: string; body: string }> = {
-  unauthorized: {
-    heading: "Signed out",
-    body: "Access didn't recognise this session. Reload to authenticate again.",
-  },
-  forbidden: {
-    heading: "Not on the roster",
-    body: "This account isn't a fire-fighter or a viewer, so there's nothing here for it.",
-  },
-  unavailable: {
-    heading: "The API didn't answer",
-    body: "Nothing on this page can load until it does. Reload to try again.",
-  },
-};
+const SIGNED_OUT: Record<ApiError["kind"], { heading: string; body: string }> =
+  {
+    unauthorized: {
+      heading: "Signed out",
+      body: "Access didn't recognise this session. Reload to authenticate again.",
+    },
+    forbidden: {
+      heading: "Not on the roster",
+      body: "This account isn't a fire-fighter or a viewer, so there's nothing here for it.",
+    },
+    unavailable: {
+      heading: "The API didn't answer",
+      body: "Nothing on this page can load until it does. Reload to try again.",
+    },
+  };
 
 export function SignedOutPage({ error }: { error: ApiError }) {
   const { heading, body } = SIGNED_OUT[error.kind] ?? SIGNED_OUT.unavailable;
@@ -40,8 +40,10 @@ export function SignedOutPage({ error }: { error: ApiError }) {
     >
       <Flame className="size-6 text-primary" aria-hidden="true" />
       <div className="space-y-1.5">
-        <h1 className="text-lg font-semibold tracking-tight">{heading}</h1>
-        <p className="max-w-sm text-sm text-balance text-muted-foreground">{body}</p>
+        <h1 className="font-semibold text-lg tracking-tight">{heading}</h1>
+        <p className="max-w-sm text-balance text-muted-foreground text-sm">
+          {body}
+        </p>
       </div>
       <Button variant="outline" size="sm" onClick={() => location.reload()}>
         <RotateCw />

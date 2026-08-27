@@ -1,9 +1,12 @@
 "use client";
 
-import { Users } from "lucide-react";
-
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
 import { cn } from "@workspace/ui/lib/utils";
+import { Users } from "lucide-react";
 
 import { Panel } from "@/components/common/panel";
 import type { Roster } from "@/lib/api/roster";
@@ -30,14 +33,17 @@ export function RosterCard({ state }: { state: PanelState<Roster> }) {
             tie-break order
           </TooltipTrigger>
           <TooltipContent>
-            The agent speaks as the first account in this order that has connected Slack. No shift,
-            no rotation — connecting or disconnecting is the only thing that changes it.
+            The agent speaks as the first account in this order that has
+            connected Slack. No shift, no rotation — connecting or disconnecting
+            is the only thing that changes it.
           </TooltipContent>
         </Tooltip>
       }
     >
       {({ pool, engineers, speaker }) => {
-        const byEmail = new Map(engineers.map((engineer) => [engineer.email, engineer]));
+        const byEmail = new Map(
+          engineers.map((engineer) => [engineer.email, engineer])
+        );
 
         return (
           <ol className="space-y-0.5">
@@ -51,7 +57,7 @@ export function RosterCard({ state }: { state: PanelState<Roster> }) {
                   key={email}
                   className={cn(
                     "flex items-center gap-2.5 rounded-md px-1.5 py-1.5",
-                    speaks && "bg-primary/8",
+                    speaks && "bg-primary/8"
                   )}
                 >
                   <span className="machine w-4 shrink-0 text-[11px] text-muted-foreground/70">
@@ -60,17 +66,22 @@ export function RosterCard({ state }: { state: PanelState<Roster> }) {
                   <span
                     aria-hidden="true"
                     className={cn(
-                      "flex size-6 shrink-0 items-center justify-center rounded-md text-[11px] font-medium",
+                      "flex size-6 shrink-0 items-center justify-center rounded-md font-medium text-[11px]",
                       speaks
                         ? "bg-primary text-primary-foreground"
                         : connected
                           ? "bg-muted text-foreground"
-                          : "bg-muted text-muted-foreground/60",
+                          : "bg-muted text-muted-foreground/60"
                     )}
                   >
                     {initialOf(email)}
                   </span>
-                  <span className={cn("truncate text-sm", !connected && "text-muted-foreground")}>
+                  <span
+                    className={cn(
+                      "truncate text-sm",
+                      !connected && "text-muted-foreground"
+                    )}
+                  >
                     {nameOf(email)}
                   </span>
                   <span className="ml-auto shrink-0 text-[11px]">

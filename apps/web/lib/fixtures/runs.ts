@@ -70,7 +70,8 @@ export const demoRuns: RunSummary[] = [
     origin: "chat",
     status: "done",
     shadow: false,
-    summary: "did PulseFit complain about checkout before this week? what did we do back then?",
+    summary:
+      "did PulseFit complain about checkout before this week? what did we do back then?",
     channelId: null,
     channelName: null,
     customerSlug: null,

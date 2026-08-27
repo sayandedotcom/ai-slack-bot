@@ -22,7 +22,7 @@ type Options<T> = {
  */
 export function toPanelState<T>(
   query: UseQueryResult<T, unknown>,
-  options: Options<T> = {},
+  options: Options<T> = {}
 ): PanelState<T> {
   if (query.data !== undefined) {
     const { emptyHint, isEmpty } = options;

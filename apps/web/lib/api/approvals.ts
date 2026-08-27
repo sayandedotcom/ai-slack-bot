@@ -1,6 +1,10 @@
+import {
+  decideDemoApproval,
+  getDemoApproval,
+  listDemoApprovals,
+} from "../fixtures/approvals";
 import { fixture, getJson, isDemo, patchJson } from "./client";
 import { ApiError, kindFor } from "./errors";
-import { decideDemoApproval, getDemoApproval, listDemoApprovals } from "../fixtures/approvals";
 
 /** A row in the open-approvals list, exactly as the worker's summary select returns it. */
 export type OpenApproval = {
@@ -13,7 +17,12 @@ export type OpenApproval = {
   createdAt: number;
 };
 
-export type Decision = "pending" | "approved" | "edited" | "rejected" | "withdrawn";
+export type Decision =
+  | "pending"
+  | "approved"
+  | "edited"
+  | "rejected"
+  | "withdrawn";
 
 /** The full card: the summary plus everything the decision itself produced. */
 export type ApprovalDetail = OpenApproval & {
@@ -38,7 +47,9 @@ export type DecideResult =
 
 export async function getOpenApprovals(): Promise<OpenApproval[]> {
   if (isDemo()) return fixture(listDemoApprovals());
-  const body = await getJson<{ approvals: OpenApproval[] }>("/api/approvals?state=open");
+  const body = await getJson<{ approvals: OpenApproval[] }>(
+    "/api/approvals?state=open"
+  );
   return body.approvals;
 }
 
@@ -51,7 +62,7 @@ export async function getOpenApprovals(): Promise<OpenApproval[]> {
 export async function getApproval(id: string): Promise<ApprovalDetail> {
   if (isDemo()) return fixture(getDemoApproval(id));
   const body = await getJson<{ approval: ApprovalDetail }>(
-    `/api/approvals/${encodeURIComponent(id)}`,
+    `/api/approvals/${encodeURIComponent(id)}`
   );
   return body.approval;
 }
@@ -63,7 +74,10 @@ export async function getApproval(id: string): Promise<ApprovalDetail> {
  * responses become errors, and those carry an `ApiError` naming the path and
  * nothing from the body.
  */
-export async function decide(id: string, action: DecideAction): Promise<DecideResult> {
+export async function decide(
+  id: string,
+  action: DecideAction
+): Promise<DecideResult> {
   const path = `/api/approvals/${encodeURIComponent(id)}`;
 
   if (isDemo()) return fixture(decideDemoApproval(id, action));
@@ -74,7 +88,10 @@ export async function decide(id: string, action: DecideAction): Promise<DecideRe
   } catch (cause) {
     return {
       result: "error",
-      error: cause instanceof ApiError ? cause : new ApiError(0, "unavailable", path),
+      error:
+        cause instanceof ApiError
+          ? cause
+          : new ApiError(0, "unavailable", path),
     };
   }
 
@@ -82,14 +99,16 @@ export async function decide(id: string, action: DecideAction): Promise<DecideRe
     const body = response.body as { approval?: ApprovalDetail } | null;
     const decision = body?.approval?.decision;
     // A 200 without a usable card is a contract break, not a decision.
-    if (!decision) return { result: "error", error: new ApiError(200, "unavailable", path) };
+    if (!decision)
+      return { result: "error", error: new ApiError(200, "unavailable", path) };
     return { result: "decided", decision };
   }
 
   if (response.status === 409) {
     const body = response.body as { decision?: Decision } | null;
     const decision = body?.decision;
-    if (!decision) return { result: "error", error: new ApiError(409, "unavailable", path) };
+    if (!decision)
+      return { result: "error", error: new ApiError(409, "unavailable", path) };
     // The worker's conflict body carries `decision` only — there is no
     // `decidedBy` on this path, so the winner has no name to show. Kept in the
     // shape as null so callers compile against one `DecideResult`.

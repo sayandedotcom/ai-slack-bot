@@ -1,6 +1,5 @@
-import { Bell, UserRound } from "lucide-react";
-
 import { Card, CardContent } from "@workspace/ui/components/card";
+import { Bell, UserRound } from "lucide-react";
 
 /**
  * Static documentation, and it earns its place: everything else on this page is
@@ -31,19 +30,24 @@ export function TokenExplainer() {
         {TOKENS.map((token) => (
           <Card key={token.title}>
             <CardContent className="flex items-start gap-3">
-              <token.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <token.icon
+                className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                aria-hidden="true"
+              />
               <div className="space-y-1">
-                <p className="text-sm font-medium">{token.title}</p>
-                <p className="text-sm text-pretty text-muted-foreground">{token.body}</p>
+                <p className="font-medium text-sm">{token.title}</p>
+                <p className="text-pretty text-muted-foreground text-sm">
+                  {token.body}
+                </p>
               </div>
             </CardContent>
           </Card>
         ))}
       </div>
-      <p className="text-xs text-pretty text-muted-foreground">
-        A self-DM sent with your own token won&apos;t push-notify you — Slack doesn&apos;t alert
-        you about your own messages. The bot token exists because it is the one reliable pinger the
-        team already lives in.
+      <p className="text-pretty text-muted-foreground text-xs">
+        A self-DM sent with your own token won&apos;t push-notify you — Slack
+        doesn&apos;t alert you about your own messages. The bot token exists
+        because it is the one reliable pinger the team already lives in.
       </p>
     </section>
   );

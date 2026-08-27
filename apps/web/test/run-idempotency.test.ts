@@ -37,7 +37,9 @@ describe("makeChatStarter", () => {
     const starter = makeChatStarter(post, mintCounter());
 
     await expect(starter.start("why is checkout broken?")).rejects.toThrow();
-    await expect(starter.start("why is checkout broken?")).resolves.toEqual({ id: "run-1" });
+    await expect(starter.start("why is checkout broken?")).resolves.toEqual({
+      id: "run-1",
+    });
 
     expect(seen).toEqual(["id-1", "id-1"]);
   });
@@ -46,7 +48,10 @@ describe("makeChatStarter", () => {
     const post = vi.fn(() => Promise.resolve({ id: "run-1" }));
     const starter = makeChatStarter(post, mintCounter());
 
-    const [a, b] = await Promise.all([starter.start("same"), starter.start("same")]);
+    const [a, b] = await Promise.all([
+      starter.start("same"),
+      starter.start("same"),
+    ]);
 
     expect(post).toHaveBeenCalledTimes(1);
     expect(a).toEqual(b);
@@ -108,13 +113,13 @@ describe("makeSteerSender", () => {
 describe("agentBasePath", () => {
   it("addresses the public run id under /api, with no leading slash", () => {
     expect(agentBasePath("5f3b1c22-9d41-4a7e-8b02-1d6c4f0a91e3")).toBe(
-      "api/runs/5f3b1c22-9d41-4a7e-8b02-1d6c4f0a91e3/agent",
+      "api/runs/5f3b1c22-9d41-4a7e-8b02-1d6c4f0a91e3/agent"
     );
   });
 
   it("encodes anything that is not a plain id, so a key can never shape a path", () => {
     expect(agentBasePath("slack:C123:1787.0001")).toBe(
-      "api/runs/slack%3AC123%3A1787.0001/agent",
+      "api/runs/slack%3AC123%3A1787.0001/agent"
     );
   });
 });

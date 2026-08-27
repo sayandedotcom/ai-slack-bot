@@ -49,10 +49,17 @@ function subscribe(onChange: () => void): () => void {
  * timestamp to "just now" — so the pre-hydration frame reads as fresh rather
  * than as a negative age, and corrects a microtask later.
  */
+/**
+ * The client snapshot. `useSyncExternalStore` calls this during render and
+ * demands a value that does not change between calls, so the first one seeds
+ * the module-scope clock and every later one reads it — the tick in
+ * `subscribe` is the only thing that moves it.
+ */
+function getSnapshot(): number {
+  if (now === 0) now = Date.now();
+  return now;
+}
+
 export function useNow(): number {
-  return useSyncExternalStore(
-    subscribe,
-    () => now || (now = Date.now()),
-    () => 0,
-  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => 0);
 }

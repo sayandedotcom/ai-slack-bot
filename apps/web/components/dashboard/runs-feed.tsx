@@ -1,12 +1,15 @@
 "use client";
 
+import { cn } from "@workspace/ui/lib/utils";
 import { Activity, Hash } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { cn } from "@workspace/ui/lib/utils";
-
 import { Panel } from "@/components/common/panel";
-import { OriginBadge, ShadowBadge, StatusChip } from "@/components/common/status-chip";
+import {
+  OriginBadge,
+  ShadowBadge,
+  StatusChip,
+} from "@/components/common/status-chip";
 import type { RunSummary } from "@/lib/api/runs";
 import { ago } from "@/lib/format";
 import { useRuns } from "@/lib/hooks/use-dashboard-data";
@@ -39,7 +42,12 @@ export function RunsFeed() {
           {[...runs]
             .sort((a, b) => b.updatedAt - a.updatedAt)
             .map((run) => (
-              <RunRow key={run.id} run={run} now={now} onSelect={() => selectRun(run.id)} />
+              <RunRow
+                key={run.id}
+                run={run}
+                now={now}
+                onSelect={() => selectRun(run.id)}
+              />
             ))}
         </ul>
       )}
@@ -66,7 +74,7 @@ function RunRow({
         onClick={onSelect}
         className={cn(
           "flex w-full flex-col gap-1.5 rounded-lg px-2.5 py-2.5 text-left transition-colors",
-          "hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+          "hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
         )}
       >
         <div className="flex flex-wrap items-center gap-2">
@@ -74,16 +82,16 @@ function RunRow({
           <OriginBadge origin={run.origin} />
           {run.shadow ? <ShadowBadge /> : null}
           {where === null ? null : (
-            <span className="machine inline-flex min-w-0 items-center gap-0.5 truncate text-xs text-muted-foreground">
+            <span className="machine inline-flex min-w-0 items-center gap-0.5 truncate text-muted-foreground text-xs">
               <Hash className="size-3 shrink-0" aria-hidden="true" />
               {where}
             </span>
           )}
-          <span className="machine ml-auto shrink-0 text-xs text-muted-foreground">
+          <span className="machine ml-auto shrink-0 text-muted-foreground text-xs">
             {ago(run.updatedAt, now)}
           </span>
         </div>
-        <p className="line-clamp-2 text-sm text-pretty">
+        <p className="line-clamp-2 text-pretty text-sm">
           {/* A run can be woken before it has said anything worth summarising;
               saying so beats an empty row that reads as a rendering bug. */}
           {run.summary ?? (

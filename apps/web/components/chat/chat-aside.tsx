@@ -1,8 +1,7 @@
 "use client";
 
-import { Bot, Brain, Eye, Zap } from "lucide-react";
-
 import { Card, CardContent } from "@workspace/ui/components/card";
+import { Bot, Brain, Eye, Zap } from "lucide-react";
 
 /**
  * Why this page exists, which is not obvious: from the outside it looks like a
@@ -58,8 +57,10 @@ export function ChatAside({ onPick }: { onPick: (text: string) => void }) {
                   aria-hidden="true"
                 />
                 <div className="space-y-0.5">
-                  <p className="text-sm font-medium">{claim.title}</p>
-                  <p className="text-xs text-pretty text-muted-foreground">{claim.body}</p>
+                  <p className="font-medium text-sm">{claim.title}</p>
+                  <p className="text-pretty text-muted-foreground text-xs">
+                    {claim.body}
+                  </p>
                 </div>
               </li>
             ))}
@@ -79,7 +80,7 @@ export function ChatAside({ onPick }: { onPick: (text: string) => void }) {
                 <button
                   type="button"
                   onClick={() => onPick(suggestion)}
-                  className="w-full rounded-md border border-border/60 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground"
+                  className="w-full rounded-md border border-border/60 px-3 py-2 text-left text-muted-foreground text-sm transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground"
                 >
                   {suggestion}
                 </button>

@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { PAYLOAD_MAX_CHARS, Transcript } from "@/components/run/transcript";
-import { DEMO_CHAT_RUN_ID, demoTranscriptFor } from "@/lib/fixtures/run-transcript";
+import {
+  DEMO_CHAT_RUN_ID,
+  demoTranscriptFor,
+} from "@/lib/fixtures/run-transcript";
 
 /**
  * The transcript takes its parts as `unknown` and narrows them itself, because
@@ -16,7 +19,9 @@ import { DEMO_CHAT_RUN_ID, demoTranscriptFor } from "@/lib/fixtures/run-transcri
 describe("Transcript", () => {
   it("renders the demo fixture, which is in the socket's own shape", () => {
     render(<Transcript messages={demoTranscriptFor(DEMO_CHAT_RUN_ID)} />);
-    expect(screen.getByText(/did PulseFit complain about checkout/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/did PulseFit complain about checkout/)
+    ).toBeInTheDocument();
     expect(screen.getAllByText("run_code")).toHaveLength(2);
   });
 
@@ -47,7 +52,7 @@ describe("Transcript", () => {
             ],
           },
         ]}
-      />,
+      />
     );
 
     await userEvent.click(screen.getByRole("button", { expanded: false }));
@@ -72,7 +77,7 @@ describe("Transcript", () => {
             ],
           },
         ]}
-      />,
+      />
     );
 
     expect(screen.getByText("Here is the answer.")).toBeInTheDocument();
@@ -81,7 +86,11 @@ describe("Transcript", () => {
 
   it("renders nothing at all for a message with no drawable part", () => {
     const { container } = render(
-      <Transcript messages={[{ id: "m1", role: "assistant", parts: [{ type: "step-start" }] }]} />,
+      <Transcript
+        messages={[
+          { id: "m1", role: "assistant", parts: [{ type: "step-start" }] },
+        ]}
+      />
     );
     expect(container.querySelector("li")?.textContent).toBe("");
   });

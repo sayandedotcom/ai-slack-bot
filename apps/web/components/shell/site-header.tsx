@@ -1,11 +1,14 @@
 "use client";
 
-import { FlaskConical } from "lucide-react";
-import { usePathname } from "next/navigation";
-
 import { Separator } from "@workspace/ui/components/separator";
 import { SidebarTrigger } from "@workspace/ui/components/sidebar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
+import { FlaskConical } from "lucide-react";
+import { usePathname } from "next/navigation";
 
 import { isDemo } from "@/lib/api/client";
 import { useApprovals } from "@/lib/hooks/use-approvals";
@@ -29,7 +32,7 @@ export function SiteHeader() {
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur-sm">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-1 h-4" />
-      <span className="text-sm font-medium">{titleFor(pathname)}</span>
+      <span className="font-medium text-sm">{titleFor(pathname)}</span>
 
       <div className="ml-auto flex items-center gap-3">
         {/*
@@ -41,7 +44,10 @@ export function SiteHeader() {
         {/* The words are the first thing to go when the bar is narrow: the
             pulsing count already carries the signal, and a two-line header is
             worse than a terse one. */}
-        <span aria-live="polite" className="text-xs whitespace-nowrap text-muted-foreground">
+        <span
+          aria-live="polite"
+          className="whitespace-nowrap text-muted-foreground text-xs"
+        >
           {openCount > 0 ? (
             <span className="inline-flex items-center gap-1.5">
               <span className="relative flex size-1.5" aria-hidden="true">
@@ -61,7 +67,7 @@ export function SiteHeader() {
           <Tooltip>
             <TooltipTrigger
               render={
-                <span className="eyebrow flex cursor-default items-center gap-1.5 rounded-full border border-dashed px-2 py-1 whitespace-nowrap" />
+                <span className="eyebrow flex cursor-default items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed px-2 py-1" />
               }
             >
               <FlaskConical className="size-3" aria-hidden="true" />
@@ -69,7 +75,8 @@ export function SiteHeader() {
               <span className="sr-only sm:hidden">Demo data</span>
             </TooltipTrigger>
             <TooltipContent>
-              Nothing on this page reached the network. Every number, run and draft is a fixture.
+              Nothing on this page reached the network. Every number, run and
+              draft is a fixture.
             </TooltipContent>
           </Tooltip>
         ) : null}

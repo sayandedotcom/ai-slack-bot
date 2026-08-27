@@ -19,9 +19,13 @@ export function PageHeader({
   return (
     <div className="space-y-2.5">
       <p className="eyebrow">{eyebrow}</p>
-      <h1 className="text-2xl font-semibold tracking-tight text-balance sm:text-3xl">{title}</h1>
+      <h1 className="text-balance font-semibold text-2xl tracking-tight sm:text-3xl">
+        {title}
+      </h1>
       {children ? (
-        <p className="max-w-2xl text-sm text-pretty text-muted-foreground">{children}</p>
+        <p className="max-w-2xl text-pretty text-muted-foreground text-sm">
+          {children}
+        </p>
       ) : null}
     </div>
   );

@@ -16,10 +16,16 @@ export const demoShadowPairs: ShadowPair[] = [
     createdAt: now - 3 * 60 * 60 * 1000,
     channelId: "C0MACROSNAP",
     threadTs: "1787701122.000200",
-    tells: ["great_question", "bulleted_recap", "closing_restatement", "exclamation"],
+    tells: [
+      "great_question",
+      "bulleted_recap",
+      "closing_restatement",
+      "exclamation",
+    ],
     humanReply: {
       text: "60 req/min per token. Raising it for your account is possible but needs platform to sign off — I'll ask today.",
-      permalink: "https://zellify.slack.com/archives/C0MACROSNAP/p1787701199000200",
+      permalink:
+        "https://zellify.slack.com/archives/C0MACROSNAP/p1787701199000200",
       ts: "1787701199.000200",
     },
   },
@@ -34,7 +40,8 @@ export const demoShadowPairs: ShadowPair[] = [
     tells: ["exclaimed_thanks", "semicolon", "em_dash"],
     humanReply: {
       text: "Rolled back. No data affected. Post-mortem to you by Friday.",
-      permalink: "https://zellify.slack.com/archives/C0PULSEFIT/p1787688401000700",
+      permalink:
+        "https://zellify.slack.com/archives/C0PULSEFIT/p1787688401000700",
       ts: "1787688401.000700",
     },
   },

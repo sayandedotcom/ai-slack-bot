@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { getCounters, type Counters } from "../api/counters";
+import { type Counters, getCounters } from "../api/counters";
 import { getIdentity, type Identity } from "../api/identity";
 import { getRoster, type Roster } from "../api/roster";
 import { getRuns, getRunUsageTotal, type RunSummary } from "../api/runs";
@@ -43,7 +43,7 @@ export function useRoster(): PanelState<Roster> {
       queryKey: queryKeys.roster,
       queryFn: getRoster,
       refetchInterval: POLL_MS.roster,
-    }),
+    })
   );
 }
 
@@ -53,11 +53,12 @@ export function useCounters(): PanelState<Counters> {
       queryKey: queryKeys.counters,
       queryFn: getCounters,
       refetchInterval: POLL_MS.counters,
-    }),
+    })
   );
 }
 
-const NO_RUNS_HINT = "No runs yet — the agent wakes when a customer thread needs it.";
+const NO_RUNS_HINT =
+  "No runs yet — the agent wakes when a customer thread needs it.";
 
 export function useRuns(limit = 50): PanelState<RunSummary[]> {
   return toPanelState(
@@ -66,7 +67,7 @@ export function useRuns(limit = 50): PanelState<RunSummary[]> {
       queryFn: () => getRuns(limit),
       refetchInterval: POLL_MS.runs,
     }),
-    { emptyHint: NO_RUNS_HINT, isEmpty: (runs) => runs.length === 0 },
+    { emptyHint: NO_RUNS_HINT, isEmpty: (runs) => runs.length === 0 }
   );
 }
 
@@ -81,7 +82,7 @@ export function useRunUsage(id: string | null): PanelState<string> {
       queryFn: () => getRunUsageTotal(id as string),
       enabled: id !== null,
       staleTime: 30_000,
-    }),
+    })
   );
 }
 
@@ -95,6 +96,6 @@ export function useShadowPairs(): PanelState<ShadowPair[]> {
       queryFn: getShadowPairs,
       refetchInterval: POLL_MS.shadow,
     }),
-    { emptyHint: NO_SHADOW_HINT, isEmpty: (pairs) => pairs.length === 0 },
+    { emptyHint: NO_SHADOW_HINT, isEmpty: (pairs) => pairs.length === 0 }
   );
 }

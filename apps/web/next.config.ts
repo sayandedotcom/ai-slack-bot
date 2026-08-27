@@ -30,7 +30,10 @@ const nextConfig: NextConfig = {
       { source: "/api/:path*", destination: `${workerOrigin}/api/:path*` },
       // Access-bypassed on the Worker; a proof link pasted into Slack has to
       // resolve without a login redirect, and it resolves here too.
-      { source: "/proofs/:path*", destination: `${workerOrigin}/proofs/:path*` },
+      {
+        source: "/proofs/:path*",
+        destination: `${workerOrigin}/proofs/:path*`,
+      },
     ];
   },
 };

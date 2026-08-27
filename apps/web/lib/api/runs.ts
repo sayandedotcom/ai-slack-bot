@@ -1,7 +1,13 @@
-import { fixture, getJson, isDemo } from "./client";
 import { demoRuns, demoUsageTotals } from "../fixtures/runs";
+import { fixture, getJson, isDemo } from "./client";
+import { ApiError } from "./errors";
 
-export type RunStatus = "live" | "awaiting_approval" | "idle" | "done" | "failed";
+export type RunStatus =
+  | "live"
+  | "awaiting_approval"
+  | "idle"
+  | "done"
+  | "failed";
 
 /**
  * A row in the runs list. The worker's `listRuns` joins the channel and
@@ -23,7 +29,9 @@ export type RunSummary = {
 
 export async function getRuns(limit = 50): Promise<RunSummary[]> {
   if (isDemo()) return fixture(demoRuns);
-  const body = await getJson<{ runs: RunSummary[] }>(`/api/runs?limit=${limit}`);
+  const body = await getJson<{ runs: RunSummary[] }>(
+    `/api/runs?limit=${limit}`
+  );
   return body.runs;
 }
 
@@ -43,10 +51,18 @@ export type RunDetail = Omit<RunSummary, "channelName" | "customerSlug"> & {
 
 export async function getRun(id: string): Promise<RunDetail> {
   if (isDemo()) {
-    const run = demoRuns.find((candidate) => candidate.id === id) ?? demoRuns[0]!;
+    // An unknown id borrows the first row rather than 404ing, so a pasted or
+    // stale `/runs/<id>` still renders something in a demo. `demoRuns` is a
+    // non-empty literal, but the index is narrowed rather than asserted —
+    // an assertion here would outlive whoever next edits the fixture.
+    const [first] = demoRuns;
+    const run = demoRuns.find((candidate) => candidate.id === id) ?? first;
+    if (run === undefined) throw new ApiError(404, "unavailable", "demo runs");
     return fixture({ ...run, id, threadTs: null });
   }
-  const body = await getJson<{ run: RunDetail }>(`/api/runs/${encodeURIComponent(id)}`);
+  const body = await getJson<{ run: RunDetail }>(
+    `/api/runs/${encodeURIComponent(id)}`
+  );
   return body.run;
 }
 
@@ -57,7 +73,7 @@ export async function getRun(id: string): Promise<RunDetail> {
 export async function getRunUsageTotal(id: string): Promise<string> {
   if (isDemo()) return fixture(demoUsageTotals[id] ?? "0.0000");
   const body = await getJson<{ totalCostUsd: string }>(
-    `/api/runs/${encodeURIComponent(id)}/usage`,
+    `/api/runs/${encodeURIComponent(id)}/usage`
   );
   return body.totalCostUsd;
 }

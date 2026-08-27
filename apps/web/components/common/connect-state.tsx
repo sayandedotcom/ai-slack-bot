@@ -1,15 +1,25 @@
 "use client";
 
+import { buttonVariants } from "@workspace/ui/components/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
+import { cn } from "@workspace/ui/lib/utils";
 import { Check, Link2 } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { buttonVariants } from "@workspace/ui/components/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
-import { cn } from "@workspace/ui/lib/utils";
+import {
+  type ConnectStatus,
+  OAUTH_START,
+  type Provider,
+} from "@/lib/api/roster";
 
-import { OAUTH_START, type ConnectStatus, type Provider } from "@/lib/api/roster";
-
-const PROVIDER_LABEL: Record<Provider, string> = { slack: "Slack", github: "GitHub" };
+const PROVIDER_LABEL: Record<Provider, string> = {
+  slack: "Slack",
+  github: "GitHub",
+};
 
 /**
  * Whether one engineer has linked one provider, and — on their own row only —
@@ -36,31 +46,38 @@ export function ConnectState({
 
   if (engineer[provider]) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-success">
+      <span className="inline-flex items-center gap-1 text-success text-xs">
         <Check className="size-3" aria-hidden="true" />
         connected
       </span>
     );
   }
 
-  const classes = buttonVariants({ variant: isSelf ? "default" : "outline", size: "xs" });
+  const classes = buttonVariants({
+    variant: isSelf ? "default" : "outline",
+    size: "xs",
+  });
 
   if (!isSelf) {
     return (
+      // A REAL disabled button inside a plain-span trigger, rather than a span
+      // wearing `role="button"`. A disabled button emits no pointer events, so
+      // it cannot be the tooltip's own trigger — the span is, which is the same
+      // shape the approval card uses for its disabled Send.
       <Tooltip>
-        <TooltipTrigger
-          render={
-            <span
-              className={cn(classes, "cursor-not-allowed opacity-50")}
-              aria-disabled="true"
-              role="button"
-            />
-          }
-        >
-          <Link2 data-icon="inline-start" />
-          Connect
+        <TooltipTrigger render={<span className="inline-flex" />}>
+          <button
+            type="button"
+            disabled
+            className={cn(classes, "cursor-not-allowed")}
+          >
+            <Link2 data-icon="inline-start" />
+            Connect
+          </button>
         </TooltipTrigger>
-        <TooltipContent>Each engineer connects their own account.</TooltipContent>
+        <TooltipContent>
+          Each engineer connects their own account.
+        </TooltipContent>
       </Tooltip>
     );
   }

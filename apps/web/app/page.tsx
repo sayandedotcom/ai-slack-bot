@@ -11,7 +11,11 @@ import { SpeakerHero } from "@/components/dashboard/speaker-hero";
 import { TeamTable } from "@/components/dashboard/team-table";
 import { TokenExplainer } from "@/components/dashboard/token-explainer";
 import { PageHeader } from "@/components/shell/page-header";
-import { useCounters, useIdentityQuery, useRoster } from "@/lib/hooks/use-dashboard-data";
+import {
+  useCounters,
+  useIdentityQuery,
+  useRoster,
+} from "@/lib/hooks/use-dashboard-data";
 
 /**
  * The dashboard, in the order a stranger needs to read it: whose voice the
@@ -32,8 +36,9 @@ export default function DashboardPage() {
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 p-4 pb-16 sm:p-6">
       <PageHeader eyebrow="Last 24 hours" title="Who answers the fire today">
-        The agent listens to every customer channel, wakes on the few messages that need it, and
-        speaks as a fire-fighter — but never sends a committal reply without one of you saying yes.
+        The agent listens to every customer channel, wakes on the few messages
+        that need it, and speaks as a fire-fighter — but never sends a committal
+        reply without one of you saying yes.
       </PageHeader>
 
       <div className="grid gap-4 lg:grid-cols-12">

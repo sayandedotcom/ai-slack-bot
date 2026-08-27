@@ -26,7 +26,7 @@ export function ApprovalsQueue({ role }: { role: Role }) {
       state={state}
       aside={
         openCount > 0 ? (
-          <span className="machine rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground">
+          <span className="machine rounded-full bg-primary px-2 py-0.5 font-medium text-[11px] text-primary-foreground">
             {openCount}
           </span>
         ) : null

@@ -1,13 +1,12 @@
 "use client";
 
-import { Flame } from "lucide-react";
-
-import { Card, CardContent } from "@workspace/ui/components/card";
 import { buttonVariants } from "@workspace/ui/components/button";
 
+import { Card, CardContent } from "@workspace/ui/components/card";
+import { Flame } from "lucide-react";
+import { nameOf } from "@/lib/format";
 import { useApprovals } from "@/lib/hooks/use-approvals";
 import { useRoster } from "@/lib/hooks/use-dashboard-data";
-import { nameOf } from "@/lib/format";
 
 /**
  * The Block Kit DM as it reaches the person who has to decide.
@@ -39,32 +38,44 @@ export function NudgePreview() {
       </h2>
       <Card>
         <CardContent className="space-y-3">
-          <div className="flex items-center gap-2 border-b pb-2.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 border-b pb-2.5 text-muted-foreground text-xs">
             <Flame className="size-3.5 text-primary" aria-hidden="true" />
             <span className="font-medium text-foreground">Firefighter</span>
             <span>direct message</span>
-            {speaker ? <span className="machine ml-auto">to {nameOf(speaker.email)}</span> : null}
+            {speaker ? (
+              <span className="machine ml-auto">
+                to {nameOf(speaker.email)}
+              </span>
+            ) : null}
           </div>
 
           <p className="text-sm">
             A draft is waiting on you in{" "}
-            <span className="machine text-muted-foreground">#{oldest.channelId}</span>:
+            <span className="machine text-muted-foreground">
+              #{oldest.channelId}
+            </span>
+            :
           </p>
 
-          <blockquote className="border-l-2 border-primary/40 bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-            {oldest.draft.length > 140 ? `${oldest.draft.slice(0, 140)}…` : oldest.draft}
+          <blockquote className="border-primary/40 border-l-2 bg-muted/40 px-3 py-2 text-muted-foreground text-sm">
+            {oldest.draft.length > 140
+              ? `${oldest.draft.slice(0, 140)}…`
+              : oldest.draft}
           </blockquote>
 
           {/* Rendered as the link it is. Making this a Button would imply a
               click here does something, and it does not — it opens the page
               you are already looking at. */}
-          <span className={buttonVariants({ variant: "outline", size: "sm" })} aria-hidden="true">
+          <span
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+            aria-hidden="true"
+          >
             Review in dashboard →
           </span>
 
-          <p className="text-xs text-pretty text-muted-foreground">
-            Push reaches phone and desktop. The button is a plain link — approving happens above,
-            never in Slack.
+          <p className="text-pretty text-muted-foreground text-xs">
+            Push reaches phone and desktop. The button is a plain link —
+            approving happens above, never in Slack.
           </p>
         </CardContent>
       </Card>

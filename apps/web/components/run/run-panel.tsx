@@ -1,9 +1,8 @@
 "use client";
 
+import { Skeleton } from "@workspace/ui/components/skeleton";
 import dynamic from "next/dynamic";
 import type { ReactNode } from "react";
-
-import { Skeleton } from "@workspace/ui/components/skeleton";
 
 import { isDemo } from "@/lib/api/client";
 import { demoTranscriptFor } from "@/lib/fixtures/run-transcript";
@@ -26,7 +25,13 @@ const RunSession = dynamic(() => import("./run-session"), {
   loading: () => <Skeleton className="min-h-0 flex-1 rounded-lg" />,
 });
 
-export function RunPanel({ runId, approvals }: { runId: string; approvals?: ReactNode }) {
+export function RunPanel({
+  runId,
+  approvals,
+}: {
+  runId: string;
+  approvals?: ReactNode;
+}) {
   if (isDemo()) {
     return (
       <RunView

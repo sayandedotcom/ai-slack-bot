@@ -1,8 +1,10 @@
 "use client";
 
-import { Suspense, type ReactNode } from "react";
-
-import { SidebarInset, SidebarProvider } from "@workspace/ui/components/sidebar";
+import {
+  SidebarInset,
+  SidebarProvider,
+} from "@workspace/ui/components/sidebar";
+import { type ReactNode, Suspense } from "react";
 
 import { SignedOutPage } from "@/components/common/signed-out";
 import { useIdentityQuery } from "@/lib/hooks/use-dashboard-data";

@@ -4,16 +4,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
+  type DecideAction,
   decide,
   getApproval,
   getOpenApprovals,
-  type DecideAction,
   type OpenApproval,
 } from "../api/approvals";
 import type { PanelState } from "../panel-state";
 import { POLL_MS, queryKeys } from "../query/keys";
 import { toPanelState } from "../query/to-panel-state";
-import { useApprovalsOverlay, type CardState } from "../store/approvals-overlay";
+import {
+  type CardState,
+  useApprovalsOverlay,
+} from "../store/approvals-overlay";
 
 export type { CardState };
 
@@ -50,8 +53,14 @@ export function useApprovals(): {
   });
 
   const overlay = useApprovalsOverlay((s) => s.cards);
-  const { beginDecide, failDecide, resolve, hold, nameDecider, claimReconcile } =
-    useApprovalsOverlay.getState();
+  const {
+    beginDecide,
+    failDecide,
+    resolve,
+    hold,
+    nameDecider,
+    claimReconcile,
+  } = useApprovalsOverlay.getState();
 
   const rows = query.data ?? null;
 
@@ -92,8 +101,13 @@ export function useApprovals(): {
       hold(row);
 
       void queryClient
-        .fetchQuery({ queryKey: queryKeys.approval(id), queryFn: () => getApproval(id) })
-        .then((detail) => resolve(detail, detail.decision, detail.decidedBy, false))
+        .fetchQuery({
+          queryKey: queryKeys.approval(id),
+          queryFn: () => getApproval(id),
+        })
+        .then((detail) =>
+          resolve(detail, detail.decision, detail.decidedBy, false)
+        )
         .catch(() => {
           // We know it left the open list but not why. "withdrawn" with no name
           // is this store's shape for "resolved elsewhere" — vague, but true.
@@ -103,8 +117,13 @@ export function useApprovals(): {
   }, [rows, claimReconcile, hold, resolve, queryClient]);
 
   const mutation = useMutation({
-    mutationFn: ({ card, action }: { card: OpenApproval; action: DecideAction }) =>
-      decide(card.id, action).then((result) => ({ card, result })),
+    mutationFn: ({
+      card,
+      action,
+    }: {
+      card: OpenApproval;
+      action: DecideAction;
+    }) => decide(card.id, action).then((result) => ({ card, result })),
     onMutate: ({ card, action }) => {
       beginDecide(card, action);
     },
@@ -118,7 +137,9 @@ export function useApprovals(): {
         resolve(card, result.decision, null, true);
         // The row is gone server-side; stop showing a stale open list until the
         // next tick of the interval would have noticed.
-        void queryClient.invalidateQueries({ queryKey: queryKeys.openApprovals });
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.openApprovals,
+        });
         return;
       }
 
@@ -166,7 +187,9 @@ export function useApprovals(): {
     for (const [id, state] of overlay) {
       if (!merged.has(id)) merged.set(id, state);
     }
-    return [...merged.values()].sort((a, b) => b.card.createdAt - a.card.createdAt);
+    return [...merged.values()].sort(
+      (a, b) => b.card.createdAt - a.card.createdAt
+    );
   }, [rows, overlay]);
 
   /**
@@ -183,7 +206,7 @@ export function useApprovals(): {
       if (current === undefined || current.kind !== "open") return;
       mutation.mutate({ card: current.card, action });
     },
-    [cards, mutation],
+    [cards, mutation]
   );
 
   /**

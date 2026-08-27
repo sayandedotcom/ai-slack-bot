@@ -1,11 +1,19 @@
 "use client";
 
-import { AlertTriangle, GitPullRequest, MessageCircle, TriangleAlert } from "lucide-react";
-
 import { Card, CardContent } from "@workspace/ui/components/card";
 import { Skeleton } from "@workspace/ui/components/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
 import { cn } from "@workspace/ui/lib/utils";
+import {
+  AlertTriangle,
+  GitPullRequest,
+  MessageCircle,
+  TriangleAlert,
+} from "lucide-react";
 
 import type { Roster } from "@/lib/api/roster";
 import { initialOf, nameOf } from "@/lib/format";
@@ -29,7 +37,7 @@ export function SpeakerHero({ state }: { state: PanelState<Roster> }) {
       <Card className="justify-center">
         <CardContent className="space-y-2">
           {state.kind === "error" ? (
-            <p className="text-sm text-muted-foreground" role="alert">
+            <p className="text-muted-foreground text-sm" role="alert">
               Can&apos;t tell who the agent speaks as right now.
             </p>
           ) : (
@@ -53,12 +61,16 @@ export function SpeakerHero({ state }: { state: PanelState<Roster> }) {
     return (
       <Card className="border-destructive/50 bg-destructive/5">
         <CardContent className="flex items-start gap-3">
-          <TriangleAlert className="mt-0.5 size-5 shrink-0 text-destructive" aria-hidden="true" />
+          <TriangleAlert
+            className="mt-0.5 size-5 shrink-0 text-destructive"
+            aria-hidden="true"
+          />
           <div className="space-y-1">
             <p className="font-medium">Nobody can speak</p>
-            <p className="text-sm text-pretty text-muted-foreground">
-              No fire-fighter has connected Slack, so every customer-facing reply is refused.
-              Connect an account in the team table below to unblock it.
+            <p className="text-pretty text-muted-foreground text-sm">
+              No fire-fighter has connected Slack, so every customer-facing
+              reply is refused. Connect an account in the team table below to
+              unblock it.
             </p>
           </div>
         </CardContent>
@@ -67,32 +79,46 @@ export function SpeakerHero({ state }: { state: PanelState<Roster> }) {
   }
 
   const self = engineers.find((engineer) => engineer.email === speaker.email);
-  const prAuthorDiffers = githubSpeaker !== null && githubSpeaker.email !== speaker.email;
+  const prAuthorDiffers =
+    githubSpeaker !== null && githubSpeaker.email !== speaker.email;
 
   return (
     <Card className="relative overflow-hidden border-l-2 border-l-primary">
       <CardContent className="flex items-start gap-4">
         <span
           aria-hidden="true"
-          className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary text-lg font-semibold text-primary-foreground"
+          className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary font-semibold text-lg text-primary-foreground"
         >
           {initialOf(speaker.email)}
         </span>
 
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className="text-lg font-semibold tracking-tight">{nameOf(speaker.email)}</span>
-            <span className="text-sm text-muted-foreground">speaks by default</span>
+            <span className="font-semibold text-lg tracking-tight">
+              {nameOf(speaker.email)}
+            </span>
+            <span className="text-muted-foreground text-sm">
+              speaks by default
+            </span>
           </div>
 
-          <p className="text-sm text-pretty text-muted-foreground">
-            Direct replies and the nudge DM go out under this account. An approved reply goes out
-            as whoever approved it, when they&apos;ve connected.
+          <p className="text-pretty text-muted-foreground text-sm">
+            Direct replies and the nudge DM go out under this account. An
+            approved reply goes out as whoever approved it, when they&apos;ve
+            connected.
           </p>
 
           <div className="flex flex-wrap items-center gap-2 pt-0.5">
-            <ConnectChip label="Slack" connected={self?.slack ?? false} icon={MessageCircle} />
-            <ConnectChip label="GitHub" connected={self?.github ?? false} icon={GitPullRequest} />
+            <ConnectChip
+              label="Slack"
+              connected={self?.slack ?? false}
+              icon={MessageCircle}
+            />
+            <ConnectChip
+              label="GitHub"
+              connected={self?.github ?? false}
+              icon={GitPullRequest}
+            />
 
             {prAuthorDiffers ? (
               <Tooltip>
@@ -105,8 +131,8 @@ export function SpeakerHero({ state }: { state: PanelState<Roster> }) {
                   PRs open as {nameOf(githubSpeaker.email)}
                 </TooltipTrigger>
                 <TooltipContent>
-                  Slack and GitHub are picked separately — each is the first fire-fighter in roster
-                  order who has connected that provider.
+                  Slack and GitHub are picked separately — each is the first
+                  fire-fighter in roster order who has connected that provider.
                 </TooltipContent>
               </Tooltip>
             ) : null}
@@ -132,7 +158,7 @@ function ConnectChip({
         "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px]",
         connected
           ? "border-success/40 bg-success/10 text-success"
-          : "border-warning/40 bg-warning/10 text-warning",
+          : "border-warning/40 bg-warning/10 text-warning"
       )}
     >
       {connected ? (

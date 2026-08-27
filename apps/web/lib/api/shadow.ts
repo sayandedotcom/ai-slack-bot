@@ -1,5 +1,5 @@
-import { fixture, getJson, isDemo } from "./client";
 import { demoShadowPairs } from "../fixtures/shadow";
+import { fixture, getJson, isDemo } from "./client";
 
 /** A detected AI "tell" in a draft — the worker's tell detector owns the full list. */
 export type AiTell =
@@ -45,6 +45,8 @@ export type ShadowPair = {
 
 export async function getShadowPairs(): Promise<ShadowPair[]> {
   if (isDemo()) return fixture(demoShadowPairs);
-  const body = await getJson<{ pairs: ShadowPair[] }>("/api/eval/shadow?limit=20");
+  const body = await getJson<{ pairs: ShadowPair[] }>(
+    "/api/eval/shadow?limit=20"
+  );
   return body.pairs;
 }

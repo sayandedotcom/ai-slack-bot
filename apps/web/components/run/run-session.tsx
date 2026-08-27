@@ -18,7 +18,13 @@ import { RunView } from "./run-view";
  * nothing for a server render to produce here and the client-only boundary
  * makes that explicit rather than incidental.
  */
-export function RunSession({ runId, approvals }: { runId: string; approvals?: ReactNode }) {
+export function RunSession({
+  runId,
+  approvals,
+}: {
+  runId: string;
+  approvals?: ReactNode;
+}) {
   const run = useRunAgent(runId);
 
   return (

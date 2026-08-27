@@ -1,5 +1,5 @@
-import { fixture, getJson, isDemo } from "./client";
 import { demoCounters } from "../fixtures/counters";
+import { fixture, getJson, isDemo } from "./client";
 
 export type Counters = {
   counters: {

@@ -1,9 +1,12 @@
 "use client";
 
-import type { ReactNode } from "react";
-
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
 import { cn } from "@workspace/ui/lib/utils";
+import type { ReactNode } from "react";
 
 import type { RunStatus } from "@/lib/api/runs";
 
@@ -12,7 +15,10 @@ import type { RunStatus } from "@/lib/api/runs";
  * on you". These are the only rows that pulse; a pulse on a finished run would
  * train an operator to ignore the one signal that matters.
  */
-const LIVE: ReadonlySet<RunStatus> = new Set<RunStatus>(["live", "awaiting_approval"]);
+const LIVE: ReadonlySet<RunStatus> = new Set<RunStatus>([
+  "live",
+  "awaiting_approval",
+]);
 
 const LABEL: Record<RunStatus, string> = {
   live: "live",
@@ -46,8 +52,8 @@ export function StatusChip({ status }: { status: RunStatus }): ReactNode {
         render={
           <span
             className={cn(
-              "machine inline-flex cursor-default items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium",
-              TONE[status],
+              "machine inline-flex cursor-default items-center gap-1.5 rounded-full border px-2 py-0.5 font-medium text-[11px]",
+              TONE[status]
             )}
           />
         }
@@ -91,7 +97,8 @@ export function ShadowBadge({ label }: { label?: string }): ReactNode {
         {label ?? "shadow"}
       </TooltipTrigger>
       <TooltipContent>
-        Shadow run — it drafts and reasons, but nothing it does reaches a customer.
+        Shadow run — it drafts and reasons, but nothing it does reaches a
+        customer.
       </TooltipContent>
     </Tooltip>
   );

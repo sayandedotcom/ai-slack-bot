@@ -16,7 +16,13 @@ function view(overrides: Partial<RunViewProps> = {}) {
   const props: RunViewProps = {
     connection: "live",
     connectionError: false,
-    messages: [{ id: "m1", role: "assistant", parts: [{ type: "text", text: "Working on it." }] }],
+    messages: [
+      {
+        id: "m1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Working on it." }],
+      },
+    ],
     busy: false,
     turnError: false,
     sendError: null,
@@ -35,7 +41,9 @@ describe("RunView", () => {
 
   it("distinguishes a first connect from a reconnect", () => {
     const first = view({ connection: "connecting" });
-    expect(screen.getByRole("status")).toHaveTextContent(/Connecting to the run/);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /Connecting to the run/
+    );
     first.unmount();
 
     view({ connection: "reconnecting" });
@@ -71,7 +79,9 @@ describe("RunView", () => {
   });
 
   it("will not send when the composer is off, whatever is typed", async () => {
-    const { props } = view({ steerDisabledReason: "no run behind this transcript" });
+    const { props } = view({
+      steerDisabledReason: "no run behind this transcript",
+    });
     const box = screen.getByLabelText("Steer the agent");
 
     expect(box).toBeDisabled();

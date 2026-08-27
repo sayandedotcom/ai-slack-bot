@@ -1,9 +1,8 @@
 "use client";
 
+import { cn } from "@workspace/ui/lib/utils";
 import { ChevronRight, Code2, Flame, User } from "lucide-react";
 import { useState } from "react";
-
-import { cn } from "@workspace/ui/lib/utils";
 
 /**
  * One run's transcript.
@@ -64,14 +63,24 @@ function textOf(part: unknown): string | null {
 function preview(value: unknown): { text: string; truncated: boolean } {
   let full: string;
   try {
-    full = typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value));
+    full =
+      typeof value === "string"
+        ? value
+        : (JSON.stringify(value, null, 2) ?? String(value));
   } catch {
     full = String(value);
   }
-  return { text: full.slice(0, PAYLOAD_MAX_CHARS), truncated: full.length > PAYLOAD_MAX_CHARS };
+  return {
+    text: full.slice(0, PAYLOAD_MAX_CHARS),
+    truncated: full.length > PAYLOAD_MAX_CHARS,
+  };
 }
 
-export function Transcript({ messages }: { messages: readonly TranscriptMessage[] }) {
+export function Transcript({
+  messages,
+}: {
+  messages: readonly TranscriptMessage[];
+}) {
   return (
     <ol className="space-y-5">
       {messages.map((message) => (
@@ -96,18 +105,17 @@ function MessageRow({ message }: { message: TranscriptMessage }) {
         <p
           key={key}
           className={cn(
-            "text-sm text-pretty whitespace-pre-wrap",
-            !isAgent && "rounded-lg rounded-tl-sm bg-muted/60 px-3 py-2",
+            "whitespace-pre-wrap text-pretty text-sm",
+            !isAgent && "rounded-lg rounded-tl-sm bg-muted/60 px-3 py-2"
           )}
         >
           {text}
-        </p>,
+        </p>
       );
       continue;
     }
     if (isToolPart(part)) {
       rows.push(<ToolRow key={key} part={part} />);
-      continue;
     }
     // `reasoning` is deliberately not rendered: the provider returns thinking
     // with an empty text field (invariant 17), so there is nothing to show and
@@ -123,11 +131,17 @@ function MessageRow({ message }: { message: TranscriptMessage }) {
       <span
         aria-hidden="true"
         className={cn(
-          "flex size-7 shrink-0 items-center justify-center rounded-lg text-[11px] font-medium",
-          isAgent ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
+          "flex size-7 shrink-0 items-center justify-center rounded-lg font-medium text-[11px]",
+          isAgent
+            ? "bg-primary/15 text-primary"
+            : "bg-muted text-muted-foreground"
         )}
       >
-        {isAgent ? <Flame className="size-3.5" /> : <User className="size-3.5" />}
+        {isAgent ? (
+          <Flame className="size-3.5" />
+        ) : (
+          <User className="size-3.5" />
+        )}
       </span>
       <div className="min-w-0 flex-1 space-y-2">
         <span className="eyebrow">{isAgent ? "Firefighter" : "You"}</span>
@@ -156,7 +170,10 @@ function ToolRow({ part }: { part: unknown }) {
   const state = typeof record.state === "string" ? record.state : "";
 
   return (
-    <div data-slot="tool-row" className="overflow-hidden rounded-lg border bg-card">
+    <div
+      data-slot="tool-row"
+      className="overflow-hidden rounded-lg border bg-card"
+    >
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -165,9 +182,15 @@ function ToolRow({ part }: { part: unknown }) {
       >
         <ChevronRight
           aria-hidden="true"
-          className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-90"
+          )}
         />
-        <Code2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <Code2
+          className="size-3.5 shrink-0 text-muted-foreground"
+          aria-hidden="true"
+        />
         <span className="machine text-xs">{toolNameOf(part)}</span>
         {state === "" ? null : <span className="eyebrow ml-auto">{state}</span>}
       </button>
@@ -178,7 +201,9 @@ function ToolRow({ part }: { part: unknown }) {
           ) : record.input === undefined ? null : (
             <Payload label="input" value={record.input} />
           )}
-          {record.output === undefined ? null : <Payload label="output" value={record.output} />}
+          {record.output === undefined ? null : (
+            <Payload label="output" value={record.output} />
+          )}
         </div>
       ) : null}
     </div>
@@ -190,7 +215,7 @@ function Payload({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="space-y-1">
       <span className="eyebrow">{label}</span>
-      <pre className="machine overflow-x-auto rounded bg-muted/60 p-2 text-[11px] leading-relaxed break-words whitespace-pre-wrap">
+      <pre className="machine overflow-x-auto whitespace-pre-wrap break-words rounded bg-muted/60 p-2 text-[11px] leading-relaxed">
         {text}
       </pre>
       {truncated ? (

@@ -101,6 +101,11 @@
   /* The only motion in the app is the live-run pulse, and it exists to draw an
      eye across a list. Somebody who has asked their OS to stop moving things
      still gets the steady dot underneath it. */
+  /* `!important` is the point, not a shortcut. This block has to beat utility
+     classes and inline styles it can never enumerate — `animate-ping` on the
+     live-run dot among them — and an accessibility preference the reader has
+     set at the OS level outranks any of them. This is the one place in the app
+     that uses it, and biome.jsonc carries the matching override. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

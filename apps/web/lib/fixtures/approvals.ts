@@ -88,18 +88,33 @@ export function getDemoApproval(id: string): ApprovalDetail {
  * one answers 409 with the decision that won. Deciding the same card twice in
  * a demo is exactly how an operator discovers that rule exists.
  */
-export function decideDemoApproval(id: string, action: DecideAction): DecideResult {
+export function decideDemoApproval(
+  id: string,
+  action: DecideAction
+): DecideResult {
   const row = rows.find((candidate) => candidate.id === id);
   if (!row) {
-    return { result: "already_decided", decision: "withdrawn", decidedBy: null };
+    return {
+      result: "already_decided",
+      decision: "withdrawn",
+      decidedBy: null,
+    };
   }
 
   if (row.decision !== "pending") {
-    return { result: "already_decided", decision: row.decision, decidedBy: null };
+    return {
+      result: "already_decided",
+      decision: row.decision,
+      decidedBy: null,
+    };
   }
 
   const decision: Decision =
-    action.action === "approve" ? "approved" : action.action === "edit" ? "edited" : "rejected";
+    action.action === "approve"
+      ? "approved"
+      : action.action === "edit"
+        ? "edited"
+        : "rejected";
   row.decision = decision;
   return { result: "decided", decision };
 }

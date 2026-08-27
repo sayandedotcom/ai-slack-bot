@@ -1,7 +1,5 @@
 "use client";
 
-import { Users2 } from "lucide-react";
-
 import { Badge } from "@workspace/ui/components/badge";
 import {
   Table,
@@ -12,6 +10,7 @@ import {
   TableRow,
 } from "@workspace/ui/components/table";
 import { cn } from "@workspace/ui/lib/utils";
+import { Users2 } from "lucide-react";
 
 import { ConnectState } from "@/components/common/connect-state";
 import { Panel } from "@/components/common/panel";
@@ -48,7 +47,9 @@ export function TeamTable({
       aside={<span className="eyebrow">seven accounts, hardcoded</span>}
     >
       {(roster) => {
-        const firefighters = roster.engineers.filter((e) => e.role === "firefighter");
+        const firefighters = roster.engineers.filter(
+          (e) => e.role === "firefighter"
+        );
         const viewers = roster.engineers.filter((e) => e.role === "viewer");
 
         return (
@@ -75,7 +76,9 @@ export function TeamTable({
                 {viewers.length > 0 ? (
                   <TableRow className="hover:bg-transparent">
                     <TableCell colSpan={4} className="pt-5 pb-1 pl-4">
-                      <span className="eyebrow">Viewers · read-only and chat</span>
+                      <span className="eyebrow">
+                        Viewers · read-only and chat
+                      </span>
                     </TableCell>
                   </TableRow>
                 ) : null}
@@ -113,15 +116,19 @@ function PersonRow({
           <span
             aria-hidden="true"
             className={cn(
-              "flex size-7 shrink-0 items-center justify-center rounded-md text-[11px] font-medium",
-              speaks ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
+              "flex size-7 shrink-0 items-center justify-center rounded-md font-medium text-[11px]",
+              speaks
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground"
             )}
           >
             {initialOf(engineer.email)}
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="truncate text-sm font-medium">{nameOf(engineer.email)}</span>
+              <span className="truncate font-medium text-sm">
+                {nameOf(engineer.email)}
+              </span>
               {isSelf ? <span className="eyebrow">you</span> : null}
             </div>
             <span className="machine truncate text-[11px] text-muted-foreground">

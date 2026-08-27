@@ -22,7 +22,8 @@ export function makeQueryClient(): QueryClient {
         // the request reaches a route, and no amount of backoff changes who you
         // are. Everything else gets two attempts.
         retry: (failureCount, error) => {
-          if (error instanceof ApiError && error.kind !== "unavailable") return false;
+          if (error instanceof ApiError && error.kind !== "unavailable")
+            return false;
           return failureCount < 2;
         },
       },

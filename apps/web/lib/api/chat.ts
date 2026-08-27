@@ -1,5 +1,5 @@
-import { fixture, isDemo, postJson } from "./client";
 import { DEMO_CHAT_RUN_ID } from "../fixtures/run-transcript";
+import { fixture, isDemo, postJson } from "./client";
 
 /**
  * Starting a run from this app.
@@ -22,7 +22,7 @@ export type StartedRun = { id: string };
 
 export function startChatRun(
   firstMessage: string,
-  clientRequestId: string,
+  clientRequestId: string
 ): Promise<StartedRun> {
   if (isDemo()) return fixture({ id: DEMO_CHAT_RUN_ID });
   return postJson<StartedRun>("/api/runs", { firstMessage, clientRequestId });
@@ -49,7 +49,7 @@ export type ChatStarter = {
  */
 export function makeChatStarter(
   post: (text: string, clientRequestId: string) => Promise<StartedRun>,
-  mintId: () => string = () => crypto.randomUUID(),
+  mintId: () => string = () => crypto.randomUUID()
 ): ChatStarter {
   const idFor = new Map<string, string>();
   const inFlight = new Map<string, Promise<StartedRun>>();

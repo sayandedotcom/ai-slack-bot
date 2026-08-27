@@ -54,7 +54,7 @@ type ApprovalsOverlay = {
     card: OpenApproval,
     decision: Decision,
     decidedBy: string | null,
-    mine: boolean,
+    mine: boolean
   ) => void;
   /** Hold a vanished card visible, as its last polled row, for one round trip. */
   hold: (card: OpenApproval) => void;
@@ -79,7 +79,7 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>();
 function withCard(
   cards: ReadonlyMap<string, CardState>,
   id: string,
-  state: CardState,
+  state: CardState
 ): ReadonlyMap<string, CardState> {
   return new Map(cards).set(id, state);
 }
@@ -89,19 +89,31 @@ export const useApprovalsOverlay = create<ApprovalsOverlay>()((set, get) => ({
   reconciled: new Set(),
 
   beginDecide: (card, action) =>
-    set((s) => ({ cards: withCard(s.cards, card.id, { kind: "deciding", card, action }) })),
+    set((s) => ({
+      cards: withCard(s.cards, card.id, { kind: "deciding", card, action }),
+    })),
 
   failDecide: (card, message) =>
-    set((s) => ({ cards: withCard(s.cards, card.id, { kind: "open", card, error: message }) })),
+    set((s) => ({
+      cards: withCard(s.cards, card.id, { kind: "open", card, error: message }),
+    })),
 
   hold: (card) =>
     set((s) =>
-      s.cards.has(card.id) ? s : { cards: withCard(s.cards, card.id, { kind: "open", card }) },
+      s.cards.has(card.id)
+        ? s
+        : { cards: withCard(s.cards, card.id, { kind: "open", card }) }
     ),
 
   resolve: (card, decision, decidedBy, mine) => {
     set((s) => ({
-      cards: withCard(s.cards, card.id, { kind: "resolved", card, decision, decidedBy, mine }),
+      cards: withCard(s.cards, card.id, {
+        kind: "resolved",
+        card,
+        decision,
+        decidedBy,
+        mine,
+      }),
     }));
 
     const existing = timers.get(card.id);
@@ -111,7 +123,7 @@ export const useApprovalsOverlay = create<ApprovalsOverlay>()((set, get) => ({
       setTimeout(() => {
         timers.delete(card.id);
         get().forget(card.id);
-      }, RESOLVED_TTL_MS),
+      }, RESOLVED_TTL_MS)
     );
   },
 

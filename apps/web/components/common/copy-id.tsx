@@ -1,12 +1,15 @@
 "use client";
 
-import { Check, Copy } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import type { ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
 import { cn } from "@workspace/ui/lib/utils";
+import { Check, Copy } from "lucide-react";
+import type { ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * An identifier, and a way to get it into a Slack message. The id itself stays
@@ -36,16 +39,18 @@ export function CopyId({
   const copy = useCallback(() => {
     void navigator.clipboard?.writeText(value).then(
       () => setCopied(true),
-      () => undefined,
+      () => undefined
     );
   }, [value]);
 
   return (
-    <span className={cn("inline-flex max-w-full items-center gap-1", className)}>
+    <span
+      className={cn("inline-flex max-w-full items-center gap-1", className)}
+    >
       <code
         className={cn(
           "machine rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground",
-          truncate && "truncate",
+          truncate && "truncate"
         )}
       >
         {value}

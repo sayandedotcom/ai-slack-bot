@@ -36,7 +36,9 @@ const FIXTURE_LATENCY_MS = 220;
 
 /** Resolve a fixture as though it had crossed a network. */
 export function fixture<T>(value: T): Promise<T> {
-  return new Promise((resolve) => setTimeout(() => resolve(value), FIXTURE_LATENCY_MS));
+  return new Promise((resolve) =>
+    setTimeout(() => resolve(value), FIXTURE_LATENCY_MS)
+  );
 }
 
 /** GET a relative JSON endpoint. Throws `ApiError` for anything that is not a parsed 2xx. */
@@ -52,7 +54,8 @@ export async function getJson<T>(path: string): Promise<T> {
     throw new ApiError(0, "unavailable", path);
   }
 
-  if (!response.ok) throw new ApiError(response.status, kindFor(response.status), path);
+  if (!response.ok)
+    throw new ApiError(response.status, kindFor(response.status), path);
 
   try {
     return (await response.json()) as T;
@@ -67,7 +70,10 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   try {
     response = await fetch(path, {
       method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
       credentials: "same-origin",
       body: JSON.stringify(body),
     });
@@ -75,7 +81,8 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
     throw new ApiError(0, "unavailable", path);
   }
 
-  if (!response.ok) throw new ApiError(response.status, kindFor(response.status), path);
+  if (!response.ok)
+    throw new ApiError(response.status, kindFor(response.status), path);
 
   try {
     return (await response.json()) as T;
@@ -92,13 +99,16 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
  */
 export async function patchJson(
   path: string,
-  body: unknown,
+  body: unknown
 ): Promise<{ status: number; body: unknown }> {
   let response: Response;
   try {
     response = await fetch(path, {
       method: "PATCH",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
       credentials: "same-origin",
       body: JSON.stringify(body),
     });

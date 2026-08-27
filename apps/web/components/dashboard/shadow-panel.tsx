@@ -1,11 +1,14 @@
 "use client";
 
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip";
 import { ExternalLink, FlaskConical } from "lucide-react";
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
-
 import { Panel } from "@/components/common/panel";
-import { TELL_MEANING, type AiTell, type ShadowPair } from "@/lib/api/shadow";
+import { type AiTell, type ShadowPair, TELL_MEANING } from "@/lib/api/shadow";
 import { ago, shortThread } from "@/lib/format";
 import { useShadowPairs } from "@/lib/hooks/use-dashboard-data";
 import { useNow } from "@/lib/hooks/use-now";
@@ -54,7 +57,7 @@ function Pair({ pair, now }: { pair: ShadowPair; now: number }) {
       <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-1.5">
           <p className="eyebrow">Agent draft</p>
-          <p className="rounded-md border border-shadow-run/30 bg-shadow-run/5 px-3 py-2 text-sm whitespace-pre-wrap">
+          <p className="whitespace-pre-wrap rounded-md border border-shadow-run/30 bg-shadow-run/5 px-3 py-2 text-sm">
             {pair.draft}
           </p>
           {pair.tells.length > 0 ? (
@@ -69,12 +72,13 @@ function Pair({ pair, now }: { pair: ShadowPair; now: number }) {
         <div className="space-y-1.5">
           <p className="eyebrow">What a human sent</p>
           {pair.humanReply === null ? (
-            <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-              Nobody replied in the thread, so there is nothing to compare against.
+            <p className="rounded-md border border-dashed px-3 py-2 text-muted-foreground text-sm">
+              Nobody replied in the thread, so there is nothing to compare
+              against.
             </p>
           ) : (
             <>
-              <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap">
+              <p className="whitespace-pre-wrap rounded-md border bg-muted/40 px-3 py-2 text-sm">
                 {pair.humanReply.text}
               </p>
               {pair.humanReply.permalink ? (
@@ -82,7 +86,7 @@ function Pair({ pair, now }: { pair: ShadowPair; now: number }) {
                   href={pair.humanReply.permalink}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                  className="inline-flex items-center gap-1 text-muted-foreground text-xs underline-offset-4 hover:text-foreground hover:underline"
                 >
                   Open thread
                   <ExternalLink className="size-3" aria-hidden="true" />

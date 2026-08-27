@@ -1,8 +1,5 @@
 "use client";
 
-import { ChevronsUpDown, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
-import { useTheme } from "next-themes";
-
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,13 +17,17 @@ import {
   useSidebar,
 } from "@workspace/ui/components/sidebar";
 import { Skeleton } from "@workspace/ui/components/skeleton";
+import { ChevronsUpDown, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
+import { useTheme } from "next-themes";
 
 import { initialOf, nameOf } from "@/lib/format";
 import { useIdentityQuery } from "@/lib/hooks/use-dashboard-data";
 
 const ROLE_MEANING = {
-  firefighter: "You can decide approvals and connect your own Slack and GitHub.",
-  viewer: "You can read everything and use chat. Fire-fighters decide approvals.",
+  firefighter:
+    "You can decide approvals and connect your own Slack and GitHub.",
+  viewer:
+    "You can read everything and use chat. Fire-fighters decide approvals.",
 } as const;
 
 /**
@@ -63,14 +64,19 @@ export function NavUser() {
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <SidebarMenuButton size="lg" tooltip={`${identity.email} · ${identity.role}`} />
+              <SidebarMenuButton
+                size="lg"
+                tooltip={`${identity.email} · ${identity.role}`}
+              />
             }
           >
-            <span className="flex aspect-square size-8 items-center justify-center rounded-lg bg-muted text-xs font-medium">
+            <span className="flex aspect-square size-8 items-center justify-center rounded-lg bg-muted font-medium text-xs">
               {initialOf(identity.email)}
             </span>
             <span className="grid flex-1 text-left leading-tight">
-              <span className="truncate text-sm font-medium">{nameOf(identity.email)}</span>
+              <span className="truncate font-medium text-sm">
+                {nameOf(identity.email)}
+              </span>
               <span className="eyebrow truncate">{identity.role}</span>
             </span>
             <ChevronsUpDown className="ml-auto size-4" />
@@ -84,10 +90,10 @@ export function NavUser() {
           >
             <DropdownMenuLabel className="font-normal">
               <div className="flex flex-col gap-1">
-                <span className="machine truncate text-xs text-muted-foreground">
+                <span className="machine truncate text-muted-foreground text-xs">
                   {identity.email}
                 </span>
-                <span className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                <span className="flex items-start gap-1.5 text-muted-foreground text-xs">
                   <ShieldCheck
                     className={`mt-px size-3.5 shrink-0 ${isFirefighter ? "text-success" : ""}`}
                     aria-hidden="true"
@@ -99,8 +105,13 @@ export function NavUser() {
 
             <DropdownMenuSeparator />
 
-            <DropdownMenuLabel className="eyebrow">Appearance</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={theme ?? "system"} onValueChange={setTheme}>
+            <DropdownMenuLabel className="eyebrow">
+              Appearance
+            </DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={theme ?? "system"}
+              onValueChange={setTheme}
+            >
               <DropdownMenuRadioItem value="dark">
                 <Moon />
                 Dark

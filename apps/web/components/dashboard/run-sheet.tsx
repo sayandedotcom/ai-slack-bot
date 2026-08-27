@@ -1,8 +1,6 @@
 "use client";
 
-import { ArrowUpRight } from "lucide-react";
-import Link from "next/link";
-
+import { Button } from "@workspace/ui/components/button";
 import {
   Sheet,
   SheetContent,
@@ -10,13 +8,18 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@workspace/ui/components/sheet";
-import { Button } from "@workspace/ui/components/button";
 import { Skeleton } from "@workspace/ui/components/skeleton";
+import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 
 import { CopyId } from "@/components/common/copy-id";
-import { OriginBadge, ShadowBadge, StatusChip } from "@/components/common/status-chip";
+import {
+  OriginBadge,
+  ShadowBadge,
+  StatusChip,
+} from "@/components/common/status-chip";
 import { ago, usd } from "@/lib/format";
-import { useRunUsage, useRuns } from "@/lib/hooks/use-dashboard-data";
+import { useRuns, useRunUsage } from "@/lib/hooks/use-dashboard-data";
 import { useNow } from "@/lib/hooks/use-now";
 import { useSelectedRun } from "@/lib/hooks/use-selected-run";
 
@@ -38,7 +41,9 @@ export function RunSheet() {
   const usage = useRunUsage(selected);
 
   const run =
-    runs.kind === "ready" ? runs.data.find((candidate) => candidate.id === selected) : undefined;
+    runs.kind === "ready"
+      ? runs.data.find((candidate) => candidate.id === selected)
+      : undefined;
 
   return (
     <Sheet
@@ -70,10 +75,11 @@ export function RunSheet() {
                 {run.shadow ? <ShadowBadge /> : null}
               </div>
 
-              <p className="text-sm text-pretty">
+              <p className="text-pretty text-sm">
                 {run.summary ?? (
                   <span className="text-muted-foreground italic">
-                    No summary — the agent was woken but has not written one yet.
+                    No summary — the agent was woken but has not written one
+                    yet.
                   </span>
                 )}
               </p>
@@ -93,12 +99,12 @@ export function RunSheet() {
                   </Row>
                 ) : null}
                 <Row label="Started">
-                  <span className="machine text-xs text-muted-foreground">
+                  <span className="machine text-muted-foreground text-xs">
                     {ago(run.createdAt, now)}
                   </span>
                 </Row>
                 <Row label="Last activity">
-                  <span className="machine text-xs text-muted-foreground">
+                  <span className="machine text-muted-foreground text-xs">
                     {ago(run.updatedAt, now)}
                   </span>
                 </Row>
@@ -108,7 +114,9 @@ export function RunSheet() {
                     // Formatting it as a number here would round money.
                     <span className="machine text-xs">{usd(usage.data)}</span>
                   ) : usage.kind === "error" ? (
-                    <span className="text-xs text-muted-foreground">unavailable</span>
+                    <span className="text-muted-foreground text-xs">
+                      unavailable
+                    </span>
                   ) : (
                     <Skeleton className="h-4 w-16" />
                   )}
@@ -137,7 +145,13 @@ export function RunSheet() {
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex items-center justify-between gap-3">
       <dt className="eyebrow">{label}</dt>

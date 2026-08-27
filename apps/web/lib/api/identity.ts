@@ -1,5 +1,5 @@
-import { fixture, getJson, isDemo } from "./client";
 import { demoIdentity } from "../fixtures/identity";
+import { fixture, getJson, isDemo } from "./client";
 
 export type Role = "firefighter" | "viewer";
 

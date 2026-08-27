@@ -30,5 +30,7 @@ export function kindFor(status: number): ApiErrorKind {
 
 /** Narrow an unknown catch binding without losing the classification. */
 export function asApiError(cause: unknown, path: string): ApiError {
-  return cause instanceof ApiError ? cause : new ApiError(0, "unavailable", path);
+  return cause instanceof ApiError
+    ? cause
+    : new ApiError(0, "unavailable", path);
 }
