@@ -97,7 +97,7 @@ The rejections are as load-bearing as the choices.
 
 | Rejected | Why |
 |---|---|
-| **Vercel + Next 16** | The sanctioned combo, and permitted rather than mandated. But every pixel is live socket state, so SSR earns nothing; two origins means cross-origin WebSocket auth against Access and a second deploy target; and Vercel behind an orange-cloud proxy has known cert-issuance friction. Single origin collapses all of it. |
+| **Vercel + Next 16** *(rejected for the product surface; adopted 2026-08-27 as a second, additive front-end — `apps/web`)* | The sanctioned combo, and permitted rather than mandated. But every pixel is live socket state, so SSR earns nothing; two origins means cross-origin WebSocket auth against Access and a second deploy target; and Vercel behind an orange-cloud proxy has known cert-issuance friction. Single origin collapses all of it, and **it still does**: the Worker keeps serving `apps/dashboard` from its own origin and `pnpm run deploy` is unchanged. What was added beside it is a Next 16 App Router app that renders the same three surfaces, deployable to Vercel. The rejection's own reasoning is what limits it — the Access cookie is issued for the Worker's hostname and is not sent to a `*.vercel.app` origin, and a `next.config` rewrite proxies the REQUEST, which never carried the cookie — so a Vercel deployment renders in demo mode (`NEXT_PUBLIC_DEMO=1`) off `lib/fixtures` until that is answered. `apps/web/BACKEND-GAPS.md` §1 states the three ways out; `docs/deploy-vercel.md` is the wiring. |
 | **`@cloudflare/think`** *(rejected for the trial build; adopted after the drill as a flag-gated second chassis, Phase 25)* | Its execution ladder is exactly the right model and is cited as prior art for the two-tier design. But it is a preview release, and a preview base class on a 7-day clock is where the week disappears — so the trial deliverable was built on `@cloudflare/codemode` + `@cloudflare/sandbox` on a hand-built Durable Object. Once the drill had passed on that build, `RunAgent extends Think<Env>` was ported in beside it (`agents@0.20.1`, `@cloudflare/think@0.15.1`, exact pins) with every invariant re-homed; it is deployed but **not active** (`RUN_CHASSIS=legacy`) until its 14 pinned defects are closed. The traps it took are in the README's AI-tool notes. |
 | **MCP servers as the model's tool surface** | Code Mode instead. LLMs have trained on real-world code and only synthetic tool-call examples. Writing TypeScript lets the agent chain four bindings in one execution without every intermediate result round-tripping through the model. |
 | **Flat tool schemas** | Same reasoning, worse: dozens of schemas to maintain by hand, and a contract that drifts from the implementation. The `.d.ts` is generated from the bindings. |
@@ -116,7 +116,7 @@ The rejections are as load-bearing as the choices.
 | Cloudflare Workers Paid | $5 |
 | Cloudflare Containers usage | $10 – 40 |
 | D1 / R2 / Queues / Durable Objects | < $5 |
-| Vercel | $0 — not used |
+| Vercel | $0 — Hobby, and demo mode makes no outbound request |
 | **Total** | **~$70 – 160** |
 
 Ceiling is $500 all-in for the week, tokens included. Ping Ronit *before* crossing it.

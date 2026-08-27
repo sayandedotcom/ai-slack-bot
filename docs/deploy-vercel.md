@@ -1,13 +1,12 @@
 # Deploying the Next.js front-end to Vercel
 
-**Status: not set up, deliberately. Do not create the Vercel project yet.**
+**Status: `apps/web` is on `main` as of 2026-08-27. The Vercel project is still
+not created — everything below is now safe to do, and none of it has been done.**
 
-`apps/web` does not exist on `main`. It lives only on `worktree-next-frontend`
-(locked, ahead of `main`, and dirty at the time of writing). A Vercel project
-whose Root Directory is `apps/web` fails **every** build until that branch
-merges — including builds of `main`. This document is the wiring written down
-so it does not have to be rediscovered; it is not a description of something
-that exists.
+The blocker this document was written under is gone: `worktree-next-frontend`
+fast-forwarded into `main`, so a Vercel project whose Root Directory is
+`apps/web` will build. What has NOT happened is the project itself, the
+environment variables, or the Ignored Build Step.
 
 ## Read this before wiring anything
 
@@ -68,21 +67,36 @@ rebuilds when **`packages/ui`** changes and correctly skips when only
 `apps/worker` does. A hand-rolled `git diff --quiet HEAD^ -- apps/web` would
 miss that transitive edge. `--fallback=HEAD^` covers the shallow-clone case.
 
-## Also required at merge time
+## Was required at merge time — all four are done
 
-1. **Drop ESLint from `apps/web/package.json`** — the `lint` script, the
-   `eslint` devDependency, and `"@workspace/eslint-config": "workspace:*"`.
-   That package no longer exists, and a `workspace:` protocol pointing at a
-   missing package is a hard `pnpm install` failure, not a warning. The same
-   applies to that branch's copy of `packages/ui/package.json`. Biome already
-   covers `apps/web` through `files.includes`.
-2. **Expect a formatting commit.** `apps/web` has never been linted or
-   formatted; run `pnpm format` and land it as its own `style:` commit.
-3. **`apps/web/.env.example`** — `NEXT_PUBLIC_DEMO_MODE=true` is not a
-   placeholder. See the auth note above.
-4. **Amend `docs/tech-stack.md`** as described at the top of this file.
+Kept as the record of what the merge had to carry, not as a to-do list.
+
+1. ~~**Drop ESLint from `apps/web/package.json`**~~ — done in `a635828`. The
+   `lint` script, the `eslint` devDependency and `"@workspace/eslint-config":
+   "workspace:*"` are gone; `git grep -i eslint -- apps/web packages/ui` is
+   empty. That package no longer exists, and a `workspace:` protocol pointing at
+   a missing one is a hard `pnpm install` failure rather than a warning, so this
+   was forced rather than tidy. Biome covers `apps/web` through
+   `files.includes`, and it found five real errors ESLint's ruleset did not.
+2. ~~**Expect a formatting commit**~~ — done, same commit.
+3. ~~**`apps/web/.env.example`**~~ — the variable is `NEXT_PUBLIC_DEMO=1`, not
+   `NEXT_PUBLIC_DEMO_MODE=true`. The file has always said so; this item was
+   written against a draft. The auth note above still stands.
+4. ~~**Amend `docs/tech-stack.md`**~~ — done. The "Vercel + Next 16" rejection
+   row now carries an adopted-as-additive parenthetical and states that the
+   single-origin decision holds for the product surface; the cost table's
+   Vercel line reads "$0 — Hobby, and demo mode makes no outbound request".
 
 ## What is already in place
 
 `turbo.json`'s `build.outputs` already includes `.next/**` and
-`!.next/cache/**`, so nothing has to change there when `apps/web` lands.
+`!.next/cache/**`, and its `build` and `dev` tasks now declare
+`NEXT_PUBLIC_DEMO`, `NEXT_PUBLIC_WORKER_ORIGIN` and `WORKER_ORIGIN` in `env`.
+That last part is not cosmetic: unlisted, turbo would hand back a build made
+under different values, which for a `NEXT_PUBLIC_` variable means shipping the
+wrong constant inside the bundle.
+
+The gate covers it. `pnpm check` at the repository root runs `apps/web`'s 82
+tests and its `tsc --noEmit` alongside the Worker's, and `.github/workflows/ci.yml`
+runs the same four jobs — so a Vercel build failing is a signal about Vercel,
+not about the app.
