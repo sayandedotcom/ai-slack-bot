@@ -10,6 +10,9 @@ import { SpeakerStrip } from "./components/speaker-strip";
 import { getRoster, type Role } from "./lib/api";
 import { usePoll } from "./lib/use-poll";
 import { RunList } from "./runs/run-list";
+import { RunSession } from "./runs/run-view";
+import { RunApprovals } from "./approvals/run-approvals";
+import { ChatStarter } from "./chat/chat-page";
 import { ShadowPanel } from "./shadow/shadow-panel";
 
 /**
@@ -86,13 +89,49 @@ export function App() {
         </div>
         <ConnectPanel state={roster} identity={identity} />
         <CountersPanel />
+        {/* One create form, above the list it feeds. A chat run is the same
+            object a Slack wake produces, so there is no second session shape
+            here — starting one selects it and the run view below takes over. */}
+        <div data-slot="chat-panel" className="md:col-span-2 rounded-lg border p-3">
+          <ChatStarter onStarted={selectRun} />
+        </div>
         <div data-slot="runs-panel" className="md:col-span-2">
-          {/* The transcript drawer this used to open went with the agent layer
-              on 2026-08-23. Selecting a run still writes the hash, so the
-              shareable URL an operator pastes into Slack keeps working and the
-              new session view has a route waiting for it. */}
           <RunList onSelect={selectRun} />
         </div>
+        {/* The selected run, live over its own socket. Keyed by id so switching
+            runs tears the old socket down instead of re-pointing it — a
+            re-pointed connection would briefly show one run's transcript under
+            another run's header. */}
+        {selectedRun === null ? null : (
+          <section
+            data-slot="run-session"
+            aria-label="Selected run"
+            className="md:col-span-2 h-[32rem] rounded-lg border p-3"
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-medium">Run</h2>
+              <button
+                type="button"
+                onClick={() => selectRun(null)}
+                className="text-xs text-muted-foreground underline"
+              >
+                Close
+              </button>
+            </div>
+            <RunSession
+              key={selectedRun}
+              runId={selectedRun}
+              approvals={
+                <RunApprovals
+                  runId={selectedRun}
+                  state={approvals.state}
+                  role={identity?.role ?? "viewer"}
+                  onDecide={approvals.decideCard}
+                />
+              }
+            />
+          </section>
+        )}
         {/* Below the fold, deliberately: this is an eval corpus for
             reviewing after the fact, not something waiting on a human
             the way the approvals queue is. */}
