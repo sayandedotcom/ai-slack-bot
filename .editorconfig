@@ -1,0 +1,44 @@
+# Editor defaults. Subordinate to biome.jsonc, which sets
+# `formatter.useEditorconfig = false` precisely so this file can never fight
+# it, and consistent with .gitattributes (text diff; eol=lf on *.sh).
+#
+# Its real job is the file types Biome 2.x cannot format: .md, .sql, .sh, .yml.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# NOTE: there is deliberately no `max_line_length` anywhere in this file.
+# biome.jsonc's `lineWidth = 80` is the only authority on width. A
+# max_line_length here would make editors hard-wrap comments that Biome will
+# not, producing diffs that neither tool agrees with.
+
+[*.md]
+# Markdown uses two trailing spaces as a hard line break; trimming them
+# silently joins lines. Biome 2.x has no Markdown support at all, so this is
+# the only rule protecting them.
+trim_trailing_whitespace = false
+
+[*.{sh,bash}]
+end_of_line = lf
+
+[*.sql]
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[{Makefile,*.mk}]
+indent_style = tab
+
+# Generated artifacts. Listed so that an editor does not "helpfully" normalise
+# a file that `pnpm capabilities:dts:check` compares BYTE-WISE against
+# generator output, or one that `wrangler types` regenerates wholesale.
+[apps/worker/src/capabilities/generated/**]
+indent_size = 4
+trim_trailing_whitespace = false
