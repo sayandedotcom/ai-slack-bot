@@ -1,9 +1,8 @@
+import { env } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
-
 import { makeFilesTools } from "../src/capabilities/namespaces/files";
 import type { ArtifactPublisher } from "../src/gateways/ports";
 import { createOrGetRun } from "../src/run/repository";
-import { env } from "cloudflare:test";
 import { testBindingContext } from "./helpers/capabilities";
 
 async function liveChatScope() {

@@ -11,8 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   makeChatStarter,
-  startChatRun,
   type StartedRun,
+  startChatRun,
 } from "../src/chat/api";
 import { ChatPage, type ChatPageProps } from "../src/chat/chat-page";
 

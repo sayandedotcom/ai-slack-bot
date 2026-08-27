@@ -12,6 +12,8 @@
  * reader knows which scope it answers for, and a sandbox gateway knows which
  * container is this run's. None of them takes a destination as an argument.
  */
+
+import type { ApprovalPort } from "../approval/contracts";
 import {
   BETTERSTACK_UPTIME_ENDPOINT,
   makeBetterStackReader,
@@ -33,7 +35,6 @@ import { makeSandboxGateway } from "../sandbox/gateway";
 import { makeSlackGateway } from "../slack/gateway";
 import { PRODUCTION_ALLOWLIST } from "../supabase/allowlist";
 import { makeSupabaseReader } from "../supabase/reader";
-import type { ApprovalPort } from "../approval/contracts";
 
 export type DependencyOverrides = Partial<CapabilityDependencies>;
 

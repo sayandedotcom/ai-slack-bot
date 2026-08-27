@@ -69,7 +69,12 @@ function assertPublishable(
   if (/[/\\]/.test(filename)) {
     throw invalid("the filename cannot contain a path.");
   }
-  // eslint-disable-next-line no-control-regex
+  // Matching C0 control bytes is the whole point here: this rejects them
+  // from a filename that goes on to become a download name. It is the same
+  // class of byte that check-text-files.mjs guards against in tracked
+  // source. The suppression must sit on the line directly above the
+  // statement, so the reasoning lives here instead.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberate
   if (/[\x00-\x1f\x7f]/.test(filename)) {
     throw invalid("the filename cannot contain control characters.");
   }

@@ -141,10 +141,13 @@
   // shrinks deliberately, while the gate is green from day one.
   //
   // Each demotion carries its measured count. Re-measure before promoting.
+  //
+  // `preset` rather than the older `"recommended": true`, which 2.5.10 reports
+  // as DEPRECATED and drops in the next major.
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
 
       "suspicious": {
         // MEASURED, not assumed: `noExplicitAny` fires ZERO times across the

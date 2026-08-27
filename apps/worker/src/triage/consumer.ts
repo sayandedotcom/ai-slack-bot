@@ -1,11 +1,11 @@
+import { getChannelPolicy, shouldTriage } from "../db/channels";
+import type { MessagesRow, RunsRow, TriageDecisionsRow } from "../db/schema";
 import type { Env } from "../index";
+import { graphIdFor } from "../memory/graphs";
 import type { MemoryStore } from "../memory/store";
+import type { SlackRunMessage } from "./contracts";
 import type { TriageInput } from "./prompt";
 import type { TriageRunner } from "./run";
-import { getChannelPolicy, shouldTriage } from "../db/channels";
-import { graphIdFor } from "../memory/graphs";
-import type { SlackRunMessage } from "./contracts";
-import type { MessagesRow, RunsRow, TriageDecisionsRow } from "../db/schema";
 
 export type TriageJob = { event_id: string };
 

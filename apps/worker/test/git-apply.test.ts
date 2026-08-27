@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyUnifiedDiff, basePaths } from "../src/git/apply";
 import { CapabilityError } from "../src/gateways/errors";
+import { applyUnifiedDiff, basePaths } from "../src/git/apply";
 
 /**
  * BYTE-EXACT OR REFUSED.

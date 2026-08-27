@@ -1,6 +1,5 @@
-import type { ComponentProps } from "react";
-
 import { cn } from "@workspace/ui/lib/utils";
+import type { ComponentProps } from "react";
 
 function Card({ className, ...props }: ComponentProps<"div">) {
   return (
@@ -29,7 +28,7 @@ function CardTitle({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="card-title"
-      className={cn("text-sm font-medium leading-none", className)}
+      className={cn("font-medium text-sm leading-none", className)}
       {...props}
     />
   );
@@ -39,7 +38,7 @@ function CardDescription({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="card-description"
-      className={cn("text-sm text-muted-foreground", className)}
+      className={cn("text-muted-foreground text-sm", className)}
       {...props}
     />
   );

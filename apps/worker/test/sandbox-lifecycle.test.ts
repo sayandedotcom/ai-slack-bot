@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/index";
+import { createOrGetRun, setRunStatus } from "../src/run/repository";
 import {
   GIT_SENTINEL_HOST,
   MONOREPO_SLUG,
@@ -8,11 +9,10 @@ import {
 } from "../src/sandbox/class";
 import {
   makeSandboxLifecycle,
+  type SandboxHandle,
   sandboxIdFor,
   sweepSandboxes,
-  type SandboxHandle,
 } from "../src/sandbox/lifecycle";
-import { createOrGetRun, setRunStatus } from "../src/run/repository";
 
 /**
  * THE PER-RUN CONTAINER LIFECYCLE — Phase 18 Task 4.

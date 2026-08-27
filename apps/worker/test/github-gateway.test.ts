@@ -1,16 +1,16 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Env } from "../src/index";
-import { captureDiff } from "../src/sandbox/diff";
-import { importIdentityKey, seal } from "../src/identity/crypto";
 import { upsertIdentity } from "../src/db/identities";
 import {
+  type GithubShipConfig,
   makeGithubAuthSource,
   makeGithubGateway,
   resolveGithubConfig,
-  type GithubShipConfig,
 } from "../src/git/commit";
+import { importIdentityKey, seal } from "../src/identity/crypto";
+import type { Env } from "../src/index";
 import { MONOREPO_SLUG } from "../src/sandbox/class";
+import { captureDiff } from "../src/sandbox/diff";
 
 const worker = env as unknown as Env;
 
@@ -1089,6 +1089,12 @@ describe("openPR — write path", () => {
     expect(treeBody.tree).toHaveLength(2);
 
     const deleteEntry = treeBody.tree.find((e) => e.path === "src/old.ts");
+    // Narrowed before the own-key check below: `Object.hasOwn` takes a
+    // non-optional object, unlike the `Object.prototype.hasOwnProperty.call`
+    // form this replaced, whose `.call` signature swallowed the `undefined`
+    // that `.find()` can return.
+    expect(deleteEntry).toBeDefined();
+    if (deleteEntry === undefined) throw new Error("unreachable");
     expect(deleteEntry).toMatchObject({
       path: "src/old.ts",
       mode: "100644",
@@ -1099,7 +1105,7 @@ describe("openPR — write path", () => {
     // -- which GitHub treats as "leave the file alone", not "delete it".
     // `toEqual` cannot tell those apart; `hasOwnProperty` on the PARSED wire
     // body can.
-    expect(Object.prototype.hasOwnProperty.call(deleteEntry, "sha")).toBe(true);
+    expect(Object.hasOwn(deleteEntry, "sha")).toBe(true);
     expect(deleteEntry?.sha).toBeNull();
 
     const createEntry = treeBody.tree.find((e) => e.path === "scripts/run.sh");

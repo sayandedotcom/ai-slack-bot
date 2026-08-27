@@ -1,13 +1,12 @@
-import { Hono } from "hono";
-import type { Context } from "hono";
 import { getAgentByName } from "agents";
-
-import { requireTeamMember } from "./identity";
+import type { Context } from "hono";
+import { Hono } from "hono";
 import type { Env } from "../index";
 import type { RunAgent } from "../run/agent";
 import { assertRunKey } from "../run/keys";
 import { getRunById } from "../run/repository";
 import { AGENT_IDENTITY_HEADER } from "../run/transport";
+import { requireTeamMember } from "./identity";
 
 /**
  * The Agents SDK's own transport for `RunAgent` — the WebSocket the dashboard

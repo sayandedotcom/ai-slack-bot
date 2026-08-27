@@ -23,20 +23,20 @@ import type { RunTurnSubmit, SubmitMessagesResult } from "@cloudflare/think";
 import { getAgentByName } from "agents";
 
 import type { ResolutionNotifier } from "../api/approvals";
+import { makeUserTokenSource } from "../identity/user-token";
 import type { Env } from "../index";
 import { updateNudge } from "../notify/nudge";
 import type { RunAgent } from "../run/agent";
 import { channelForOrigin } from "../run/agent-channels";
 import { getRunById, type RunRecord } from "../run/repository";
 import {
-  outboundText,
-  resolutionTurnContent,
   type ApprovalDelivery,
   type ApprovalRow,
+  outboundText,
+  resolutionTurnContent,
 } from "./contracts";
 import { getApproval, setDelivery } from "./repository";
-import { makeUserTokenSender, type ApprovalSender } from "./sender";
-import { makeUserTokenSource } from "../identity/user-token";
+import { type ApprovalSender, makeUserTokenSender } from "./sender";
 
 /** See `wake.ts` for why an overloaded method needs restating through a stub. */
 type SubmitOnlyAgent = {

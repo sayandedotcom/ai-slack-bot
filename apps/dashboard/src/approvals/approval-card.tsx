@@ -1,9 +1,8 @@
-import { useState } from "react";
-import type { ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
+import type { ReactNode } from "react";
+import { useState } from "react";
 
-import type { Decision, DecideAction, OpenApproval } from "./api";
+import type { DecideAction, Decision, OpenApproval } from "./api";
 
 /**
  * One approval, rendered as the thing a fire-fighter actually acts on. The card
@@ -116,7 +115,7 @@ function Meta({ card, now }: { card: OpenApproval; now: number }): ReactNode {
  */
 function Draft({ text }: { text: string }): ReactNode {
   return (
-    <blockquote className="max-h-52 overflow-y-auto whitespace-pre-wrap border-l-2 border-border bg-muted/40 px-3 py-2 text-sm">
+    <blockquote className="max-h-52 overflow-y-auto whitespace-pre-wrap border-border border-l-2 bg-muted/40 px-3 py-2 text-sm">
       {text}
     </blockquote>
   );
@@ -141,10 +140,10 @@ export function ApprovalCard({
   if (state.kind === "resolved") {
     return (
       <li className="rounded-lg border bg-card px-3 py-2">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-muted-foreground text-sm">
           {resolvedLine(state.decision, state.decidedBy, state.mine)}
         </p>
-        <p className="mt-1 truncate text-xs text-muted-foreground/80">
+        <p className="mt-1 truncate text-muted-foreground/80 text-xs">
           {card.why}
         </p>
       </li>
@@ -162,7 +161,7 @@ export function ApprovalCard({
 
       {/* The `why` leads. It is the answer to "why am I being interrupted?",
           and an operator who skips it is deciding blind. */}
-      <p className="text-sm font-medium">{card.why}</p>
+      <p className="font-medium text-sm">{card.why}</p>
 
       {composer === "edit" && !locked ? (
         <textarea
@@ -170,7 +169,7 @@ export function ApprovalCard({
           onChange={(event) => setEditText(event.target.value)}
           rows={8}
           aria-label="Edited reply"
-          className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
         />
       ) : (
         <Draft text={card.draft} />
@@ -183,7 +182,7 @@ export function ApprovalCard({
             onChange={(event) => setReason(event.target.value)}
             placeholder="Why is this wrong?"
             aria-label="Rejection reason"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
           />
           <p className="text-[11px] text-muted-foreground">
             The reason trains the agent — it is required.
@@ -279,7 +278,7 @@ export function ApprovalCard({
       </div>
 
       {state.kind === "open" && state.error !== undefined ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-destructive text-xs">
           {state.error}
         </p>
       ) : null}

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/lib/api";
-import { fetchRunUsageTotal, fetchRuns } from "../src/runs/api";
+import { fetchRuns, fetchRunUsageTotal } from "../src/runs/api";
 
 /** The secret we never want to see leak out of a thrown error. */
 const BODY = "stack trace with s3cret-token and internal hostnames";

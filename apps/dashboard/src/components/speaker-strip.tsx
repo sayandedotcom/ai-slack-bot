@@ -1,5 +1,5 @@
-import { Panel, type PanelState } from "./panel";
 import type { Roster } from "../lib/api";
+import { Panel, type PanelState } from "./panel";
 
 /**
  * Whose name goes on what the agent says in public. There is no shift and no
@@ -34,7 +34,7 @@ export function SpeakerStrip({ state }: { state: PanelState<Roster> }) {
           <div className="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm">
             {speaker === null ? (
               <div className="flex items-center gap-2">
-                <span className="flex size-7 items-center justify-center rounded-md bg-muted text-xs font-medium text-muted-foreground">
+                <span className="flex size-7 items-center justify-center rounded-md bg-muted font-medium text-muted-foreground text-xs">
                   ?
                 </span>
                 <span className="font-medium">nobody can speak</span>
@@ -44,7 +44,7 @@ export function SpeakerStrip({ state }: { state: PanelState<Roster> }) {
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <span className="flex size-7 items-center justify-center rounded-md bg-primary text-xs font-medium text-primary-foreground">
+                <span className="flex size-7 items-center justify-center rounded-md bg-primary font-medium text-primary-foreground text-xs">
                   {initialOf(speaker.email)}
                 </span>
                 <span className="font-medium">{nameOf(speaker.email)}</span>

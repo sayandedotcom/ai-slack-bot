@@ -25,27 +25,28 @@
  * gap is closable from this side of the container, and both are written down
  * rather than claimed away.
  */
+
+import { getSandbox } from "@cloudflare/sandbox";
+import { CapabilityError } from "../gateways/errors";
 import type {
   SandboxCommandResult,
   SandboxGateway,
   SandboxProcessState,
 } from "../gateways/ports";
-import { CapabilityError } from "../gateways/errors";
 import type { Env } from "../index";
 import { captureDiff, type DiffResult } from "./diff";
 import { devEnvFor, devEnvForProcess } from "./env";
 import {
   makeSandboxLifecycle,
-  sandboxIdFor,
   type ProcessSnapshot,
   type SandboxLifecycleDeps,
+  sandboxIdFor,
 } from "./lifecycle";
 import {
-  startRecording,
-  checkRecording as runCheckRecording,
   type RecordDeps,
+  checkRecording as runCheckRecording,
+  startRecording,
 } from "./record";
-import { getSandbox } from "@cloudflare/sandbox";
 
 /**
  * Everything this module and the lifecycle together ask of a container.

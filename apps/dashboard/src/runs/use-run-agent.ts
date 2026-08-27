@@ -15,9 +15,9 @@
  * first.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
 import { useAgentChat } from "@cloudflare/think/react";
 import { useAgent } from "agents/react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 /**
  * `RunAgent`'s durable state, as the socket broadcasts it.

@@ -1,10 +1,10 @@
-import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type {
   ExecuteOptions,
   ExecuteResult,
   Executor,
   ResolvedProvider,
 } from "@cloudflare/codemode";
+import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { CapabilityError, safeMessage } from "../gateways/errors";
 import type { JsonValue } from "../run/protocol";
 import type { CapabilityLimits } from "./execution";

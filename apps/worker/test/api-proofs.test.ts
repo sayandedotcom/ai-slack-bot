@@ -1,8 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { isProofKey } from "../src/api/proofs";
-import { MAX_RECORDING_BYTES } from "../src/sandbox/record";
 import { INTERNAL_KEY_PREFIX, isInternalKey } from "../src/sandbox/diff";
+import { MAX_RECORDING_BYTES } from "../src/sandbox/record";
 
 /**
  * THE ONE UNAUTHENTICATED SURFACE IN THIS WORKER.

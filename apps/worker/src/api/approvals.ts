@@ -1,13 +1,19 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import type { Env } from "../index";
 import {
-  AccessJwtError,
-  makeAccessVerifier,
   type AccessIdentity,
+  AccessJwtError,
   type AccessVerifier,
+  makeAccessVerifier,
 } from "../access/jwt";
 import { isFirefighter, isTeamMember } from "../access/roster";
+import {
+  type ApprovalRow,
+  type DecisionInput,
+  DecisionInputError,
+  outboundText,
+} from "../approval/contracts";
+import { makeRunAgentResolutionNotifier } from "../approval/notifier";
 import {
   decideApproval,
   getApproval,
@@ -15,13 +21,7 @@ import {
   listUndeliveredResolutions,
   markResolutionDelivered,
 } from "../approval/repository";
-import {
-  DecisionInputError,
-  outboundText,
-  type ApprovalRow,
-  type DecisionInput,
-} from "../approval/contracts";
-import { makeRunAgentResolutionNotifier } from "../approval/notifier";
+import type { Env } from "../index";
 
 /**
  * One human decision on one proposed customer Slack reply, over HTTP. This is

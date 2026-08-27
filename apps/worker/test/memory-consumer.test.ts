@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { handleMemoryBatch, type MemoryJob } from "../src/memory/consumer";
 import { backfillMemory } from "../src/api/backfill";
+import { handleMemoryBatch, type MemoryJob } from "../src/memory/consumer";
 import { FakeMemoryStore } from "./helpers/fake-memory";
 
 function batchOf(eventIds: string[]) {

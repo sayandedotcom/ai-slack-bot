@@ -1,6 +1,6 @@
 import { CapabilityError } from "../gateways/errors";
-import { redact } from "../redact";
 import type { BetterStackReader, LogLine, Monitor } from "../gateways/ports";
+import { redact } from "../redact";
 
 const MAX_LINES = 200;
 /** Retention on the configured source is 3 days; asking wider just costs time. */

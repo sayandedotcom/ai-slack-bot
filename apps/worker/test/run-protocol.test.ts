@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { canonicalThreadTs, chatRunKey, slackRunKey } from "../src/run/keys";
 import {
   ACTIVE_RUN_STATUSES,
   ASSISTANT_DELTA_MAX,
@@ -6,17 +7,16 @@ import {
   ASSISTANT_FLUSH_CHARS,
   ASSISTANT_FLUSH_MS,
   ASSISTANT_UPDATE_STATES,
-  RUN_STATUSES,
+  type AssistantUpdate,
   evaluateTransition,
   isAssistantUpdateState,
   isRunStatus,
   parseClientMessage,
-  STEER_MAX_CONTENT,
-  type AssistantUpdate,
+  RUN_STATUSES,
   type RunEvent,
   type RunStatus,
+  STEER_MAX_CONTENT,
 } from "../src/run/protocol";
-import { canonicalThreadTs, chatRunKey, slackRunKey } from "../src/run/keys";
 
 describe("run statuses", () => {
   it("is exactly the five documented statuses, in order", () => {

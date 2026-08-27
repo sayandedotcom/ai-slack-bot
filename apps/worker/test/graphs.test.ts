@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { graphIdFor } from "../src/memory/graphs";
 import type { ChannelPolicy } from "../src/db/channels";
+import { graphIdFor } from "../src/memory/graphs";
 
 const base: ChannelPolicy = {
   channel_id: "C1",

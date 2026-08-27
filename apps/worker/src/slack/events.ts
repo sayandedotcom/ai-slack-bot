@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { verifySlackSignature } from "./verify";
 import type { QueuedEvent, SlackEnvelope } from "./types";
+import { verifySlackSignature } from "./verify";
 
 export const slackEvents = new Hono<{ Bindings: Env }>();
 

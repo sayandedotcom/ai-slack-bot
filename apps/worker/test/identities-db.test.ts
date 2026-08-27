@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { FIREFIGHTERS, VIEWERS } from "../src/access/roster";
 import {
   getIdentity,
+  type IdentityRow,
   listConnectStatus,
   upsertIdentity,
-  type IdentityRow,
 } from "../src/db/identities";
 
 /**

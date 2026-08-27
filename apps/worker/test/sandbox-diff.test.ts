@@ -1,5 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { isArtifactKey } from "../src/api/artifacts";
+import { makeArtifactPublisher } from "../src/files/r2";
 import type { Env } from "../src/index";
 import {
   captureDiff,
@@ -11,8 +13,6 @@ import {
   readDiff,
   readDiffWithBase,
 } from "../src/sandbox/diff";
-import { isArtifactKey } from "../src/api/artifacts";
-import { makeArtifactPublisher } from "../src/files/r2";
 
 /**
  * THE DIFF TRAVELS WORKER→WORKER, NEVER THROUGH THE MODEL.

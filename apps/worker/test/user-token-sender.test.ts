@@ -1,16 +1,16 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FIREFIGHTERS } from "../src/access/roster";
 import {
-  makeUserTokenSender,
   type ApprovalSendResult,
+  makeUserTokenSender,
 } from "../src/approval/sender";
 import { upsertIdentity } from "../src/db/identities";
-import { importIdentityKey, seal, SealError } from "../src/identity/crypto";
+import { importIdentityKey, SealError, seal } from "../src/identity/crypto";
 import {
   makeUserTokenSource,
   type UserTokenSource,
 } from "../src/identity/user-token";
-import { FIREFIGHTERS } from "../src/access/roster";
 import type { Env } from "../src/index";
 
 /**

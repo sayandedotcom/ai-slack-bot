@@ -1,5 +1,5 @@
-import type { SlackMessage } from "../gateways/ports";
 import type { MessagesRow } from "../db/schema";
+import type { SlackMessage } from "../gateways/ports";
 
 /**
  * Reads over the ingested message table.

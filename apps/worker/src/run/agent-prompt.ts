@@ -29,8 +29,9 @@
  * DATA, never instruction (invariant 25). It reaches the model inside the JSON
  * envelope this module builds, after the stable prefix (26).
  */
-import type { ContextProvider } from "agents/experimental/memory/session";
+
 import type { Session } from "@cloudflare/think";
+import type { ContextProvider } from "agents/experimental/memory/session";
 
 import type { RunScope } from "../gateways/scope";
 

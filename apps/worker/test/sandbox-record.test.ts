@@ -1,5 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { isInternalKey } from "../src/sandbox/diff";
 import {
   BROWSER_UNAVAILABLE_MESSAGE,
   BROWSER_UNAVAILABLE_TOKEN,
@@ -10,10 +11,9 @@ import {
   RECORDING_HARNESS_PATH,
   RECORDING_TAIL_CHARS,
   RECORDING_WORKDIR_ROOT,
-  startRecording,
   type RecordDeps,
+  startRecording,
 } from "../src/sandbox/record";
-import { isInternalKey } from "../src/sandbox/diff";
 
 /**
  * THE RECORDING IS THE PROOF, AND IT HAS TO SURVIVE THE TRIP.

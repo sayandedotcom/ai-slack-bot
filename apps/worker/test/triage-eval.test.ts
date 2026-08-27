@@ -7,7 +7,7 @@
  * and callers that render one as the other would be reporting a number that
  * doesn't exist.
  */
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { scoreTriage, type TriageOutcomeRow } from "../src/eval/triage-eval";
 

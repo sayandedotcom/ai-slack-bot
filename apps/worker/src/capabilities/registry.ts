@@ -29,19 +29,18 @@ import {
   type CodeExecution,
   withCapabilityAudit,
 } from "./execution";
-import { assertEffectPermitted } from "./write-guard";
-
-import { makeFilesTools } from "./namespaces/files";
-import { makeGithubTools } from "./namespaces/github";
-import { makeLinearTools } from "./namespaces/linear";
-import { makeMemoryTools } from "./namespaces/memory";
 import { makeApprovalTools } from "./namespaces/approval";
 import { makeBetterStackTools } from "./namespaces/betterstack";
 import { makeBrowserTools } from "./namespaces/browser";
+import { makeFilesTools } from "./namespaces/files";
+import { makeGithubTools } from "./namespaces/github";
 import { makeLangSmithTools } from "./namespaces/langsmith";
+import { makeLinearTools } from "./namespaces/linear";
+import { makeMemoryTools } from "./namespaces/memory";
 import { makeSandboxTools } from "./namespaces/sandbox";
 import { makeSlackTools } from "./namespaces/slack";
 import { makeSupabaseTools } from "./namespaces/supabase";
+import { assertEffectPermitted } from "./write-guard";
 
 /**
  * The namespace order, frozen.

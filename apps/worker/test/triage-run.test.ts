@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  triageSchema,
   haikuCostUsd,
   makeTriageRunner,
+  triageSchema,
 } from "../src/triage/run";
 
 describe("triage schema", () => {

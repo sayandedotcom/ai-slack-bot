@@ -10,8 +10,8 @@ import { env } from "cloudflare:test";
 
 import type { CapabilityEvent } from "../../src/capabilities/audit";
 import {
-  alwaysFresh,
   type AgentExecutionGuard,
+  alwaysFresh,
   newCodeExecution,
   PRODUCTION_LIMITS,
 } from "../../src/capabilities/execution";

@@ -1,11 +1,11 @@
+import type { ApprovalsRow } from "../db/schema";
 import {
-  validateDecisionInput,
   type ApprovalDecision,
   type ApprovalDelivery,
   type ApprovalRow,
   type DecisionInput,
+  validateDecisionInput,
 } from "./contracts";
-import type { ApprovalsRow } from "../db/schema";
 
 /**
  * D1-only operations on `approvals` (`migrations/0007_approvals.sql`). D1 is

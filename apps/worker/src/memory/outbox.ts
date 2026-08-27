@@ -1,5 +1,5 @@
-import { ZEP_REQUEST_TIMEOUT_SECONDS } from "./zep";
 import type { AgentMemoryOutboxRow } from "../db/schema";
+import { ZEP_REQUEST_TIMEOUT_SECONDS } from "./zep";
 
 /**
  * The D1 side of agent-memory projection: the claim protocol, its fence, and

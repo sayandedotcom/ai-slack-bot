@@ -10,8 +10,8 @@ import {
   insertApproval,
 } from "../src/approval/repository";
 import { CapabilityError } from "../src/gateways/errors";
-import { installTestModel, resetTestModel } from "../src/run/model";
 import { chatRunKey } from "../src/run/keys";
+import { installTestModel, resetTestModel } from "../src/run/model";
 import { createOrGetRun } from "../src/run/repository";
 import { createRunFromChat } from "../src/run/wake";
 import { cannedModel } from "./helpers/canned-model";

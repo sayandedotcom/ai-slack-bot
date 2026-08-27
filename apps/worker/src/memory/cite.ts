@@ -1,5 +1,5 @@
-import type { MemoryFact } from "./store";
 import type { MessagesRow } from "../db/schema";
+import type { MemoryFact } from "./store";
 
 export type Citation = {
   factId: string;

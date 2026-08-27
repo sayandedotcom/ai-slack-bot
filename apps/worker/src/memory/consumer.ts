@@ -1,23 +1,23 @@
-import type { Env } from "../index";
-import type { MemoryStore } from "./store";
 import { getChannelPolicy } from "../db/channels";
-import { graphIdFor } from "./graphs";
+import type { MessagesRow } from "../db/schema";
+import type { Env } from "../index";
 import {
+  type AgentEpisode,
   boundedMetadata,
   boundedSourceDescription,
-  type AgentEpisode,
   type EpisodeMetadata,
 } from "./episode";
+import { graphIdFor } from "./graphs";
 import {
   claimOutboxRow,
+  type OutboxClaim,
   poisonOutboxRow,
   recordEpisodeUuid,
   retryOutboxRow,
   sterileError,
-  type OutboxClaim,
 } from "./outbox";
 import { parseSourceDescriptors, resolveSources } from "./sources";
-import type { MessagesRow } from "../db/schema";
+import type { MemoryStore } from "./store";
 
 /**
  * Two projections, one queue.

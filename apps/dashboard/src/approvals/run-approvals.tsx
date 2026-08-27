@@ -73,7 +73,7 @@ export function RunApprovals({
 
   return (
     <section aria-label="Waiting on you" className="space-y-2">
-      <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">
+      <h3 className="text-[11px] text-muted-foreground uppercase tracking-wide">
         Waiting on you
       </h3>
       <ul className="space-y-3">

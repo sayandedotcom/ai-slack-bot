@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export function CopyId({ runId }: { runId: string }): ReactNode {
   const [copied, setCopied] = useState(false);
@@ -28,7 +28,7 @@ export function CopyId({ runId }: { runId: string }): ReactNode {
         type="button"
         onClick={copy}
         aria-label={`Copy run id ${runId}`}
-        className="rounded px-1 text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="rounded px-1 text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
       >
         {copied ? "copied" : "copy"}
       </button>

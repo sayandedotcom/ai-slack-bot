@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
-
-import { fetchShadowPairs, type ShadowPair } from "./api";
-import { usePoll } from "../lib/use-poll";
 import { Panel, type PanelState } from "../components/panel";
+import { usePoll } from "../lib/use-poll";
+import { fetchShadowPairs, type ShadowPair } from "./api";
 
 /**
  * The eval corpus this phase exists to build: every draft the agent wrote on
@@ -23,7 +22,7 @@ const EMPTY_HINT =
 function TellBadges({ tells }: { tells: ShadowPair["tells"] }): ReactNode {
   if (tells.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground">
+      <p className="text-muted-foreground text-xs">
         clean — no AI tells detected
       </p>
     );
@@ -33,7 +32,7 @@ function TellBadges({ tells }: { tells: ShadowPair["tells"] }): ReactNode {
       {tells.map((tell) => (
         <li
           key={tell}
-          className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground"
+          className="rounded border border-border px-1.5 py-0.5 text-muted-foreground text-xs"
         >
           {tell}
         </li>
@@ -44,7 +43,7 @@ function TellBadges({ tells }: { tells: ShadowPair["tells"] }): ReactNode {
 
 function HumanSent({ reply }: { reply: ShadowPair["humanReply"] }): ReactNode {
   if (reply === null) {
-    return <p className="text-sm text-muted-foreground">no human reply yet</p>;
+    return <p className="text-muted-foreground text-sm">no human reply yet</p>;
   }
   return (
     <div className="space-y-1">
@@ -54,7 +53,7 @@ function HumanSent({ reply }: { reply: ShadowPair["humanReply"] }): ReactNode {
           href={reply.permalink}
           target="_blank"
           rel="noreferrer"
-          className="text-xs text-primary underline"
+          className="text-primary text-xs underline"
         >
           view in Slack
         </a>
@@ -65,16 +64,16 @@ function HumanSent({ reply }: { reply: ShadowPair["humanReply"] }): ReactNode {
 
 function PairRow({ pair }: { pair: ShadowPair }): ReactNode {
   return (
-    <li className="grid grid-cols-1 gap-4 border-b border-border py-3 last:border-b-0 md:grid-cols-2">
+    <li className="grid grid-cols-1 gap-4 border-border border-b py-3 last:border-b-0 md:grid-cols-2">
       <div className="space-y-2">
-        <p className="text-xs font-medium text-muted-foreground">
+        <p className="font-medium text-muted-foreground text-xs">
           Agent drafted
         </p>
         <p className="whitespace-pre-wrap text-sm">{pair.draft}</p>
         <TellBadges tells={pair.tells} />
       </div>
       <div className="space-y-2">
-        <p className="text-xs font-medium text-muted-foreground">Human sent</p>
+        <p className="font-medium text-muted-foreground text-xs">Human sent</p>
         <HumanSent reply={pair.humanReply} />
       </div>
     </li>

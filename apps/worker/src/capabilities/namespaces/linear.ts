@@ -1,12 +1,11 @@
 import { z } from "zod";
-
-import type { ClassifiedTool } from "../define";
 import type { JsonObject } from "../../run/protocol";
+import type { ClassifiedTool } from "../define";
 import { runEffect } from "../effects";
 import {
   auditedCapability,
-  effectDeps,
   type BindingContext,
+  effectDeps,
 } from "../registry";
 
 const level = z.enum(["low", "medium", "high"]);

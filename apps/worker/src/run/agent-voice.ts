@@ -37,8 +37,8 @@
  * engineer once typed cannot read as an instruction.
  */
 import { listConnected } from "../db/identities";
-import { pickSpeaker } from "../identity/speaker";
 import type { MessagesRow } from "../db/schema";
+import { pickSpeaker } from "../identity/speaker";
 
 /** At most twenty messages: enough to carry a register, few enough to bound. */
 export const ENGINEER_VOICE_MAX_COUNT = 20;

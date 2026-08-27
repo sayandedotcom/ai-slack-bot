@@ -361,10 +361,7 @@ function parseResult(stdout: string): HarnessResult | null {
         durationMs:
           typeof parsed.durationMs === "number" ? parsed.durationMs : 0,
       };
-    } catch {
-      // A truncated or interleaved line is not the result; keep looking back.
-      continue;
-    }
+    } catch {}
   }
   return null;
 }

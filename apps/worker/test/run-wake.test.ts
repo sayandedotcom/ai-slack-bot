@@ -1,10 +1,9 @@
 import { env } from "cloudflare:test";
 import { getAgentByName } from "agents";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
+import { slackRunKey } from "../src/run/keys";
 import { installTestModel, resetTestModel } from "../src/run/model";
 import { getRunByKey, readRunUsage, setRunStatus } from "../src/run/repository";
-import { slackRunKey } from "../src/run/keys";
 import { createRunFromChat, routeToOwnedRun, wakeRun } from "../src/run/wake";
 import { cannedModel } from "./helpers/canned-model";
 import { waitFor } from "./helpers/wait";

@@ -15,14 +15,14 @@
  * eviction, while the process itself is the only thing that actually knows.
  */
 import { getSandbox } from "@cloudflare/sandbox";
+import type { RunsRow } from "../db/schema";
 import type { Env } from "../index";
 import { TERMINAL_RUN_STATUSES } from "../run/protocol";
 import {
+  assertGitSentinel,
   MONOREPO_SLUG,
   PLACEHOLDER_CREDENTIAL,
-  assertGitSentinel,
 } from "./class";
-import type { RunsRow } from "../db/schema";
 
 export type BootState = "provisioning" | "ready" | "failed";
 

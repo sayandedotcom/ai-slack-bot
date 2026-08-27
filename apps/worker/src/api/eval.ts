@@ -1,17 +1,17 @@
 import { Hono } from "hono";
-import type { Env } from "../index";
-import { requireTeamMember } from "./identity";
-import { detectAiTells, type AiTell } from "../eval/ai-tells";
-import {
-  scoreTriage,
-  type TriageOutcomeRow,
-  type TriageScore,
-} from "../eval/triage-eval";
 import type {
   ApprovalsRow,
   MessagesRow,
   TriageDecisionsRow,
 } from "../db/schema";
+import { type AiTell, detectAiTells } from "../eval/ai-tells";
+import {
+  scoreTriage,
+  type TriageOutcomeRow,
+  type TriageScore,
+} from "../eval/triage-eval";
+import type { Env } from "../index";
+import { requireTeamMember } from "./identity";
 
 /**
  * The eval API: how good was the triage decision, and how close was the shadow

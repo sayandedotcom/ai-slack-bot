@@ -1,9 +1,9 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import type { Env } from "../index";
 import { requireTeamMember } from "../api/identity";
-import { importIdentityKey, seal } from "../identity/crypto";
 import { upsertIdentity } from "../db/identities";
+import { importIdentityKey, seal } from "../identity/crypto";
+import type { Env } from "../index";
 import { importStateKey, mintState, verifyState } from "./state";
 
 /**

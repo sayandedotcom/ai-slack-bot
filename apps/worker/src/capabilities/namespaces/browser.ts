@@ -1,9 +1,8 @@
 import { z } from "zod";
-
-import type { ClassifiedTool } from "../define";
 import { CapabilityError } from "../../gateways/errors";
-import { auditedCapability, type BindingContext } from "../registry";
 import { MAX_RECORDING_TIMEOUT_MS } from "../../sandbox/record";
+import type { ClassifiedTool } from "../define";
+import { auditedCapability, type BindingContext } from "../registry";
 
 /**
  * The tenth namespace: a real browser on this run's own machine, and the

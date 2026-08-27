@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   projectStatus,
   recordUsage,
-  usageRowId,
   type UsageRow,
+  usageRowId,
 } from "../src/run/agent-projection";
 import { chatRunKey } from "../src/run/keys";
 import {

@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { getAgentByName } from "agents";
-import { z } from "zod";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { FirefighterConnector } from "../src/capabilities/connector";
 import {

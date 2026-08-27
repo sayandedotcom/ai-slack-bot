@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { chatRunKey, slackRunKey } from "../src/run/keys";
 import {
   createOrGetRun,
   createOrGetRunUnderPolicy,
@@ -8,11 +9,10 @@ import {
   getRunByKey,
   listRuns,
   projectRunIndex,
+  RUN_LIST_MAX_LIMIT,
   setRunStatus,
   touchRun,
-  RUN_LIST_MAX_LIMIT,
 } from "../src/run/repository";
-import { chatRunKey, slackRunKey } from "../src/run/keys";
 
 // D1 is shared across every suite in this pool (see phase-08-notes.md), so each
 // case works on ids it generated itself and the table is cleared up front.

@@ -26,9 +26,8 @@
  */
 
 import type { UIMessage } from "ai";
-
-import { getChannelPolicy } from "../db/channels";
 import type { CapabilityAuditSink } from "../capabilities/audit";
+import { getChannelPolicy } from "../db/channels";
 import type { Env } from "../index";
 import {
   buildAgentEpisode,

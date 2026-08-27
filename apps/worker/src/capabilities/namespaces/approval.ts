@@ -1,7 +1,6 @@
 import { z } from "zod";
-
-import type { ClassifiedTool } from "../define";
 import { CapabilityError } from "../../gateways/errors";
+import type { ClassifiedTool } from "../define";
 import { auditedCapability, type BindingContext } from "../registry";
 
 /**

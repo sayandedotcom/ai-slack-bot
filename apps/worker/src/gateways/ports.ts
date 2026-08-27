@@ -1,5 +1,5 @@
-import type { MemoryStore } from "../memory/store";
 import type { ApprovalPort } from "../approval/contracts";
+import type { MemoryStore } from "../memory/store";
 import type { DiffResult } from "../sandbox/diff";
 import type { BootStatus } from "../sandbox/lifecycle";
 

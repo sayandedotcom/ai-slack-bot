@@ -1,11 +1,9 @@
 import { env } from "cloudflare:test";
 import { getAgentByName } from "agents";
+import type { UIMessage } from "ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { UIMessage } from "ai";
-
 import type { AgentEpisode } from "../src/memory/episode";
-import { chatRunKey, slackRunKey } from "../src/run/keys";
 import {
   askedFrom,
   enqueueTurnEpisode,
@@ -15,6 +13,7 @@ import {
   messageText,
   newTurnRecord,
 } from "../src/run/agent-memory";
+import { chatRunKey, slackRunKey } from "../src/run/keys";
 import { installTestModel, resetTestModel } from "../src/run/model";
 import { getRunById } from "../src/run/repository";
 import { createRunFromChat, wakeRun } from "../src/run/wake";

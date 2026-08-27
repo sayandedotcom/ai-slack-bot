@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  SealError,
   importIdentityKey,
   open,
+  SealError,
   seal,
 } from "../src/identity/crypto";
 

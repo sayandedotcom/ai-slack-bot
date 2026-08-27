@@ -1,9 +1,9 @@
-import type { RunScope } from "../gateways/scope";
+import { makeUserTokenSender, NOT_CONNECTED } from "../approval/sender";
 import { CapabilityError } from "../gateways/errors";
 import type { SlackGateway, SlackMessage } from "../gateways/ports";
-import { makeUserTokenSender, NOT_CONNECTED } from "../approval/sender";
+import type { RunScope } from "../gateways/scope";
 import type { UserTokenSource } from "../identity/user-token";
-import { readThread, searchStoredMessages, isWildcardOnly } from "./messages";
+import { isWildcardOnly, readThread, searchStoredMessages } from "./messages";
 
 /** Ceilings applied after schema validation, so a caller cannot widen a read. */
 const MAX_THREAD = 200;

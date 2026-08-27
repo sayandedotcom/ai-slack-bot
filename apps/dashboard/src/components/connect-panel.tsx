@@ -87,7 +87,7 @@ export function ConnectPanel({
                 )}
               >
                 <span className="truncate">{engineer.email}</span>
-                <span className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground">
+                <span className="rounded border border-border px-1.5 py-0.5 text-muted-foreground text-xs">
                   {engineer.role}
                 </span>
                 <span className="ml-auto flex items-center gap-4 text-xs">

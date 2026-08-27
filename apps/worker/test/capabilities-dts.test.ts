@@ -6,8 +6,8 @@ import {
   renderCapabilityDeclarations,
   renderDeclarationsFromConnectors,
 } from "../src/capabilities/dts";
-import { buildNamespaces } from "../src/capabilities/registry";
 import generated from "../src/capabilities/generated/capabilities.d.ts?raw";
+import { buildNamespaces } from "../src/capabilities/registry";
 import { testBindingContext } from "./helpers/capabilities";
 
 describe("capability declarations", () => {

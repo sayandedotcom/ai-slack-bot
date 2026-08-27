@@ -32,8 +32,8 @@
  */
 import { FIREFIGHTERS, isFirefighter } from "../access/roster";
 import {
-  listConnected,
   type ConnectedIdentity,
+  listConnected,
   type Provider,
 } from "../db/identities";
 

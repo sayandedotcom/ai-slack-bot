@@ -1,15 +1,15 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  AccessJwtError,
   type AccessIdentity,
+  AccessJwtError,
   type AccessVerifier,
 } from "../src/access/jwt";
-import { githubOAuth } from "../src/oauth/github";
 import {
   installIdentityApiPorts,
   resetIdentityApiPorts,
 } from "../src/api/identity";
+import { githubOAuth } from "../src/oauth/github";
 import { importStateKey, mintState, verifyState } from "../src/oauth/state";
 
 /**

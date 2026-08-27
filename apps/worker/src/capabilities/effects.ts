@@ -1,13 +1,13 @@
+import type { CodemodeEffectsRow } from "../db/schema";
+import type { CapabilityErrorCode } from "../gateways/errors";
 import {
   CapabilityError,
   safeMessage,
   toCapabilityError,
 } from "../gateways/errors";
-import type { CapabilityErrorCode } from "../gateways/errors";
 import { sha256Bytes } from "../gateways/hash";
 import type { RunScope } from "../gateways/scope";
 import type { JsonValue } from "../run/protocol";
-import type { CodemodeEffectsRow } from "../db/schema";
 
 /**
  * Bumping this invalidates every existing key, which is the point: if the

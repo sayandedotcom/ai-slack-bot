@@ -1,9 +1,9 @@
-import type { Env } from "../index";
-import type { QueuedEvent } from "../slack/types";
+import { registerChannel } from "../channels/registry";
 import { getChannelPolicy, shouldTriage } from "../db/channels";
 import { insertMessage, recordEvent } from "../db/messages";
-import { registerChannel } from "../channels/registry";
+import type { Env } from "../index";
 import { getPermalink } from "../slack/client";
+import type { QueuedEvent } from "../slack/types";
 import { classify } from "./rules";
 
 /**

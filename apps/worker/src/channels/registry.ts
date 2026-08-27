@@ -31,7 +31,7 @@
  * keeps its row — Slack itself refuses the post with `not_in_channel`, which is
  * a better enforcement point than a row we would have to keep in sync.
  */
-import { getChannelPolicy, type ChannelPolicy } from "../db/channels";
+import { type ChannelPolicy, getChannelPolicy } from "../db/channels";
 import type { Env } from "../index";
 import { getConversationInfo, listBotConversations } from "../slack/client";
 

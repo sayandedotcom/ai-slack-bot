@@ -1,7 +1,6 @@
-import { Component } from "react";
-import type { ErrorInfo, ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
+import type { ErrorInfo, ReactNode } from "react";
+import { Component } from "react";
 
 /**
  * The one class component in this app, and it exists because React gives no

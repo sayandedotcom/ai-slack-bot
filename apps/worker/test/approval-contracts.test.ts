@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  type ApprovalRow,
   DecisionInputError,
   outboundText,
   validateDecisionInput,
-  type ApprovalRow,
 } from "../src/approval/contracts";
 
 function row(overrides: Partial<ApprovalRow> = {}): ApprovalRow {

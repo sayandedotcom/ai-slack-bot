@@ -1,5 +1,5 @@
-import { useMemo } from "react";
 import type { ReactNode } from "react";
+import { useMemo } from "react";
 
 import { Panel, type PanelState } from "../components/panel";
 import { usePoll } from "../lib/use-poll";
@@ -63,7 +63,7 @@ export function ago(thenMs: number, nowMs: number): string {
 export function StatusChip({ status }: { status: RunStatus }): ReactNode {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${STATUS_CLASS[status]}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-medium text-[11px] ${STATUS_CLASS[status]}`}
     >
       {LIVE.has(status) ? (
         // Two layers: a steady dot so the state is readable when the OS is set
@@ -114,18 +114,18 @@ function RunRow({
       <button
         type="button"
         onClick={() => onSelect(run.id)}
-        className="flex w-full flex-col gap-1 rounded-lg border bg-card px-3 py-2 text-left transition-colors hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="flex w-full flex-col gap-1 rounded-lg border bg-card px-3 py-2 text-left transition-colors hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
       >
         <div className="flex flex-wrap items-center gap-2">
           <StatusChip status={run.status} />
           <OriginBadge origin={run.origin} />
           {run.shadow ? <ShadowBadge /> : null}
           {where === null ? null : (
-            <span className="truncate text-xs text-muted-foreground">
+            <span className="truncate text-muted-foreground text-xs">
               {where}
             </span>
           )}
-          <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="ml-auto shrink-0 text-muted-foreground text-xs tabular-nums">
             {ago(run.updatedAt, now)}
           </span>
         </div>

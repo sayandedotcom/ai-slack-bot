@@ -6,8 +6,8 @@ import type { ClassifiedTool } from "../define";
 import { runEffect } from "../effects";
 import {
   auditedCapability,
-  effectDeps,
   type BindingContext,
+  effectDeps,
 } from "../registry";
 import { resolveCustomerScope } from "./customers";
 

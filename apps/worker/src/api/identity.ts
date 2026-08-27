@@ -1,14 +1,14 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import type { Env } from "../index";
 import {
   AccessJwtError,
-  makeAccessVerifier,
   type AccessVerifier,
+  makeAccessVerifier,
 } from "../access/jwt";
 import { isFirefighter, isTeamMember } from "../access/roster";
 import { listConnectStatus } from "../db/identities";
 import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
+import type { Env } from "../index";
 
 /**
  * Who am I, and who is on duty — the two read-only questions the dashboard asks

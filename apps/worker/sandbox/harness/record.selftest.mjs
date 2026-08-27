@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /*
  * record.selftest.mjs — runs record.cjs against a FAKE playwright and a FAKE
  * ffmpeg, on this machine, without the image.
@@ -17,12 +18,12 @@
  *   3. a script that never navigates is NOT cut, and RESULT is still passed.
  */
 
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));

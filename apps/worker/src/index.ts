@@ -1,30 +1,37 @@
+import { subscribe } from "agents/observability";
 import { Hono } from "hono";
-import { slackEvents } from "./slack/events";
-import { countersApi } from "./api/counters";
-import { backfillApi } from "./api/backfill";
-import { runsApi } from "./api/runs";
 import { agentsApi } from "./api/agents";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
-import { proofsApi } from "./api/proofs";
-import { identityApi } from "./api/identity";
+import { backfillApi } from "./api/backfill";
+import { countersApi } from "./api/counters";
 import { evalApi } from "./api/eval";
-import { slackOAuth } from "./oauth/slack";
-import { githubOAuth } from "./oauth/github";
-import { slackRunKey } from "./run/keys";
-import { routeToOwnedRun, wakeRun } from "./run/wake";
+import { identityApi } from "./api/identity";
+import { proofsApi } from "./api/proofs";
+import { runsApi } from "./api/runs";
 import { sweepChannelMembership } from "./channels/registry";
 import { handleIngestBatch } from "./ingest/consumer";
 import { handleMemoryBatch, type MemoryJob } from "./memory/consumer";
 import { sweepMemoryOutbox } from "./memory/sweeper";
-import { sweepNudges } from "./notify/nudge";
-import { sweepSandboxes } from "./sandbox/lifecycle";
 import { ZepMemory } from "./memory/zep";
-import { subscribe } from "agents/observability";
+import { sweepNudges } from "./notify/nudge";
+import { githubOAuth } from "./oauth/github";
+import { slackOAuth } from "./oauth/slack";
+import { slackRunKey } from "./run/keys";
+import { routeToOwnedRun, wakeRun } from "./run/wake";
+import { sweepSandboxes } from "./sandbox/lifecycle";
+import { slackEvents } from "./slack/events";
+import type { QueuedEvent } from "./slack/types";
 import { handleTriageBatch, type TriageJob } from "./triage/consumer";
 import { makeTriageRunner } from "./triage/run";
-import type { QueuedEvent } from "./slack/types";
 
+// The durable Code Mode runtime lives in a Durable Object FACET of RunAgent.
+// It needs no `durable_objects.bindings` entry — nothing addresses it from
+// outside — but it must be exported here AND declared in the v5 migration, or
+// `ctx.exports.CodemodeRuntime` is a LoopbackServiceStub and `facets.get`
+// throws "Incorrect type for the 'class' field on 'StartupOptions'".
+export { CodemodeRuntime } from "@cloudflare/codemode";
+export { RunAgent } from "./run/agent";
 // The SANDBOX binding's class (Phase 18), and the SDK's own ContainerProxy.
 //
 // `ContainerProxy` is not decoration: the Sandbox DO resolves
@@ -33,13 +40,6 @@ import type { QueuedEvent } from "./slack/types";
 // .ContainerProxy is undefined" rather than at build time. The requirement is
 // stated only in a comment inside the package's `.d.ts`.
 export { ContainerProxy, Sandbox } from "./sandbox/class";
-export { RunAgent } from "./run/agent";
-// The durable Code Mode runtime lives in a Durable Object FACET of RunAgent.
-// It needs no `durable_objects.bindings` entry — nothing addresses it from
-// outside — but it must be exported here AND declared in the v5 migration, or
-// `ctx.exports.CodemodeRuntime` is a LoopbackServiceStub and `facets.get`
-// throws "Incorrect type for the 'class' field on 'StartupOptions'".
-export { CodemodeRuntime } from "@cloudflare/codemode";
 
 /**
  * Wrangler-generated bindings, plus the two narrow refinements the application

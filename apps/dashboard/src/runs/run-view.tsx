@@ -19,17 +19,16 @@
  * `PATCH /api/approvals/:id`, which takes the roster check and the D1 CAS.
  */
 
-import { useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
+import type { KeyboardEvent, ReactNode } from "react";
+import { useState } from "react";
 
 import {
-  useRunAgent,
   type ChatMessage,
   type ChatMessagePart,
   type ConnectionState,
   type RunAgentState,
+  useRunAgent,
 } from "./use-run-agent";
 
 /** How much of a tool payload this pane will show. It is not a JSON viewer. */
@@ -87,7 +86,7 @@ function preview(value: unknown): { text: string; truncated: boolean } {
 
 function Caption({ children }: { children: ReactNode }): ReactNode {
   return (
-    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+    <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
       {children}
     </div>
   );
@@ -104,7 +103,7 @@ function Payload({
   return (
     <div className="space-y-1">
       <Caption>{label}</Caption>
-      <pre className="overflow-x-auto rounded bg-muted/60 p-2 text-xs leading-snug break-words whitespace-pre-wrap">
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-muted/60 p-2 text-xs leading-snug">
         {text}
       </pre>
       {truncated ? (
@@ -142,7 +141,7 @@ function ToolRow({ part }: { part: ChatMessagePart }): ReactNode {
           {open ? "▾" : "▸"}
         </span>
         <span className="font-medium">{toolNameOf(part)}</span>
-        <span className="ml-auto text-xs text-muted-foreground">{state}</span>
+        <span className="ml-auto text-muted-foreground text-xs">{state}</span>
       </button>
       {open ? (
         <div className="space-y-2 border-t px-3 py-2">
@@ -181,14 +180,13 @@ function MessageRow({ message }: { message: ChatMessage }): ReactNode {
           className={`rounded-lg border px-3 py-2 ${ROLE_CLASS[message.role] ?? ROLE_CLASS.system}`}
         >
           <Caption>{message.role}</Caption>
-          <p className="mt-1 text-sm break-words whitespace-pre-wrap">{text}</p>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm">{text}</p>
         </div>
       );
       continue;
     }
     if (isToolPart(part)) {
       rows.push(<ToolRow key={key} part={part} />);
-      continue;
     }
     // `reasoning` is deliberately not rendered: the provider returns thinking
     // with an empty text field (invariant 17), so there is nothing to show and
@@ -303,7 +301,7 @@ export function RunView({
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto rounded-lg border bg-background p-3">
         {messages.length === 0 && !busy ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
+          <p className="py-8 text-center text-muted-foreground text-sm">
             Nothing yet — the transcript fills in as the agent works.
           </p>
         ) : (
@@ -316,7 +314,7 @@ export function RunView({
 
         {busy ? (
           <p
-            className="text-center text-xs text-muted-foreground"
+            className="text-center text-muted-foreground text-xs"
             role="status"
           >
             Working…

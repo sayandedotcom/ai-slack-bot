@@ -1,8 +1,8 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  DecisionInputError,
   type ApprovalRow,
+  DecisionInputError,
 } from "../src/approval/contracts";
 import {
   claimNudge,
@@ -12,10 +12,10 @@ import {
   listOpen,
   listUndeliveredResolutions,
   markResolutionDelivered,
+  type NewApprovalCard,
   recordNudgeMessage,
   setDelivery,
   withdrawApproval,
-  type NewApprovalCard,
 } from "../src/approval/repository";
 
 /**

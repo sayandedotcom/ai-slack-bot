@@ -5,11 +5,10 @@
  * reproduce a bug and draft an escalation; it just never sends anything.
  */
 import { describe, expect, it, vi } from "vitest";
-
+import type { ApprovalPort } from "../src/approval/contracts";
 import { makeApprovalTools } from "../src/capabilities/namespaces/approval";
 import { makeBrowserTools } from "../src/capabilities/namespaces/browser";
 import { makeSandboxTools } from "../src/capabilities/namespaces/sandbox";
-import type { ApprovalPort } from "../src/approval/contracts";
 import type { SandboxGateway } from "../src/gateways/ports";
 import { testBindingContext } from "./helpers/capabilities";
 

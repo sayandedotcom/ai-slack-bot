@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import type { Env } from "../index";
 import { CONTENT_TYPES, MAX_ARTIFACT_BYTES } from "../files/r2";
+import type { Env } from "../index";
 import { isInternalKey } from "../sandbox/diff";
 
 /**

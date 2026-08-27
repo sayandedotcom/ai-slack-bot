@@ -1,5 +1,5 @@
-import type { EpisodeSourceDescriptor } from "./episode";
 import type { MessagesRow } from "../db/schema";
+import type { EpisodeSourceDescriptor } from "./episode";
 
 /**
  * Turning a bounded source DESCRIPTOR into an exact D1 provenance row.

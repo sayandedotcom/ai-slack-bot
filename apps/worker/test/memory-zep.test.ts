@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { ZepError } from "@getzep/zep-cloud";
-import { ZepMemory, isGraphNotFound } from "../src/memory/zep";
+import { describe, expect, it } from "vitest";
+import { isGraphNotFound, ZepMemory } from "../src/memory/zep";
 
 // The private `client` is compile-time privacy only; tests swap it to keep the
 // real search() code path — including its catch — under test without network.

@@ -10,7 +10,7 @@
  * `Container` in `@cloudflare/containers` (0.3.7), which is why grepping the
  * sandbox package for them finds nothing and reads as "these were removed".
  */
-import { ContainerProxy, Sandbox as BaseSandbox } from "@cloudflare/sandbox";
+import { Sandbox as BaseSandbox, ContainerProxy } from "@cloudflare/sandbox";
 import type { Env } from "../index";
 
 /**

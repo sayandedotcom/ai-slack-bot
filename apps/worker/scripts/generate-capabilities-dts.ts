@@ -6,7 +6,7 @@
  * touching the worktree — CI must report drift, not silently repair it.
  *
  */
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 

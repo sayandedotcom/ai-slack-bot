@@ -1,10 +1,10 @@
-import type { RunScope } from "../gateways/scope";
 import { CapabilityError } from "../gateways/errors";
 import type {
   ResourceDescription,
   Row,
   SupabaseReader,
 } from "../gateways/ports";
+import type { RunScope } from "../gateways/scope";
 import { findResource, type SupabaseAllowlist } from "./allowlist";
 
 /** PostgREST operator names, keyed by the operators the schema advertises. */

@@ -334,7 +334,6 @@ export function boundedMetadata(raw: Record<string, unknown>): EpisodeMetadata {
         .slice(0, 20);
       // A non-EMPTY scalar array. An empty one is not a supported tag value.
       if (items.length > 0) out[key] = items;
-      continue;
     }
     // Objects, null and undefined are not scalar tags. Dropped, never
     // stringified: `[object Object]` is a tag that means nothing and filters

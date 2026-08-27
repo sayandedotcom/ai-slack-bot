@@ -1,6 +1,6 @@
 import {
-  generateTypesFromJsonSchema,
   type CodemodeConnector,
+  generateTypesFromJsonSchema,
   type JsonSchemaToolDescriptors,
 } from "@cloudflare/codemode";
 import type { CapabilityNamespace } from "./connector";

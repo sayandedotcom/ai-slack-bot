@@ -1,10 +1,9 @@
 import { z } from "zod";
-
-import type { ClassifiedTool } from "../define";
-import { cite as resolveCitations } from "../../memory/cite";
 import { CUSTOMER_SEARCH_MAX, searchCustomers } from "../../db/channels";
-import type { MemoryFact } from "../../memory/store";
 import { CapabilityError } from "../../gateways/errors";
+import { cite as resolveCitations } from "../../memory/cite";
+import type { MemoryFact } from "../../memory/store";
+import type { ClassifiedTool } from "../define";
 import { auditedCapability, type BindingContext } from "../registry";
 import { assertDiscoveryAllowed, resolveCustomerScope } from "./customers";
 

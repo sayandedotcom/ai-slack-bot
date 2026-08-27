@@ -11,10 +11,9 @@
  * a package with no DOM.
  */
 
-import { useMemo, useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
-
 import { Button } from "@workspace/ui/components/button";
+import type { KeyboardEvent, ReactNode } from "react";
+import { useMemo, useState } from "react";
 
 import { makeChatStarter, startChatRun } from "./api";
 
@@ -52,7 +51,7 @@ export function ChatPage({
       aria-label="Ask the agent"
       className="space-y-3"
     >
-      <p className="text-sm text-muted-foreground">
+      <p className="text-muted-foreground text-sm">
         Ask about a customer, a deploy, a trace or a table. This opens a run —
         the same kind of run a Slack thread opens — and everything committal
         still needs a human.

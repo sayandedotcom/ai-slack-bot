@@ -1,20 +1,20 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  AccessJwtError,
   type AccessIdentity,
+  AccessJwtError,
   type AccessVerifier,
 } from "../src/access/jwt";
+import { FIREFIGHTERS } from "../src/access/roster";
 import {
   identityApi,
   installIdentityApiPorts,
   resetIdentityApiPorts,
 } from "../src/api/identity";
-import { upsertIdentity, type ConnectStatus } from "../src/db/identities";
-import { importIdentityKey, seal, SealError } from "../src/identity/crypto";
-import { getDecryptedToken } from "../src/identity/tokens";
+import { type ConnectStatus, upsertIdentity } from "../src/db/identities";
+import { importIdentityKey, SealError, seal } from "../src/identity/crypto";
 import { SPEAKER_POOL } from "../src/identity/speaker";
-import { FIREFIGHTERS } from "../src/access/roster";
+import { getDecryptedToken } from "../src/identity/tokens";
 import type { Env } from "../src/index";
 
 /**

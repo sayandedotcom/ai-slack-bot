@@ -1,5 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FIREFIGHTERS } from "../src/access/roster";
+import type { ApprovalRow } from "../src/approval/contracts";
 import {
   claimNudge,
   decideApproval,
@@ -8,9 +10,7 @@ import {
   recordNudgeMessage,
   withdrawApproval,
 } from "../src/approval/repository";
-import type { ApprovalRow } from "../src/approval/contracts";
 import { upsertIdentity } from "../src/db/identities";
-import { FIREFIGHTERS } from "../src/access/roster";
 import type { Env } from "../src/index";
 import { sendNudge, sweepNudges, updateNudge } from "../src/notify/nudge";
 

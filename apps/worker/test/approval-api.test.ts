@@ -1,22 +1,22 @@
-import { SELF, createScheduledController, env } from "cloudflare:test";
+import { createScheduledController, env, SELF } from "cloudflare:test";
 import { getAgentByName } from "agents";
 import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index";
 import {
-  AccessJwtError,
   type AccessIdentity,
+  AccessJwtError,
   type AccessVerifier,
 } from "../src/access/jwt";
 import {
   installApprovalApiPorts,
-  resetApprovalApiPorts,
   type ResolutionNotifier,
+  resetApprovalApiPorts,
 } from "../src/api/approvals";
 import {
   insertApproval,
-  setDelivery,
   type NewApprovalCard,
+  setDelivery,
 } from "../src/approval/repository";
+import worker from "../src/index";
 
 /**
  * Real D1 through the workerd vitest pool, no `isolatedStorage` — same

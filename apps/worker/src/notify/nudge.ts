@@ -1,4 +1,3 @@
-import type { Env } from "../index";
 import type { ApprovalRow } from "../approval/contracts";
 import {
   claimNudge,
@@ -7,9 +6,10 @@ import {
   releaseNudge,
 } from "../approval/repository";
 import { getChannelPolicy } from "../db/channels";
-import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
-import { nudgeBlocks, resolvedBlocks } from "./blocks";
 import type { ApprovalsRow } from "../db/schema";
+import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
+import type { Env } from "../index";
+import { nudgeBlocks, resolvedBlocks } from "./blocks";
 
 /**
  * The escalation nudge: one Block Kit DM to the on-duty engineer, once.
@@ -359,7 +359,6 @@ export async function sweepNudges(env: Env, now = Date.now()): Promise<number> {
       // thrown value is not logged (see above); the id and the literal outcome
       // are all this line is allowed to say.
       console.warn("nudge sweep", { approvalId: id, outcome: "failed" });
-      continue;
     }
   }
   return sent;

@@ -23,9 +23,9 @@
  * timestamp this writes is compared against one a caller already fixed.
  */
 
+import { CapabilityError } from "../gateways/errors";
 import type { Env } from "../index";
 import { updateNudge } from "../notify/nudge";
-import { CapabilityError } from "../gateways/errors";
 import type { ApprovalDecision, ApprovalPort } from "./contracts";
 import { getApproval, insertApproval, withdrawApproval } from "./repository";
 

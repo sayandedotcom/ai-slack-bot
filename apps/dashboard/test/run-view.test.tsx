@@ -16,8 +16,8 @@ import { describe, expect, it, vi } from "vitest";
 import { RunView, type RunViewProps } from "../src/runs/run-view";
 import {
   agentBasePath,
-  makeSteerSender,
   type ChatMessage,
+  makeSteerSender,
 } from "../src/runs/use-run-agent";
 
 function view(over: Partial<RunViewProps> = {}): string {

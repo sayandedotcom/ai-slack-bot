@@ -13,7 +13,7 @@
  *    hand cannot forge it, which is what lets `assertClassified` be a check
  *    instead of a naming rule.
  */
-import { z } from "zod";
+import type { z } from "zod";
 
 import { CapabilityError } from "../gateways/errors";
 

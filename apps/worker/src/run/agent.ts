@@ -12,22 +12,22 @@
  * separate UUID resolved through D1. Nothing here may hand the name to a client.
  */
 import {
-  defaultContextOverflowClassifier,
-  Think,
   type ChatErrorContext,
   type ChatRecoveryConfig,
   type ChatResponseResult,
+  defaultContextOverflowClassifier,
   type PrepareStepContext,
   type Session,
   type StepConfig,
   type StepContext,
+  Think,
   type ToolCallContext,
   type ToolCallDecision,
   type TurnConfig,
   type TurnContext,
 } from "@cloudflare/think";
 import { createExecuteRuntime } from "@cloudflare/think/tools/execute";
-import { callable, type Connection, type ConnectionContext } from "agents";
+import { type Connection, type ConnectionContext, callable } from "agents";
 import type { ContextProvider } from "agents/experimental/memory/session";
 import type {
   LanguageModel,
@@ -56,18 +56,8 @@ import {
 import { CapabilityError } from "../gateways/errors";
 import type { RunScope } from "../gateways/scope";
 import type { Env } from "../index";
-import { redact } from "../redact";
-import {
-  askedFrom,
-  enqueueTurnEpisode,
-  episodeOutcomeFor,
-  makeTurnAuditSink,
-  makeTurnProvenanceSink,
-  messageText,
-  newTurnRecord,
-  type TurnRecord,
-} from "./agent-memory";
 import { sendNudge } from "../notify/nudge";
+import { redact } from "../redact";
 import {
   makeSandboxLifecycle,
   sandboxContainersAvailable,
@@ -78,8 +68,17 @@ import {
   RUN_CHANNELS,
   type RunChannelId,
 } from "./agent-channels";
-import { runOriginOf } from "./keys";
-import { identityFromRequest, isBlockedClientFrame } from "./transport";
+import {
+  askedFrom,
+  enqueueTurnEpisode,
+  episodeOutcomeFor,
+  makeTurnAuditSink,
+  makeTurnProvenanceSink,
+  messageText,
+  newTurnRecord,
+  type TurnRecord,
+} from "./agent-memory";
+import { projectStatus, recordUsage } from "./agent-projection";
 import {
   ANTHROPIC_PROVIDER_OPTIONS,
   composeInstructions,
@@ -89,7 +88,6 @@ import {
   type ThreadMessage,
   turnInstructions,
 } from "./agent-prompt";
-import { projectStatus, recordUsage } from "./agent-projection";
 import {
   costBreakdown,
   FABLE_5_MODEL_ID,
@@ -116,9 +114,11 @@ import {
   voiceWindowIndex,
 } from "./agent-voice";
 import { productionDependencies } from "./dependencies";
+import { runOriginOf } from "./keys";
 import { isRunStatus, isTerminalRunStatus, type RunStatus } from "./protocol";
 import { getRunById, getRunByKey, readRunUsage } from "./repository";
 import { resolveRunScope } from "./scope";
+import { identityFromRequest, isBlockedClientFrame } from "./transport";
 
 /** The one outer tool. Named in the prompt, the tests and the README. */
 export const RUN_CODE_TOOL = "run_code";
@@ -1303,9 +1303,7 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * survive RPC. `TurnConfig` carries functions (`stopWhen`), so it cannot cross
    * a stub itself.
    */
-  async beforeTurnForTest(
-    assembledSystem = ""
-  ): Promise<{
+  async beforeTurnForTest(assembledSystem = ""): Promise<{
     instructions: string;
     activeTools: string[];
     maxSteps: number;

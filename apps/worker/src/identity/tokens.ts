@@ -1,6 +1,6 @@
-import type { Env } from "../index";
 import { getIdentity, type Provider } from "../db/identities";
-import { SealError, importIdentityKey, open } from "../identity/crypto";
+import { importIdentityKey, open, SealError } from "../identity/crypto";
+import type { Env } from "../index";
 
 /**
  * The one composition that turns a stored identity row back into a usable

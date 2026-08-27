@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { ApiError } from "../src/lib/api";
 import {
   decide,
   fetchApproval,
   fetchOpenApprovals,
 } from "../src/approvals/api";
+import { ApiError } from "../src/lib/api";
 
 /** The secret we never want to see leak out of a thrown or returned error. */
 const BODY = "stack trace with s3cret-token and internal hostnames";

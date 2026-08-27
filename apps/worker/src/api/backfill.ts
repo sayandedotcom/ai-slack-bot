@@ -1,7 +1,7 @@
 import { Hono } from "hono";
+import type { MessagesRow } from "../db/schema";
 import type { Env } from "../index";
 import type { MemoryJob } from "../memory/consumer";
-import type { MessagesRow } from "../db/schema";
 
 /**
  * Re-enqueues messages that predate the memory layer (or fell into the DLQ)

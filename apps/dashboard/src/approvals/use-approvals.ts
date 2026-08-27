@@ -15,17 +15,16 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
+import type { PanelState } from "../components/panel";
+import { usePoll } from "../lib/use-poll";
 import {
+  type DecideAction,
+  type Decision,
   decide,
   fetchApproval,
   fetchOpenApprovals,
-  type DecideAction,
-  type Decision,
   type OpenApproval,
 } from "./api";
-import { usePoll } from "../lib/use-poll";
-import type { PanelState } from "../components/panel";
 
 /** How often the open list is re-read. */
 const POLL_MS = 3_000;

@@ -1,4 +1,3 @@
-import type { Env } from "../index";
 import { CapabilityError } from "../gateways/errors";
 import type {
   GithubGateway,
@@ -6,13 +5,14 @@ import type {
   PullRequestRef,
   PullRequestStatus,
 } from "../gateways/ports";
-import { applyUnifiedDiff, basePaths } from "./apply";
+import { resolveSpeaker } from "../identity/speaker";
+import { getDecryptedToken } from "../identity/tokens";
+import type { Env } from "../index";
+import { MONOREPO_SLUG } from "../sandbox/class";
 import { readDiffWithBase } from "../sandbox/diff";
 import { devEnvFor } from "../sandbox/env";
 import { makeRedactor } from "../sandbox/gateway";
-import { MONOREPO_SLUG } from "../sandbox/class";
-import { getDecryptedToken } from "../identity/tokens";
-import { resolveSpeaker } from "../identity/speaker";
+import { applyUnifiedDiff, basePaths } from "./apply";
 
 /**
  * The last leg of the pipeline: a stored diff becomes a real commit on a real

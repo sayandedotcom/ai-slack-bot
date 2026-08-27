@@ -37,8 +37,8 @@
  * Adding a migration means adding or amending a type here in the same commit.
  */
 
-import type { IngestOutcome } from "../ingest/rules";
 import type { ApprovalDecision, ApprovalDelivery } from "../approval/contracts";
+import type { IngestOutcome } from "../ingest/rules";
 import type { RunOrigin } from "../run/keys";
 import type { RunStatus } from "../run/protocol";
 import type { ChannelMode } from "./channels";

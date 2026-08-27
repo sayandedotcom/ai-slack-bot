@@ -1,12 +1,11 @@
 import { z } from "zod";
-
-import type { ClassifiedTool } from "../define";
 import { sha256Bytes } from "../../gateways/hash";
+import type { ClassifiedTool } from "../define";
 import { runEffect } from "../effects";
 import {
   auditedCapability,
-  effectDeps,
   type BindingContext,
+  effectDeps,
 } from "../registry";
 
 /**

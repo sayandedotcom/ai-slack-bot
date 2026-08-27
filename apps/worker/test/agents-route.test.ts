@@ -1,12 +1,11 @@
-import { SELF, env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { getAgentByName } from "agents";
+import type { UIMessage } from "ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { UIMessage } from "ai";
-
 import {
-  AccessJwtError,
   type AccessIdentity,
+  AccessJwtError,
   type AccessVerifier,
 } from "../src/access/jwt";
 import {

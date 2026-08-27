@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { AccessJwtError, makeAccessVerifier } from "../src/access/jwt";
 import {
   FIREFIGHTERS,
-  VIEWERS,
   isFirefighter,
   isTeamMember,
+  VIEWERS,
 } from "../src/access/roster";
 
 const TEAM_DOMAIN = "zellify-firefighter.cloudflareaccess.com";
