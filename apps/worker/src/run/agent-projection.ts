@@ -7,7 +7,10 @@
  * are conditional, and neither may fail a turn: a run that cannot update its
  * index row is still a run.
  */
+import type { StepContext } from "@cloudflare/think";
+
 import { redact } from "../redact";
+import { costBreakdown, FABLE_5_MODEL_ID, normalizeUsage } from "./agent-spend";
 import { evaluateTransition, type RunStatus } from "./protocol";
 import { casRunStatus, getRunById, setRunSummaryIfAbsent } from "./repository";
 
@@ -89,6 +92,59 @@ export type UsageRow = {
   errorCode: string | null;
   createdAt: number;
 };
+
+/**
+ * One finished step, as the row that bills it.
+ *
+ * A pure mapping, kept beside the writer rather than in the hook that calls it:
+ * every field is a decision about what the bill is made of, and three of them
+ * are the ones that have been gotten wrong before.
+ *
+ *  - `generationId` is the AI SDK's own id for the generation, which is what the
+ *    unique index is keyed on together with attempt and step. `providerRequestId`
+ *    is METADATA and never an idempotency key — it changes on a retry of the
+ *    same logical step, so keying on it would record the retry as a second
+ *    billed call.
+ *  - `attempt` distinguishes a recovery re-run from a replay. A re-run after an
+ *    interruption is a distinct billed call and must not collide with the first.
+ *  - a pre-output refusal comes back HTTP 200 and Anthropic does not bill it, so
+ *    the tokens are still recorded and the money is not.
+ */
+export function usageRowFrom(
+  ctx: StepContext,
+  ids: { runId: string; turnId: string; attempt: number; now: number }
+): UsageRow {
+  const usage = normalizeUsage(ctx.usage);
+  const modelId = ctx.model?.modelId ?? FABLE_5_MODEL_ID;
+  return {
+    runId: ids.runId,
+    generationId: ctx.callId,
+    agentTurnId: ids.turnId,
+    attempt: ids.attempt,
+    stepIndex: ctx.stepNumber,
+    provider: ctx.model?.provider ?? "anthropic",
+    model: modelId,
+    providerRequestId: ctx.response?.id ?? null,
+    gatewayLogId: ctx.response?.headers?.["cf-aig-log-id"] ?? null,
+    inputTokens: usage.inputTokens,
+    noCacheTokens: usage.noCacheTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+    outputTokens: usage.outputTokens,
+    reasoningTokens: usage.reasoningTokens,
+    totalTokens: usage.totalTokens,
+    costNanoUsd: costBreakdown({
+      modelId,
+      usage,
+      billing: ctx.finishReason === "content-filter" ? "none" : "normal",
+    }).totalNanoUsd,
+    latencyMs: Math.max(0, Math.round(ctx.performance?.stepTimeMs ?? 0)),
+    finishReason: ctx.finishReason ?? null,
+    rawFinishReason: ctx.rawFinishReason ?? null,
+    errorCode: null,
+    createdAt: ids.now,
+  };
+}
 
 /**
  * Record it, once.

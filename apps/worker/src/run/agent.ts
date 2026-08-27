@@ -10,6 +10,18 @@
  * The DO's NAME is the private run key (`slack:{channel}:{thread_ts}` or
  * `chat:{uuid}`), built only by `src/run/keys.ts`. The public `runs.id` is a
  * separate UUID resolved through D1. Nothing here may hand the name to a client.
+ *
+ * WHAT IS DELIBERATELY NOT HERE. This file is the hooks and the state machine;
+ * everything that does not need a live run lives beside it, so that reading it
+ * is reading policy rather than prose about JSON shapes:
+ *
+ *  - `agent-contract.ts` — the constants, `RunAgentState`, and the two
+ *    invariants enforced as functions (telemetry naming, thinking omitted).
+ *  - `agent-metadata.ts` — every value that crossed a durable boundary and has
+ *    to be read defensively on the way back.
+ *  - `agent-testkit.ts` — the bodies of the test-only RPC surface. The methods
+ *    stay on the class because a stub resolves them by name; the reasoning does
+ *    not have to.
  */
 import {
   type ChatErrorContext,
@@ -69,6 +81,15 @@ import {
   type RunChannelId,
 } from "./agent-channels";
 import {
+  ACTIVE_TOOLS,
+  APPROVAL_TTL_SECONDS,
+  assertThinkingOmitted,
+  CHAT_ERROR_MAX_CHARS,
+  RUN_CODE_TOOL,
+  type RunAgentState,
+  turnTelemetry,
+} from "./agent-contract";
+import {
   askedFrom,
   enqueueTurnEpisode,
   episodeOutcomeFor,
@@ -78,21 +99,30 @@ import {
   newTurnRecord,
   type TurnRecord,
 } from "./agent-memory";
-import { projectStatus, projectSummary, recordUsage } from "./agent-projection";
+import {
+  readApprovalId,
+  readTurnId,
+  readTurnRecall,
+  readTurnRevision,
+  readTurnThread,
+} from "./agent-metadata";
+import {
+  projectStatus,
+  projectSummary,
+  recordUsage,
+  usageRowFrom,
+} from "./agent-projection";
 import {
   ANTHROPIC_PROVIDER_OPTIONS,
   composeInstructions,
   configureRunSession,
   type PendingApprovalFacts,
-  type RecalledFact,
-  type ThreadMessage,
   turnInstructions,
 } from "./agent-prompt";
 import {
-  costBreakdown,
+  budgetExhaustedInstructions,
   FABLE_5_MODEL_ID,
   MIN_USEFUL_OUTPUT_TOKENS,
-  normalizeUsage,
   spendCeilingFrom,
   spendDecision,
   spendStopWhen,
@@ -109,6 +139,13 @@ import {
   steerText,
 } from "./agent-steering";
 import {
+  beforeTurnSummary,
+  mergedToolNames,
+  outcomeOf,
+  sweepForCanary,
+  tracingPolicy,
+} from "./agent-testkit";
+import {
   renderEngineerVoice,
   resolveEngineerVoice,
   voiceWindowIndex,
@@ -119,149 +156,6 @@ import { isRunStatus, isTerminalRunStatus, type RunStatus } from "./protocol";
 import { getRunById, getRunByKey, readRunUsage } from "./repository";
 import { resolveRunScope } from "./scope";
 import { identityFromRequest, isBlockedClientFrame } from "./transport";
-
-/** The one outer tool. Named in the prompt, the tests and the README. */
-export const RUN_CODE_TOOL = "run_code";
-
-/**
- * What `beforeTurn` permits the model to call.
- *
- * Invariant 5, as it is actually enforceable on this chassis. The MERGED tool
- * map can never be one entry — `think.js:2628` calls `createWorkspaceTools`
- * unconditionally and it always returns seven file tools — so the control is
- * `activeTools`, which Think forwards to `streamText` (`think.js:2729`).
- */
-export const ACTIVE_TOOLS = [RUN_CODE_TOOL];
-
-/**
- * How much of a failure reason reaches every dashboard tab.
- *
- * Bounded as well as scrubbed: a provider error body can be kilobytes of
- * echoed request, and `redact` removes credential SHAPES, not volume.
- */
-export const CHAT_ERROR_MAX_CHARS = 300;
-
-/**
- * The telemetry settings for one turn, and the cast they need.
- *
- * MEASURED TRAP: `TurnConfig.telemetry` is typed as `streamText`'s
- * `experimental_telemetry`, which on `ai` 7 is `TelemetryOptions` — and that
- * type has NO `metadata`; v7 replaced it with `runtimeContext`. But Think reads
- * `settings.metadata` at runtime (`think.js:2569`), spreads it into the
- * runtime context it builds, and only then deletes the key from the options it
- * forwards. So `metadata` is the shape Think honours and the type does not
- * describe, and a cast is the honest way to say that rather than a silently
- * dropped field.
- *
- * `agentId` is the reason any of this is stamped. Think's default is
- * `this.name` — the PRIVATE run key — which would put
- * `slack:{channel}:{thread_ts}` into a third-party trace store for every
- * customer conversation, breaking invariant 10 somewhere nobody greps. Caller
- * metadata is merged last, so naming the public id here replaces it.
- */
-export function turnTelemetry(ids: {
-  runId: string;
-  turnId: string;
-}): TurnConfig["telemetry"] {
-  return {
-    functionId: "run-agent",
-    metadata: { agentId: ids.runId, runId: ids.runId, turnId: ids.turnId },
-  } as TurnConfig["telemetry"];
-}
-
-/**
- * Invariant 17: readable chain-of-thought must never reach an event, a log, a
- * D1 row, or Zep.
- *
- * `agent-prompt.ts` asks for `thinking: { display: "omitted" }`, so the provider
- * returns SIGNED thinking blocks with an empty text field — enough to replay a
- * tool-use turn, and nothing to read. This is the check that the setting is
- * actually in force: readable text in a reasoning part means the option was
- * dropped somewhere between here and the provider, and every downstream sink
- * that touches this turn would then be storing customer-derived reasoning.
- *
- * Thrown rather than logged, because there is no safe way to continue: the
- * block is already in the transcript by the time this runs, and the turn has to
- * end so nothing else picks it up.
- */
-export function assertThinkingOmitted(
-  reasoning: ReadonlyArray<unknown> | undefined
-): void {
-  for (const part of reasoning ?? []) {
-    // `unknown` rather than the SDK's ReasoningPart union: a reasoning FILE part
-    // has no `text` at all, and narrowing to the union here would have to be
-    // updated every time the SDK adds an arm. The question asked is the same for
-    // every arm — is there readable text on it.
-    const text = (part as { text?: unknown } | null)?.text;
-    if (typeof text === "string" && text.trim() !== "") {
-      throw new Error(
-        "readable thinking reached the transcript: provider options must keep thinking display omitted (invariant 17)"
-      );
-    }
-  }
-}
-
-/**
- * How long a run waits for a human before it stops waiting.
- *
- * A REVIEWED DEFAULT, not a vendor constant. An escalation nobody answers must
- * not park a run forever: the thread would stay owned by a session that will
- * never speak again, and every later customer message would be absorbed into
- * silence. Six hours is long enough to cover a meeting or a handover and short
- * enough that a stranded thread is released the same day.
- */
-export const APPROVAL_TTL_SECONDS = 6 * 60 * 60;
-
-/**
- * Run-scoped state that must survive hibernation.
- *
- * `this.state` is SQLite-backed and broadcast to every connection on
- * `setState`, which is exactly what the dashboard's live view wants. An
- * in-memory private field is neither: it dies on the next eviction and the
- * constructor re-runs. `this.configure()` — which the Think docs describe —
- * does not exist on 0.15.1. Found by the 2026-08-24 docs audit.
- *
- * Nothing sensitive may live here, because every field reaches every connected
- * browser. The run id is already public (it is in the dashboard URL); the
- * private run key, the customer slug and the actor's email are not, and are
- * deliberately absent.
- *
- * D1 `runs` stays the system of record; this is the live mirror.
- */
-/**
- * The approval id off a scheduled payload, or null.
- *
- * Validated rather than trusted: a schedule row round-trips through JSON in DO
- * SQLite and can outlive a deploy, so one written by an older build is a thing
- * to drop rather than to crash on.
- */
-function readApprovalId(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) return null;
-  const raw = (payload as { approvalId?: unknown }).approvalId;
-  return typeof raw === "string" && raw !== "" ? raw : null;
-}
-
-export type RunAgentState = {
-  /** The public runs.id, bound by the wake path from the D1 row keyed by this.name. */
-  runId: string | null;
-  /** The turn currently being served. Null when idle. */
-  turnId: string | null;
-  status: RunStatus;
-  openApprovalId: string | null;
-  /**
-   * The last approval this run opened, decided or not, and never cleared.
-   *
-   * `openApprovalId` alone cannot answer a withdraw that arrives just after a
-   * human decided: the resolution clears the flag, and a port with nothing open
-   * would report a clean withdrawal for a message that may already have gone to
-   * the customer. This is what lets it look the decision up instead.
-   */
-  lastApprovalId: string | null;
-  /** Which surface this run speaks on. Decides the delivery label. */
-  channel: RunChannelId;
-  /** Bumped by every submit; a turn whose revision is older is stale. */
-  inputRevision: number;
-};
 
 export class RunAgent extends Think<Env, RunAgentState> {
   override initialState: RunAgentState = {
@@ -570,8 +464,8 @@ export class RunAgent extends Think<Env, RunAgentState> {
     );
     const perTurn = turnInstructions({
       scope,
-      thread: this.#turnThread(),
-      recall: this.#turnRecall(),
+      thread: readTurnThread(this.activeTurnMetadata),
+      recall: readTurnRecall(this.activeTurnMetadata),
       pendingApproval: await this.#pendingApproval(),
     });
 
@@ -584,7 +478,8 @@ export class RunAgent extends Think<Env, RunAgentState> {
     // metadata when it has one — that value is persisted on the user message,
     // so a RECOVERED turn re-resolves the revision it was actually started for
     // rather than the current one — and from durable state otherwise.
-    this.#turnRevision = this.#metadataRevision() ?? this.state.inputRevision;
+    this.#turnRevision =
+      readTurnRevision(this.activeTurnMetadata) ?? this.state.inputRevision;
 
     return {
       instructions: this.#turnInstructions,
@@ -650,17 +545,10 @@ export class RunAgent extends Think<Env, RunAgentState> {
     const config: PrepareStepResult<ToolSet> = {
       ...(spliced === null ? {} : { messages: spliced }),
       activeTools: [],
-      instructions: [
+      instructions: budgetExhaustedInstructions(
         this.#turnInstructions,
-        "## Budget",
-        "",
-        "This turn has spent what it is allowed to spend, so the capability tool is",
-        "no longer available. Write your closing message now: say what you found,",
-        "what you verified, and what you did not get to. Do not describe work you",
-        "did not do.",
-        "",
-        `Host record: ${decision.reason}.`,
-      ].join("\n"),
+        decision.reason
+      ),
     };
     return config;
   }
@@ -747,23 +635,9 @@ export class RunAgent extends Think<Env, RunAgentState> {
    * nobody named.
    */
   async #adoptTurnId(): Promise<void> {
-    const turnId = this.#metadataTurnId();
+    const turnId = readTurnId(this.activeTurnMetadata);
     if (turnId === null || this.state.turnId === turnId) return;
     this.setState({ ...this.state, turnId });
-  }
-
-  /** The turn id stamped on this turn's user message, if it carries one. */
-  #metadataTurnId(): string | null {
-    const raw = this.activeTurnMetadata?.turnId;
-    return typeof raw === "string" && raw !== "" ? raw : null;
-  }
-
-  /** The revision stamped on this turn's user message, if it carries one. */
-  #metadataRevision(): number | null {
-    const raw = this.activeTurnMetadata?.inputRevision;
-    return typeof raw === "number" && Number.isInteger(raw) && raw >= 0
-      ? raw
-      : null;
   }
 
   /**
@@ -1096,44 +970,17 @@ export class RunAgent extends Think<Env, RunAgentState> {
   async #recordStepUsage(ctx: StepContext): Promise<void> {
     const runId = this.state.runId;
     if (runId === null) return;
-    const usage = normalizeUsage(ctx.usage);
-    const modelId = ctx.model?.modelId ?? FABLE_5_MODEL_ID;
 
     try {
-      await recordUsage(this.env.DB, {
-        runId,
-        // The AI SDK's own id for the generation this step belongs to, which is
-        // what the unique index is keyed on together with attempt and step.
-        generationId: ctx.callId,
-        agentTurnId: this.#turnId(),
-        attempt: this.#recoveryAttempt,
-        stepIndex: ctx.stepNumber,
-        provider: ctx.model?.provider ?? "anthropic",
-        model: modelId,
-        // Metadata, never an idempotency key: it changes on a retry of the same
-        // logical step.
-        providerRequestId: ctx.response?.id ?? null,
-        gatewayLogId: ctx.response?.headers?.["cf-aig-log-id"] ?? null,
-        inputTokens: usage.inputTokens,
-        noCacheTokens: usage.noCacheTokens,
-        cacheReadTokens: usage.cacheReadTokens,
-        cacheWriteTokens: usage.cacheWriteTokens,
-        outputTokens: usage.outputTokens,
-        reasoningTokens: usage.reasoningTokens,
-        totalTokens: usage.totalTokens,
-        costNanoUsd: costBreakdown({
-          modelId,
-          usage,
-          // A pre-output refusal comes back HTTP 200 and Anthropic does not
-          // bill it. The tokens are still recorded; the money is not.
-          billing: ctx.finishReason === "content-filter" ? "none" : "normal",
-        }).totalNanoUsd,
-        latencyMs: Math.max(0, Math.round(ctx.performance?.stepTimeMs ?? 0)),
-        finishReason: ctx.finishReason ?? null,
-        rawFinishReason: ctx.rawFinishReason ?? null,
-        errorCode: null,
-        createdAt: Date.now(),
-      });
+      await recordUsage(
+        this.env.DB,
+        usageRowFrom(ctx, {
+          runId,
+          turnId: this.#turnId(),
+          attempt: this.#recoveryAttempt,
+          now: Date.now(),
+        })
+      );
     } catch (err) {
       // Never into the loop. See the ordering note on onStepEnd.
       console.error(
@@ -1324,13 +1171,11 @@ export class RunAgent extends Think<Env, RunAgentState> {
 
   /** The merged map Think would assemble for a turn. */
   async toolNames(): Promise<string[]> {
-    const { createWorkspaceTools } = await import(
-      "@cloudflare/think/tools/workspace"
-    );
-    return Object.keys({
-      ...createWorkspaceTools(this.workspace, { bash: this.workspaceBash }),
-      ...this.getTools(),
-      ...(await this.session.tools()),
+    return mergedToolNames({
+      workspace: this.workspace,
+      bash: this.workspaceBash,
+      own: this.getTools(),
+      session: await this.session.tools(),
     });
   }
 
@@ -1344,124 +1189,40 @@ export class RunAgent extends Think<Env, RunAgentState> {
     return this.session.freezeSystemPrompt();
   }
 
-  /**
-   * Run the per-turn hook against a synthetic context and return the parts that
-   * survive RPC. `TurnConfig` carries functions (`stopWhen`), so it cannot cross
-   * a stub itself.
-   */
+  /** The per-turn hook's result, minus the parts that cannot cross a stub. */
   async beforeTurnForTest(assembledSystem = ""): Promise<{
     instructions: string;
     activeTools: string[];
     maxSteps: number;
   }> {
-    const config = await this.beforeTurn({
-      system: assembledSystem,
-    } as TurnContext);
-    return {
-      instructions: config.instructions ?? "",
-      activeTools: [...(config.activeTools ?? [])],
-      maxSteps: config.maxSteps ?? 0,
-    };
+    return beforeTurnSummary((ctx) => this.beforeTurn(ctx), assembledSystem);
   }
 
-  /**
-   * Run `onStepEnd` and report how it ended.
-   *
-   * A throw crossing an RPC stub is logged by the runtime as an uncaught
-   * exception even when the caller handles the rejection, which turns one
-   * deliberate assertion into permanent suite noise. This keeps the throw inside
-   * the object where it belongs.
-   */
+  /** Run `onStepEnd` and report how it ended, keeping any throw inside the object. */
   async stepEndOutcomeForTest(ctx: unknown): Promise<string | null> {
-    try {
-      await this.onStepEnd(ctx as StepContext);
-      return null;
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err);
-    }
+    return outcomeOf(() => this.onStepEnd(ctx as StepContext));
   }
 
-  /**
-   * The whole of this agent's trace policy, as one readable value.
-   *
-   * Span EMISSION is a deploy-side property — the OTLP destination is a
-   * dashboard setting, not anything a Worker var or the test pool can reach —
-   * so what a test can pin from in here is the policy that decides what those
-   * spans carry. That is the half with the security content.
-   */
+  /** The agent's trace policy: what its spans are allowed to carry. */
   async tracingPolicyForTest(): Promise<{
     storeTools: boolean;
     storeMessages: boolean;
     telemetry: { functionId?: string; metadata?: Record<string, unknown> };
   }> {
-    return {
+    return tracingPolicy({
       storeTools: this.storeTools,
       storeMessages: this.storeMessages,
-      telemetry: turnTelemetry({
-        runId: this.state.runId ?? "unbound",
-        turnId: this.#turnId(),
-      }) as { functionId?: string; metadata?: Record<string, unknown> },
-    };
+      runId: this.state.runId ?? "unbound",
+      turnId: this.#turnId(),
+    });
   }
 
   /**
-   * Every table in this object's own SQLite that contains `needle`.
-   *
-   * ENUMERATED FROM `sqlite_master`, NEVER FROM A LIST OF NAMES. The tables
-   * that matter here are not ours: Think creates the session tree, the
-   * submission ledger, the chat fiber snapshots, the cached prompt store and
-   * the stream chunk table, and the set changes when the SDK version does. A
-   * sweep over names somebody wrote down by hand would keep passing after the
-   * SDK added the table that leaks.
-   *
-   * A test surface, and only that — nothing in production calls it. It exists
-   * because invariant 39 is a claim about storage nobody can see from outside
-   * the object, and a claim nothing checks is a claim that quietly stops being
-   * true.
+   * Every table in this object's own SQLite that contains `needle`, enumerated
+   * from `sqlite_master` rather than from a list of names. Invariant 39's check.
    */
   async sweepForCanaryForTest(needle: string): Promise<string[]> {
-    // `ctx.storage.sql.exec` and NOT the `this.sql` tag. The tag binds every
-    // interpolation as a PARAMETER, and SQLite has no bind slot for an
-    // identifier — `FROM "${name}"` would run `FROM "?"`. A table name is not a
-    // value, so it has to be concatenated, which is why the shape is checked
-    // first even though sqlite_master is the only source it has.
-    const raw = this.ctx.storage.sql;
-    const tables = [
-      ...raw.exec<{ name: string }>(
-        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC"
-      ),
-    ];
-
-    const hits: string[] = [];
-    for (const { name } of tables) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
-      try {
-        const rows = [...raw.exec(`SELECT * FROM "${name}"`)];
-        if (rows.some((row) => JSON.stringify(row).includes(needle)))
-          hits.push(name);
-      } catch {
-        // `_cf_KV` refuses direct SQL with SQLITE_AUTH: it is the key-value
-        // surface the runtime reserves, and `this.state` lives in it. Skipped
-        // here and swept below through the API that IS allowed to read it, so
-        // the hole is covered rather than excused.
-        hits.push(...(await this.#sweepKeyValue(needle, name)));
-      }
-    }
-    return hits;
-  }
-
-  /**
-   * The half of durable storage SQL cannot reach: the key-value surface, which
-   * is where `this.state` and every scheduled callback's payload live.
-   */
-  async #sweepKeyValue(needle: string, label: string): Promise<string[]> {
-    const stored = await this.ctx.storage.list();
-    const values = [...stored.values(), this.state];
-    return values.some((value) =>
-      JSON.stringify(value ?? null).includes(needle)
-    )
-      ? [label]
-      : [];
+    return sweepForCanary(this.ctx.storage, this.state, needle);
   }
 
   /**
@@ -1505,8 +1266,8 @@ export class RunAgent extends Think<Env, RunAgentState> {
     );
     return turnInstructions({
       scope,
-      thread: this.#turnThread(),
-      recall: this.#turnRecall(),
+      thread: readTurnThread(this.activeTurnMetadata),
+      recall: readTurnRecall(this.activeTurnMetadata),
       pendingApproval: await this.#pendingApproval(),
     });
   }
@@ -1688,52 +1449,6 @@ export class RunAgent extends Think<Env, RunAgentState> {
   }
 
   /**
-   * The thread this turn was woken on, from the turn's own metadata.
-   *
-   * Turn metadata is the SDK's recovery-safe, server-only carrier: reserved keys
-   * on client-supplied messages are stripped at intake, and the value is
-   * persisted on the user message so a recovered turn re-resolves it. Read
-   * defensively anyway — it crosses a durable boundary, so a row written by an
-   * older build is a thing to ignore rather than to crash on.
-   */
-  #turnThread(): ThreadMessage[] {
-    const raw = this.activeTurnMetadata?.thread;
-    if (!Array.isArray(raw)) return [];
-    return raw.flatMap((entry) => {
-      if (typeof entry !== "object" || entry === null) return [];
-      const record = entry as Record<string, unknown>;
-      if (typeof record.text !== "string" || typeof record.ts !== "string")
-        return [];
-      return [
-        {
-          ts: record.ts,
-          userId: typeof record.userId === "string" ? record.userId : null,
-          text: record.text,
-          permalink:
-            typeof record.permalink === "string" ? record.permalink : null,
-        },
-      ];
-    });
-  }
-
-  #turnRecall(): RecalledFact[] {
-    const raw = this.activeTurnMetadata?.recall;
-    if (!Array.isArray(raw)) return [];
-    return raw.flatMap((entry) => {
-      if (typeof entry !== "object" || entry === null) return [];
-      const record = entry as Record<string, unknown>;
-      if (typeof record.fact !== "string") return [];
-      return [
-        {
-          fact: record.fact,
-          citation:
-            typeof record.citation === "string" ? record.citation : null,
-        },
-      ];
-    });
-  }
-
-  /**
    * The approval this run is parked on, read from the host's record.
    *
    * The id comes from durable state and the content from D1, so a model that
@@ -1755,6 +1470,3 @@ export class RunAgent extends Think<Env, RunAgentState> {
     return (this.constructor as typeof RunAgent).options.sendIdentityOnConnect;
   }
 }
-
-/** Re-exported so the wake path names one thing. */
-export { channelForOrigin };

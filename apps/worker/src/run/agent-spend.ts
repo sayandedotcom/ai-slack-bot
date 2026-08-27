@@ -342,6 +342,36 @@ export function spendDecision(input: {
 }
 
 /**
+ * What the model is told once the preflight has taken its tools away.
+ *
+ * The preflight is only half an ending: `activeTools: []` stops the next tool
+ * round-trip, and on its own it leaves a model that was mid-plan writing a
+ * closing message with no idea why the capability vanished. This is the other
+ * half, and it is APPENDED to whatever the turn assembled rather than replacing
+ * it — `beforeStep` can only replace the instructions, so the base has to be
+ * carried back in or every context block is dropped for the final step.
+ *
+ * `reason` is the host's own sentence from `spendDecision`, quoted rather than
+ * paraphrased: the numbers in it are the record of why the turn stopped.
+ */
+export function budgetExhaustedInstructions(
+  base: string,
+  reason: string
+): string {
+  return [
+    base,
+    "## Budget",
+    "",
+    "This turn has spent what it is allowed to spend, so the capability tool is",
+    "no longer available. Write your closing message now: say what you found,",
+    "what you verified, and what you did not get to. Do not describe work you",
+    "did not do.",
+    "",
+    `Host record: ${reason}.`,
+  ].join("\n");
+}
+
+/**
  * The stop condition that actually ends the turn.
  *
  * `beforeStep` cannot: `StepConfig` has no stop field. This runs after each

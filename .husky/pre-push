@@ -11,9 +11,9 @@ pnpm run capabilities:dts:check || exit 1
 
 # NOTE ON WHAT IS *NOT* IN pre-push.
 #
-# The worker suite is deliberately absent. It was measured on this machine at
-# 205-306 seconds — 58 files, 860 tests in workerd against real D1, queues and
-# Durable Objects, plus a dashboard build on a cold turbo cache. A hook that
+# The worker suite is deliberately absent. It has been measured on this machine
+# at 205-492 seconds — 75 files, 1078 tests in workerd against real D1, queues
+# and Durable Objects, plus a dashboard build on a cold turbo cache. A hook that
 # costs five minutes is a hook people learn to pass --no-verify to, which would
 # cost the two fast checks above as well.
 #

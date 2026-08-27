@@ -2,7 +2,10 @@ import { env } from "cloudflare:test";
 import { getAgentByName } from "agents";
 import { describe, expect, it } from "vitest";
 
-import { assertThinkingOmitted, CHAT_ERROR_MAX_CHARS } from "../src/run/agent";
+import {
+  assertThinkingOmitted,
+  CHAT_ERROR_MAX_CHARS,
+} from "../src/run/agent-contract";
 import { chatRunKey } from "../src/run/keys";
 import {
   createOrGetRun,

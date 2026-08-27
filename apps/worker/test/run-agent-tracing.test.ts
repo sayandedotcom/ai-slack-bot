@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { getAgentByName } from "agents";
 import { describe, expect, it } from "vitest";
 
-import { turnTelemetry } from "../src/run/agent";
+import { turnTelemetry } from "../src/run/agent-contract";
 import { getRunById } from "../src/run/repository";
 import { createRunFromChat } from "../src/run/wake";
 
