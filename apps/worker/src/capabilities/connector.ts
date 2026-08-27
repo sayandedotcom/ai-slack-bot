@@ -120,6 +120,23 @@ export class FirefighterConnector<Ctx = unknown> extends CodemodeConnector<Env> 
       const tool = rendered[method] as (typeof rendered)[string];
       out[method] = {
         description: tool.description,
+        // EVERY READ IS EPHEMERAL, and the rule is the effect classification
+        // rather than a per-method judgement.
+        //
+        // `cm_log` stores a call's args AND its result verbatim, durably, for
+        // the runtime's replay to return on a resume pass. A read's result is
+        // the one thing in this system that is unbounded and entirely made of
+        // other people's data — a whole Slack thread, a page of production
+        // logs, a set of Supabase rows — so logging it would put customer bytes
+        // in a store nothing else in this codebase redacts or bounds
+        // (invariant 39), and would do it for every read the model ever makes.
+        //
+        // `reexecute` re-runs the call on a resume instead of replaying a
+        // stored result, which is exactly right for a `read`: the
+        // classification already means idempotent, and after an approval pause
+        // fresh data is the better answer anyway. Writes stay logged, because
+        // re-executing one would do it twice.
+        ...(tool.effect === "read" ? { replay: "reexecute" as const } : {}),
         // JSON Schema, NEVER the Zod instance. `toolInputSchema` in the
         // connector base accepts anything with a `type`, `properties` or `$ref`
         // key — and a Zod v4 schema has `.type === "object"`, so a raw Zod
