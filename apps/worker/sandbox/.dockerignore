@@ -1,0 +1,36 @@
+# The build context is apps/worker/sandbox — build.sh resolves HERE to this
+# directory and passes it as the context (build.sh:28, build.sh:45). A
+# .dockerignore is resolved relative to the CONTEXT ROOT, so this file has to
+# live here; one at the repository root would do nothing at all.
+#
+# THIS IS A CREDENTIAL GUARD, NOT A BUILD OPTIMISATION.
+#
+# `.build-secrets` sits in this directory (mode 0600) and holds the real
+# MONOREPO_PAT and NUCLEO_LICENSE_KEY. Both are supposed to reach the build
+# ONLY through BuildKit `--secret` mounts (id=monorepo_pat,
+# id=nucleo_license_key), which never become a layer and never show up in
+# `docker history`. Without this file they are still uploaded to the Docker
+# daemon as ordinary build context — one `COPY . .` away from being baked into
+# a layer that gets pushed to a registry.
+#
+# build.sh already greps `docker history` and the assembled filesystem for both
+# values after every build. This is the guard that stops them entering in the
+# first place.
+.build-secrets
+.build-secrets.*
+!.build-secrets.example
+
+# Not consumed by the image. The Dockerfile COPYs exactly two paths —
+# provision.sh (Dockerfile:273) and harness/record.cjs (Dockerfile:278) — so
+# nothing excluded here is needed by the build.
+build.sh
+*.md
+
+# Never present in this directory today, but cheap insurance if the context
+# ever widens.
+**/node_modules
+**/.git
+**/.env
+**/*.env
+**/.dev.vars
+**/.DS_Store
