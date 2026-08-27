@@ -14,6 +14,7 @@ async function loadWith(demo: boolean) {
     roster: await import("@/lib/api/roster"),
     runs: await import("@/lib/api/runs"),
     approvals: await import("@/lib/api/approvals"),
+    chat: await import("@/lib/api/chat"),
   };
 }
 
@@ -54,6 +55,50 @@ describe("the demo transport switch", () => {
     // Not 0.9042 the number: a float here is a rounded invoice.
     expect(total).toBe("0.9042");
     expect(typeof total).toBe("string");
+  });
+});
+
+describe("starting a run", () => {
+  it("resolves to a linkable fixture run without touching the network in demo mode", async () => {
+    const { chat, runs } = await loadWith(true);
+
+    const started = await chat.startChatRun("what shipped this week?", "req-1");
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // The id has to be one `/runs/:id` can then render, or the demo dead-ends
+    // on a page with nothing on it.
+    const run = await runs.getRun(started.id);
+    expect(run.id).toBe(started.id);
+  });
+
+  it("posts firstMessage and clientRequestId to /api/runs when demo is off", async () => {
+    const { chat } = await loadWith(false);
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: () => Promise.resolve({ id: "run-1" }),
+    } as Response);
+
+    await expect(chat.startChatRun("hello", "req-9")).resolves.toEqual({ id: "run-1" });
+
+    const [path, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/runs");
+    expect(JSON.parse(String(init.body))).toEqual({
+      firstMessage: "hello",
+      clientRequestId: "req-9",
+    });
+  });
+
+  it("reads one run from /api/runs/:id when demo is off", async () => {
+    const { runs } = await loadWith(false);
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ run: { id: "run-1" } }),
+    } as Response);
+
+    await runs.getRun("run-1");
+    expect(fetchSpy).toHaveBeenCalledWith("/api/runs/run-1", expect.anything());
   });
 });
 

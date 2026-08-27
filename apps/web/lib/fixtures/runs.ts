@@ -62,6 +62,22 @@ export const demoRuns: RunSummary[] = [
     updatedAt: minutes(181),
   },
   {
+    // The run `/chat` resolves to in demo mode, so the transcript fixture and
+    // this row tell the same story. Kept in the list rather than hidden: a run
+    // opened from the dashboard is the same object as one opened from chat, and
+    // the list is where that becomes visible.
+    id: "b8d41f62-0c37-4a1e-9d55-3e6f2a8c7014",
+    origin: "chat",
+    status: "done",
+    shadow: false,
+    summary: "did PulseFit complain about checkout before this week? what did we do back then?",
+    channelId: null,
+    channelName: null,
+    customerSlug: null,
+    createdAt: minutes(21),
+    updatedAt: minutes(17),
+  },
+  {
     id: "e0a6b3f8-1d74-49c5-b2e9-6f4c8a105d72",
     origin: "chat",
     status: "failed",
@@ -81,5 +97,6 @@ export const demoUsageTotals: Record<string, string> = {
   "a1c9e7d4-32b8-4f10-95aa-7c2e5b8d0446": "0.1893",
   "7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258": "0.9042",
   "c4e8f107-5a23-4b96-8e15-2d7a9c0b4f36": "0.2255",
+  "b8d41f62-0c37-4a1e-9d55-3e6f2a8c7014": "0.1204",
   "e0a6b3f8-1d74-49c5-b2e9-6f4c8a105d72": "0.0310",
 };

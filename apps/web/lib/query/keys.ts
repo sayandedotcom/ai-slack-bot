@@ -8,11 +8,11 @@ export const queryKeys = {
   roster: ["roster"] as const,
   counters: ["counters"] as const,
   runs: (limit: number) => ["runs", limit] as const,
+  run: (id: string) => ["runs", id, "detail"] as const,
   runUsage: (id: string) => ["runs", id, "usage"] as const,
   openApprovals: ["approvals", "open"] as const,
   approval: (id: string) => ["approvals", id] as const,
   shadow: ["eval", "shadow"] as const,
-  chat: ["chat"] as const,
 };
 
 /**

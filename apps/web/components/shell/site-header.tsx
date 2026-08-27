@@ -15,6 +15,12 @@ const TITLE: Record<string, string> = {
   "/chat": "Chat",
 };
 
+/** `/runs/<uuid>` is one title, not one per run. */
+function titleFor(pathname: string): string {
+  if (pathname.startsWith("/runs/")) return "Run";
+  return TITLE[pathname] ?? "Fire-Fighter";
+}
+
 export function SiteHeader() {
   const pathname = usePathname();
   const { openCount } = useApprovals();
@@ -23,7 +29,7 @@ export function SiteHeader() {
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur-sm">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-1 h-4" />
-      <span className="text-sm font-medium">{TITLE[pathname] ?? "Fire-Fighter"}</span>
+      <span className="text-sm font-medium">{titleFor(pathname)}</span>
 
       <div className="ml-auto flex items-center gap-3">
         {/*

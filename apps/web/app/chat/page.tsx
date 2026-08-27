@@ -1,30 +1,61 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { PlugZap } from "lucide-react";
+import { AlertTriangle, CornerDownLeft, Loader2, SendHorizontal } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useMemo, useState, type KeyboardEvent } from "react";
 
+import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent } from "@workspace/ui/components/card";
-import { Skeleton } from "@workspace/ui/components/skeleton";
+import { Textarea } from "@workspace/ui/components/textarea";
 
 import { ChatAside } from "@/components/chat/chat-aside";
-import { Composer } from "@/components/chat/composer";
-import { Transcript } from "@/components/chat/transcript";
-import { ErrorBoundary } from "@/components/common/error-boundary";
 import { PageHeader } from "@/components/shell/page-header";
-import { chatIsDemoOnly, getChatThread } from "@/lib/api/chat";
-import { queryKeys } from "@/lib/query/keys";
+import { FIRST_MESSAGE_MAX_CHARS, makeChatStarter, startChatRun } from "@/lib/api/chat";
 
 /**
  * The second door: Slack wakes the agent for customers, and anyone on the team
  * — viewers included — can reach the same brain from here.
  *
- * It is transcript-only today, and the page says so rather than implying
- * otherwise. The agent layer was removed from the Worker to be rebuilt, so
- * there is no route to send a turn to.
+ * This page is a CREATE FORM and nothing more. A chat run is the same object a
+ * triage wake produces — one `RunAgent`, one transcript, one steer path — so
+ * once the run exists the reader goes to `/runs/:id` and the run view takes
+ * over. Building a second session shape here is how the two drift.
  */
 export default function ChatPage() {
-  const disabled = chatIsDemoOnly();
-  const query = useQuery({ queryKey: queryKeys.chat, queryFn: getChatThread });
+  const router = useRouter();
+  const [draft, setDraft] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // One starter for the life of the page, because the idempotency it holds —
+  // one `clientRequestId` per text, across retries — only means anything if it
+  // outlives the failure the reader is retrying after.
+  const starter = useMemo(() => makeChatStarter(startChatRun), []);
+
+  const tooLong = draft.trim().length > FIRST_MESSAGE_MAX_CHARS;
+  const canStart = draft.trim() !== "" && !starting && !tooLong;
+
+  const start = () => {
+    if (!canStart) return;
+    setError(null);
+    setStarting(true);
+    void starter
+      .start(draft)
+      .then((run) => {
+        if (run !== null) router.push(`/runs/${encodeURIComponent(run.id)}`);
+      })
+      .catch(() => {
+        setError("Could not start that run. Try again.");
+      })
+      .finally(() => setStarting(false));
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      start();
+    }
+  };
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 p-4 pb-16 sm:p-6">
@@ -33,54 +64,67 @@ export default function ChatPage() {
         or hand it work directly.
       </PageHeader>
 
-      {disabled ? <NoBackendNotice /> : null}
-
       <div className="grid items-start gap-4 lg:grid-cols-12">
         <Card className="lg:col-span-7">
-          <CardContent className="flex flex-col gap-4">
-            {query.data === undefined ? (
-              <div className="space-y-3">
-                <Skeleton className="h-4 w-1/3" />
-                <Skeleton className="h-16 w-full" />
-                <Skeleton className="h-4 w-1/4" />
+          <CardContent className="space-y-3">
+            {error === null ? null : (
+              <div
+                role="alert"
+                className="flex items-start gap-2.5 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                <span className="text-pretty">{error}</span>
               </div>
-            ) : (
-              <ErrorBoundary message="This transcript could not be rendered.">
-                <Transcript messages={query.data.messages} />
-              </ErrorBoundary>
             )}
-            <Composer disabled={disabled} />
+
+            <Textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={onKeyDown}
+              disabled={starting}
+              aria-label="Ask the agent"
+              placeholder="What do you want to know? Or hand it work — file the issue, draft the PR, run the fix."
+              /* `field-sizing-content` on the primitive means `rows` does
+                 nothing: the box grows with what is typed. The floor is what
+                 sets how much room the page offers to think in. */
+              className="min-h-48 resize-none text-sm"
+            />
+
+            <div className="flex items-center justify-between gap-3">
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                {tooLong ? (
+                  <span className="text-destructive">
+                    Too long — {FIRST_MESSAGE_MAX_CHARS.toLocaleString("en-US")} characters is the
+                    opening limit.
+                  </span>
+                ) : (
+                  <>
+                    <CornerDownLeft className="size-3" aria-hidden="true" />
+                    Enter to start, Shift+Enter for a newline
+                  </>
+                )}
+              </p>
+              <Button onClick={start} disabled={!canStart}>
+                {starting ? (
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <SendHorizontal aria-hidden="true" />
+                )}
+                {starting ? "Starting…" : "Ask"}
+              </Button>
+            </div>
+
+            <p className="border-t pt-3 text-xs text-pretty text-muted-foreground">
+              This opens a run — the same kind of run a Slack thread opens — and everything
+              committal still needs a human. You land in the run and can steer it from there.
+            </p>
           </CardContent>
         </Card>
 
         <div className="lg:col-span-5">
-          <ChatAside suggestions={query.data?.suggestions ?? []} disabled={disabled} />
+          <ChatAside onPick={setDraft} />
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * Named plainly, with the commit that caused it. A banner that said "coming
- * soon" would be a guess; this is a fact somebody can go and check.
- */
-function NoBackendNotice() {
-  return (
-    <Card className="border-warning/40 bg-warning/5">
-      <CardContent className="flex items-start gap-3">
-        <PlugZap className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-        <div className="space-y-1">
-          <p className="text-sm font-medium">This transcript is a fixture</p>
-          <p className="text-sm text-pretty text-muted-foreground">
-            The Worker exposes no chat route. The agent layer was removed in{" "}
-            <code className="machine text-xs">2698e88</code> to be rebuilt on the Agents SDK, and
-            with it went <code className="machine text-xs">/agents/*</code> and{" "}
-            <code className="machine text-xs">/ws/run/:id</code>. Sending is off until one of them
-            comes back — the contract it needs is in BACKEND-GAPS.md.
-          </p>
-        </div>
-      </CardContent>
-    </Card>
   );
 }

@@ -3,7 +3,6 @@
 import { Bot, Brain, Eye, Zap } from "lucide-react";
 
 import { Card, CardContent } from "@workspace/ui/components/card";
-import { cn } from "@workspace/ui/lib/utils";
 
 /**
  * Why this page exists, which is not obvious: from the outside it looks like a
@@ -33,13 +32,19 @@ const CLAIMS = [
   },
 ];
 
-export function ChatAside({
-  suggestions,
-  disabled,
-}: {
-  suggestions: string[];
-  disabled: boolean;
-}) {
+/**
+ * Openings worth typing, kept here rather than in `lib/fixtures` because they
+ * are copy, not data: they are the same four whether the app is on fixtures or
+ * on a live Worker.
+ */
+const SUGGESTIONS: string[] = [
+  "what shipped for customers this week?",
+  "which customer is angriest right now and why?",
+  "ship the copy-funnel-ID button Priya asked for",
+  "summarise Driftwear's big ask for Monday's standup",
+];
+
+export function ChatAside({ onPick }: { onPick: (text: string) => void }) {
   return (
     <div className="space-y-4">
       <Card>
@@ -66,17 +71,15 @@ export function ChatAside({
         <CardContent className="space-y-3">
           <h2 className="eyebrow">Try asking</h2>
           <ul className="space-y-1.5">
-            {suggestions.map((suggestion) => (
+            {SUGGESTIONS.map((suggestion) => (
               <li key={suggestion}>
+                {/* Fills the composer rather than sending: an opening is worth
+                    editing before it becomes a run, and a one-click send from a
+                    sidebar is how somebody starts a run they did not mean to. */}
                 <button
                   type="button"
-                  disabled={disabled}
-                  className={cn(
-                    "w-full rounded-md border border-border/60 px-3 py-2 text-left text-sm text-muted-foreground transition-colors",
-                    disabled
-                      ? "cursor-not-allowed opacity-60"
-                      : "hover:border-border hover:bg-muted/60 hover:text-foreground",
-                  )}
+                  onClick={() => onPick(suggestion)}
+                  className="w-full rounded-md border border-border/60 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground"
                 >
                   {suggestion}
                 </button>

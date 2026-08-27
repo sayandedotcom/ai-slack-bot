@@ -1,6 +1,7 @@
 "use client";
 
-import { Info } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 
 import {
   Sheet,
@@ -9,6 +10,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@workspace/ui/components/sheet";
+import { Button } from "@workspace/ui/components/button";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 
 import { CopyId } from "@/components/common/copy-id";
@@ -22,10 +24,12 @@ import { useSelectedRun } from "@/lib/hooks/use-selected-run";
  * One run, opened from `?run=`.
  *
  * It shows what `/api/runs` and `/api/runs/:id/usage` actually return, and
- * says plainly that there is no transcript. The agent layer was removed from
- * the Worker and is being rebuilt, so there is no endpoint that could stream
- * one — inventing a "Transcript" tab that renders a permanent spinner would be
- * worse than the sentence.
+ * hands off to `/runs/:id` for the transcript.
+ *
+ * The split is deliberate rather than an unfinished sheet. This is a peek from
+ * a list — status, spend, where it came from — costing two D1 reads and no
+ * socket. The transcript costs a WebSocket into a Durable Object, and it is
+ * what somebody opens deliberately, keeps open, and links to.
  */
 export function RunSheet() {
   const [selected, selectRun] = useSelectedRun();
@@ -111,11 +115,20 @@ export function RunSheet() {
                 </Row>
               </dl>
 
-              <p className="flex items-start gap-2 border-t pt-4 text-xs text-pretty text-muted-foreground">
-                <Info className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-                There is no transcript here because the Worker exposes no route that returns one.
-                See BACKEND-GAPS.md.
-              </p>
+              {/* The primary action of the whole sheet, so it reads as one:
+                  everything above is context for deciding whether to open it. */}
+              {/* `nativeButton={false}` because the render prop is an anchor:
+                  Base UI warns (correctly) that a non-<button> silently loses
+                  native button semantics unless it is told the element is a
+                  link. It is a link — this navigates. */}
+              <Button
+                nativeButton={false}
+                render={<Link href={`/runs/${encodeURIComponent(run.id)}`} />}
+                className="w-full"
+              >
+                Open the transcript
+                <ArrowUpRight aria-hidden="true" />
+              </Button>
             </>
           )}
         </div>
