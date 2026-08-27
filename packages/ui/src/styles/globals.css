@@ -3,15 +3,23 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
-/* `@source` is resolved relative to THIS file, and this file is four levels
-   down from the repo root (packages/ui/src/styles). The globs used to start at
-   `../../../`, which lands on `packages/`, so `packages/apps/**` and
-   `packages/components/**` were scanned — neither exists, and neither has ever
-   matched a file. The Vite dashboard never noticed because `@tailwindcss/vite`
-   detects its own sources; Next's PostCSS pipeline does not, so the paths are
-   corrected here rather than worked around downstream. */
-@source "../../../../apps/**/*.{ts,tsx}";
-@source "../../../../packages/*/src/**/*.{ts,tsx}";
+/* This package scans ITS OWN sources and nothing else. `@source` is resolved
+   relative to this file, so `../**` is `packages/ui/src/**` — the components a
+   consumer imports but Tailwind cannot reach on its own, because they live
+   outside the consuming app's tree.
+
+   A consumer's own files are the consumer's job. `apps/dashboard` gets them
+   from `@tailwindcss/vite`, which detects the Vite project's sources; `apps/web`
+   declares them explicitly in `app/globals.css`, because Next's PostCSS
+   pipeline does not. Scanning `../../../../apps/**` from here instead — as this
+   file briefly did — makes every consumer ship utilities for every OTHER app's
+   markup: it put 44 kB of `apps/web`-only CSS (6.4 kB gzipped) into the Vite
+   dashboard's bundle, which never renders a line of it.
+
+   The globs it replaced started at `../../../`, which lands on `packages/`, so
+   `packages/apps/**` and `packages/components/**` were scanned. Neither exists
+   and neither has ever matched a file — which is why the Vite dashboard, whose
+   own sources Vite was detecting anyway, never noticed they were broken. */
 @source "../**/*.{ts,tsx}";
 
 @theme inline {
