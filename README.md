@@ -51,6 +51,10 @@ flowchart LR
 
 **Ingest.** The webhook verifies the HMAC and does one queue send — under Slack's 3 s. The consumer drops DMs and bots unconditionally, dedupes on `event_id`, writes every message verbatim to D1, then fans out: memory for everything, triage only where channel policy allows and the message is not the app's own post (the loop guard). Channel policy fails closed: `observe` = ingest + triage, never post; `live` = postable; unmapped = nothing.
 
+**Channels register themselves.** Invite the bot and it works — the first message from an unknown channel registers it, and a cron sweep catches channels nobody has spoken in yet. There is no seeded list. New channels default to `live`, because invite is consent, and a fire-fighter demotes one from the dashboard.
+
+What registration *cannot* know is the customer. It derives `customer_slug` from the channel name, and that guess is good enough to pick a Zep memory graph — ours, self-consistent, and a wrong one just reads back nothing. It is **not** good enough to be a Supabase tenant key: that value is appended as an unconditional predicate and a model filter on the column is refused, so a derivation that happens to match a real tenant would return *that* customer's rows and look like a successful read. So the slug carries its provenance, and a derived one refuses tenant-scoped reads with `customer_scope_unverified` until a fire-fighter confirms it on the dashboard. Everything else about the run — Slack, memory, Linear, the sandbox — keeps working meanwhile.
+
 **Triage.** Haiku emits `{ wake, why, opening_prompt }` — never a ticket type. A thread already owned by a run absorbs the message with no model call.
 
 **Run.** One `RunAgent extends Think<Env>` per conversation. Think owns the session store, turn admission, compaction, recovery and the client protocol; this repo owns the policy — the prompt, the one tool, the money ceiling, the freshness guard, the approval pause, the projection into D1. Every way in is `runTurn({ mode: "submit", idempotencyKey })`, so a redelivered Slack event, a retried create and a re-driven approval each start at most one turn.

@@ -4,6 +4,7 @@ import { agentsApi } from "./api/agents";
 import { approvalsApi, sweepUndeliveredApprovals } from "./api/approvals";
 import { artifactsApi } from "./api/artifacts";
 import { backfillApi } from "./api/backfill";
+import { channelsApi } from "./api/channels";
 import { countersApi } from "./api/counters";
 import { evalApi } from "./api/eval";
 import { identityApi } from "./api/identity";
@@ -253,6 +254,11 @@ app.route("/api", githubOAuth);
 // `requireTeamMember` roster check as `GET /api/identity` — the eval numbers are
 // exactly as private as the runs they are computed from.
 app.route("/api", evalApi);
+// The human control surface over the self-registering channel table. Same
+// /api mount and the same `requireTeamMember` gate; the PATCH additionally
+// requires a fire-fighter, because `mode` decides what the agent may say and
+// `customer_slug` decides whose data it may read.
+app.route("/api", channelsApi);
 // Phase 19's proof recordings. MOUNTED AT THE TOP LEVEL, NOT UNDER /api, AND
 // THAT IS THE WHOLE POINT: this path must be ACCESS-BYPASSABLE. A recording URL
 // is pasted into a Slack thread, and Slack's unfurler carries no Access token —
