@@ -44,7 +44,7 @@ flowchart LR
   ISO -->|"sandbox.* · browser.*"| BOX["Sandbox container DO<br/>run:{runId}"]
   BOX -->|"diff · proof mp4"| R2[("R2 · firefighter-artifacts")]
   AGENT -->|"status · usage · episode"| D1
-  AGENT -->|"GenAI OTLP spans"| OTEL["LangSmith · project fire-fighter<br/>tool payloads yes, messages no"]
+  AGENT -->|"GenAI OTLP spans"| OTEL["OTLP export · destination is a dashboard setting<br/>tool payloads yes, messages no"]
   DASH["dashboard · Workers Assets<br/>behind Access"] <-->|"/api/runs/:id/agent"| AGENT
   DASH -->|"PATCH /api/approvals"| D1
 ```
@@ -171,22 +171,6 @@ The agent layer was deleted and rebuilt on `@cloudflare/think` + Code Mode in fo
 Two habits did most of the work. **Nothing counts until the gate is green on this machine** — no stated pass count is trusted, including one written in the plan. And **a test that cannot fail proves nothing**: the canary sweep enumerates `sqlite_master` rather than a list of table names, and carries a smoke test that a planted value *is* found.
 
 The pool disables model construction, and a turn with no model wedges the DO — so every wake path was assertable only up to the submit. `installTestModel` plus a `MockLanguageModelV4` fixed that: `test/canary-secrets.test.ts` now drives a full run and sweeps every durable store it touched for secret-shaped values.
-
----
-
-## Cost
-
-Queried out of production D1 on **2026-08-17**, after the drill runs — but these are the *pre-rebuild* agent's numbers. The rebuilt layer is not deployed yet; model, ceiling and cache layout are unchanged, so this is the shape it should reproduce rather than a measurement of it.
-
-| Source | Model | Volume | Cost |
-|---|---|---|---|
-| `agent_model_calls` | `claude-fable-5` via AI Gateway | 480 calls across 28 runs | **$27.47** |
-| `triage_decisions` | `claude-haiku-4-5` | 37 decisions, 31 `wake: true` | **$0.04** |
-| | | **Total model spend** | **$27.51** |
-
-**Prompt caching is why this fits a trial budget:** 92.3 % of input tokens were cache reads; uncached, the same traffic costs **$105.91**. Per run: $0.98 mean, $0.30 low, $4.17 high. **One PR costs $1.25–2.50** — the four that shipped (#1506, #1507, #1508, #1534) cost $1.45, $2.42, $2.03 and $1.24.
-
-Everything else is free tier or existing seats; Cloudflare is Workers Paid ($5/mo). **$27.51 of a $500 ceiling — 5.5 %.**
 
 ---
 
