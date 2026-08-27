@@ -41,15 +41,16 @@ import type { ApprovalDecision, ApprovalDelivery } from "../approval/contracts";
 import type { IngestOutcome } from "../ingest/rules";
 import type { RunOrigin } from "../run/keys";
 import type { RunStatus } from "../run/protocol";
-import type { ChannelMode } from "./channels";
+import type { ChannelMode, SlugSource } from "./channels";
 import type { Provider } from "./identities";
 
-/** `migrations/0001_init.sql` */
+/** `migrations/0001_init.sql`, `migrations/0010_channel_slug_source.sql` */
 export type ChannelsRow = {
   channel_id: string;
   name: string;
   customer_slug: string | null;
   mode: ChannelMode;
+  slug_source: SlugSource;
 };
 
 /** `migrations/0001_init.sql` */

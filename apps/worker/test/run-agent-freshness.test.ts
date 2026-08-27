@@ -117,6 +117,7 @@ describe("the per-execution call budget", () => {
       origin: "chat" as const,
       shadow: false,
       customerSlug: null,
+      customerSlugTrusted: false,
       slackThread: null,
       actor: null,
     };

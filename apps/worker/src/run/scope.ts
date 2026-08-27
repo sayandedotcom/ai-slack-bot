@@ -14,7 +14,7 @@
  *    tool arguments or model text. An unknown channel yields null, which makes
  *    customer-scoped reads refuse rather than silently widening.
  */
-import { getChannelPolicy } from "../db/channels";
+import { getChannelPolicy, isTenantKeyTrusted } from "../db/channels";
 import { CapabilityError } from "../gateways/errors";
 import type { RunScope } from "../gateways/scope";
 import { resolveSpeaker } from "../identity/speaker";
@@ -39,11 +39,16 @@ export async function resolveRunScope(
       ? { channelId: run.channelId, threadTs: run.threadTs }
       : null;
 
-  const customerSlug =
+  // One read, two answers. `customerSlug` names the customer; `trusted` says
+  // whether that name may be spent as a tenant key in someone else's database.
+  // A derived slug answers the first and not the second — see
+  // `isTenantKeyTrusted`.
+  const policy =
     slackThread === null
       ? null
-      : ((await getChannelPolicy(env.DB, slackThread.channelId))
-          .customer_slug ?? null);
+      : await getChannelPolicy(env.DB, slackThread.channelId);
+  const customerSlug = policy?.customer_slug ?? null;
+  const customerSlugTrusted = policy !== null && isTenantKeyTrusted(policy);
 
   // The speaker rule, not a rotation: the approver if they clicked and have
   // connected Slack, else the first roster entry who has. Nobody connected
@@ -59,6 +64,7 @@ export async function resolveRunScope(
     // shadow mid-run has to stop the next write.
     shadow: run.shadow,
     customerSlug,
+    customerSlugTrusted,
     slackThread,
     actor:
       speaker === null

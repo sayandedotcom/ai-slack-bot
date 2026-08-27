@@ -31,6 +31,7 @@ function scope(overrides: Partial<RunScope> = {}): RunScope {
     origin: "slack",
     shadow: false,
     customerSlug: "pulsefit",
+    customerSlugTrusted: true,
     slackThread: { channelId: "C1", threadTs: "1720000000.123456" },
     actor: { engineerEmail: "eng@zellify.com", slackUserId: "U1" },
     ...overrides,
@@ -259,5 +260,40 @@ describe("the assembled prompt", () => {
     // Static text only. A per-turn fact in a block would be frozen for the life
     // of the isolate, because freezeSystemPrompt() calls each provider once.
     expect(prompt).not.toContain("This run (trusted host facts)");
+  });
+});
+
+describe("the customer line states whether the slug is confirmed", () => {
+  const empty = { thread: [], recall: [], pendingApproval: null } as const;
+
+  it("names the customer plainly when a human confirmed it", () => {
+    const text = turnInstructions({
+      scope: scope({ customerSlug: "pulsefit", customerSlugTrusted: true }),
+      ...empty,
+    });
+    expect(text).toContain("- customer: pulsefit");
+    expect(text).not.toContain("INFERRED");
+  });
+
+  it("warns, in the prompt, when the slug was only inferred", () => {
+    // Stated up front rather than discovered by a refusal mid-turn. A model
+    // that learns this from a failed read has already spent a turn, and its
+    // next move is usually to ask the customer to identify themselves — in a
+    // channel that already says who they are.
+    const text = turnInstructions({
+      scope: scope({ customerSlug: "ext-acme", customerSlugTrusted: false }),
+      ...empty,
+    });
+    expect(text).toContain("INFERRED from the Slack channel name");
+    expect(text).toContain("Supabase reads will refuse");
+    expect(text).toContain("Do not ask the customer to confirm their own");
+  });
+
+  it("says there is no customer when there is none", () => {
+    const text = turnInstructions({
+      scope: scope({ customerSlug: null, customerSlugTrusted: false }),
+      ...empty,
+    });
+    expect(text).toContain("- customer: none in scope for this run");
   });
 });

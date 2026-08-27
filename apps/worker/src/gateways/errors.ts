@@ -17,6 +17,23 @@ export type CapabilityErrorCode =
   | "shadow_write_denied"
   | "linear_team_denied"
   | "customer_scope_required"
+  /**
+   * There IS a customer on this run, but its slug was inferred from the Slack
+   * channel name rather than confirmed by a human, so it cannot be spent as a
+   * tenant key in a third-party database.
+   *
+   * Its own code rather than `customer_scope_required`, because the two ask
+   * for opposite reactions. `customer_scope_required` means "you do not know
+   * which customer this is — ask." This means "we know, but nobody has
+   * confirmed the mapping — a human has to, on the dashboard." A model that
+   * conflated them would keep asking a customer to name themselves, in a
+   * channel that already says who they are, forever.
+   *
+   * Narrow by construction: only reads whose allowlist entry declares a
+   * `tenantColumn` raise it. Slack, memory, Linear and the sandbox are
+   * unaffected.
+   */
+  | "customer_scope_unverified"
   | "read_only_violation"
   | "stale_generation"
   | "effect_in_doubt"

@@ -8,24 +8,15 @@ import { canPost, getChannelPolicy, shouldTriage } from "../src/db/channels";
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM channels").run();
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
-      "C0B9YBENNAD",
-      "ext-zellify-sidehop",
-      "sidehop",
-      "observe"
-    ),
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
-      "C0BPGUXG5RS",
-      "test-firedrill",
-      "firedrill",
-      "live"
-    ),
-    env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)").bind(
-      "C0BPA2L4BBP",
-      "ff-test",
-      "firedrill",
-      "live"
-    ),
+    env.DB.prepare(
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, ?)"
+    ).bind("C0B9YBENNAD", "ext-zellify-sidehop", "sidehop", "observe"),
+    env.DB.prepare(
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, ?)"
+    ).bind("C0BPGUXG5RS", "test-firedrill", "firedrill", "live"),
+    env.DB.prepare(
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, ?)"
+    ).bind("C0BPA2L4BBP", "ff-test", "firedrill", "live"),
   ]);
 });
 

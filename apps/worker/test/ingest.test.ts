@@ -56,7 +56,9 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM events_seen"),
     env.DB.prepare("DELETE FROM channels"),
   ]);
-  await env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)")
+  await env.DB.prepare(
+    "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, ?)"
+  )
     .bind("C_TEST", "test-firedrill", "firedrill", "live")
     .run();
 });
@@ -149,7 +151,9 @@ describe("handleIngestBatch", () => {
   });
 
   it("ingests reference-channel messages — observe blocks posting, not hearing", async () => {
-    await env.DB.prepare("INSERT INTO channels VALUES (?, ?, ?, ?)")
+    await env.DB.prepare(
+      "INSERT INTO channels (channel_id, name, customer_slug, mode) VALUES (?, ?, ?, ?)"
+    )
       .bind("C_REF", "pulsefit-zellify", "pulsefit", "observe")
       .run();
     const refMsg = ev({ event_id: "Ev_ref" });

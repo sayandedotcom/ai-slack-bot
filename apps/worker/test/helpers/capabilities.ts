@@ -55,6 +55,10 @@ export function testScope(overrides: Partial<RunScope> = {}): RunScope {
     origin: "chat",
     shadow: false,
     customerSlug: null,
+    // Defaults to UNTRUSTED. A test that wants a tenant-scoped Supabase
+    // read has to opt in, so the refusal path is the one you get by
+    // accident rather than the one you have to remember to cover.
+    customerSlugTrusted: false,
     slackThread: null,
     actor: null,
     ...overrides,

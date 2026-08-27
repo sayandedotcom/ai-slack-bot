@@ -485,7 +485,18 @@ export function turnInstructions(input: TurnInstructionsInput): string {
     `- turn: ${scope.turnId}`,
     `- origin: ${scope.origin}`,
     `- shadow: ${scope.shadow ? "yes — draft only, nothing is sent" : "no"}`,
-    `- customer: ${scope.customerSlug ?? "none in scope for this run"}`,
+    // The trusted/untrusted distinction is stated HERE rather than left for
+    // the capability to refuse mid-turn. A model that only learns the slug is
+    // unconfirmed by trying a customer-scoped read has already spent a turn on
+    // it, and its next move is usually to ask the customer to identify
+    // themselves — in a channel that already says who they are.
+    `- customer: ${
+      scope.customerSlug === null
+        ? "none in scope for this run"
+        : scope.customerSlugTrusted
+          ? scope.customerSlug
+          : `${scope.customerSlug} — INFERRED from the Slack channel name and not yet confirmed by a fire-fighter, so customer-scoped Supabase reads will refuse. Everything else works. Do not ask the customer to confirm their own account name; this is ours to fix, on the dashboard.`
+    }`,
     `- slack target: ${
       scope.slackThread === null
         ? "none"

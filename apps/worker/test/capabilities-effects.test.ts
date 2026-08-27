@@ -16,6 +16,7 @@ function scopeFor(turnId = crypto.randomUUID()): RunScope {
     origin: "chat",
     shadow: false,
     customerSlug: null,
+    customerSlugTrusted: false,
     slackThread: null,
     actor: null,
   };

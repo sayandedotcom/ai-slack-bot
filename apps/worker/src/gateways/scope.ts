@@ -15,6 +15,7 @@
  * | slackThread            | the D1 `runs` row         | (as above)             |
  * | shadow                 | the D1 `runs` row         | REFUSE (fail closed)   |
  * | customerSlug           | the D1 channel policy     | null (no customer)     |
+ * | customerSlugTrusted    | the D1 channel policy     | false (fail closed)    |
  * | actor                  | speaker rule + identities | null (nobody to speak) |
  *
  * Two properties are worth stating separately, because both have been gotten
@@ -42,6 +43,22 @@ export type RunScope = {
    */
   shadow: boolean;
   customerSlug: string | null;
+  /**
+   * Whether `customerSlug` may be spent as a TENANT KEY, as opposed to merely
+   * naming a customer.
+   *
+   * Two different questions, and conflating them is the bug this field exists
+   * to prevent. `customerSlug !== null` answers "is there a customer here" —
+   * enough to pick a Zep graph, which is ours. This answers "did a human
+   * confirm this string identifies that customer in someone else's database" —
+   * which is what an unconditional Supabase tenant predicate actually spends
+   * it as.
+   *
+   * False for an auto-registered channel, whose slug is slugified from the
+   * Slack channel name and can collide with a real tenant that is not this
+   * customer. Only `PATCH /api/channels/:id` makes it true.
+   */
+  customerSlugTrusted: boolean;
   slackThread: {
     channelId: string;
     threadTs: string;
