@@ -70,8 +70,14 @@ export default function RunPage({
   };
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-h-0 flex-1 flex-col">
+    /* `min-w-0` on BOTH: a flex item defaults to `min-width: auto`, so it
+       refuses to shrink below its content's min-content width. The transcript
+       carries unbreakable tokens (run uuids, `/api/runs/:id/agent`, code
+       payloads), so without this the column stays as wide as its widest token,
+       the fixed-width inspector is pushed past the panel, and the whole page
+       gains a horizontal scrollbar. */
+    <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-2 border-b px-4 py-2">
           <Link
             href="/runs"
@@ -107,6 +113,7 @@ export default function RunPage({
           >
             <RunPanel
               runId={id}
+              origin={run.data?.origin}
               approvals={
                 <RunApprovals runId={id} role={identity?.role ?? "viewer"} />
               }

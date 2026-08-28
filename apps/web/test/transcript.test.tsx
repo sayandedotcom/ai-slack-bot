@@ -2,7 +2,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { PAYLOAD_MAX_CHARS, Transcript } from "@/components/run/transcript";
+import {
+  PAYLOAD_MAX_CHARS,
+  speakerOf,
+  Transcript,
+  type TranscriptMessage,
+} from "@/components/run/transcript";
 import {
   DEMO_CHAT_RUN_ID,
   demoTranscriptFor,
@@ -145,5 +150,45 @@ describe("Transcript", () => {
     ];
     render(<Transcript messages={messages} chips={new Map()} />);
     expect(screen.getByText("run_code · 6 chars")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Who a row is attributed to is a claim about who said something, and on this
+ * product that claim matters: a Slack run's `user` message is the CUSTOMER's,
+ * not the operator's, and the agent's reply is a draft nobody has approved yet.
+ */
+describe("speakerOf", () => {
+  const msg = (over: Partial<TranscriptMessage>): TranscriptMessage => ({
+    id: "m1",
+    role: "user",
+    parts: [],
+    ...over,
+  });
+
+  it("names the customer, not the operator, on a slack-woken run", () => {
+    expect(speakerOf(msg({}), "slack")).toBe("Customer");
+  });
+
+  it("names the operator on a chat run, where the user really is you", () => {
+    expect(speakerOf(msg({}), "chat")).toBe("You");
+  });
+
+  it("names the operator for a steer, whichever origin it lands in", () => {
+    // The Worker mints a steer's id as `steer:{requestId}`, which is the only
+    // thing separating operator input from a thread message the run absorbed.
+    expect(speakerOf(msg({ id: "steer:abc" }), "slack")).toBe("You");
+    expect(speakerOf(msg({ id: "steer:abc" }), "chat")).toBe("You");
+  });
+
+  it("never calls the agent's draft yours — it is unapproved until you say so", () => {
+    expect(speakerOf(msg({ role: "assistant" }), "slack")).toBe("Fire-Fighter");
+    expect(speakerOf(msg({ role: "assistant" }), "chat")).toBe("Fire-Fighter");
+  });
+
+  it("falls back to You when the origin is not yet known", () => {
+    // The header read can still be in flight. `chat` is the safer default:
+    // it is the only origin where the reader did type the message.
+    expect(speakerOf(msg({}), undefined)).toBe("You");
   });
 });

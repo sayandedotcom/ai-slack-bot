@@ -74,6 +74,8 @@ export type RunViewProps = {
   steerDisabledReason?: string | null;
   /** This run's capability chip strip, keyed by turn id — see `chipsByTurn`. */
   chips?: ReadonlyMap<string, readonly string[]>;
+  /** Passed to `Transcript` so a `user` row is labelled Customer or You correctly. */
+  origin?: string;
   /** Whether Cancel may be offered at all — a parked run is not running. */
   canCancel: boolean;
   onCancel: () => void;
@@ -92,6 +94,7 @@ export function RunView({
   approvals,
   steerDisabledReason = null,
   chips,
+  origin,
   canCancel,
   onCancel,
   cancelling,
@@ -186,7 +189,7 @@ export function RunView({
             Nothing yet — the transcript fills in as the agent works.
           </p>
         ) : (
-          <Transcript messages={messages} chips={chips} />
+          <Transcript messages={messages} chips={chips} origin={origin} />
         )}
 
         {approvals}

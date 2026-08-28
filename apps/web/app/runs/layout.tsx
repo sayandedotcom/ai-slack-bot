@@ -5,6 +5,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@workspace/ui/components/resizable";
+import { cn } from "@workspace/ui/lib/utils";
 import { useParams } from "next/navigation";
 import { Suspense } from "react";
 
@@ -41,18 +42,29 @@ export default function RunsLayout({
         have.
       */}
       <ResizablePanelGroup orientation="horizontal" className="h-full">
+        {/*
+          `min-w-0` on both panels: `Panel` renders a bare div, so each one is
+          a flex item with the default `min-width: auto` and will refuse to
+          shrink below its content's min-content width. The transcript and the
+          run list both carry unbreakable tokens (run uuids, channel ids, code
+          payloads), so without this the panels push past the group and the
+          whole page gains a horizontal scrollbar instead of the panes
+          scrolling within themselves.
+        */}
         <ResizablePanel
           defaultSize="26"
           minSize="18"
           maxSize="40"
-          className={selectedId ? "hidden lg:block" : ""}
+          className={cn("min-w-0", selectedId && "hidden lg:block")}
         >
           <Suspense fallback={null}>
             <RunList selectedId={selectedId} />
           </Suspense>
         </ResizablePanel>
         <ResizableHandle withHandle className="hidden lg:flex" />
-        <ResizablePanel className={selectedId ? "" : "hidden lg:block"}>
+        <ResizablePanel
+          className={cn("min-w-0", !selectedId && "hidden lg:block")}
+        >
           {children}
         </ResizablePanel>
       </ResizablePanelGroup>

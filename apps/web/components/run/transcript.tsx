@@ -95,10 +95,13 @@ function preview(value: unknown): { text: string; truncated: boolean } {
 export function Transcript({
   messages,
   chips,
+  origin,
 }: {
   messages: readonly TranscriptMessage[];
   /** This turn's capability chips, keyed by `turnIdOf`. From `chipsByTurn`. */
   chips?: ReadonlyMap<string, readonly string[]>;
+  /** Decides whether a `user` message is the customer or the operator — see `speakerOf`. */
+  origin?: string;
 }) {
   // The turn a row belongs to is whichever user message came before it — so a
   // tool row is walked in order, tracking the last user turn seen, rather than
@@ -114,7 +117,7 @@ export function Transcript({
           currentTurn === null ? null : (chips?.get(currentTurn) ?? null);
         return (
           <li key={message.id}>
-            <MessageRow message={message} chips={turnChips} />
+            <MessageRow message={message} chips={turnChips} origin={origin} />
           </li>
         );
       })}
@@ -122,14 +125,42 @@ export function Transcript({
   );
 }
 
+/**
+ * Who said this, in the reader's own vocabulary.
+ *
+ * A `user` message is NOT always the operator. On a Slack-woken run the
+ * opening message — and every later message the thread absorbs — is the
+ * CUSTOMER's, and labelling their words "You" tells the reader they wrote
+ * something they never did. On a chat run the same role really is the
+ * operator. A steer is always the operator, whichever origin it lands in,
+ * and it is distinguishable because the Worker mints its message id as
+ * `steer:{requestId}` (`apps/worker/src/run/agent.ts`).
+ *
+ * The agent stays "Fire-Fighter" and never becomes "You": in this transcript
+ * a customer-facing reply is still a DRAFT awaiting approval. It goes out
+ * under a person's own account only after they approve it, so claiming their
+ * authorship here would be a lie about who committed to what.
+ */
+export function speakerOf(
+  message: TranscriptMessage,
+  origin: string | undefined
+): string {
+  if (message.role !== "user") return "Fire-Fighter";
+  if (message.id.startsWith("steer:")) return "You";
+  return origin === "slack" ? "Customer" : "You";
+}
+
 function MessageRow({
   message,
   chips,
+  origin,
 }: {
   message: TranscriptMessage;
   chips: readonly string[] | null;
+  origin: string | undefined;
 }) {
   const isAgent = message.role !== "user";
+  const speaker = speakerOf(message, origin);
   const rows: React.ReactNode[] = [];
   let index = 0;
 
@@ -180,7 +211,7 @@ function MessageRow({
         )}
       </span>
       <div className="min-w-0 flex-1 space-y-2">
-        <span className="eyebrow">{isAgent ? "Firefighter" : "You"}</span>
+        <span className="eyebrow">{speaker}</span>
         {rows}
       </div>
     </div>

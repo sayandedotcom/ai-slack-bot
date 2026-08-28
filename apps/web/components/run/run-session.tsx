@@ -26,9 +26,12 @@ import { RunView } from "./run-view";
 export function RunSession({
   runId,
   approvals,
+  origin,
 }: {
   runId: string;
   approvals?: ReactNode;
+  /** Slack-woken runs label a `user` row "Customer"; chat runs label it "You". */
+  origin?: string;
 }) {
   const run = useRunAgent(runId);
   const effects = useRunEffects(runId);
@@ -54,6 +57,7 @@ export function RunSession({
       onSend={run.send}
       onDismissError={run.dismissError}
       approvals={approvals}
+      origin={origin}
       chips={chipsByTurn(effects.kind === "ready" ? effects.data : [])}
       canCancel={run.status === "live"}
       onCancel={onCancel}
