@@ -4,8 +4,9 @@ import {
   SidebarInset,
   SidebarProvider,
 } from "@workspace/ui/components/sidebar";
-import { type ReactNode, Suspense } from "react";
+import { type ReactNode, Suspense, useState } from "react";
 
+import { CommandPalette } from "@/components/common/command-palette";
 import { SignedOutPage } from "@/components/common/signed-out";
 import { useIdentityQuery } from "@/lib/hooks/use-dashboard-data";
 import { AppSidebar } from "./app-sidebar";
@@ -21,6 +22,7 @@ import { SiteHeader } from "./site-header";
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const { state } = useIdentityQuery();
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   if (state.kind === "error") return <SignedOutPage error={state.error} />;
 
@@ -28,7 +30,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        <SiteHeader />
+        <SiteHeader onOpenPalette={() => setPaletteOpen(true)} />
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
         {/*
           `useSearchParams` (the `?run=` selection) opts a subtree out of
           prerendering, and more than one component reads it. One boundary here

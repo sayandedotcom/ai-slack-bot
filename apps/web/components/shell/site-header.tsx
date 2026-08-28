@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@workspace/ui/components/button";
 import { Separator } from "@workspace/ui/components/separator";
 import { SidebarTrigger } from "@workspace/ui/components/sidebar";
 import {
@@ -7,7 +8,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip";
-import { FlaskConical } from "lucide-react";
+import { FlaskConical, Search } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 import { isDemo } from "@/lib/api/client";
@@ -28,7 +29,7 @@ function titleFor(pathname: string): string {
   return TITLE[pathname] ?? "Fire-Fighter";
 }
 
-export function SiteHeader() {
+export function SiteHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
   const pathname = usePathname();
   const { openCount } = useApprovals();
 
@@ -39,6 +40,11 @@ export function SiteHeader() {
       <span className="font-medium text-sm">{titleFor(pathname)}</span>
 
       <div className="ml-auto flex items-center gap-3">
+        <Button variant="outline" size="sm" onClick={onOpenPalette}>
+          <Search />
+          <kbd className="machine">⌘K</kbd>
+        </Button>
+
         {/*
           The count is here rather than only on the dashboard because it is the
           one fact that should reach you from any page: someone is waiting.
