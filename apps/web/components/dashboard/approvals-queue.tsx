@@ -1,6 +1,5 @@
 "use client";
 
-import { Inbox } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Panel } from "@/components/common/panel";
@@ -18,12 +17,11 @@ const HIGHLIGHT_MS = 4_000;
 
 /**
  * The queue of decisions, and the only surface on this page with a human on the
- * other end of it.
+ * other end of it. `/approvals` owns the section chrome (title, description) —
+ * this renders bare, as a list inside that page.
  *
- * The panel's job beyond layout is the empty state. An operator seeing this
- * blank should read "you're clear", not "something failed to load" — which is
- * why the hint names the agent's escalation rule instead of just saying there
- * is nothing here.
+ * Oldest first: the card that has waited longest is the one to answer, not the
+ * one that would still make sense in the thread it came from.
  *
  * It is also where a Slack nudge lands. `?approval=<id>` scrolls that card into
  * view and rings it; see `useSelectedApproval`. The jump is deliberately once
@@ -66,36 +64,32 @@ export function ApprovalsQueue({ role }: { role: Role }) {
   }, [highlighted]);
 
   return (
-    <Panel
-      title="Waiting on you"
-      icon={Inbox}
-      state={state}
-      aside={
-        openCount > 0 ? (
-          <span className="machine rounded-full bg-primary px-2 py-0.5 font-medium text-[11px] text-primary-foreground">
+    <div className="space-y-2.5">
+      {openCount > 0 ? (
+        <div className="flex justify-end">
+          <span className="machine rounded-full bg-attention px-2 py-0.5 font-medium text-[11px] text-attention-foreground">
             {openCount}
           </span>
-        ) : null
-      }
-      description="Approving sends the reply to Slack under a fire-fighter's own account."
-    >
-      {(cards) => (
-        <ul className="space-y-2.5">
-          {/* Newest first: the freshest escalation is the one still likely to be
-              worth answering in the thread it came from. */}
-          {[...cards]
-            .sort((a, b) => b.card.createdAt - a.card.createdAt)
-            .map((cardState) => (
-              <ApprovalCard
-                key={cardState.card.id}
-                state={cardState}
-                role={role}
-                highlighted={highlighted === cardState.card.id}
-                onDecide={(action) => decideCard(cardState.card.id, action)}
-              />
-            ))}
-        </ul>
-      )}
-    </Panel>
+        </div>
+      ) : null}
+      <Panel title="Waiting on you" state={state} bare>
+        {(cards) => (
+          <ul className="space-y-2.5">
+            {/* Oldest first: the card that has waited longest is on top. */}
+            {[...cards]
+              .sort((a, b) => a.card.createdAt - b.card.createdAt)
+              .map((cardState) => (
+                <ApprovalCard
+                  key={cardState.card.id}
+                  state={cardState}
+                  role={role}
+                  highlighted={highlighted === cardState.card.id}
+                  onDecide={(action) => decideCard(cardState.card.id, action)}
+                />
+              ))}
+          </ul>
+        )}
+      </Panel>
+    </div>
   );
 }
