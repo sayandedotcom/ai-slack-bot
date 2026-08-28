@@ -87,12 +87,28 @@ export async function getRuns(params: RunListParams = {}): Promise<RunPage> {
  * `GET /api/runs/:id` is D1-only on the Worker — rendering a run must not wake
  * it — and returns `publicRun`, which omits the Durable Object key. The
  * dashboard addresses runs by UUID and the Worker resolves the key server-side
- * (invariant 10), so this shape is a narrower `RunSummary`: the join columns
- * `channelName` and `customerSlug` belong to the list query and are absent
- * here.
+ * (invariant 10).
+ *
+ * Deliberately spelled out field-by-field rather than derived from
+ * `RunSummary` (e.g. `Omit<RunSummary, ...>`): `publicRun` in
+ * `apps/worker/src/api/runs.ts` returns exactly `id, origin, status, shadow,
+ * summary, channelId, threadTs, createdAt, updatedAt` and nothing else. A
+ * derived type would silently inherit any field `RunSummary` gains in the
+ * future (as happened with `costUsd`, `turns` and `openApprovalId`, none of
+ * which the detail endpoint returns) unless every future edit also remembers
+ * to extend the `Omit`. This type has to be edited by hand only when the
+ * Worker's own `publicRun` shape changes, which is the one time it should be.
  */
-export type RunDetail = Omit<RunSummary, "channelName" | "customerSlug"> & {
+export type RunDetail = {
+  id: string;
+  origin: string;
+  status: RunStatus;
+  shadow: boolean;
+  summary: string | null;
+  channelId: string | null;
   threadTs: string | null;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export async function getRun(id: string): Promise<RunDetail> {
