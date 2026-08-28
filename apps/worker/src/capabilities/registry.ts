@@ -14,6 +14,7 @@ import type { Env } from "../index";
 import {
   type CapabilityNamespace,
   type CapabilityNamespaceFactory,
+  executionContexts,
   FirefighterConnector,
 } from "./connector";
 import {
@@ -203,15 +204,18 @@ export function buildConnectors(
   env: Env,
   /**
    * Builds the context for ONE execution, keyed by the `executionId` codemode
-   * hands to every call. The connector memoises it for the execution's
-   * lifetime and evicts it in `onPassEnd`, so every call inside one
-   * `run_code` shares a budget, an audit stream and a customer-reference map,
-   * and no two executions do.
+   * hands to every call. It is memoised ONCE, here, and the one memo is shared
+   * by every connector below — so every call inside one `run_code`, on any
+   * namespace, shares a budget, an audit stream and a customer-reference map,
+   * and no two executions do. `disposeExecution` on any connector evicts it.
+   * See `ExecutionContexts` for what went wrong when each connector kept its
+   * own.
    */
   getContext: (executionId: string) => Promise<BindingContext>
 ): CodemodeConnector[] {
+  const contexts = executionContexts(getContext);
   return NAMESPACE_FACTORIES.map(
-    (factory) => new FirefighterConnector(doCtx, env, factory, getContext)
+    (factory) => new FirefighterConnector(doCtx, env, factory, contexts)
   );
 }
 
