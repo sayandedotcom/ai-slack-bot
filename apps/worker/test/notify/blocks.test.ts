@@ -99,7 +99,9 @@ describe("nudgeBlocks", () => {
     expect(elements).toHaveLength(1);
     const button = elements[0];
     expect(button.type).toBe("button");
-    expect(button.url).toBe(`${DASHBOARD_URL}/?approval=${APPROVAL_ID}`);
+    expect(button.url).toBe(
+      `${DASHBOARD_URL}/approvals?approval=${APPROVAL_ID}`
+    );
     expect(button).not.toHaveProperty("value");
   });
 

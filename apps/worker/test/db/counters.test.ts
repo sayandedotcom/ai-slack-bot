@@ -1,6 +1,26 @@
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import {
+  type AccessIdentity,
+  AccessJwtError,
+  type AccessVerifier,
+} from "../../src/access/jwt";
+import {
+  installIdentityApiPorts,
+  resetIdentityApiPorts,
+} from "../../src/api/identity";
 import { getCounters } from "../../src/db/counters";
+
+function fakeVerifier(): AccessVerifier {
+  return {
+    async verify(jwt: string): Promise<AccessIdentity> {
+      if (!jwt) throw new AccessJwtError("missing", "no token was supplied");
+      if (!jwt.includes("@"))
+        throw new AccessJwtError("malformed", "not an email-shaped token");
+      return { email: jwt };
+    },
+  };
+}
 
 const NOW = 1_700_000_000_000;
 const DAY = 86_400_000;
@@ -120,26 +140,83 @@ describe("getCounters", () => {
     expect(counters.triaged).toBe(1); // only EvT1 is inside the window
   });
 
+  it("counts woken as the triage decisions that said wake, and dropped as the rest", async () => {
+    await env.DB.prepare(
+      `INSERT INTO triage_decisions (event_id, wake, why, opening_prompt, model, cost_usd, latency_ms, created_at)
+       VALUES ('EvW1', 1, 'q', 'p', 'claude-haiku-4-5', 0.0003, 400, ?),
+              ('EvW2', 0, 'banter', '', 'claude-haiku-4-5', 0.0002, 300, ?),
+              ('EvW3', 0, 'banter', '', 'claude-haiku-4-5', 0.0002, 300, ?)`
+    )
+      .bind(NOW, NOW, NOW)
+      .run();
+    const c = await getCounters(env.DB, NOW - DAY);
+    expect(c.triaged).toBe(3);
+    expect(c.woken).toBe(1);
+    expect(c.dropped).toBe(2);
+  });
+
   it("returns all zeros for an empty window without throwing", async () => {
     const c = await getCounters(env.DB, NOW + DAY);
-    expect(c).toEqual({ heard: 0, ingested: 0, triaged: 0, escalated: 0 });
+    expect(c).toEqual({
+      heard: 0,
+      ingested: 0,
+      triaged: 0,
+      woken: 0,
+      dropped: 0,
+      escalated: 0,
+    });
   });
 });
 
 describe("GET /api/counters", () => {
-  it("serves the counters as json", async () => {
-    const res = await SELF.fetch("https://example.com/api/counters");
+  beforeEach(() => {
+    resetIdentityApiPorts();
+    installIdentityApiPorts({ verifier: fakeVerifier() });
+  });
+
+  const read = (query = "") =>
+    SELF.fetch(`https://example.com/api/counters${query}`, {
+      headers: { "Cf-Access-Jwt-Assertion": "ronit@zellify.app" },
+    });
+
+  it("serves the six counters as json, defaulting to a 24h window", async () => {
+    const res = await read();
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       counters: Record<string, number>;
       since: number;
+      window: string;
     };
     expect(Object.keys(body.counters).sort()).toEqual([
+      "dropped",
       "escalated",
       "heard",
       "ingested",
       "triaged",
+      "woken",
     ]);
-    expect(typeof body.since).toBe("number");
+    expect(body.window).toBe("24h");
+    expect(Date.now() - body.since).toBeGreaterThan(86_400_000 - 5_000);
+  });
+
+  it("accepts window=7d", async () => {
+    const res = await read("?window=7d");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { since: number; window: string };
+    expect(body.window).toBe("7d");
+    expect(Date.now() - body.since).toBeGreaterThan(7 * 86_400_000 - 5_000);
+  });
+
+  it("refuses an unknown window", async () => {
+    const res = await read("?window=1y");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe(
+      "invalid_window"
+    );
+  });
+
+  it("is gated like every other dashboard read", async () => {
+    const res = await SELF.fetch("https://example.com/api/counters");
+    expect(res.status).toBe(401);
   });
 });

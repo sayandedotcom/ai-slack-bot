@@ -1,12 +1,11 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
   type DecideAction,
   decide,
-  getApproval,
   getOpenApprovals,
   type OpenApproval,
 } from "../api/approvals";
@@ -53,68 +52,9 @@ export function useApprovals(): {
   });
 
   const overlay = useApprovalsOverlay((s) => s.cards);
-  const {
-    beginDecide,
-    failDecide,
-    resolve,
-    hold,
-    nameDecider,
-    claimReconcile,
-  } = useApprovalsOverlay.getState();
+  const { beginDecide, failDecide, resolve } = useApprovalsOverlay.getState();
 
   const rows = query.data ?? null;
-
-  /** Last row seen for an id, so a vanished card still has something to draw. */
-  const lastRowRef = useRef(new Map<string, OpenApproval>());
-  /** Ids present in the previous poll — the only way to notice a disappearance. */
-  const previousIdsRef = useRef(new Set<string>());
-
-  /**
-   * Vanish reconciliation. A card that was in the previous poll and is not in
-   * this one, with no local decision explaining why, was decided by someone
-   * else or withdrawn by the agent. Rather than let it blink out, ask the
-   * detail endpoint what happened — that answer is a real source, so it obeys
-   * the never-invent rule.
-   */
-  useEffect(() => {
-    if (rows === null) return;
-
-    const ids = new Set<string>();
-    for (const row of rows) {
-      ids.add(row.id);
-      lastRowRef.current.set(row.id, row);
-    }
-    const previousIds = previousIdsRef.current;
-    previousIdsRef.current = ids;
-
-    for (const id of previousIds) {
-      if (ids.has(id)) continue;
-      const owned = useApprovalsOverlay.getState().cards.get(id);
-      // A local decision already explains the absence; the poll is the stale one.
-      if (owned !== undefined && owned.kind !== "open") continue;
-      const row = lastRowRef.current.get(id);
-      if (row === undefined) continue;
-      // At most one detail read per id, ever.
-      if (!claimReconcile(id)) continue;
-
-      // Hold it visible for the round trip so it does not flicker out and back in.
-      hold(row);
-
-      void queryClient
-        .fetchQuery({
-          queryKey: queryKeys.approval(id),
-          queryFn: () => getApproval(id),
-        })
-        .then((detail) =>
-          resolve(detail, detail.decision, detail.decidedBy, false)
-        )
-        .catch(() => {
-          // We know it left the open list but not why. "withdrawn" with no name
-          // is this store's shape for "resolved elsewhere" — vague, but true.
-          resolve(row, "withdrawn", null, false);
-        });
-    }
-  }, [rows, claimReconcile, hold, resolve, queryClient]);
 
   const mutation = useMutation({
     mutationFn: ({
@@ -143,26 +83,11 @@ export function useApprovals(): {
         return;
       }
 
-      // Lost the race. The winning DECISION comes from the 409 body and only
-      // from there — refetching to learn it would reintroduce the race we just
-      // lost. But the worker's conflict body carries no name, and the decider's
-      // name exists only on GET /api/approvals/:id, so the two halves of this
-      // banner genuinely arrive from two places.
+      // Lost the race. The winning decision AND its decider come straight off
+      // the 409 body — the worker names the winner directly now, so there is
+      // no second read to make and nothing opportunistic left to do here.
       resolve(card, result.decision, result.decidedBy, false);
       void queryClient.invalidateQueries({ queryKey: queryKeys.openApprovals });
-
-      // Opportunistic and strictly cosmetic: its only permitted effect is
-      // filling in a name on a card that is already resolved. Failure is
-      // invisible — the banner simply has no name.
-      void queryClient
-        .fetchQuery({
-          queryKey: queryKeys.approval(card.id),
-          queryFn: () => getApproval(card.id),
-        })
-        .then((detail) => {
-          if (detail.decidedBy !== null) nameDecider(card.id, detail.decidedBy);
-        })
-        .catch(() => {});
     },
     onError: (_error, { card }) => {
       // `decide` resolves rather than throws for every outcome it understands,

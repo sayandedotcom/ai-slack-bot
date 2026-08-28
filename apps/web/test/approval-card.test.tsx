@@ -191,4 +191,18 @@ describe("ApprovalCard", () => {
       linked.container.querySelector("#approval-apr-1")?.className
     ).toContain("ring-2");
   });
+
+  it("offers the run behind the draft, so nobody approves without the evidence", () => {
+    // A card says WHAT the agent wants to send and WHY it asked, but not what
+    // it read or ran to get there. Approving is a promise made in a customer's
+    // thread under a person's name, so the run has to be one click away.
+    renderCard({ kind: "open", card }, "firefighter");
+    const link = screen.getByRole("link", { name: /open run/i });
+    expect(link).toHaveAttribute("href", `/runs/${card.runId}`);
+  });
+
+  it("offers it to viewers too — reading is not deciding", () => {
+    renderCard({ kind: "open", card }, "viewer");
+    expect(screen.getByRole("link", { name: /open run/i })).toBeInTheDocument();
+  });
 });

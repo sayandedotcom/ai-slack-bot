@@ -19,10 +19,14 @@ import type { DecideAction, Decision, OpenApproval } from "../api/approvals";
  * testable without rendering anything.
  *
  * The one rule this file must never break: it NEVER invents a decision. Only
- * three things can move a card to `resolved` — a 200 returning what you
- * decided, a 409 returning who won, or a detail read for a card that vanished
- * from the list. A network failure puts the card back to `open` with an error
- * on it, because "we don't know" must not render as "done".
+ * two things can move a card to `resolved` — a 200 returning what you decided,
+ * or a 409 returning who won and their name, directly in the body. A network
+ * failure puts the card back to `open` with an error on it, because "we don't
+ * know" must not render as "done". A card that vanishes from the open poll
+ * with no local decision explaining it (decided elsewhere, or withdrawn) is
+ * NOT reconciled here any more — it simply leaves the open list, and the
+ * honest place to see it is the Decided list (`useDecidedApprovals`), which
+ * reads a real source instead of this store inventing one.
  */
 
 /** How long a decided card lingers before it stops being news. */
@@ -42,8 +46,6 @@ export type CardState =
 type ApprovalsOverlay = {
   /** Only ids this store has an opinion about. Everything else comes from the poll. */
   cards: ReadonlyMap<string, CardState>;
-  /** Ids whose vanish-reconciliation read has already been started. */
-  reconciled: ReadonlySet<string>;
 
   /** Move a card into `deciding`, locking its controls against a double submit. */
   beginDecide: (card: OpenApproval, action: DecideAction) => void;
@@ -56,15 +58,6 @@ type ApprovalsOverlay = {
     decidedBy: string | null,
     mine: boolean
   ) => void;
-  /** Hold a vanished card visible, as its last polled row, for one round trip. */
-  hold: (card: OpenApproval) => void;
-  /**
-   * Fill in the decider's name on an already-resolved card. Cosmetic and
-   * strictly additive: it can never change a decision or un-resolve a card.
-   */
-  nameDecider: (id: string, decidedBy: string) => void;
-  /** Claim an id for reconciliation. False when someone already claimed it. */
-  claimReconcile: (id: string) => boolean;
   forget: (id: string) => void;
   /** Cancel every pending expiry. For tests and for a full teardown. */
   reset: () => void;
@@ -86,7 +79,6 @@ function withCard(
 
 export const useApprovalsOverlay = create<ApprovalsOverlay>()((set, get) => ({
   cards: new Map(),
-  reconciled: new Set(),
 
   beginDecide: (card, action) =>
     set((s) => ({
@@ -97,13 +89,6 @@ export const useApprovalsOverlay = create<ApprovalsOverlay>()((set, get) => ({
     set((s) => ({
       cards: withCard(s.cards, card.id, { kind: "open", card, error: message }),
     })),
-
-  hold: (card) =>
-    set((s) =>
-      s.cards.has(card.id)
-        ? s
-        : { cards: withCard(s.cards, card.id, { kind: "open", card }) }
-    ),
 
   resolve: (card, decision, decidedBy, mine) => {
     set((s) => ({
@@ -127,20 +112,6 @@ export const useApprovalsOverlay = create<ApprovalsOverlay>()((set, get) => ({
     );
   },
 
-  nameDecider: (id, decidedBy) =>
-    set((s) => {
-      const entry = s.cards.get(id);
-      if (entry === undefined || entry.kind !== "resolved") return s;
-      if (entry.decidedBy !== null) return s;
-      return { cards: withCard(s.cards, id, { ...entry, decidedBy }) };
-    }),
-
-  claimReconcile: (id) => {
-    if (get().reconciled.has(id)) return false;
-    set((s) => ({ reconciled: new Set(s.reconciled).add(id) }));
-    return true;
-  },
-
   forget: (id) =>
     set((s) => {
       if (!s.cards.has(id)) return s;
@@ -152,6 +123,6 @@ export const useApprovalsOverlay = create<ApprovalsOverlay>()((set, get) => ({
   reset: () => {
     for (const timer of timers.values()) clearTimeout(timer);
     timers.clear();
-    set({ cards: new Map(), reconciled: new Set() });
+    set({ cards: new Map() });
   },
 }));

@@ -78,9 +78,8 @@ describe("the approvals overlay", () => {
     expect(store().cards.has(card.id)).toBe(false);
   });
 
-  it("fills in a decider's name but never changes the decision", () => {
-    store().resolve(card, "approved", null, false);
-    store().nameDecider(card.id, "zurab@zellify.app");
+  it("takes a decider's name directly off a resolve call, from the 409 body — never invented", () => {
+    store().resolve(card, "approved", "zurab@zellify.app", false);
 
     expect(store().cards.get(card.id)).toMatchObject({
       kind: "resolved",
@@ -89,30 +88,9 @@ describe("the approvals overlay", () => {
     });
   });
 
-  it("refuses to name a decider on a card that is not resolved", () => {
-    store().beginDecide(card, { action: "approve" });
-    store().nameDecider(card.id, "zurab@zellify.app");
-
-    expect(store().cards.get(card.id)).toMatchObject({ kind: "deciding" });
-  });
-
-  it("never overwrites a name that is already known", () => {
-    store().resolve(card, "approved", "luka@zellify.app", false);
-    store().nameDecider(card.id, "zurab@zellify.app");
-
-    expect(store().cards.get(card.id)).toMatchObject({
-      decidedBy: "luka@zellify.app",
-    });
-  });
-
-  it("lets exactly one caller claim an id for reconciliation", () => {
-    expect(store().claimReconcile(card.id)).toBe(true);
-    expect(store().claimReconcile(card.id)).toBe(false);
-  });
-
-  it("holds a vanished card without clobbering a state it already has", () => {
-    store().beginDecide(card, { action: "approve" });
-    store().hold(card);
-    expect(store().cards.get(card.id)).toMatchObject({ kind: "deciding" });
+  it("no longer carries a reconcile set — a vanished card is explained by the decided list", () => {
+    const s = useApprovalsOverlay.getState() as Record<string, unknown>;
+    expect("claimReconcile" in s).toBe(false);
+    expect("reconciled" in s).toBe(false);
   });
 });

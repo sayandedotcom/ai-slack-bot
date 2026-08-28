@@ -221,3 +221,70 @@ describe("reading one run", () => {
     expect((await read(id, OUTSIDER)).status).toBe(403);
   });
 });
+
+describe("GET /api/runs (list)", () => {
+  const list = (query = "", token = FIREFIGHTER) =>
+    SELF.fetch(`https://firefighter.test/api/runs${query}`, {
+      headers: { "Cf-Access-Jwt-Assertion": token },
+    });
+
+  it("is gated", async () => {
+    expect((await SELF.fetch("https://firefighter.test/api/runs")).status).toBe(
+      401
+    );
+    expect((await list("", OUTSIDER)).status).toBe(403);
+  });
+
+  it("answers a page with a nextCursor field and the new per-row columns", async () => {
+    const created = await create(
+      { firstMessage: "list me", clientRequestId: crypto.randomUUID() },
+      FIREFIGHTER
+    );
+    const { id } = await created.json<{ id: string }>();
+    const res = await list(`?q=${id.slice(0, 8)}`);
+    expect(res.status).toBe(200);
+    const body = await res.json<{
+      runs: {
+        id: string;
+        costUsd: string;
+        turns: number;
+        openApprovalId: string | null;
+      }[];
+      nextCursor: string | null;
+    }>();
+    expect(body.runs.map((r) => r.id)).toContain(id);
+    const row = body.runs.find((r) => r.id === id);
+    expect(typeof row?.costUsd).toBe("string");
+    expect(row?.turns).toBeGreaterThanOrEqual(0);
+    expect("openApprovalId" in (row ?? {})).toBe(true);
+    expect("nextCursor" in body).toBe(true);
+  });
+
+  it("refuses bad filters with a code", async () => {
+    expect(
+      ((await (await list("?origin=email")).json()) as { code: string }).code
+    ).toBe("invalid_origin");
+    expect(
+      ((await (await list("?shadow=maybe")).json()) as { code: string }).code
+    ).toBe("invalid_shadow");
+    expect(
+      ((await (await list("?cursor=nope")).json()) as { code: string }).code
+    ).toBe("invalid_cursor");
+    expect(
+      ((await (await list(`?q=${"x".repeat(201)}`)).json()) as { code: string })
+        .code
+    ).toBe("invalid_q");
+  });
+
+  it("gates the usage read too", async () => {
+    const created = await create(
+      { firstMessage: "usage", clientRequestId: crypto.randomUUID() },
+      FIREFIGHTER
+    );
+    const { id } = await created.json<{ id: string }>();
+    expect(
+      (await SELF.fetch(`https://firefighter.test/api/runs/${id}/usage`)).status
+    ).toBe(401);
+    expect((await read(`${id}/usage`, FIREFIGHTER)).status).toBe(200);
+  });
+});

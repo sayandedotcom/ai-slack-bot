@@ -8,7 +8,17 @@
  * rather than letting a browser hand us a Durable Object name.
  */
 
-export type RunOrigin = "slack" | "chat";
+/**
+ * `RunOrigin` is derived from this array, not declared independently, so the
+ * type and the runtime guard below cannot drift apart the way a hand-written
+ * literal union and a hand-written array could.
+ */
+export const RUN_ORIGINS = ["slack", "chat"] as const;
+export type RunOrigin = (typeof RUN_ORIGINS)[number];
+
+export function isRunOrigin(value: unknown): value is RunOrigin {
+  return (RUN_ORIGINS as readonly unknown[]).includes(value);
+}
 
 /** Slack channel ids are uppercase alphanumeric; this also excludes `:`. */
 const SLACK_CHANNEL = /^[A-Z0-9]+$/;

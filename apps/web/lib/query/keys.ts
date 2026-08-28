@@ -6,14 +6,19 @@
 export const queryKeys = {
   identity: ["identity"] as const,
   roster: ["roster"] as const,
-  counters: ["counters"] as const,
-  runs: (limit: number) => ["runs", limit] as const,
+  counters: (window: "24h" | "7d") => ["counters", window] as const,
+  runsPage: (params: Record<string, unknown>) =>
+    ["runs", "page", params] as const,
   run: (id: string) => ["runs", id, "detail"] as const,
   runUsage: (id: string) => ["runs", id, "usage"] as const,
+  runApprovals: (id: string) => ["runs", id, "approvals"] as const,
+  runEffects: (id: string) => ["runs", id, "effects"] as const,
   openApprovals: ["approvals", "open"] as const,
   approval: (id: string) => ["approvals", id] as const,
+  decidedApprovals: (since: number) => ["approvals", "decided", since] as const,
   channels: ["channels"] as const,
   shadow: ["eval", "shadow"] as const,
+  triage: (days: number) => ["eval", "triage", days] as const,
 };
 
 /**
@@ -24,6 +29,7 @@ export const queryKeys = {
 export const POLL_MS = {
   approvals: 3_000,
   runs: 5_000,
+  effects: 5_000,
   counters: 10_000,
   shadow: 60_000,
   roster: 60_000,

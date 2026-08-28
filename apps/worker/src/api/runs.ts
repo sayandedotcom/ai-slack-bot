@@ -1,15 +1,19 @@
 import { Hono } from "hono";
+import { listByRun } from "../approval/repository";
 import type { Env } from "../index";
+import { isRunOrigin } from "../run/keys";
 import { decimalNanoUsd } from "../run/money";
 import { isRunStatus, type RunStatus } from "../run/protocol";
 import type { RunRecord } from "../run/repository";
 import {
+  decodeRunCursor,
   getRunById,
   listRuns,
   RUN_LIST_MAX_LIMIT,
   readRunUsage,
 } from "../run/repository";
 import { createRunFromChat } from "../run/wake";
+import { publicApprovalCard } from "./approvals";
 import { requireTeamMember } from "./identity";
 
 export const runsApi = new Hono<{ Bindings: Env }>();
@@ -38,8 +42,13 @@ function fail(code: string, message: string) {
   return { code, message };
 }
 
+const RUN_SEARCH_MAX_CHARS = 200;
+
 /** D1 only. This must never wake a Durable Object, or the list costs one wake per row. */
 runsApi.get("/runs", async (c) => {
+  const member = await requireTeamMember(c);
+  if (member instanceof Response) return member;
+
   const statusParam = c.req.query("status");
   let status: RunStatus | undefined;
   if (statusParam !== undefined) {
@@ -47,6 +56,39 @@ runsApi.get("/runs", async (c) => {
       return c.json(fail("invalid_status", "unknown run status"), 400);
     }
     status = statusParam;
+  }
+
+  const originParam = c.req.query("origin");
+  if (originParam !== undefined && !isRunOrigin(originParam)) {
+    return c.json(fail("invalid_origin", "origin must be slack or chat"), 400);
+  }
+
+  const shadowParam = c.req.query("shadow");
+  let shadow: boolean | undefined;
+  if (shadowParam !== undefined) {
+    if (shadowParam !== "true" && shadowParam !== "false") {
+      return c.json(
+        fail("invalid_shadow", "shadow must be true or false"),
+        400
+      );
+    }
+    shadow = shadowParam === "true";
+  }
+
+  const q = c.req.query("q")?.trim();
+  if (q !== undefined && q.length > RUN_SEARCH_MAX_CHARS) {
+    return c.json(
+      fail("invalid_q", `q must be at most ${RUN_SEARCH_MAX_CHARS} characters`),
+      400
+    );
+  }
+
+  const cursor = c.req.query("cursor");
+  if (cursor !== undefined && decodeRunCursor(cursor) === null) {
+    return c.json(
+      fail("invalid_cursor", "cursor is not one this endpoint issued"),
+      400
+    );
   }
 
   const limitParam = c.req.query("limit");
@@ -66,7 +108,16 @@ runsApi.get("/runs", async (c) => {
     limit = parsed;
   }
 
-  return c.json({ runs: await listRuns(c.env.DB, { status, limit }) });
+  const page = await listRuns(c.env.DB, {
+    status,
+    origin: originParam,
+    channelId: c.req.query("channelId") || undefined,
+    shadow,
+    q: q || undefined,
+    cursor,
+    limit,
+  });
+  return c.json(page);
 });
 
 /**
@@ -89,6 +140,9 @@ runsApi.get("/runs", async (c) => {
  * token counts, a call count and a cost.
  */
 runsApi.get("/runs/:id/usage", async (c) => {
+  const member = await requireTeamMember(c);
+  if (member instanceof Response) return member;
+
   const run = await getRunById(c.env.DB, c.req.param("id"));
   if (!run) return c.json(fail("not_found", "no such run"), 404);
 
@@ -216,4 +270,14 @@ runsApi.get("/runs/:id", async (c) => {
   const run = await getRunById(c.env.DB, c.req.param("id"));
   if (!run) return c.json(fail("not_found", "no such run"), 404);
   return c.json({ run: publicRun(run) });
+});
+
+/** Every approval this run raised, oldest first. D1 only. */
+runsApi.get("/runs/:id/approvals", async (c) => {
+  const member = await requireTeamMember(c);
+  if (member instanceof Response) return member;
+  const run = await getRunById(c.env.DB, c.req.param("id"));
+  if (!run) return c.json(fail("not_found", "no such run"), 404);
+  const rows = await listByRun(c.env.DB, run.id);
+  return c.json({ approvals: rows.map(publicApprovalCard) });
 });

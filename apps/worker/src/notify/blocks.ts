@@ -48,7 +48,7 @@ export function nudgeBlocks(input: {
         {
           type: "button",
           text: { type: "plain_text", text: "Review", emoji: true },
-          url: `${dashboardUrl}/?approval=${approvalId}`,
+          url: `${dashboardUrl}/approvals?approval=${approvalId}`,
         },
       ],
     },

@@ -5,8 +5,19 @@ It sits **beside** `apps/dashboard` rather than replacing it: the Worker still
 builds and serves the Vite SPA as its `ASSETS` bundle, and `pnpm run deploy` in
 `apps/worker` is unaffected.
 
-Three surfaces: `/` the dashboard, `/chat` to start a run, `/runs/[id]` for one
-run live over its own socket.
+Seven routes: `/` the dashboard (attention row, funnel, approvals queue,
+decided list), `/chat` the create form, `/runs` the workbench — a resizable
+split of the runs list against `/runs/[id]`, one run live over its own socket
+with that run's approval card inside the transcript, `/approvals` the full open
+queue, `/channels` the channel-registry panel, `/team` who speaks and why, and
+`/eval` shadow pairs and the triage score.
+
+Starting a run has two doors and one path behind them: the `/chat` page, and
+the New-run dialog on `/runs`. Both call `makeChatStarter`/`startChatRun`, so
+the idempotency rule — one `clientRequestId` per text, reused across retries —
+holds either way, and both land on `/runs/:id` once `POST /api/runs` answers. A
+run is always read in the workbench; neither door builds a second session
+shape.
 
 **It is live at `https://firefighter.sayande.xyz`.** That hostname is a
 Cloudflare-proxied CNAME to Vercel, added to the same Access application that
@@ -44,17 +55,21 @@ pnpm format             # from the repo root: biome check --write .
 `pnpm dev` with neither variable set starts with no rewrite target, so every
 `/api` call 404s against Next itself. Pick one.
 
-**Three routes do not work against `wrangler dev`, and cannot be made to.**
-`POST /api/runs`, `GET /api/runs/:id` and the run socket all sit behind
-`requireTeamMember`, which verifies a real Access JWT — and `wrangler dev` has
-no Cloudflare Access in front of it, so all three answer 401 locally. The runs
-list, counters, roster and approvals are fine; starting a run and opening a
-transcript are not. The Vite dashboard has the same hole and says so in
-`apps/dashboard/dev-stubs.ts`, which deliberately does **not** stub them: a
-faked create hands back an id whose socket then refuses, which reads as a bug
-in the run view rather than as the absence of Access. Exercise those three
-against a deployed Worker behind the real Access application, or use
-`NEXT_PUBLIC_DEMO=1`.
+**Five routes do not work against `wrangler dev`, and cannot be made to.**
+`GET /api/runs` (the runs list) and `GET /api/counters` (the funnel) now sit
+behind `requireTeamMember` alongside `POST /api/runs`, `GET /api/runs/:id` and
+the run socket — five routes, not three — and `wrangler dev` has no Cloudflare
+Access in front of it, so all five answer 401 locally. Only roster and
+approvals are fine. The Vite dashboard has the same hole and says so in
+`apps/dashboard/dev-stubs.ts`, which deliberately does **not** stub any of
+them: a faked create hands back an id whose socket then refuses, which reads
+as a bug in the run view rather than as the absence of Access, and the same
+argument holds for a faked runs list or funnel. The only local path to real
+data is `apps/web/proxy.ts` with `CF_ACCESS_TOKEN` (from
+`cloudflared access login` then `cloudflared access token --app=…`) — or
+`NEXT_PUBLIC_DEMO=1` for fixtures. Exercising a deployed Worker behind the
+real Access application works for everything except the socket, which is
+same-origin only (see `BACKEND-GAPS.md` §1).
 
 ## Environment
 
@@ -120,16 +135,22 @@ The one piece of genuine client state is the approvals overlay
 (`lib/store/approvals-overlay.ts`): a decided card lingers as a transient note,
 it is read by both the queue and the sidebar badge, it outlives any component's
 mount, and it owns timers. Its rule is that it never invents a decision — only
-a 200, a 409, or a detail read can resolve a card, and a network failure puts
-the card back to `open` with a sentence on it. That rule is tested directly,
-without rendering anything.
+two things can resolve a card, a 200 returning what you decided or a 409
+returning who won and their name directly in the body, and a network failure
+puts the card back to `open` with a sentence on it. There used to be a third
+path, an opportunistic detail read for the case where a 409 didn't carry
+`decidedBy` — the Worker started returning it on 2026-08-28, and that read (and
+the `nameDecider`/`reconciled` machinery it fed) was deleted with it. That rule
+is tested directly, without rendering anything.
 
-Selected run lives in `?run=`, sidebar state in `SidebarProvider`'s cookie,
-theme in `next-themes`, and a half-typed rejection reason in the card that owns
-it. None of those belong in a store.
+The run a reader has open lives in the URL as a route, `/runs/[id]`, not a
+query parameter — `app/runs/layout.tsx` reads it with `useParams` so the list
+and the detail panel both survive navigating between runs. Sidebar state lives
+in `SidebarProvider`'s cookie, theme in `next-themes`, and a half-typed
+rejection reason in the card that owns it. None of those belong in a store.
 
-**Type carries provenance.** IBM Plex Mono for anything a machine produced —
-channel ids, thread keys, run uuids, counts, capability calls — and Plex Sans
+**Type carries provenance.** Geist Mono for anything a machine produced —
+channel ids, thread keys, run uuids, counts, capability calls — and Geist Sans
 for anything a person wrote. The agent's draft reply is set in sans on purpose:
 the product's whole claim is that it will read as though the fire-fighter wrote
 it, so it must not look machine-made on the page where somebody approves it.
@@ -159,5 +180,6 @@ never have arrived, and a duplicate id would be refused).
 
 **The funnel is the one bold element.** Four stat tiles would say "here are four
 numbers"; what is true is an attenuation, so each stage carries a bar scaled
-against what came in and they visibly collapse across the row. Ember is spent on
-exactly one stage — `escalated` — the only one that costs a person's attention.
+against what came in and they visibly collapse across the row. `--attention`
+(the one chromatic accent, `app/globals.css`) is spent on exactly one stage —
+`escalated` — the only one that costs a person's attention.

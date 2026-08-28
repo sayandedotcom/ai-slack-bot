@@ -8,10 +8,12 @@ import {
 import { cn } from "@workspace/ui/lib/utils";
 import { Users } from "lucide-react";
 
+import { SpecBadge } from "@/components/common/badge";
 import { Panel } from "@/components/common/panel";
 import type { Roster } from "@/lib/api/roster";
 import { initialOf, nameOf } from "@/lib/format";
 import type { PanelState } from "@/lib/panel-state";
+import { connectBadge } from "@/lib/status";
 
 /**
  * The eligible pool, in the order that decides who speaks.
@@ -87,10 +89,8 @@ export function RosterCard({ state }: { state: PanelState<Roster> }) {
                   <span className="ml-auto shrink-0 text-[11px]">
                     {speaks ? (
                       <span className="text-primary">speaks</span>
-                    ) : connected ? (
-                      <span className="text-muted-foreground">connected</span>
                     ) : (
-                      <span className="text-warning">not connected</span>
+                      <SpecBadge spec={connectBadge(connected, "slack")} />
                     )}
                   </span>
                 </li>

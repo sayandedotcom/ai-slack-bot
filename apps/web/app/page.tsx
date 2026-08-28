@@ -1,94 +1,80 @@
 "use client";
 
-import { ApprovalsQueue } from "@/components/dashboard/approvals-queue";
-import { ChannelsPanel } from "@/components/dashboard/channels-panel";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { Panel } from "@/components/common/panel";
+import { SectionHeader } from "@/components/common/section-header";
+import { AttentionRow } from "@/components/dashboard/attention-row";
 import { FunnelStrip } from "@/components/dashboard/funnel-strip";
-import { NudgePreview } from "@/components/dashboard/nudge-preview";
-import { RosterCard } from "@/components/dashboard/roster-card";
-import { RunSheet } from "@/components/dashboard/run-sheet";
-import { RunsFeed } from "@/components/dashboard/runs-feed";
-import { ShadowPanel } from "@/components/dashboard/shadow-panel";
-import { SpeakerHero } from "@/components/dashboard/speaker-hero";
-import { TeamTable } from "@/components/dashboard/team-table";
-import { TokenExplainer } from "@/components/dashboard/token-explainer";
-import { PageHeader } from "@/components/shell/page-header";
-import {
-  useCounters,
-  useIdentityQuery,
-  useRoster,
-} from "@/lib/hooks/use-dashboard-data";
+import { RunRow } from "@/components/runs/run-row";
+import type { CountersWindow } from "@/lib/api/counters";
+import { useCounters } from "@/lib/hooks/use-dashboard-data";
+import { useNow } from "@/lib/hooks/use-now";
+import { useRunsPage } from "@/lib/hooks/use-runs-page";
 
 /**
- * The dashboard, in the order a stranger needs to read it: whose voice the
- * agent uses, how little of what it hears reaches a human, what it is doing,
- * and what is waiting on you.
+ * The overview: the three things a fire-fighter opens the dashboard to
+ * check, in the order they matter — is anything waiting on me, how little of
+ * what the agent hears actually reaches a human, and what has it done lately.
  *
- * The roster is read here AND inside the team table, deliberately. Both call
- * `useRoster()`, the cache answers once, and neither has to be handed the other
- * one's data — which is what the Vite dashboard has to do, and says so in a
- * comment, because it has no cache to dedupe with.
+ * The approvals queue, team table, channels panel and shadow corpus each have
+ * their own route (`/approvals`, `/team`, `/channels`, `/eval`), and the full
+ * run history lives at `/runs` — this page is a dashboard onto all of them,
+ * not a fifth copy of any one.
  */
-export default function DashboardPage() {
-  const roster = useRoster();
-  const counters = useCounters();
-  const { identity } = useIdentityQuery();
-  const role = identity?.role ?? "viewer";
+export default function OverviewPage() {
+  const search = useSearchParams();
+  const router = useRouter();
+  useEffect(() => {
+    // Slack's Review buttons already point at `/?approval=<id>` in threads
+    // that exist today — this keeps them working by handing the id to the
+    // approvals queue's own route instead of duplicating that queue here.
+    const approval = search.get("approval");
+    if (approval)
+      router.replace(`/approvals?approval=${encodeURIComponent(approval)}`);
+  }, [search, router]);
+
+  const [window, setWindow] = useState<CountersWindow>(
+    search.get("window") === "7d" ? "7d" : "24h"
+  );
+  const counters = useCounters(window);
+  const recent = useRunsPage({ limit: 8 });
+  const now = useNow();
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6 p-4 pb-16 sm:p-6">
-      <PageHeader eyebrow="Last 24 hours" title="Who answers the fire today">
-        The agent listens to every customer channel, wakes on the few messages
-        that need it, and speaks as a fire-fighter — but never sends a committal
-        reply without one of you saying yes.
-      </PageHeader>
-
-      <div className="grid gap-4 lg:grid-cols-12">
-        <div className="lg:col-span-7">
-          <SpeakerHero state={roster} />
-        </div>
-        <div className="lg:col-span-5">
-          <RosterCard state={roster} />
-        </div>
-      </div>
-
-      <FunnelStrip state={counters} />
-
-      <div className="grid items-start gap-4 lg:grid-cols-12">
-        <div className="lg:col-span-7">
-          <RunsFeed />
-        </div>
-        {/*
-          Sticky, and that is the point of the two-column split: the run history
-          is long and worth scrolling, and the thing with a human waiting on the
-          other end of it should not scroll away while you do.
-        */}
-        <div className="lg:sticky lg:top-20 lg:col-span-5">
-          <ApprovalsQueue role={role} />
-        </div>
-      </div>
-
-      {/* The nudge and the two tokens are one idea — how a decision reaches a
-          human and comes back — so they sit together rather than the nudge
-          floating beside the queue it describes. */}
-      <div className="grid items-start gap-4 lg:grid-cols-12">
-        <div className="lg:col-span-5">
-          <NudgePreview />
-        </div>
-        <div className="lg:col-span-7">
-          <TokenExplainer />
-        </div>
-      </div>
-
-      <TeamTable state={roster} identity={identity} />
-
-      {/* Above the shadow corpus, because a channel whose customer is still a
-          guess is a live constraint on what the agent may read — not an
-          after-the-fact review. */}
-      <ChannelsPanel role={identity?.role ?? null} />
-
-      <ShadowPanel />
-
-      <RunSheet />
+    <div className="mx-auto w-full max-w-7xl space-y-8 p-6">
+      <AttentionRow />
+      <FunnelStrip state={counters} window={window} onWindow={setWindow} />
+      <section className="space-y-3">
+        <SectionHeader
+          eyebrow="Recent"
+          title="Runs"
+          action={
+            <Link
+              href="/runs"
+              className="text-sm underline-offset-4 hover:underline"
+            >
+              See all →
+            </Link>
+          }
+        />
+        <Panel title="Recent runs" state={recent.state} bare>
+          {(runs) => (
+            <ul className="divide-y rounded-lg border">
+              {runs.slice(0, 8).map((run) => (
+                <RunRow
+                  key={run.id}
+                  run={run}
+                  selected={false}
+                  now={now}
+                  href={`/runs/${encodeURIComponent(run.id)}`}
+                />
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </section>
     </div>
   );
 }

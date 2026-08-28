@@ -12,8 +12,8 @@ import { RunView, type RunViewProps } from "@/components/run/run-view";
  * composer.
  */
 
-function view(overrides: Partial<RunViewProps> = {}) {
-  const props: RunViewProps = {
+function baseProps(overrides: Partial<RunViewProps> = {}): RunViewProps {
+  return {
     connection: "live",
     connectionError: false,
     messages: [
@@ -28,8 +28,15 @@ function view(overrides: Partial<RunViewProps> = {}) {
     sendError: null,
     onSend: vi.fn(),
     onDismissError: vi.fn(),
+    canCancel: false,
+    onCancel: vi.fn(),
+    cancelling: false,
     ...overrides,
   };
+}
+
+function view(overrides: Partial<RunViewProps> = {}) {
+  const props = baseProps(overrides);
   return { props, ...render(<RunView {...props} />) };
 }
 
@@ -104,5 +111,25 @@ describe("RunView", () => {
     view({ messages: [], busy: true });
     expect(screen.queryByText(/Nothing yet/)).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(/Working/);
+  });
+
+  it("offers Cancel only while it can, and confirms before sending it", async () => {
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <RunView
+        {...baseProps({ canCancel: true, onCancel, cancelling: false })}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    await user.click(screen.getByRole("button", { name: "Yes, stop it" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+
+    rerender(
+      <RunView
+        {...baseProps({ canCancel: false, onCancel, cancelling: false })}
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
   });
 });

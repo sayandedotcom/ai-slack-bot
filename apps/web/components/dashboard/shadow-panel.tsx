@@ -1,17 +1,14 @@
 "use client";
 
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip";
 import { ExternalLink, FlaskConical } from "lucide-react";
 
+import { SpecBadge } from "@/components/common/badge";
 import { Panel } from "@/components/common/panel";
-import { type AiTell, type ShadowPair, TELL_MEANING } from "@/lib/api/shadow";
+import type { ShadowPair } from "@/lib/api/shadow";
 import { ago, shortThread } from "@/lib/format";
 import { useShadowPairs } from "@/lib/hooks/use-dashboard-data";
 import { useNow } from "@/lib/hooks/use-now";
+import { tellBadge } from "@/lib/status";
 
 /**
  * What the agent would have said, beside what a person actually said.
@@ -63,7 +60,7 @@ function Pair({ pair, now }: { pair: ShadowPair; now: number }) {
           {pair.tells.length > 0 ? (
             <div className="flex flex-wrap gap-1">
               {pair.tells.map((tell) => (
-                <TellBadge key={tell} tell={tell} />
+                <SpecBadge key={tell} spec={tellBadge(tell)} />
               ))}
             </div>
           ) : null}
@@ -97,21 +94,5 @@ function Pair({ pair, now }: { pair: ShadowPair; now: number }) {
         </div>
       </div>
     </li>
-  );
-}
-
-/** A detected tell, with what it means — the label alone is jargon. */
-function TellBadge({ tell }: { tell: AiTell }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span className="machine cursor-default rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning" />
-        }
-      >
-        {tell.replace(/_/g, " ")}
-      </TooltipTrigger>
-      <TooltipContent>{TELL_MEANING[tell]}</TooltipContent>
-    </Tooltip>
   );
 }

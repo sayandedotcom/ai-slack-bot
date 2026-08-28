@@ -1,39 +1,45 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveFunnel } from "@/lib/api/counters";
+import { funnelStages, isQuiet } from "@/lib/api/counters";
 
-describe("deriveFunnel", () => {
-  it("derives dropped as the gap between triaged and woken", () => {
-    expect(
-      deriveFunnel({ seen: 148, triaged: 148, woken: 17, escalated: 1 })
-    ).toEqual({
-      seen: 148,
-      triaged: 148,
-      dropped: 131,
-      woken: 17,
-      escalated: 1,
-    });
+const day = {
+  heard: 148,
+  ingested: 140,
+  triaged: 140,
+  woken: 17,
+  dropped: 123,
+  escalated: 1,
+};
+
+describe("funnelStages", () => {
+  it("scales every stage against heard, in order", () => {
+    const stages = funnelStages(day);
+    expect(stages.map((s) => s.key)).toEqual([
+      "heard",
+      "triaged",
+      "woken",
+      "escalated",
+    ]);
+    expect(stages[0]!.ratio).toBe(1);
+    expect(stages[3]!.ratio).toBeCloseTo(1 / 148);
+    expect(stages[3]!.accent).toBe(true);
+    expect(stages.filter((s) => s.accent)).toHaveLength(1);
   });
 
-  it("clamps at zero rather than showing a negative stage", () => {
-    // `triaged` and `woken` are counted by different consumers over the same
-    // window, so a message triaged just before it opened and woken just after
-    // makes `woken` momentarily the larger number. "-2 dropped" is not a thing
-    // anyone should read on this page.
-    expect(
-      deriveFunnel({ seen: 10, triaged: 3, woken: 5, escalated: 0 }).dropped
-    ).toBe(0);
-  });
-
-  it("survives a quiet day with every counter at zero", () => {
-    expect(
-      deriveFunnel({ seen: 0, triaged: 0, woken: 0, escalated: 0 })
-    ).toEqual({
-      seen: 0,
+  it("never divides by zero and never yields NaN", () => {
+    const zero = {
+      heard: 0,
+      ingested: 0,
       triaged: 0,
-      dropped: 0,
       woken: 0,
+      dropped: 0,
       escalated: 0,
-    });
+    };
+    for (const s of funnelStages(zero)) {
+      expect(Number.isFinite(s.ratio)).toBe(true);
+      expect(s.ratio).toBe(0);
+    }
+    expect(isQuiet(zero)).toBe(true);
+    expect(isQuiet(day)).toBe(false);
   });
 });

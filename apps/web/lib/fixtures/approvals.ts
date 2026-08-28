@@ -56,6 +56,67 @@ export function listDemoApprovals(): OpenApproval[] {
     });
 }
 
+/** One row's `DemoRow` widened to the full `ApprovalDetail` card `getDemoApproval` returns. */
+function toDetail(row: DemoRow): ApprovalDetail {
+  return getDemoApproval(row.id);
+}
+
+/** Every card — open or decided — that belongs to one run. */
+export function listDemoApprovalsForRun(runId: string): ApprovalDetail[] {
+  return rows.filter((row) => row.runId === runId).map(toDetail);
+}
+
+/**
+ * Two static decided cards, so the "decided" section of a demo is never
+ * empty even before anyone has clicked Approve/Reject on the mutable rows
+ * above — plus whichever of those rows a click has since resolved.
+ */
+const staticDecided: ApprovalDetail[] = [
+  {
+    id: "apr-6c40f813",
+    runId: "7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258",
+    draft:
+      "Added a copy-funnel-ID button next to the funnel name in the dashboard header — it's live now, no action needed on your side.",
+    why: "Tells the customer a change already shipped. Low risk, but it is still speech under the fire-fighter's name.",
+    channelId: "C0MACROSNAP",
+    threadTs: "1787729400.000100",
+    createdAt: now - 2 * 60 * 60 * 1000,
+    updatedAt: now - 2 * 60 * 60 * 1000,
+    decision: "approved",
+    decidedBy: "ronit@zellify.app",
+    decidedAt: now - 2 * 60 * 60 * 1000,
+    editedText: null,
+    rejectReason: null,
+    delivery: "sent",
+  },
+  {
+    id: "apr-1a9e2f66",
+    runId: "c4e8f107-5a23-4b96-8e15-2d7a9c0b4f36",
+    draft:
+      "We can turn on per-country price A/B testing this sprint, but local currencies would push it into next sprint — want the split now or the currencies with it?",
+    why: "Sets an expectation about scope and timing for a Q4-priority ask; the customer should hear it from a human, not the agent's first draft.",
+    channelId: "C0DRIFTWEAR",
+    threadTs: "1787660100.000200",
+    createdAt: now - 5 * 60 * 60 * 1000,
+    updatedAt: now - 5 * 60 * 60 * 1000,
+    decision: "rejected",
+    decidedBy: "zurab@zellify.app",
+    decidedAt: now - 5 * 60 * 60 * 1000,
+    editedText: null,
+    rejectReason:
+      "Too soon to commit to a split — let's see the pricing model draft first.",
+    delivery: "none",
+  },
+];
+
+/** Every demo card that has left `pending`, plus the two static ones above. */
+export function listDemoDecided(): ApprovalDetail[] {
+  const fromRows = rows
+    .filter((row) => row.decision !== "pending")
+    .map(toDetail);
+  return [...fromRows, ...staticDecided];
+}
+
 /**
  * The detail read. In demo mode a decided card names its decider, which is the
  * one thing the worker's 409 body cannot tell a losing card — this is what

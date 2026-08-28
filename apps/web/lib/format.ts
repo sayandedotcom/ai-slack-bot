@@ -37,9 +37,21 @@ export function shortThread(threadTs: string): string {
 
 /**
  * A cost as it should be shown, from the decimal string the ledger returned.
- * The string is never parsed — this only decides where to put the dollar sign,
- * because `Number()` on a ledger total is a rounded invoice.
+ *
+ * `decimalNanoUsd` (`apps/worker/src/run/money.ts`) always pads to nine
+ * decimal places, so a real row is `"0.412700000"` — unreadable verbatim, and
+ * false precision nobody asked for. This truncates to four decimal places BY
+ * STRING SLICE — never `Number()`, never `parseFloat`, never `toFixed`. Money
+ * is a decimal string end to end (invariant 29); parsing it here is the exact
+ * trap that invariant exists to prevent. Truncating rather than rounding means
+ * a displayed cost never overstates what was actually spent. Callers that want
+ * the untruncated figure still have `total` itself — put it in a `title`
+ * attribute so the exact value is one hover away.
  */
 export function usd(total: string): string {
-  return `$${total}`;
+  const negative = total.startsWith("-");
+  const unsigned = negative ? total.slice(1) : total;
+  const dot = unsigned.indexOf(".");
+  const truncated = dot === -1 ? unsigned : unsigned.slice(0, dot + 5);
+  return `${negative ? "-" : ""}$${truncated}`;
 }

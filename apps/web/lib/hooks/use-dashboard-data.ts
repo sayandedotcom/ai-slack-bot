@@ -2,10 +2,25 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { type Counters, getCounters } from "../api/counters";
+import {
+  type ApprovalDetail,
+  getDecidedApprovals,
+  getRunApprovals,
+} from "../api/approvals";
+import {
+  type Counters,
+  type CountersWindow,
+  getCounters,
+} from "../api/counters";
+import { getRunEffects, type RunEffect } from "../api/effects";
+import {
+  getTriageScore,
+  type TriageDays,
+  type TriageReport,
+} from "../api/eval";
 import { getIdentity, type Identity } from "../api/identity";
 import { getRoster, type Roster } from "../api/roster";
-import { getRuns, getRunUsageTotal, type RunSummary } from "../api/runs";
+import { getRunUsageTotal } from "../api/runs";
 import { getShadowPairs, type ShadowPair } from "../api/shadow";
 import type { PanelState } from "../panel-state";
 import { POLL_MS, queryKeys } from "../query/keys";
@@ -47,27 +62,13 @@ export function useRoster(): PanelState<Roster> {
   );
 }
 
-export function useCounters(): PanelState<Counters> {
+export function useCounters(window: CountersWindow): PanelState<Counters> {
   return toPanelState(
     useQuery({
-      queryKey: queryKeys.counters,
-      queryFn: getCounters,
+      queryKey: queryKeys.counters(window),
+      queryFn: () => getCounters(window),
       refetchInterval: POLL_MS.counters,
     })
-  );
-}
-
-const NO_RUNS_HINT =
-  "No runs yet — the agent wakes when a customer thread needs it.";
-
-export function useRuns(limit = 50): PanelState<RunSummary[]> {
-  return toPanelState(
-    useQuery({
-      queryKey: queryKeys.runs(limit),
-      queryFn: () => getRuns(limit),
-      refetchInterval: POLL_MS.runs,
-    }),
-    { emptyHint: NO_RUNS_HINT, isEmpty: (runs) => runs.length === 0 }
   );
 }
 
@@ -97,5 +98,66 @@ export function useShadowPairs(): PanelState<ShadowPair[]> {
       refetchInterval: POLL_MS.shadow,
     }),
     { emptyHint: NO_SHADOW_HINT, isEmpty: (pairs) => pairs.length === 0 }
+  );
+}
+
+export function useRunApprovals(id: string): PanelState<ApprovalDetail[]> {
+  return toPanelState(
+    useQuery({
+      queryKey: queryKeys.runApprovals(id),
+      queryFn: () => getRunApprovals(id),
+      refetchInterval: POLL_MS.approvals,
+    }),
+    {
+      emptyHint: "This run has not asked for anything yet.",
+      isEmpty: (rows) => rows.length === 0,
+    }
+  );
+}
+
+export function useRunEffects(id: string): PanelState<RunEffect[]> {
+  return toPanelState(
+    useQuery({
+      queryKey: queryKeys.runEffects(id),
+      queryFn: () => getRunEffects(id),
+      refetchInterval: POLL_MS.effects,
+    }),
+    {
+      emptyHint: "Nothing committal yet — reads do not land in the ledger.",
+      isEmpty: (rows) => rows.length === 0,
+    }
+  );
+}
+
+/**
+ * `enabled` defaults to `true` but `DecidedList` passes its collapsed state —
+ * the section is closed by default, and a closed section has no reason to
+ * poll `/api/approvals?state=decided` every three seconds.
+ */
+export function useDecidedApprovals(
+  sinceMs: number,
+  options?: { enabled?: boolean }
+): PanelState<ApprovalDetail[]> {
+  return toPanelState(
+    useQuery({
+      queryKey: queryKeys.decidedApprovals(sinceMs),
+      queryFn: () => getDecidedApprovals(sinceMs),
+      refetchInterval: POLL_MS.approvals,
+      enabled: options?.enabled ?? true,
+    }),
+    {
+      emptyHint: "Nothing was decided in this window.",
+      isEmpty: (rows) => rows.length === 0,
+    }
+  );
+}
+
+export function useTriageScore(days: TriageDays): PanelState<TriageReport> {
+  return toPanelState(
+    useQuery({
+      queryKey: queryKeys.triage(days),
+      queryFn: () => getTriageScore(days),
+      staleTime: 60_000,
+    })
   );
 }

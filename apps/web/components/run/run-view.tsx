@@ -1,13 +1,24 @@
 "use client";
 
 import { Button } from "@workspace/ui/components/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover";
 import { Textarea } from "@workspace/ui/components/textarea";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip";
-import { AlertTriangle, PlugZap, SendHorizontal, WifiOff } from "lucide-react";
+import {
+  AlertTriangle,
+  PlugZap,
+  SendHorizontal,
+  Square,
+  WifiOff,
+} from "lucide-react";
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -61,6 +72,14 @@ export type RunViewProps = {
    * works.
    */
   steerDisabledReason?: string | null;
+  /** This run's capability chip strip, keyed by turn id — see `chipsByTurn`. */
+  chips?: ReadonlyMap<string, readonly string[]>;
+  /** Passed to `Transcript` so a `user` row is labelled Customer or You correctly. */
+  origin?: string;
+  /** Whether Cancel may be offered at all — a parked run is not running. */
+  canCancel: boolean;
+  onCancel: () => void;
+  cancelling: boolean;
 };
 
 export function RunView({
@@ -74,6 +93,11 @@ export function RunView({
   onDismissError,
   approvals,
   steerDisabledReason = null,
+  chips,
+  origin,
+  canCancel,
+  onCancel,
+  cancelling,
 }: RunViewProps) {
   const [draft, setDraft] = useState("");
   const disabled = steerDisabledReason !== null;
@@ -165,7 +189,7 @@ export function RunView({
             Nothing yet — the transcript fills in as the agent works.
           </p>
         ) : (
-          <Transcript messages={messages} />
+          <Transcript messages={messages} chips={chips} origin={origin} />
         )}
 
         {approvals}
@@ -219,6 +243,37 @@ export function RunView({
             </Button>
           )}
         </div>
+        {canCancel ? (
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={cancelling}
+                  aria-label="Cancel run"
+                />
+              }
+            >
+              <Square /> Cancel run
+            </PopoverTrigger>
+            <PopoverContent className="w-64 space-y-2 text-sm">
+              <p>
+                Stops the turn in flight. The run stays where it is — a human
+                stopping it is not it failing.
+              </p>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={onCancel}
+                aria-label="Yes, stop it"
+              >
+                Yes, stop it
+              </Button>
+            </PopoverContent>
+          </Popover>
+        ) : null}
+
         <p className="text-pretty text-muted-foreground text-xs">
           A steer is spliced into the agent&rsquo;s next step, so you can
           correct it mid-answer. A customer-facing Slack reply still waits for

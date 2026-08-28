@@ -2,9 +2,11 @@
 
 /*
  * `packages/ui` holds a deliberately generic neutral token set — it is shared,
- * and nothing in it should know what Fire-Fighter looks like. The brand lives
- * here instead: one accent (ember), one status ramp, and the two font
- * variables the shared `@theme` block already references but never defines.
+ * and nothing in it should know what Fire-Fighter looks like. This file
+ * carries the app's own palette instead: the tweakcn "vercel" neutral set,
+ * the one chromatic accent (`--attention`, meaning "a human is needed" and
+ * nothing else), the semantic status ramp, and the two font variables the
+ * shared `@theme` block already references but never defines.
  *
  * Only tokens are redefined. No component is restyled from this file.
  */
@@ -13,8 +15,6 @@
 @source "../../../packages/ui/src/**/*.{ts,tsx}";
 
 @theme inline {
-  /* Status colours, promoted to real utilities (`text-success`, `bg-warning/10`)
-     so a panel never hand-writes a hex value or an arbitrary oklch(). */
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
@@ -22,46 +22,101 @@
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
   --color-shadow-run: var(--shadow-run);
+  /* The one accent that means "a human is needed" — open approval,
+     awaiting_approval, escalated — and nothing else (spec D17). */
+  --color-attention: var(--attention);
+  --color-attention-foreground: var(--attention-foreground);
   --font-mono: var(--font-mono);
 }
 
 :root {
-  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono:
+    var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
+  --radius: 0.5rem;
 
-  /* Ember. The agent is a fire-fighter; the accent is the fire, used sparingly
-     — the speaker hero's edge, the primary action, the section eyebrow. */
-  --primary: oklch(0.598 0.196 27.4);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.598 0.196 27.4);
-  --sidebar-primary: oklch(0.598 0.196 27.4);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
+  /* tweakcn "vercel" — light. Pasted verbatim from the registry item. */
+  --background: oklch(0.99 0 0);
+  --foreground: oklch(0 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0 0 0);
+  --popover: oklch(0.99 0 0);
+  --popover-foreground: oklch(0 0 0);
+  --primary: oklch(0 0 0);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.94 0 0);
+  --secondary-foreground: oklch(0 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.44 0 0);
+  --accent: oklch(0.94 0 0);
+  --accent-foreground: oklch(0 0 0);
+  --destructive: oklch(0.63 0.19 23.03);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.92 0 0);
+  --input: oklch(0.94 0 0);
+  --ring: oklch(0 0 0);
+  --chart-1: oklch(0.81 0.17 75.35);
+  --chart-2: oklch(0.55 0.22 264.53);
+  --chart-3: oklch(0.72 0 0);
+  --chart-4: oklch(0.92 0 0);
+  --chart-5: oklch(0.56 0 0);
+  --sidebar: oklch(0.99 0 0);
+  --sidebar-foreground: oklch(0 0 0);
+  --sidebar-primary: oklch(0 0 0);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.94 0 0);
+  --sidebar-accent-foreground: oklch(0 0 0);
+  --sidebar-border: oklch(0.94 0 0);
+  --sidebar-ring: oklch(0 0 0);
 
+  --attention: oklch(0.7 0.17 55);
+  --attention-foreground: oklch(0.145 0 0);
   --success: oklch(0.596 0.145 163);
   --success-foreground: oklch(0.985 0 0);
   --warning: oklch(0.666 0.153 62);
   --warning-foreground: oklch(0.145 0 0);
   --info: oklch(0.588 0.158 254);
   --info-foreground: oklch(0.985 0 0);
-  /* Violet, and only ever for shadow runs — a run whose writes reach nobody.
-     It is a different KIND of thing from live/idle/failed, so it gets a hue no
-     status uses. */
   --shadow-run: oklch(0.585 0.199 296);
-
-  --chart-1: oklch(0.598 0.196 27.4);
-  --chart-2: oklch(0.666 0.153 62);
-  --chart-3: oklch(0.596 0.145 163);
-  --chart-4: oklch(0.588 0.158 254);
-  --chart-5: oklch(0.585 0.199 296);
 }
 
 .dark {
-  --primary: oklch(0.653 0.203 27.4);
-  --primary-foreground: oklch(0.145 0 0);
-  --ring: oklch(0.653 0.203 27.4);
-  --sidebar-primary: oklch(0.653 0.203 27.4);
-  --sidebar-primary-foreground: oklch(0.145 0 0);
+  /* tweakcn "vercel" — dark. Pasted verbatim from the registry item's `dark` map. */
+  --background: oklch(0 0 0);
+  --foreground: oklch(1 0 0);
+  --card: oklch(0.14 0 0);
+  --card-foreground: oklch(1 0 0);
+  --popover: oklch(0.18 0 0);
+  --popover-foreground: oklch(1 0 0);
+  --primary: oklch(1 0 0);
+  --primary-foreground: oklch(0 0 0);
+  --secondary: oklch(0.25 0 0);
+  --secondary-foreground: oklch(1 0 0);
+  --muted: oklch(0.23 0 0);
+  --muted-foreground: oklch(0.72 0 0);
+  --accent: oklch(0.32 0 0);
+  --accent-foreground: oklch(1 0 0);
+  --destructive: oklch(0.69 0.2 23.91);
+  --destructive-foreground: oklch(0 0 0);
+  --border: oklch(0.26 0 0);
+  --input: oklch(0.32 0 0);
+  --ring: oklch(0.72 0 0);
+  --chart-1: oklch(0.81 0.17 75.35);
+  --chart-2: oklch(0.58 0.21 260.84);
+  --chart-3: oklch(0.56 0 0);
+  --chart-4: oklch(0.44 0 0);
+  --chart-5: oklch(0.92 0 0);
+  --sidebar: oklch(0.18 0 0);
+  --sidebar-foreground: oklch(1 0 0);
+  --sidebar-primary: oklch(1 0 0);
+  --sidebar-primary-foreground: oklch(0 0 0);
+  --sidebar-accent: oklch(0.32 0 0);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.32 0 0);
+  --sidebar-ring: oklch(0.72 0 0);
 
+  --attention: oklch(0.78 0.16 60);
+  --attention-foreground: oklch(0.145 0 0);
   --success: oklch(0.723 0.155 163);
   --success-foreground: oklch(0.145 0 0);
   --warning: oklch(0.769 0.158 70);
@@ -69,19 +124,6 @@
   --info: oklch(0.707 0.146 254);
   --info-foreground: oklch(0.145 0 0);
   --shadow-run: oklch(0.702 0.183 294);
-
-  /* The screenshots sit cards a hair above the page rather than the shared
-     set's much lighter grey; at this contrast the border does the separating,
-     which keeps a long dashboard from reading as a stack of trays. */
-  --card: oklch(0.178 0 0);
-  --popover: oklch(0.178 0 0);
-  --sidebar: oklch(0.165 0 0);
-
-  --chart-1: oklch(0.653 0.203 27.4);
-  --chart-2: oklch(0.769 0.158 70);
-  --chart-3: oklch(0.723 0.155 163);
-  --chart-4: oklch(0.707 0.146 254);
-  --chart-5: oklch(0.702 0.183 294);
 }
 
 @layer base {

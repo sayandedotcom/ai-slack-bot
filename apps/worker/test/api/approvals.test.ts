@@ -1,6 +1,6 @@
 import { createScheduledController, env, SELF } from "cloudflare:test";
 import { getAgentByName } from "agents";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type AccessIdentity,
   AccessJwtError,
@@ -11,6 +11,10 @@ import {
   type ResolutionNotifier,
   resetApprovalApiPorts,
 } from "../../src/api/approvals";
+import {
+  installIdentityApiPorts,
+  resetIdentityApiPorts,
+} from "../../src/api/identity";
 import {
   insertApproval,
   type NewApprovalCard,
@@ -688,5 +692,127 @@ describe("the extended scheduled() sweeper", () => {
       .bind(id)
       .first<{ resolution_delivered_at: number | null }>();
     expect(row?.resolution_delivered_at).not.toBeNull();
+  });
+});
+
+describe("history reads", () => {
+  const get = (path: string, who = VIEWER) =>
+    SELF.fetch(`https://firefighter.test${path}`, {
+      headers: { "Cf-Access-Jwt-Assertion": who },
+    });
+
+  beforeEach(() => {
+    installApprovalApiPorts({
+      verifier: fakeVerifier(),
+      notifier: recordingNotifier(),
+    });
+    // `GET /runs/:id/approvals` lives in `src/api/runs.ts` and is gated by
+    // `requireTeamMember` (`src/api/identity.ts`), a SEPARATE port registry
+    // from `installApprovalApiPorts` above — without this, that route falls
+    // through to the real Access verifier and every case below 401s.
+    installIdentityApiPorts({ verifier: fakeVerifier() });
+  });
+
+  afterEach(() => {
+    resetIdentityApiPorts();
+  });
+
+  it("lists a run's approvals oldest first, every decision included", async () => {
+    const { runId } = await seedRun();
+    const first = card(runId, { now: 1_000 });
+    await insertApproval(env.DB, first);
+    // `delivery` must also reach a terminal state here — `idx_approvals_one_open`
+    // (migrations/0007_approvals.sql) still counts an approved-but-`none`
+    // row as unsettled, so a plain decision-only UPDATE would make the
+    // second `insertApproval` below collide with the same partial unique
+    // index invariant 4 relies on.
+    await env.DB.prepare(
+      "UPDATE approvals SET decision = 'approved', decided_by = ?, decided_at = 2000, updated_at = 2000, delivery = 'sent' WHERE id = ?"
+    )
+      .bind(FIREFIGHTER, first.id)
+      .run();
+    const second = card(runId, { now: 3_000 });
+    await insertApproval(env.DB, second);
+
+    const res = await get(`/api/runs/${runId}/approvals`);
+    expect(res.status).toBe(200);
+    const body = await res.json<{
+      approvals: { id: string; decision: string; decidedBy: string | null }[];
+    }>();
+    expect(body.approvals.map((a) => a.id)).toEqual([first.id, second.id]);
+    expect(body.approvals[0].decision).toBe("approved");
+    expect(body.approvals[0].decidedBy).toBe(FIREFIGHTER);
+  });
+
+  it("404s a run that does not exist", async () => {
+    expect((await get("/api/runs/nope/approvals")).status).toBe(404);
+  });
+
+  it("lists decided approvals newest first within the window", async () => {
+    const now = Date.now();
+    const a = (await seedRun()).runId;
+    const b = (await seedRun()).runId;
+    const c = (await seedRun()).runId;
+    const old = card(a, { now: now - 3 * 86_400_000 });
+    const recent = card(b, { now: now - 3_600_000 });
+    const open = card(c, { now });
+    await insertApproval(env.DB, old);
+    await insertApproval(env.DB, recent);
+    await insertApproval(env.DB, open);
+    await env.DB.prepare(
+      "UPDATE approvals SET decision = 'rejected', reject_reason = 'no', decided_by = ?, decided_at = ?, updated_at = ? WHERE id = ?"
+    )
+      .bind(FIREFIGHTER, old.now, old.now, old.id)
+      .run();
+    await env.DB.prepare(
+      "UPDATE approvals SET decision = 'edited', edited_text = 'x', decided_by = ?, decided_at = ?, updated_at = ? WHERE id = ?"
+    )
+      .bind(FIREFIGHTER, recent.now, recent.now, recent.id)
+      .run();
+
+    const day = await get("/api/approvals?state=decided");
+    expect(day.status).toBe(200);
+    expect(
+      (await day.json<{ approvals: { id: string }[] }>()).approvals.map(
+        (x) => x.id
+      )
+    ).toEqual([recent.id]);
+
+    const week = await get(
+      `/api/approvals?state=decided&since=${now - 7 * 86_400_000}`
+    );
+    expect(
+      (await week.json<{ approvals: { id: string }[] }>()).approvals.map(
+        (x) => x.id
+      )
+    ).toEqual([recent.id, old.id]);
+
+    expect(
+      (await get("/api/approvals?state=decided&since=yesterday")).status
+    ).toBe(400);
+  });
+
+  it("names the winner in the 409 body", async () => {
+    const { runId } = await seedRun();
+    const c = card(runId);
+    await insertApproval(env.DB, c);
+    const patch = (who: string) =>
+      SELF.fetch(`https://firefighter.test/api/approvals/${c.id}`, {
+        method: "PATCH",
+        headers: {
+          "Cf-Access-Jwt-Assertion": who,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ action: "approve" }),
+      });
+    expect((await patch(FIREFIGHTER)).status).toBe(200);
+    const lost = await patch("luka@zellify.app");
+    expect(lost.status).toBe(409);
+    const body = await lost.json<{
+      decision: string;
+      decidedBy: string | null;
+    }>();
+    expect(body.decision).toBe("approved");
+    expect(body.decidedBy).toBe(FIREFIGHTER);
   });
 });

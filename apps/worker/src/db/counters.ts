@@ -5,6 +5,10 @@ export type Counters = {
   ingested: number;
   /** Triage decisions stored in the window — wakes and non-wakes alike. */
   triaged: number;
+  /** Triage decisions that said `wake = 1`: threads the main model worked on. */
+  woken: number;
+  /** `triaged - woken`, computed here so no client ever derives it from a missing field. */
+  dropped: number;
   /** `approvals` rows opened in the window — every escalation, any decision. */
   escalated: number;
 };
@@ -26,10 +30,12 @@ export async function getCounters(
 
   const triagedRow = await db
     .prepare(
-      "SELECT COUNT(*) AS triaged FROM triage_decisions WHERE created_at >= ?"
+      `SELECT COUNT(*) AS triaged,
+              SUM(CASE WHEN wake = 1 THEN 1 ELSE 0 END) AS woken
+       FROM triage_decisions WHERE created_at >= ?`
     )
     .bind(sinceMs)
-    .first<{ triaged: number }>();
+    .first<{ triaged: number; woken: number | null }>();
 
   // Every row in `approvals` IS an escalation — `escalate` mints the row, and
   // nothing else does — so counting rows created in the window counts asks,
@@ -42,10 +48,14 @@ export async function getCounters(
     .bind(sinceMs)
     .first<{ escalated: number }>();
 
+  const triaged = triagedRow?.triaged ?? 0;
+  const woken = triagedRow?.woken ?? 0;
   return {
     heard: row?.heard ?? 0,
     ingested: row?.ingested ?? 0,
-    triaged: triagedRow?.triaged ?? 0,
+    triaged,
+    woken,
+    dropped: Math.max(0, triaged - woken),
     escalated: escalatedRow?.escalated ?? 0,
   };
 }

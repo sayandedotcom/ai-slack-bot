@@ -13,20 +13,28 @@ import type { Connect, Plugin } from "vite";
  * reachable, including the two this phase built.
  *
  * This plugin answers exactly those three route families from memory so the
- * dashboard can be looked at. Everything else — `/api/runs`, `/api/counters` —
- * falls through to the real worker, so the run list is showing genuine D1 data,
- * not a fiction.
+ * dashboard can be looked at. Everything else falls through to the real
+ * worker — which now includes `GET /api/runs` and `GET /api/counters`: both
+ * gained their own `requireTeamMember` check (Phase 26), so they answer 401
+ * here too, same as the three below, rather than the genuine D1 data an
+ * earlier version of this comment claimed.
  *
- * WHAT DOES NOT WORK ON LOCALHOST, stated rather than papered over. Three
- * surfaces landed in Phase 26 behind the same `requireTeamMember` check, and
- * `wrangler dev` has no Cloudflare Access in front of it, so all three answer
- * 401 here: `POST /api/runs` (start a chat run), `GET /api/runs/:id`, and the
- * run socket at `/api/runs/:id/agent`. The socket is the reason none of them is
- * stubbed. A fake create would hand back an id whose socket then refuses, which
- * looks like a bug in the run view rather than what it is — and a stubbed
- * socket would be a fiction of a live transcript, which is the one thing this
- * file has never done. Exercise them against a deployed Worker behind the real
- * Access application.
+ * WHAT DOES NOT WORK ON LOCALHOST, stated rather than papered over. FIVE
+ * routes now sit behind `requireTeamMember`, and `wrangler dev` has no
+ * Cloudflare Access in front of it, so all five answer 401 here: `GET
+ * /api/runs` (the runs list), `GET /api/counters` (the funnel), `POST
+ * /api/runs` (start a chat run), `GET /api/runs/:id`, and the run socket at
+ * `/api/runs/:id/agent`. None of the five is stubbed. A fake create would
+ * hand back an id whose socket then refuses, which looks like a bug in the
+ * run view rather than what it is — and a stubbed socket would be a fiction
+ * of a live transcript, which is the one thing this file has never done; the
+ * same argument is why the runs list and the funnel are not faked either. Get
+ * real data locally with `cloudflared access login` +
+ * `cloudflared access token --app=…` piped into `apps/web/.env.local` as
+ * `CF_ACCESS_TOKEN` and `apps/web/proxy.ts` (`NEXT_PUBLIC_DEMO=1` for
+ * fixtures instead), or exercise a deployed Worker behind the real Access
+ * application. The Vite SPA has no such bridge — its counters panel and runs
+ * list render `SignedOutPage` locally, same as everything else Access gates.
  *
  * It CANNOT reach production: it is a `configureServer` hook, and that hook
  * exists only inside vite's dev server. `vite build` never calls it, so not one

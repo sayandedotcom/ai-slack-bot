@@ -1,43 +1,29 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent } from "@workspace/ui/components/card";
-import { Skeleton } from "@workspace/ui/components/skeleton";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip";
-import { ArrowLeft, FlaskConical, Hash } from "lucide-react";
+import { Button } from "@workspace/ui/components/button";
+import { ArrowLeft, FlaskConical, PanelRight } from "lucide-react";
 import Link from "next/link";
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 
-import { CopyId } from "@/components/common/copy-id";
 import { ErrorBoundary } from "@/components/common/error-boundary";
-import {
-  OriginBadge,
-  ShadowBadge,
-  StatusChip,
-} from "@/components/common/status-chip";
 import { RunApprovals } from "@/components/run/run-approvals";
 import { RunPanel } from "@/components/run/run-panel";
+import { RunInspector } from "@/components/runs/run-inspector";
 import { isDemo } from "@/lib/api/client";
 import { getRun } from "@/lib/api/runs";
-import { ago, usd } from "@/lib/format";
-import { useIdentityQuery, useRunUsage } from "@/lib/hooks/use-dashboard-data";
+import { useIdentityQuery } from "@/lib/hooks/use-dashboard-data";
 import { useNow } from "@/lib/hooks/use-now";
 import { POLL_MS, queryKeys } from "@/lib/query/keys";
 
+/** Where the inspector's open state lives across a reload. */
+const INSPECTOR_STORAGE_KEY = "runs.inspector";
+
 /**
- * One run, live.
+ * One run, live — the detail half of the `/runs` split view.
  *
- * A route rather than a drawer, and that is a change from the Vite dashboard,
- * which renders the session inline under the runs list. A run is the thing an
- * operator pastes into Slack and reloads into at 3am: it deserves a URL that
- * survives a refresh, a back button, and a link in a thread.
- *
- * Everything on the left of the header comes from D1 through `GET /api/runs/:id`
- * — rendering a run must not wake it — and the transcript below comes from the
+ * Everything in the header comes from D1 through `GET /api/runs/:id`
+ * (rendering a run must not wake it); the transcript below comes from the
  * Durable Object over its own socket. The two are separate on purpose: the
  * header still renders when the socket cannot connect.
  */
@@ -49,127 +35,108 @@ export default function RunPage({
   const { id } = use(params);
   const { identity } = useIdentityQuery();
   const now = useNow();
-  const usage = useRunUsage(id);
 
   const run = useQuery({
     queryKey: queryKeys.run(id),
     queryFn: () => getRun(id),
-    // The status moves as the agent works, and the header is the one place the
-    // reader looks to know whether it is still going.
+    // The status moves as the agent works, and the header is the one place
+    // the reader looks to know whether it is still going.
     refetchInterval: POLL_MS.runs,
   });
 
+  // Read from storage only after mount — reading during render would disagree
+  // with the server pass and fail hydration — and only ever inside try/catch:
+  // private browsing and a blocked site-data setting both throw on access.
+  const [inspector, setInspector] = useState(true);
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(INSPECTOR_STORAGE_KEY);
+      if (stored !== null) setInspector(stored === "true");
+    } catch {
+      // No storage to read from — the default stands.
+    }
+  }, []);
+
+  const toggleInspector = () => {
+    setInspector((value) => {
+      const next = !value;
+      try {
+        localStorage.setItem(INSPECTOR_STORAGE_KEY, String(next));
+      } catch {
+        // Nothing to persist to; the toggle still works for this render.
+      }
+      return next;
+    });
+  };
+
   return (
-    <div className="mx-auto flex h-[calc(100svh-3.5rem)] w-full max-w-5xl flex-col gap-4 p-4 sm:p-6">
-      <div className="space-y-3">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1.5 text-muted-foreground text-xs underline-offset-4 hover:text-foreground hover:underline"
-        >
-          <ArrowLeft className="size-3" aria-hidden="true" />
-          Back to the dashboard
-        </Link>
+    /* `min-w-0` on BOTH: a flex item defaults to `min-width: auto`, so it
+       refuses to shrink below its content's min-content width. The transcript
+       carries unbreakable tokens (run uuids, `/api/runs/:id/agent`, code
+       payloads), so without this the column stays as wide as its widest token,
+       the fixed-width inspector is pushed past the panel, and the whole page
+       gains a horizontal scrollbar. */
+    <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-2 border-b px-4 py-2">
+          <Link
+            href="/runs"
+            className="flex items-center gap-1.5 text-muted-foreground text-xs underline-offset-4 hover:text-foreground hover:underline lg:hidden"
+          >
+            <ArrowLeft className="size-3" aria-hidden="true" />
+            Runs
+          </Link>
+          <h1 className="min-w-0 flex-1 truncate font-medium text-sm">
+            {run.data?.summary ?? (
+              <span className="text-muted-foreground italic">
+                No summary yet
+              </span>
+            )}
+          </h1>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleInspector}
+            aria-pressed={inspector}
+            aria-label="Toggle details"
+          >
+            <PanelRight />
+          </Button>
+        </header>
 
-        {run.data === undefined ? (
-          run.isError ? (
-            <p className="text-muted-foreground text-sm">
-              This run could not be loaded. It may not exist, or you may not be
-              on the roster.
-            </p>
-          ) : (
-            <Skeleton className="h-10 w-2/3" />
-          )
-        ) : (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusChip status={run.data.status} />
-              <OriginBadge origin={run.data.origin} />
-              {run.data.shadow ? <ShadowBadge /> : null}
-              {run.data.channelId ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className="machine inline-flex cursor-default items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground" />
-                    }
-                  >
-                    <Hash className="size-3" aria-hidden="true" />
-                    {run.data.channelId}
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    The Slack channel this run was woken from. The Worker
-                    resolves the name; a run row carries the id.
-                  </TooltipContent>
-                </Tooltip>
-              ) : null}
-            </div>
+        {isDemo() ? <DemoNotice /> : null}
 
-            <h1 className="text-balance font-semibold text-lg leading-snug">
-              {run.data.summary ?? (
-                <span className="text-muted-foreground italic">
-                  No summary — the agent was woken but has not written one yet.
-                </span>
-              )}
-            </h1>
-
-            <dl className="flex flex-wrap items-center gap-x-5 gap-y-1 text-muted-foreground text-xs">
-              <Fact label="Run">
-                <CopyId value={run.data.id} label="run id" truncate />
-              </Fact>
-              <Fact label="Started">
-                <span className="machine">{ago(run.data.createdAt, now)}</span>
-              </Fact>
-              <Fact label="Spend">
-                {usage.kind === "ready" ? (
-                  // The decimal string, exactly as the ledger stores it.
-                  // Formatting it as a number here would round money.
-                  <span className="machine">{usd(usage.data)}</span>
-                ) : usage.kind === "error" ? (
-                  <span>unavailable</span>
-                ) : (
-                  <Skeleton className="inline-block h-3 w-12 align-middle" />
-                )}
-              </Fact>
-            </dl>
-          </>
-        )}
-      </div>
-
-      {isDemo() ? <DemoNotice /> : null}
-
-      <Card className="flex min-h-0 flex-1 flex-col">
-        <CardContent className="flex min-h-0 flex-1 flex-col">
-          <ErrorBoundary message="This transcript could not be rendered.">
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <ErrorBoundary
+            message="This transcript could not be rendered."
+            resetKey={id}
+          >
             <RunPanel
               runId={id}
+              origin={run.data?.origin}
               approvals={
                 <RunApprovals runId={id} role={identity?.role ?? "viewer"} />
               }
             />
           </ErrorBoundary>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
+        </div>
+      </div>
 
-function Fact({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <dt className="eyebrow">{label}</dt>
-      <dd className="min-w-0">{children}</dd>
+      {/* `min-h-0` + `overflow-hidden` on the aside so the inspector's own
+          `overflow-y-auto` scrolls WITHIN this column rather than stretching
+          it — a tall effect list must not lengthen the row it sits in. */}
+      {inspector && run.data ? (
+        <aside className="hidden min-h-0 w-72 shrink-0 overflow-hidden border-l xl:block">
+          <RunInspector run={run.data} now={now} />
+        </aside>
+      ) : null}
     </div>
   );
 }
 
 function DemoNotice() {
   return (
-    <div className="flex items-start gap-2.5 rounded-md border border-dashed px-3 py-2 text-muted-foreground text-sm">
+    <div className="flex items-start gap-2.5 border-b border-dashed px-4 py-2 text-muted-foreground text-sm">
       <FlaskConical className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
       <span className="text-pretty">
         A fixture transcript, in the shape the socket broadcasts. A live build

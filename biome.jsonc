@@ -263,6 +263,28 @@
       "linter": {
         "rules": { "complexity": { "noImportantStyles": "off" } }
       }
+    },
+    {
+      // VENDORED, UNMODIFIED registry source.
+      //
+      // input-group.tsx was pulled in by `npx shadcn add command` as a
+      // transitive dependency of command.tsx (Task 8) — it is not something
+      // this repo authored. Its two `role="group"` wrapper divs trip
+      // `a11y/useSemanticElements` (biome wants a <fieldset>) and one of them
+      // trips `a11y/useKeyWithClickEvents` for a focus-forwarding onClick.
+      // Rewriting the component to satisfy both would mean restructuring
+      // vendored markup by hand instead of taking the registry's own file, so
+      // this scopes the rule off for this file rather than editing it.
+      // Measured count: 3 errors, all on this one file.
+      "includes": ["packages/ui/src/components/input-group.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useSemanticElements": "off",
+            "useKeyWithClickEvents": "off"
+          }
+        }
+      }
     }
   ]
 }

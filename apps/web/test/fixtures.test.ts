@@ -62,8 +62,11 @@ describe("the demo transport switch", () => {
       "7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258"
     );
 
-    // Not 0.9042 the number: a float here is a rounded invoice.
-    expect(total).toBe("0.9042");
+    // Not 0.9042 the number: a float here is a rounded invoice. Nine decimal
+    // places, matching what decimalNanoUsd (apps/worker/src/run/money.ts)
+    // actually emits — usd() is what truncates that for display, not the
+    // fixture or the transport.
+    expect(total).toBe("0.904200000");
     expect(typeof total).toBe("string");
   });
 });

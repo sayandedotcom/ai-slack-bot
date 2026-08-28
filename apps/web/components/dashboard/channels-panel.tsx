@@ -56,9 +56,20 @@ const MODE_HINT: Record<ChannelMode, string> = {
   internal: "Heard only. No triage, no posting.",
 };
 
-export function ChannelsPanel({ role }: { role: Role | null }) {
+export function ChannelsPanel({
+  role,
+  query = "",
+  mode = null,
+}: {
+  role: Role | null;
+  /** Case-insensitive substring match on the channel name. */
+  query?: string;
+  /** `null` means any mode. */
+  mode?: ChannelMode | null;
+}) {
   const { state, pendingId, failedId, apply } = useChannels();
   const editable = role === "firefighter";
+  const needle = query.trim().toLowerCase();
 
   return (
     <Panel
@@ -72,19 +83,31 @@ export function ChannelsPanel({ role }: { role: Role | null }) {
       }
       description="Where the agent listens, and who each channel belongs to. A channel registers itself when the bot is invited; both of these are guesses until somebody says otherwise."
     >
-      {(channels) => (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Channel</TableHead>
-              <TableHead>Customer</TableHead>
-              <TableHead className="text-right">Mode</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {[...channels]
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((channel) => (
+      {(channels) => {
+        const rows = [...channels]
+          .filter((c) => needle === "" || c.name.toLowerCase().includes(needle))
+          .filter((c) => mode === null || c.mode === mode)
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        if (rows.length === 0) {
+          return (
+            <p className="text-balance text-muted-foreground text-sm">
+              No channel matches this search and filter.
+            </p>
+          );
+        }
+
+        return (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Channel</TableHead>
+                <TableHead>Customer</TableHead>
+                <TableHead className="text-right">Mode</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((channel) => (
                 <ChannelRow
                   key={channel.channelId}
                   channel={channel}
@@ -94,9 +117,10 @@ export function ChannelsPanel({ role }: { role: Role | null }) {
                   onPatch={(patch) => apply(channel.channelId, patch)}
                 />
               ))}
-          </TableBody>
-        </Table>
-      )}
+            </TableBody>
+          </Table>
+        );
+      }}
     </Panel>
   );
 }
@@ -268,8 +292,9 @@ function UnconfirmedMark() {
         <span className="sr-only">unconfirmed customer</span>
       </TooltipTrigger>
       <TooltipContent>
-        Guessed from the channel name. Customer-data reads stay refused until
-        somebody confirms it.
+        Customer key derived from the channel name, not confirmed by a person.
+        Until a fire-fighter confirms it, tenant-scoped Supabase reads for this
+        channel are refused (`customer_scope_unverified`).
       </TooltipContent>
     </Tooltip>
   );

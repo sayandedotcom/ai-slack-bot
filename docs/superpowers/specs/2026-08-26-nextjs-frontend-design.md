@@ -131,6 +131,27 @@ goes in there.
 
 ## 5. Screens
 
+> **Superseded in part, 2026-08-28.** The 2026-08-28 redesign
+> (`docs/superpowers/specs/2026-08-28-web-redesign-design.md`, plan
+> `docs/superpowers/plans/2026-08-28-web-redesign.md`) replaced the page list
+> below with six routes, one per job — `/`, `/runs` (+ `/runs/[id]`),
+> `/approvals`, `/team`, `/channels`, `/eval`. **D7's `?run=` sheet is gone**
+> with it: a run's detail lives only at `/runs/[id]` now, reached from a row in
+> `/runs`'s own list, rather than a search param that opened a peek over the
+> dashboard. **D10 is superseded too**, for the same reason: `/chat` no longer
+> exists as a route. Starting a run that was not woken from Slack is now the
+> New-run dialog opened from `/runs`, and it still does nothing but call
+> `POST /api/runs` and hand off to `/runs/:id` — D10's underlying claim, that a
+> chat run is the same object a Slack wake produces, carried over even though
+> its route did not.
+>
+> Still holds: **D1–D6 and D8** (the workspace split, the real-data-not-mockup
+> stance, `packages/ui`-first components, the ported API client, client-side-
+> only fetching, dark-first theming), **D9's route-not-drawer principle** (only
+> the `?run=` peek that used to sit in front of it is gone), and **D11–D13**
+> (the socket's own address, demo mode branching at the component rather than
+> the hook, the transcript narrowing `unknown` itself).
+
 ### Shell
 
 Icon-collapsible sidebar (`sidebar-07`'s mechanic). Brand mark, then two nav

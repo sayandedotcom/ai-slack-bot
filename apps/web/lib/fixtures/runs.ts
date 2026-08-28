@@ -21,6 +21,9 @@ export const demoRuns: RunSummary[] = [
     customerSlug: "pulsefit",
     createdAt: minutes(14),
     updatedAt: minutes(12),
+    costUsd: "0.412700000",
+    turns: 3,
+    openApprovalId: null,
   },
   {
     id: "a1c9e7d4-32b8-4f10-95aa-7c2e5b8d0446",
@@ -34,6 +37,11 @@ export const demoRuns: RunSummary[] = [
     customerSlug: "lingua",
     createdAt: minutes(29),
     updatedAt: minutes(26),
+    costUsd: "0.189300000",
+    turns: 2,
+    // The one open card in `fixtures/approvals.ts` — kept in sync by hand,
+    // there being only one place that fixture's id is minted.
+    openApprovalId: "apr-8f21c05e",
   },
   {
     id: "7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258",
@@ -47,6 +55,9 @@ export const demoRuns: RunSummary[] = [
     customerSlug: "macrosnap",
     createdAt: minutes(74),
     updatedAt: minutes(61),
+    costUsd: "0.904200000",
+    turns: 5,
+    openApprovalId: null,
   },
   {
     id: "c4e8f107-5a23-4b96-8e15-2d7a9c0b4f36",
@@ -60,9 +71,12 @@ export const demoRuns: RunSummary[] = [
     customerSlug: "driftwear",
     createdAt: minutes(196),
     updatedAt: minutes(181),
+    costUsd: "0.225500000",
+    turns: 1,
+    openApprovalId: null,
   },
   {
-    // The run `/chat` resolves to in demo mode, so the transcript fixture and
+    // The run a demo chat create resolves to, so the transcript fixture and
     // this row tell the same story. Kept in the list rather than hidden: a run
     // opened from the dashboard is the same object as one opened from chat, and
     // the list is where that becomes visible.
@@ -77,6 +91,9 @@ export const demoRuns: RunSummary[] = [
     customerSlug: null,
     createdAt: minutes(21),
     updatedAt: minutes(17),
+    costUsd: "0.120400000",
+    turns: 2,
+    openApprovalId: null,
   },
   {
     id: "e0a6b3f8-1d74-49c5-b2e9-6f4c8a105d72",
@@ -89,15 +106,18 @@ export const demoRuns: RunSummary[] = [
     customerSlug: null,
     createdAt: minutes(310),
     updatedAt: minutes(308),
+    costUsd: "0.031000000",
+    turns: 1,
+    openApprovalId: null,
   },
 ];
 
 /** Decimal strings, exactly as the ledger stores them. Never parsed as numbers. */
 export const demoUsageTotals: Record<string, string> = {
-  "5f3b1c22-9d41-4a7e-8b02-1d6c4f0a91e3": "0.4127",
-  "a1c9e7d4-32b8-4f10-95aa-7c2e5b8d0446": "0.1893",
-  "7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258": "0.9042",
-  "c4e8f107-5a23-4b96-8e15-2d7a9c0b4f36": "0.2255",
-  "b8d41f62-0c37-4a1e-9d55-3e6f2a8c7014": "0.1204",
-  "e0a6b3f8-1d74-49c5-b2e9-6f4c8a105d72": "0.0310",
+  "5f3b1c22-9d41-4a7e-8b02-1d6c4f0a91e3": "0.412700000",
+  "a1c9e7d4-32b8-4f10-95aa-7c2e5b8d0446": "0.189300000",
+  "7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258": "0.904200000",
+  "c4e8f107-5a23-4b96-8e15-2d7a9c0b4f36": "0.225500000",
+  "b8d41f62-0c37-4a1e-9d55-3e6f2a8c7014": "0.120400000",
+  "e0a6b3f8-1d74-49c5-b2e9-6f4c8a105d72": "0.031000000",
 };

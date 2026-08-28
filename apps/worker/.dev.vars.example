@@ -236,7 +236,7 @@ NUDGE_MODE=
 NUDGE_FALLBACK_CHANNEL_ID=
 
 # DASHBOARD_BASE_URL: the origin the nudge's "Review" button points at, as
-# `${DASHBOARD_BASE_URL}/?approval=${id}`. Set it to http://localhost:8787 (or
+# `${DASHBOARD_BASE_URL}/approvals?approval=${id}`. Set it to http://localhost:8787 (or
 # your dev origin) if you want a locally clickable button.
 DASHBOARD_BASE_URL=
 

@@ -66,7 +66,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6 p-4 pb-16 sm:p-6">
+    <div className="mx-auto w-full max-w-7xl space-y-6 p-6">
       <PageHeader eyebrow="Second surface" title="Same agent, second door">
         Slack wakes the agent for customers. This page is the other way in — ask
         what Slack knows, or hand it work directly.
