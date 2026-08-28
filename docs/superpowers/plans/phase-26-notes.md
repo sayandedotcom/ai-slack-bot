@@ -163,6 +163,14 @@ outside `src/db/*.ts` and the `*/repository.ts` modules then changes, every
 existing test stays the oracle, and it lands as ~17 reviewable commits instead
 of one big-bang diff.
 
+**2026-08-28.** Re-counted: 77 `.prepare()` sites across 22 files, 12 tables /
+18 indexes. Decision re-affirmed after a second look at Drizzle, Prisma and
+Kysely: stay raw. `src/db/schema.ts` already is the one-per-table type layer an
+ORM would generate, and the load-bearing statements (batch CAS, `RETURNING`
+lease claims, scalar `MAX`, the error-string match on `idx_approvals_one_open`)
+would stay raw under any of them. Drizzle remains the choice if that ever
+changes.
+
 ## Test-harness noise, not a defect
 
 **2026-08-24.** A full `pnpm test` prints, before any test file result:

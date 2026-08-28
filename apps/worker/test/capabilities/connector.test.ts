@@ -2,7 +2,10 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { FirefighterConnector } from "../../src/capabilities/connector";
+import {
+  executionContexts,
+  FirefighterConnector,
+} from "../../src/capabilities/connector";
 import { defineCapability } from "../../src/capabilities/define";
 import { toJsonSchema } from "../../src/capabilities/schema";
 
@@ -190,6 +193,39 @@ describe("FirefighterConnector — per-execution isolation", () => {
     await connector.executeTool("echo", { text: "a" }, { executionId: "e1" });
     await connector.executeTool("echo", { text: "a" }, { executionId: "e2" });
     expect(built.filter((id) => id !== "render")).toEqual(["e1", "e2"]);
+  });
+
+  it("shares ONE context per execution between connectors built together", async () => {
+    // A run_code execution spans every namespace. Eleven connectors each
+    // memoising privately meant eleven contexts per execution: a reference
+    // minted on one was unknown to the next, and the call budget was per
+    // namespace. The memo has to sit above the connectors.
+    const built: string[] = [];
+    const shared = executionContexts<undefined>(async (executionId) => {
+      built.push(executionId);
+      return undefined;
+    });
+    const a = new FirefighterConnector(
+      {} as ExecutionContext,
+      env,
+      { name: "a", build: () => namespace.tools },
+      shared
+    );
+    const b = new FirefighterConnector(
+      {} as ExecutionContext,
+      env,
+      { name: "b", build: () => namespace.tools },
+      shared
+    );
+    await a.executeTool("echo", { text: "a" }, { executionId: "e1" });
+    await b.executeTool("ping", undefined, { executionId: "e1" });
+    expect(built.filter((id) => id === "e1")).toHaveLength(1);
+
+    // Eviction is shared too: once any connector disposes the execution, the
+    // next call from any of them rebuilds rather than reviving a spent budget.
+    await a.disposeExecution("e1");
+    await b.executeTool("ping", undefined, { executionId: "e1" });
+    expect(built.filter((id) => id === "e1")).toHaveLength(2);
   });
 
   it("refuses a call that did not come through the runtime", async () => {

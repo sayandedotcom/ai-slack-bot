@@ -32,6 +32,53 @@ export type CapabilityNamespaceFactory<Ctx> = {
 };
 
 /**
+ * The contexts of the executions currently in flight, keyed by the
+ * `executionId` codemode hands to every call — ONE per execution, shared by
+ * every connector that serves it.
+ *
+ * "Every connector" is the load-bearing part, and it is why this lives outside
+ * `FirefighterConnector`. A `run_code` execution spans every namespace, but the
+ * runtime addresses each namespace through its own connector instance. When
+ * each instance kept its own memo, one execution got eleven contexts: eleven
+ * customer-reference maps, so a reference minted by `memory.findCustomers` was
+ * unknown to the `slack` connector that `searchMessages` lives on — the exact
+ * hand-off an internal chat is routed down — and eleven call budgets, so the
+ * 40-call ceiling was really forty per namespace. Seen live on 2026-08-28: the
+ * same `customerRef`, in one code block, accepted by `memory.recall` and
+ * refused by `slack.searchMessages`. `registry.test.ts` pins the cross-namespace
+ * case through the real builder.
+ *
+ * (The 2026-08-24 fix this replaces had moved the memo from per-CALL to
+ * per-connector, which was one level short.)
+ */
+export type ExecutionContexts<Ctx> = {
+  /** The execution's one context, built on first use. */
+  contextFor(executionId: string): Promise<Ctx>;
+  /** Forget it. Idempotent; the next call for that id builds afresh. */
+  dispose(executionId: string): void;
+};
+
+export function executionContexts<Ctx>(
+  /** Builds the context for ONE execution. Called at most once per execution. */
+  getContext: (executionId: string) => Promise<Ctx>
+): ExecutionContexts<Ctx> {
+  const contexts = new Map<string, Promise<Ctx>>();
+  return {
+    contextFor(executionId) {
+      let pending = contexts.get(executionId);
+      if (pending === undefined) {
+        pending = getContext(executionId);
+        contexts.set(executionId, pending);
+      }
+      return pending;
+    },
+    dispose(executionId) {
+      contexts.delete(executionId);
+    },
+  };
+}
+
+/**
  * The project's only `CodemodeConnector`.
  *
  * Everything security-relevant already lives inside the tool's `run` — the Zod
@@ -51,40 +98,25 @@ export class FirefighterConnector<
   Ctx = unknown,
 > extends CodemodeConnector<Env> {
   readonly #factory: CapabilityNamespaceFactory<Ctx>;
-  readonly #getContext: (executionId: string) => Promise<Ctx>;
-  /**
-   * One context per EXECUTION, not per call and not per connector instance.
-   *
-   * codemode passes `{ executionId }` as the second argument of `execute`
-   * (`dist/index.js:1586`). Every capability call inside one `run_code`
-   * execution must see the same context — the same call budget (charged
-   * before the host call, so the 41st never reaches Slack), the same audit
-   * stream, and the same customer-reference map (a reference minted by
-   * `memory.findCustomers` must resolve in the `slack.searchMessages` that
-   * follows it). Before this map existed the context was rebuilt per call,
-   * and neither property held. Found by the 2026-08-24 docs audit.
-   */
-  readonly #contexts = new Map<string, Promise<Ctx>>();
+  readonly #contexts: ExecutionContexts<Ctx>;
 
   constructor(
     ctx: DurableObjectState | ExecutionContext,
     env: Env,
     factory: CapabilityNamespaceFactory<Ctx>,
-    /** Builds the context for ONE execution. Called at most once per execution. */
-    getContext: (executionId: string) => Promise<Ctx>
+    /**
+     * Either the shared `ExecutionContexts` this connector serves alongside
+     * its siblings — what `buildConnectors` passes — or a bare builder, for a
+     * connector constructed alone, which then owns a private memo. The second
+     * form exists for tests that exercise one namespace; production always
+     * builds the full set and MUST share, see `ExecutionContexts`.
+     */
+    contexts: ExecutionContexts<Ctx> | ((executionId: string) => Promise<Ctx>)
   ) {
     super(ctx, env);
     this.#factory = factory;
-    this.#getContext = getContext;
-  }
-
-  #contextFor(executionId: string): Promise<Ctx> {
-    let pending = this.#contexts.get(executionId);
-    if (pending === undefined) {
-      pending = this.#getContext(executionId);
-      this.#contexts.set(executionId, pending);
-    }
-    return pending;
+    this.#contexts =
+      typeof contexts === "function" ? executionContexts(contexts) : contexts;
   }
 
   /**
@@ -100,7 +132,7 @@ export class FirefighterConnector<
    * it may fire twice for one execution (a completed run later rolled back).
    */
   override async disposeExecution(executionId: string): Promise<void> {
-    this.#contexts.delete(executionId);
+    this.#contexts.dispose(executionId);
   }
 
   name(): string {
@@ -114,8 +146,11 @@ export class FirefighterConnector<
   protected override async tools(): Promise<ConnectorTools> {
     // Rendered once and cached by the base class. Schemas and descriptions are
     // properties of the namespace, not of the run, so a throwaway context
-    // renders them. Nothing is ever CALLED on it.
-    const rendered = this.#factory.build(await this.#getContext("render"));
+    // renders them. Nothing is ever CALLED on it — and through the shared
+    // memo, eleven connectors render from ONE throwaway rather than eleven.
+    const rendered = this.#factory.build(
+      await this.#contexts.contextFor("render")
+    );
 
     const out: ConnectorTools = {};
     for (const [method] of Object.entries(rendered)) {
@@ -164,9 +199,9 @@ export class FirefighterConnector<
               `${this.#factory.name}.${method} was called outside a codemode execution.`
             );
           }
-          const live = this.#factory.build(await this.#contextFor(executionId))[
-            method
-          ];
+          const live = this.#factory.build(
+            await this.#contexts.contextFor(executionId)
+          )[method];
           if (!live?.run) {
             // Unreachable through `auditedCapability`, which always attaches
             // one. Loud rather than silent: a tool with no `run` would
