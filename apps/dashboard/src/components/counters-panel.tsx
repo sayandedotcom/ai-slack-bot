@@ -12,7 +12,7 @@ import { Panel } from "./panel";
  */
 
 const TILES: { key: keyof Counters["counters"]; label: string }[] = [
-  { key: "seen", label: "seen" },
+  { key: "heard", label: "heard" },
   { key: "triaged", label: "triaged" },
   { key: "woken", label: "woken" },
   { key: "escalated", label: "escalated" },

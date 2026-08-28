@@ -88,12 +88,15 @@ export type Roster = {
 
 export type Counters = {
   counters: {
-    seen: number;
+    heard: number;
+    ingested: number;
     triaged: number;
     woken: number;
+    dropped: number;
     escalated: number;
   };
   since: number;
+  window: "24h" | "7d";
 };
 
 export const getIdentity = () => getJson<Identity>("/api/identity");
