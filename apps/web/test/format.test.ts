@@ -50,6 +50,19 @@ describe("shortThread", () => {
 });
 
 describe("usd", () => {
+  it("renders a missing cost as unknown, not as free", () => {
+    // A Worker that predates costUsd on the run list — mid-deploy, or after a
+    // rollback — returns rows without the field. The strict version threw
+    // inside RunRow, and a render throw with no boundary above it took down
+    // the whole page. This happened in production.
+    expect(usd(undefined)).toBe("—");
+    expect(usd(null)).toBe("—");
+    expect(usd("")).toBe("—");
+    // Not \$0.0000: that would claim the run cost nothing, which is a
+    // different statement from not knowing what it cost.
+    expect(usd(undefined)).not.toBe("$0.0000");
+  });
+
   it("formats without parsing: the digits pass through unchanged", () => {
     expect(usd("0.9042")).toBe("$0.9042");
   });

@@ -48,7 +48,22 @@ export function shortThread(threadTs: string): string {
  * the untruncated figure still have `total` itself — put it in a `title`
  * attribute so the exact value is one hover away.
  */
-export function usd(total: string): string {
+export function usd(total: string | null | undefined): string {
+  /*
+   * A missing cost renders as "—", not "$0.0000".
+   *
+   * This is not defensive noise: it is a live failure mode. A Worker that
+   * predates `costUsd` on the run list — during a deploy, a rollback, or a
+   * front-end shipping ahead of its API — returns rows without the field, and
+   * the strict version of this function threw `Cannot read properties of
+   * undefined` inside `RunRow`. That is a render throw with no boundary above
+   * it, so it took down the whole page rather than one cell. It happened in
+   * production.
+   *
+   * "—" is also the honest answer. "$0.0000" would claim the run cost nothing,
+   * which is a different statement from not knowing what it cost.
+   */
+  if (typeof total !== "string" || total === "") return "—";
   const negative = total.startsWith("-");
   const unsigned = negative ? total.slice(1) : total;
   const dot = unsigned.indexOf(".");
