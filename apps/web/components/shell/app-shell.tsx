@@ -29,7 +29,18 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
+      {/*
+        `min-w-0` is load-bearing, not cosmetic. `SidebarInset` is
+        `flex w-full flex-1 flex-col` — a flex item beside the fixed-width
+        sidebar — and a flex item's default `min-width: auto` means it will
+        not shrink below its own content's min-content width. The runs split
+        view carries a fixed-width inspector and a transcript full of
+        unbreakable tokens (run uuids, `/api/runs/:id/agent`, code payloads),
+        so without this the inset grows past the viewport and the WHOLE PAGE
+        scrolls sideways, clipping the sidebar itself. Every pane below is
+        already `min-w-0`; this is the one that actually bounds them.
+      */}
+      <SidebarInset className="min-w-0">
         <SiteHeader onOpenPalette={() => setPaletteOpen(true)} />
         <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
         {/*
