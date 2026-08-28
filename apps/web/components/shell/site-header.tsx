@@ -20,7 +20,6 @@ const TITLE: Record<string, string> = {
   "/team": "Team",
   "/channels": "Channels",
   "/eval": "Eval",
-  "/chat": "Chat",
 };
 
 /** `/runs/<uuid>` is one title, not one per run. */

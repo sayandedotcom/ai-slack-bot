@@ -20,7 +20,7 @@ import {
 } from "../api/eval";
 import { getIdentity, type Identity } from "../api/identity";
 import { getRoster, type Roster } from "../api/roster";
-import { getRuns, getRunUsageTotal, type RunSummary } from "../api/runs";
+import { getRunUsageTotal } from "../api/runs";
 import { getShadowPairs, type ShadowPair } from "../api/shadow";
 import type { PanelState } from "../panel-state";
 import { POLL_MS, queryKeys } from "../query/keys";
@@ -69,25 +69,6 @@ export function useCounters(window: CountersWindow): PanelState<Counters> {
       queryFn: () => getCounters(window),
       refetchInterval: POLL_MS.counters,
     })
-  );
-}
-
-const NO_RUNS_HINT =
-  "No runs yet — the agent wakes when a customer thread needs it.";
-
-/**
- * The 50 most recent runs, unfiltered. Kept for `runs-feed.tsx`/`run-sheet.tsx`
- * until Task 15 deletes them; `useRunsPage` (`use-runs-page.ts`) is the new,
- * filtered, paginated read.
- */
-export function useRuns(): PanelState<RunSummary[]> {
-  return toPanelState(
-    useQuery({
-      queryKey: queryKeys.runs(50),
-      queryFn: () => getRuns({ limit: 50 }).then((p) => p.runs),
-      refetchInterval: POLL_MS.runs,
-    }),
-    { emptyHint: NO_RUNS_HINT, isEmpty: (runs) => runs.length === 0 }
   );
 }
 

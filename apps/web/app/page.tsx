@@ -1,11 +1,11 @@
 "use client";
 
+import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 
 import { FunnelStrip } from "@/components/dashboard/funnel-strip";
-import { RunSheet } from "@/components/dashboard/run-sheet";
-import { RunsFeed } from "@/components/dashboard/runs-feed";
 import { SpeakerHero } from "@/components/dashboard/speaker-hero";
 import { PageHeader } from "@/components/shell/page-header";
 import { useCounters, useRoster } from "@/lib/hooks/use-dashboard-data";
@@ -16,9 +16,11 @@ import { useCounters, useRoster } from "@/lib/hooks/use-dashboard-data";
  * doing.
  *
  * The approvals queue, team table, channels panel and shadow corpus each have
- * their own route now (`/approvals`, `/team`, `/channels`, `/eval`) — Task 16
+ * their own route now (`/approvals`, `/team`, `/channels`, `/eval`), and the
+ * run history moved to its own workbench at `/runs` (Task 15) — Task 16
  * rewrites this page properly; for now it keeps the pieces that have no other
- * home yet.
+ * home yet. `RunsFeed` and `RunSheet` were deleted with this change; `/runs`
+ * is the one place a run's list and transcript live now.
  */
 export default function DashboardPage() {
   const roster = useRoster();
@@ -47,9 +49,13 @@ export default function DashboardPage() {
 
       <FunnelStrip state={counters} />
 
-      <RunsFeed />
-
-      <RunSheet />
+      <Link
+        href="/runs"
+        className="inline-flex items-center gap-1.5 text-muted-foreground text-sm underline-offset-4 hover:text-foreground hover:underline"
+      >
+        See every run
+        <ArrowUpRight className="size-3.5" aria-hidden="true" />
+      </Link>
     </div>
   );
 }

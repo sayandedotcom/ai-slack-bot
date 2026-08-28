@@ -7,9 +7,6 @@ export const queryKeys = {
   identity: ["identity"] as const,
   roster: ["roster"] as const,
   counters: (window: "24h" | "7d") => ["counters", window] as const,
-  // Kept for `useRuns`/`runs-feed.tsx`/`run-sheet.tsx` until Task 15 deletes
-  // their last callers; `runsPage` below is the new filtered/paginated key.
-  runs: (limit: number) => ["runs", limit] as const,
   runsPage: (params: Record<string, unknown>) =>
     ["runs", "page", params] as const,
   run: (id: string) => ["runs", id, "detail"] as const,

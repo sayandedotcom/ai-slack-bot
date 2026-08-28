@@ -76,7 +76,7 @@ export const demoRuns: RunSummary[] = [
     openApprovalId: null,
   },
   {
-    // The run `/chat` resolves to in demo mode, so the transcript fixture and
+    // The run a demo chat create resolves to, so the transcript fixture and
     // this row tell the same story. Kept in the list rather than hidden: a run
     // opened from the dashboard is the same object as one opened from chat, and
     // the list is where that becomes visible.
