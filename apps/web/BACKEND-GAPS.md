@@ -565,3 +565,94 @@ typechecking. Nothing outside `apps/web` was touched except one corrected
 Tailwind `@source` glob in `packages/ui` (design spec §8) and two env names
 added to `turbo.json`. That is still true after the 2026-08-27 pass: closing
 §3–§5 was a change to `apps/web` alone, reading a Worker somebody else wrote.
+
+---
+
+## §17 — Deferred findings from the 2026-08-28 redesign
+
+Every task on that branch got a scoped review, and the whole branch got one
+more at the end. The findings below were each triaged as **Minor and
+non-blocking** by that final review — recorded here rather than lost with the
+run's scratch ledger, because they are cheap to write down and expensive to
+rediscover. None of them is a defect anyone is waiting on; treat this as a
+list to pick from, not a backlog to burn down.
+
+**Worker**
+
+- No route-level 403 test for `GET /api/counters`. The 403 path of
+  `requireTeamMember` is covered in `test/api/identity.test.ts`, so the guard
+  is tested — just not from this route's own suite.
+- `?q=` accepts a whitespace-only value and silently means "no filter" rather
+  than `400`. Defensible (empty search = no search); no minimum-length rule
+  was ever stated.
+- `decodeRunCursor` inside `listRuns` ignores a malformed cursor instead of
+  refusing it. The route validates first, so "a malformed cursor is a 400"
+  holds today — but the route is the *sole* enforcement point, and a future
+  direct caller of `listRuns` could reintroduce the silent full list the spec
+  warns about. Worth a comment at minimum.
+- The 409 race test is sequential, not a genuine two-actor race. It exercises
+  the real CAS loser path; a `Promise.all` variant would be strictly stronger.
+  The pattern predates this branch.
+- The `state` dispatch in `src/api/approvals.ts` is three inline `if`/`return`
+  blocks. Fine at three; wants a lookup table if a fourth `state` appears.
+- `test/api/effects.test.ts` has one leak assertion checking the snake_case
+  literal `effect_key`, while the wire format is camelCase. Redundant rather
+  than wrong — the exact-shape `toEqual` beside it already proves no extra key
+  crosses.
+- `test/api/backfill.test.ts` puts 401/403/200 in one `it` block, so an early
+  failure hides the later assertions.
+
+**Web**
+
+- `test/status.test.ts` never asserts `tellBadge`, and `decisionBadge` /
+  `effectStateBadge` are only spot-checked. The "attention tone is only for
+  what needs a human" discipline is pinned exhaustively for `RunStatus` alone.
+- The client's `TriageScore` omits `disagreements`, which the Worker does
+  return (up to 25 rows, false-negatives first). Nothing renders them today.
+- `queryKeys.counters` is a parameterized function while its neighbours are
+  constants; the header comment in `lib/query/keys.ts` does not say so.
+- The `j`/`k` keydown effect in `run-list.tsx` has no dependency array, so its
+  `window` listener is removed and re-added every render. Add/remove are
+  correctly paired, so it leaks nothing.
+- The inspector toggle button renders below `xl`, where the `<aside>` it
+  controls is hidden — clickable, with no visible effect.
+- Split sizes survive navigation but **not reload**:
+  `react-resizable-panels@4` has no `autoSaveId`. `GroupProps.defaultLayout` +
+  `onLayoutChanged` could restore it cheaply.
+- `attention-row.tsx` calls `engineers.find()` twice instead of once into a
+  `self` const.
+- `funnel-strip`'s `empty` `PanelState` branch routes to the loading skeleton.
+  Unreachable today, since `useCounters` never yields `empty`.
+- A `biome-ignore` comment sits between JSX attributes in
+  `run-inspector.tsx` — valid and passing, but unusual enough to re-check if
+  the formatter changes.
+- The Team table's Role-column "speaks" `Badge` and the newer "speaks by
+  default" `SpecBadge` are both derived from the same boolean.
+- `channels-panel`'s "no channel matches" is a ready-state early return rather
+  than `Panel`'s `empty` kind. Semantically right (filtered-to-nothing is not
+  truly empty), but it is a second empty-ish path a reader could conflate.
+- `test/palette.test.ts` uses the run id `"abc-123"`, which contains nothing
+  `encodeURIComponent` would touch — so it pins the approval-id
+  *non*-encoding decision but would not catch a regression that stopped
+  encoding run ids.
+
+**Shared**
+
+- `StatusBadge` is a fixed `<span>`, not `useRender`/`mergeProps` polymorphic
+  like `badge.tsx`. Fine while it is always a `Tooltip` render target.
+- `packages/ui/src/components/status-badge.tsx`'s doc comment says "capability
+  names" — Fire-Fighter domain vocabulary in a shared package's comment.
+- `connect-state.tsx`'s connected badge drops the `Check` icon its siblings in
+  `speaker-hero.tsx` pass. A polish gap between two call sites of one concept.
+- `cmdk` transitively installs ~16 `@radix-ui/*` packages, and once the ⌘K
+  palette is on a page **Radix ships in the client bundle** — measured with a
+  probe build, not assumed, because `cmdk` attaches `Dialog` to the same
+  exported object rather than a separately tree-shakeable binding. Accepted:
+  no file this repo owns imports Radix, so the rule that mattered (one UI
+  paradigm in our own components) holds. The lever, if it ever matters, is
+  dropping the palette or replacing `cmdk` — no config reaches it.
+- `GET /api/runs` is now the most expensive query in the app, and the sidebar
+  polls it from every page at `POLL_MS.runs`. Its spend column joins a
+  pre-aggregated `GROUP BY` over `agent_model_calls`, which SQLite cannot
+  flatten, so the ledger is aggregated on every request regardless of `LIMIT`.
+  Fine at this data size; the first thing to look at if the list gets slow.
