@@ -50,8 +50,28 @@ describe("shortThread", () => {
 });
 
 describe("usd", () => {
-  it("formats without parsing, so a ledger total is never rounded", () => {
+  it("formats without parsing: the digits pass through unchanged", () => {
     expect(usd("0.9042")).toBe("$0.9042");
-    expect(usd("12.0000000001")).toBe("$12.0000000001");
+  });
+
+  it("truncates a nine-decimal ledger total to four decimal places", () => {
+    // decimalNanoUsd (apps/worker/src/run/money.ts) always pads to nine
+    // decimal places, so this is the shape a real row actually has.
+    expect(usd("0.412700000")).toBe("$0.4127");
+  });
+
+  it("leaves a value with fewer than four decimals alone", () => {
+    expect(usd("0.9")).toBe("$0.9");
+    expect(usd("12")).toBe("$12");
+  });
+
+  it("never returns NaN, because it never parses the string as a number", () => {
+    expect(usd("0.412700000")).not.toContain("NaN");
+    expect(usd("12.0000000001")).not.toContain("NaN");
+  });
+
+  it("truncates rather than rounds, so a displayed cost never overstates", () => {
+    // A naive `toFixed(4)` would round this up to $0.4128 — truncation must not.
+    expect(usd("0.41279999")).toBe("$0.4127");
   });
 });

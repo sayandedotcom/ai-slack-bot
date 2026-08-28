@@ -25,15 +25,31 @@ const DAY = 86_400_000;
  * that another person decided simply leaves the open queue on the next poll
  * and appears here instead, from a real read rather than an inference.
  */
+function roundedSince(): number {
+  // Rounded to the minute so the key (and the request) is not new on every render.
+  return Math.floor((Date.now() - DAY) / 60_000) * 60_000;
+}
+
 export function DecidedList() {
   const [open, setOpen] = useState(false);
   const now = useNow();
-  // Rounded to the minute so the key (and the request) is not new on every render.
-  const since = Math.floor((Date.now() - DAY) / 60_000) * 60_000;
-  const state = useDecidedApprovals(since);
+  // Frozen at the moment the panel opens, not recomputed on every render: a
+  // `since` that advances with the minute would mint a fresh query key every
+  // 60s while the panel is open, and the panel would flash back to its
+  // loading skeleton under the reader's eyes.
+  const [since, setSince] = useState(roundedSince);
+
+  function handleOpenChange(next: boolean) {
+    setOpen(next);
+    if (next) setSince(roundedSince());
+  }
+
+  // Polling `/api/approvals?state=decided` only while the section is open —
+  // a collapsed section has no reader to show a poll's result to.
+  const state = useDecidedApprovals(since, { enabled: open });
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
+    <Collapsible open={open} onOpenChange={handleOpenChange}>
       <CollapsibleTrigger className="flex items-center gap-2 text-sm">
         <ChevronRight
           className={

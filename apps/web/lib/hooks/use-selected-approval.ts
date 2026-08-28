@@ -6,14 +6,15 @@ import { useSearchParams } from "next/navigation";
  * The approval a Slack nudge deep-linked to, or `null`.
  *
  * `apps/worker/src/notify/blocks.ts` builds every approval DM's Review button
- * as `${DASHBOARD_BASE_URL}/?approval=<id>`, so this parameter is the only
- * thing connecting a notification to the card it is about. Before this existed
- * the button landed on a dashboard that ignored it, which reads as a dead link
- * at exactly the moment somebody is being paged.
+ * as `${DASHBOARD_BASE_URL}/approvals?approval=<id>` (since commit `4726a8f` —
+ * it used to point at `/`), so this parameter is the only thing connecting a
+ * notification to the card it is about. Before this existed the button landed
+ * on a dashboard that ignored it, which reads as a dead link at exactly the
+ * moment somebody is being paged.
  *
- * Read-only, unlike `useSelectedRun`. Nothing in this app writes the parameter
- * and nothing clears it: the URL that arrived from Slack is the URL that stays,
- * so a reload lands where the link pointed rather than somewhere else.
+ * Read-only. Nothing in this app writes the parameter and nothing clears it:
+ * the URL that arrived from Slack is the URL that stays, so a reload lands
+ * where the link pointed rather than somewhere else.
  */
 export function useSelectedApproval(): string | null {
   return useSearchParams().get("approval");

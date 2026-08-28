@@ -4,8 +4,10 @@ import type { RunListParams, RunStatus } from "../api/runs";
  * The runs list's filter state, and the pure URL bridge for it.
  *
  * `q` is kept out of `activeFilterCount` deliberately: the search box already
- * shows its own contents, so counting it in the chip badge would double the
- * same fact.
+ * shows its own contents, so counting it too would double the same fact.
+ * `run-filters.tsx` uses the count (checked against zero, ORed with `q`
+ * itself) only to decide whether to show a "Clear" control — there is no chip
+ * badge that renders the number.
  */
 export type RunFilters = {
   q: string;

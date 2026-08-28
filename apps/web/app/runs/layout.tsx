@@ -16,8 +16,10 @@ import { RunList } from "@/components/runs/run-list";
  *
  * Below `lg` the two panels stack instead of splitting: the list is `/runs`
  * and a run's detail is `/runs/[id]`, with a back link in the header. Above
- * `lg` both are visible at once, resizable, and `autoSaveId` remembers the
- * split the reader left it at.
+ * `lg` both are visible at once, resizable — but see the comment on
+ * `ResizablePanelGroup` below: there is no `autoSaveId`, so the split does
+ * NOT survive a reload, only navigating between runs while this layout stays
+ * mounted.
  */
 export default function RunsLayout({
   children,

@@ -53,8 +53,13 @@ Three consequences, and they are the reason this option was preferred:
   handshake is first-party. This is the only one of the three options that
   achieved that.
 - **`GET /api/counters`, `GET /api/runs` and `GET /api/runs/:id/usage` stay
-  protected.** Those three have no in-code auth and are gated by Access alone;
-  an answer that weakened Access would have exposed them.
+  protected.** At the time this was written they had no in-code auth and were
+  gated by Access alone; an answer that weakened Access would have exposed
+  them. Since then `GET /api/counters` and `GET /api/runs` (and
+  `GET /api/runs/:id/usage`, `GET /api/runs/:id/approvals`) gained their own
+  `requireTeamMember` check too — belt and braces now, not a reason to revisit
+  this decision. The consequence worth knowing: those routes now also 401 on
+  `wrangler dev`, where they used to fall through unauthenticated. See §14.
 
 **A fourth option was considered and rejected**, because at the time this was
 answered there was no Cloudflare zone: having the Worker itself reverse-proxy to
@@ -328,12 +333,13 @@ That extra request exists only because of this gap. Adding `decidedBy` to the
 
 **Contract needed:** `{ code: "already_decided", message, decision, decidedBy }`.
 
-**RESOLVED 2026-08-28 (backend):** the 409 body carries `decidedBy`. The
-front-end has not caught up yet — `nameDecider` and the `reconciled` set in
-`lib/store/approvals-overlay.ts` still exist and are still exercised by
-`use-approvals.ts`'s opportunistic detail read. That workaround is now
-provably redundant and a later task (the `apps/web` rewrite) should delete it
-rather than keep both paths.
+**RESOLVED 2026-08-28, both halves.** The 409 body carries `decidedBy`, and the
+front-end has since caught up: `nameDecider`, the `reconciled` set, and the
+opportunistic detail read that fed them are gone from
+`lib/store/approvals-overlay.ts`. A card now resolves from exactly two sources
+— a 200 or a 409, both carrying the decision and `decidedBy` directly in the
+body — and nothing else touches it. See the store's own doc comment for the
+current rule.
 
 ---
 
@@ -433,16 +439,21 @@ single highest-value thing the backend could do for either dashboard.
 `requireTeamMember` verifies a real Access JWT off `Cf-Access-Jwt-Assertion`
 (`src/api/identity.ts`), and `wrangler dev` has no Cloudflare Access in front of
 it. So `POST /api/runs`, `GET /api/runs/:id`, the run socket and **both channel
-routes** answer 401 against a local Worker. The runs list, counters, roster and
-approvals are reachable; starting a run, opening a transcript and correcting a
-channel are not.
+routes** answer 401 against a local Worker — and, since this branch added the
+same check to `GET /api/runs` and `GET /api/counters` (see §1), the runs list
+and the funnel now do too. Only roster and approvals are reachable; starting a
+run, opening a transcript, correcting a channel, and just looking at the runs
+list or the funnel are not.
 
 This is not new and it is not this app's doing — `apps/dashboard/dev-stubs.ts`
 stubs identity, roster and approvals for exactly this reason, and deliberately
-**refuses** to stub these three. Its argument is worth repeating: a faked create
-hands back an id whose socket then refuses, which reads as a bug in the run view
-rather than as the absence of Access, and a stubbed socket would be a fiction of
-a live transcript.
+**refuses** to stub any of the rest. Its argument is worth repeating: a faked
+create hands back an id whose socket then refuses, which reads as a bug in the
+run view rather than as the absence of Access, a stubbed socket would be a
+fiction of a live transcript, and the same is true of a faked runs list or
+funnel. The only local path to real data on any of these is
+`apps/web/proxy.ts` with `CF_ACCESS_TOKEN` (`cloudflared access login` then
+`cloudflared access token --app=…`), or `NEXT_PUBLIC_DEMO=1` for fixtures.
 
 **What it means here.** `WORKER_ORIGIN=http://localhost:8787 pnpm dev` is still
 the right way to develop the dashboard against real D1 data. It is *not* a way

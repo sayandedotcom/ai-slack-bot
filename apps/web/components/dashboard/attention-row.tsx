@@ -63,11 +63,15 @@ export function AttentionRow() {
       ? Math.min(...openCards.map((c) => c.card.createdAt))
       : null;
 
+  // Only `live`, matching what the card links to (`/runs?status=live`) — the
+  // filter behind that URL takes one status, not two, so a count that folded
+  // in `awaiting_approval` would send a reader who clicked a "3" to a list of
+  // 1. `awaiting_approval` still has its own number on the line below
+  // (`needsYou`), and its own count one card to the left, so nothing here is
+  // lost by not double-counting it.
   const liveRuns =
     runs.state.kind === "ready"
-      ? runs.state.data.filter(
-          (r) => r.status === "live" || r.status === "awaiting_approval"
-        )
+      ? runs.state.data.filter((r) => r.status === "live")
       : [];
   const needsYou =
     runs.state.kind === "ready"

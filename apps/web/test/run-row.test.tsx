@@ -29,7 +29,10 @@ describe("RunRow", () => {
     );
     expect(screen.getByText(/checkout button/)).toBeInTheDocument();
     expect(screen.getByText("#zellify-pulsefit")).toBeInTheDocument();
-    expect(screen.getByText("$0.412700000")).toBeInTheDocument();
+    // usd() truncates the ledger's nine-decimal string to four places for
+    // display; the untruncated figure is one hover away in `title`.
+    expect(screen.getByText("$0.4127")).toBeInTheDocument();
+    expect(screen.getByText("$0.4127")).toHaveAttribute("title", "0.412700000");
     expect(screen.getByLabelText("needs a decision")).toBeInTheDocument();
     expect(screen.getByRole("link")).toHaveAttribute("href", "/runs/x");
   });

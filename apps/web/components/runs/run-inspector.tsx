@@ -69,7 +69,7 @@ export function RunInspector({ run, now }: { run: RunDetail; now: number }) {
           <Row label="Last activity">{ago(run.updatedAt, now)}</Row>
           <Row label="Spend">
             {usage.kind === "ready" ? (
-              usd(usage.data)
+              <span title={usage.data}>{usd(usage.data)}</span>
             ) : usage.kind === "error" ? (
               "unavailable"
             ) : (

@@ -129,14 +129,21 @@ export function useRunEffects(id: string): PanelState<RunEffect[]> {
   );
 }
 
+/**
+ * `enabled` defaults to `true` but `DecidedList` passes its collapsed state —
+ * the section is closed by default, and a closed section has no reason to
+ * poll `/api/approvals?state=decided` every three seconds.
+ */
 export function useDecidedApprovals(
-  sinceMs: number
+  sinceMs: number,
+  options?: { enabled?: boolean }
 ): PanelState<ApprovalDetail[]> {
   return toPanelState(
     useQuery({
       queryKey: queryKeys.decidedApprovals(sinceMs),
       queryFn: () => getDecidedApprovals(sinceMs),
       refetchInterval: POLL_MS.approvals,
+      enabled: options?.enabled ?? true,
     }),
     {
       emptyHint: "Nothing was decided in this window.",

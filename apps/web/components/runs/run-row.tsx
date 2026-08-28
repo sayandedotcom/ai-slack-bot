@@ -58,7 +58,7 @@ export function RunRow({
               <span aria-hidden="true">·</span>
               <span>{ago(run.updatedAt, now)}</span>
               <span aria-hidden="true">·</span>
-              <span>{usd(run.costUsd)}</span>
+              <span title={run.costUsd}>{usd(run.costUsd)}</span>
               {run.shadow ? (
                 <StatusBadge
                   tone={SHADOW_BADGE.tone}
