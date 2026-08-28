@@ -8,7 +8,8 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip";
 import { cn } from "@workspace/ui/lib/utils";
-import { Check, Hash, Pencil, X } from "lucide-react";
+import { Check, Eye, Hash, Pencil, X } from "lucide-react";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { useState } from "react";
 
@@ -103,6 +104,33 @@ function Meta({ card, now }: { card: OpenApproval; now: number }): ReactNode {
           thread {shortThread(card.threadTs)}
         </TooltipTrigger>
         <TooltipContent>{card.threadTs}</TooltipContent>
+      </Tooltip>
+      {/*
+        The way to read a draft before committing to it. A card shows WHAT the
+        agent wants to send and WHY it asked, but not what it did to get there
+        — the thread it read, the queries it ran, what came back. Approving is
+        a promise made in a customer's thread under a person's name, so the
+        evidence has to be one click away, not a hunt through another page.
+        The run route renders this same card inside its transcript, so the
+        decision can be made there: this is a link to more context, not a
+        detour away from the task.
+      */}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Link
+              href={`/runs/${encodeURIComponent(card.runId)}`}
+              className="inline-flex items-center gap-1 rounded px-1 underline-offset-4 hover:text-foreground hover:underline"
+            />
+          }
+        >
+          <Eye className="size-2.5" aria-hidden="true" />
+          open run
+        </TooltipTrigger>
+        <TooltipContent>
+          Read the whole run — what it did, what it spent — then approve from
+          there.
+        </TooltipContent>
       </Tooltip>
       <span className="ml-auto shrink-0">{ago(card.createdAt, now)}</span>
     </div>
