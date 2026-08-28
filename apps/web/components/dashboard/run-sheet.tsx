@@ -12,16 +12,13 @@ import { Skeleton } from "@workspace/ui/components/skeleton";
 import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 
+import { SpecBadge } from "@/components/common/badge";
 import { CopyId } from "@/components/common/copy-id";
-import {
-  OriginBadge,
-  ShadowBadge,
-  StatusChip,
-} from "@/components/common/status-chip";
 import { ago, usd } from "@/lib/format";
 import { useRuns, useRunUsage } from "@/lib/hooks/use-dashboard-data";
 import { useNow } from "@/lib/hooks/use-now";
 import { useSelectedRun } from "@/lib/hooks/use-selected-run";
+import { originBadge, runStatusBadge, SHADOW_BADGE } from "@/lib/status";
 
 /**
  * One run, opened from `?run=`.
@@ -70,9 +67,9 @@ export function RunSheet() {
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-2">
-                <StatusChip status={run.status} />
-                <OriginBadge origin={run.origin} />
-                {run.shadow ? <ShadowBadge /> : null}
+                <SpecBadge spec={runStatusBadge(run.status)} />
+                <SpecBadge spec={originBadge(run.origin)} />
+                {run.shadow ? <SpecBadge spec={SHADOW_BADGE} /> : null}
               </div>
 
               <p className="text-pretty text-sm">

@@ -7,14 +7,16 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip";
 import { cn } from "@workspace/ui/lib/utils";
-import { Check, Link2 } from "lucide-react";
+import { Link2 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { SpecBadge } from "@/components/common/badge";
 import {
   type ConnectStatus,
   OAUTH_START,
   type Provider,
 } from "@/lib/api/roster";
+import { connectBadge } from "@/lib/status";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
   slack: "Slack",
@@ -45,12 +47,7 @@ export function ConnectState({
   }
 
   if (engineer[provider]) {
-    return (
-      <span className="inline-flex items-center gap-1 text-success text-xs">
-        <Check className="size-3" aria-hidden="true" />
-        connected
-      </span>
-    );
+    return <SpecBadge spec={connectBadge(true, provider)} />;
   }
 
   const classes = buttonVariants({

@@ -7,7 +7,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip";
-import { cn } from "@workspace/ui/lib/utils";
 import {
   AlertTriangle,
   GitPullRequest,
@@ -15,9 +14,11 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
+import { SpecBadge } from "@/components/common/badge";
 import type { Roster } from "@/lib/api/roster";
 import { initialOf, nameOf } from "@/lib/format";
 import type { PanelState } from "@/lib/panel-state";
+import { connectBadge } from "@/lib/status";
 
 /**
  * Whose name goes on what the agent says in public.
@@ -109,15 +110,25 @@ export function SpeakerHero({ state }: { state: PanelState<Roster> }) {
           </p>
 
           <div className="flex flex-wrap items-center gap-2 pt-0.5">
-            <ConnectChip
-              label="Slack"
-              connected={self?.slack ?? false}
-              icon={MessageCircle}
+            <SpecBadge
+              spec={connectBadge(self?.slack ?? false, "slack")}
+              icon={
+                self?.slack ? (
+                  <MessageCircle className="size-3" aria-hidden="true" />
+                ) : (
+                  <AlertTriangle className="size-3" aria-hidden="true" />
+                )
+              }
             />
-            <ConnectChip
-              label="GitHub"
-              connected={self?.github ?? false}
-              icon={GitPullRequest}
+            <SpecBadge
+              spec={connectBadge(self?.github ?? false, "github")}
+              icon={
+                self?.github ? (
+                  <GitPullRequest className="size-3" aria-hidden="true" />
+                ) : (
+                  <AlertTriangle className="size-3" aria-hidden="true" />
+                )
+              }
             />
 
             {prAuthorDiffers ? (
@@ -140,33 +151,5 @@ export function SpeakerHero({ state }: { state: PanelState<Roster> }) {
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function ConnectChip({
-  label,
-  connected,
-  icon: Icon,
-}: {
-  label: string;
-  connected: boolean;
-  icon: typeof MessageCircle;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px]",
-        connected
-          ? "border-success/40 bg-success/10 text-success"
-          : "border-warning/40 bg-warning/10 text-warning"
-      )}
-    >
-      {connected ? (
-        <Icon className="size-3" aria-hidden="true" />
-      ) : (
-        <AlertTriangle className="size-3" aria-hidden="true" />
-      )}
-      {label} {connected ? "connected" : "not connected"}
-    </span>
   );
 }

@@ -4,17 +4,14 @@ import { cn } from "@workspace/ui/lib/utils";
 import { Activity, Hash } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { SpecBadge } from "@/components/common/badge";
 import { Panel } from "@/components/common/panel";
-import {
-  OriginBadge,
-  ShadowBadge,
-  StatusChip,
-} from "@/components/common/status-chip";
 import type { RunSummary } from "@/lib/api/runs";
 import { ago } from "@/lib/format";
 import { useRuns } from "@/lib/hooks/use-dashboard-data";
 import { useNow } from "@/lib/hooks/use-now";
 import { useSelectedRun } from "@/lib/hooks/use-selected-run";
+import { originBadge, runStatusBadge, SHADOW_BADGE } from "@/lib/status";
 
 /**
  * The index of agent runs: one row per run, newest activity first.
@@ -78,9 +75,9 @@ function RunRow({
         )}
       >
         <div className="flex flex-wrap items-center gap-2">
-          <StatusChip status={run.status} />
-          <OriginBadge origin={run.origin} />
-          {run.shadow ? <ShadowBadge /> : null}
+          <SpecBadge spec={runStatusBadge(run.status)} />
+          <SpecBadge spec={originBadge(run.origin)} />
+          {run.shadow ? <SpecBadge spec={SHADOW_BADGE} /> : null}
           {where === null ? null : (
             <span className="machine inline-flex min-w-0 items-center gap-0.5 truncate text-muted-foreground text-xs">
               <Hash className="size-3 shrink-0" aria-hidden="true" />

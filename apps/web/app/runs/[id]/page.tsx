@@ -12,13 +12,9 @@ import { ArrowLeft, FlaskConical, Hash } from "lucide-react";
 import Link from "next/link";
 import { use } from "react";
 
+import { SpecBadge } from "@/components/common/badge";
 import { CopyId } from "@/components/common/copy-id";
 import { ErrorBoundary } from "@/components/common/error-boundary";
-import {
-  OriginBadge,
-  ShadowBadge,
-  StatusChip,
-} from "@/components/common/status-chip";
 import { RunApprovals } from "@/components/run/run-approvals";
 import { RunPanel } from "@/components/run/run-panel";
 import { isDemo } from "@/lib/api/client";
@@ -27,6 +23,7 @@ import { ago, usd } from "@/lib/format";
 import { useIdentityQuery, useRunUsage } from "@/lib/hooks/use-dashboard-data";
 import { useNow } from "@/lib/hooks/use-now";
 import { POLL_MS, queryKeys } from "@/lib/query/keys";
+import { originBadge, runStatusBadge, SHADOW_BADGE } from "@/lib/status";
 
 /**
  * One run, live.
@@ -82,9 +79,9 @@ export default function RunPage({
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2">
-              <StatusChip status={run.data.status} />
-              <OriginBadge origin={run.data.origin} />
-              {run.data.shadow ? <ShadowBadge /> : null}
+              <SpecBadge spec={runStatusBadge(run.data.status)} />
+              <SpecBadge spec={originBadge(run.data.origin)} />
+              {run.data.shadow ? <SpecBadge spec={SHADOW_BADGE} /> : null}
               {run.data.channelId ? (
                 <Tooltip>
                   <TooltipTrigger
