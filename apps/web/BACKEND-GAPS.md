@@ -489,12 +489,17 @@ pass and nothing above described it.**
 
 `GET /api/runs` accepts `status, origin, channelId, shadow, q, cursor, limit`
 as query parameters (`src/api/runs.ts`) and returns `{ runs, nextCursor }`
-(`src/run/repository.ts`, `RunListPage`). Each row carries `costUsd` (a
-decimal string, never a float — the same invariant as `/api/runs/:id/usage`),
-`turns`, and `openApprovalId` (`string | null`), alongside the existing `id,
-origin, status, shadow, summary, channelId, threadTs, createdAt, updatedAt`.
-`cursor` is opaque and only ever round-tripped from a previous `nextCursor`;
-an unrecognized value is a 400, not a silent reset to page one.
+(`src/run/repository.ts`, `RunListPage`). Each row (`RunListItem`) is `id,
+origin, status, shadow, summary, channelId, channelName, customerSlug,
+createdAt, updatedAt` plus the three this branch added: `costUsd` (a decimal
+string, never a float — the same invariant as `/api/runs/:id/usage`), `turns`,
+and `openApprovalId` (`string | null`). Note this is NOT the same shape as
+`GET /api/runs/:id` (`publicRun()` in `src/api/runs.ts`), which carries
+`threadTs` instead of `channelName`/`customerSlug` and has no `costUsd`,
+`turns` or `openApprovalId` — the list row is a join across `channels`,
+`agent_model_calls` and the open `approvals` row that the single-run read
+does not do. `cursor` is opaque and only ever round-tripped from a previous
+`nextCursor`; an unrecognized value is a 400, not a silent reset to page one.
 
 `GET /api/runs/:id/approvals` returns that run's approval history —
 `src/api/runs.ts`. `GET /api/approvals?state=decided&since=` extends the
