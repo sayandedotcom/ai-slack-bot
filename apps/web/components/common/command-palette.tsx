@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Command,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -70,27 +71,38 @@ export function CommandPalette({
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Jump to a page, run or approval…" />
-      <CommandList>
-        <CommandEmpty>No matches.</CommandEmpty>
-        {GROUPS.map((group) => {
-          const groupItems = items.filter((item) => item.group === group);
-          if (groupItems.length === 0) return null;
-          return (
-            <CommandGroup key={group} heading={group}>
-              {groupItems.map((item) => (
-                <CommandItem
-                  key={`${item.group}:${item.href}`}
-                  value={[item.label, ...item.keywords].join(" ")}
-                  onSelect={() => go(item.href)}
-                >
-                  {item.label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          );
-        })}
-      </CommandList>
+      {/*
+        The `Command` root is REQUIRED here and is not supplied by
+        `CommandDialog`. This registry's `CommandDialog` renders only
+        `Dialog > DialogContent > {children}` — unlike upstream shadcn's, which
+        wraps the children itself — so without this every `cmdk` child reads an
+        undefined context and `CommandPrimitive.Input` dies on `.subscribe` the
+        moment the palette opens. Fixed here rather than in the vendored
+        primitive so a future `shadcn add command` cannot silently revert it.
+      */}
+      <Command>
+        <CommandInput placeholder="Jump to a page, run or approval…" />
+        <CommandList>
+          <CommandEmpty>No matches.</CommandEmpty>
+          {GROUPS.map((group) => {
+            const groupItems = items.filter((item) => item.group === group);
+            if (groupItems.length === 0) return null;
+            return (
+              <CommandGroup key={group} heading={group}>
+                {groupItems.map((item) => (
+                  <CommandItem
+                    key={`${item.group}:${item.href}`}
+                    value={[item.label, ...item.keywords].join(" ")}
+                    onSelect={() => go(item.href)}
+                  >
+                    {item.label}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            );
+          })}
+        </CommandList>
+      </Command>
     </CommandDialog>
   );
 }
