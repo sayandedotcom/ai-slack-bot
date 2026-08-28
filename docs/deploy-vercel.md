@@ -96,13 +96,34 @@ None of this is in the repository, so it is written down here instead. Done
    resolved nothing and there were no records to migrate. Zone SSL/TLS mode was
    `full` and was changed to **Full (Strict)**.
 
-2. **Vercel project.** There was already one: **`slack-bot-web`**
-   (`prj_llB4V6pLyf3O4x0W6yg6WGmrc68C`, team `sayande2002s-projects`), linked to
-   `sayandedotcom/ai-slack-bot` with Root Directory `apps/web` and a green
-   production build — so it was reused rather than duplicated. `firefighter.sayande.xyz`
-   was added to it and came back **`verified: true` immediately**: the account
-   already owns `sayande.xyz`, so **no `_vercel` TXT record was needed**. Add
-   one only if Vercel reports the domain as unverified.
+2. **Vercel project — now `ai-slack-bot-web`** (`prj_3vPGGd9EbJZQmFENscbrq8PE8NZo`,
+   team `sayandedotcom-6343`), linked to `sayandedotcom/ai-slack-bot`, Root
+   Directory `apps/web`.
+
+   It was originally `slack-bot-web` on team `sayande2002s-projects`, and the
+   move is worth recording because it will happen again to somebody.
+   **That account's billing lapsed and Vercel began answering `402 Payment
+   Required` for every request** — the dashboard went down while the API,
+   which is the Worker and was never on Vercel, kept serving perfectly. Adding
+   the domain came back **`verified: true` immediately** in both accounts, so
+   **no `_vercel` TXT record was needed** either time. Add one only if Vercel
+   reports the domain as unverified.
+
+   **Moving a hostname between Vercel accounts, in order.** A domain can only
+   be claimed by one account, so:
+   `DELETE /v9/projects/{old}/domains/{host}`, then
+   `DELETE /v6/domains/{host}` to release it from the old account's domain list
+   as well — the second is the one people forget, and without it the new
+   account cannot add the host. Then add it on the new project. **Grey-cloud the
+   CNAME before adding it**, for exactly the reason in step 3: the new project
+   has to issue its own certificate, and Cloudflare's proxy eats the challenge.
+   Re-proxy once the host serves a certificate whose CN is the hostname.
+   Nothing on the Cloudflare or Access side changes — not the route, not the
+   AUD, not the application. Only which Vercel project answers.
+
+   **The current team is on the Hobby plan, whose terms forbid commercial
+   use.** Recorded as a known exposure rather than a recommendation: it is the
+   same class of interruption that caused this move.
 
 3. **DNS, and this is the first trap.** Create the CNAME **DNS-only (grey
    cloud) first**:
