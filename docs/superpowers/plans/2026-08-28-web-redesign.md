@@ -3505,3 +3505,25 @@ git commit -m "feat(web): team, channels and eval pages, command palette; docs f
 - **Spec coverage:** §3 shell → Task 11 (+21 for ⌘K, +5 for the redirect target); §4 `/runs` → Tasks 9, 10, 12, 13, 14, 15; §5 → Tasks 16, 17; §6 → Tasks 18, 19, 20; §7 → Tasks 6, 7, 8; §8 → Tasks 1–5; §9/§10 → the five commit steps and Task 22.
 - **Known judgment calls the executor should not re-litigate:** the runs list `refetchInterval` on an infinite query (accepted cost); `listRuns` return-shape change ripples into `test/run/repository.test.ts` (Task 2 says how); `useRuns` survives Tasks 9–14 and dies in Task 15; `speaker-hero.tsx` survives until Task 18.
 - **Open verification in Task 8:** whether the `base-nova` registry serves `resizable` and `command`. The fallback is written into the task.
+
+**2026-08-28 — Task 8's open verification, resolved.** Both `resizable` and
+`command` ARE served by the `base-nova` registry; nothing was hand-written.
+`command` pulls in `cmdk`, and `cmdk` has no Radix-free build — it declares a
+hard runtime dependency on `@radix-ui/react-dialog`, which drags a further 15
+`@radix-ui/*` packages into `pnpm-lock.yaml` (16 total, zero before this
+task). No file this repo owns imports Radix: `command.tsx`'s `CommandDialog`
+wrapper uses this repo's own `@base-ui/react`-backed `dialog.tsx`, never
+`cmdk`'s own `Command.Dialog`. That transitive dependency is accepted, not
+worked around — see the task's report for the empirical bundle check (a
+temporary probe route rendering `Command` showed `@radix-ui/react-dialog`
+code, including the distinctive `data-radix-focus-guard` attribute and
+`DismissableLayer` internal name, in the client chunk; `cmdk`'s `index.mjs`
+attaches `Dialog` to the same exported `Command` object via
+`Object.assign(me, {..., Dialog: xe, ...})`, so the two are not
+independently tree-shakeable and importing `Command` pulls `Dialog`'s Radix
+usage along with it even when unreferenced). Also landed: `input-group.tsx`,
+a file this task did not ask for but which arrives as `command`'s own
+transitive registry dependency; it carries two `role="group"` divs that trip
+`a11y/useSemanticElements` and one that trips `a11y/useKeyWithClickEvents`,
+handled with a scoped `biome.jsonc` override rather than a rewrite of
+vendored markup.
