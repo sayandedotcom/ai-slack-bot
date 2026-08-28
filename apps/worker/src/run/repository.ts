@@ -1,5 +1,6 @@
 import type { ChannelsRow, RunsRow } from "../db/schema";
 import type { RunOrigin } from "./keys";
+import { decimalNanoUsd } from "./money";
 import { ACTIVE_RUN_STATUSES, type RunStatus } from "./protocol";
 
 /**
@@ -36,7 +37,49 @@ export type RunListItem = {
   customerSlug: string | null;
   createdAt: number;
   updatedAt: number;
+  /** Decimal USD from the model-call ledger (invariant 29). "0.000000000" for a run that has not billed. */
+  costUsd: string;
+  /** Distinct `agent_turn_id`s billed — how many times the model was woken on this run. */
+  turns: number;
+  /** The one pending approval (idx_approvals_one_open), or null. */
+  openApprovalId: string | null;
 };
+
+export type RunListFilters = {
+  status?: RunStatus;
+  origin?: RunOrigin;
+  channelId?: string;
+  shadow?: boolean;
+  /** Case-insensitive substring over summary and channel name; prefix over id. */
+  q?: string;
+  cursor?: string;
+  limit?: number;
+};
+
+export type RunListPage = { runs: RunListItem[]; nextCursor: string | null };
+
+/** `${updatedAt}_${id}`: ids are uuids, which never contain `_`. Opaque to the client. */
+export function encodeRunCursor(item: {
+  updatedAt: number;
+  id: string;
+}): string {
+  return `${item.updatedAt}_${item.id}`;
+}
+
+export function decodeRunCursor(
+  raw: string
+): { updatedAt: number; id: string } | null {
+  const at = raw.indexOf("_");
+  if (at <= 0 || at === raw.length - 1) return null;
+  const updatedAt = Number(raw.slice(0, at));
+  if (!Number.isSafeInteger(updatedAt) || updatedAt < 0) return null;
+  return { updatedAt, id: raw.slice(at + 1) };
+}
+
+/** LIKE treats `%` and `_` as wildcards; a search for "50%_off" must not become "match anything". */
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
 
 export type RunDescriptor = {
   key: string;
@@ -237,27 +280,68 @@ export async function findOwnedSlackRun(
 
 export async function listRuns(
   db: D1Database,
-  options: { status?: RunStatus; limit?: number }
-): Promise<RunListItem[]> {
+  filters: RunListFilters
+): Promise<RunListPage> {
   const limit = Math.min(
-    Math.max(1, Math.floor(options.limit ?? RUN_LIST_DEFAULT_LIMIT)),
+    Math.max(1, Math.floor(filters.limit ?? RUN_LIST_DEFAULT_LIMIT)),
     RUN_LIST_MAX_LIMIT
   );
 
-  const where = options.status ? "WHERE r.status = ?" : "";
-  const bindings = options.status ? [options.status, limit] : [limit];
+  const where: string[] = [];
+  const bindings: (string | number)[] = [];
+
+  if (filters.status) {
+    where.push("r.status = ?");
+    bindings.push(filters.status);
+  }
+  if (filters.origin) {
+    where.push("r.origin = ?");
+    bindings.push(filters.origin);
+  }
+  if (filters.channelId) {
+    where.push("r.channel_id = ?");
+    bindings.push(filters.channelId);
+  }
+  if (filters.shadow !== undefined) {
+    where.push("r.shadow = ?");
+    bindings.push(filters.shadow ? 1 : 0);
+  }
+  if (filters.q) {
+    const like = `%${escapeLike(filters.q)}%`;
+    const prefix = `${escapeLike(filters.q)}%`;
+    where.push(
+      `(r.summary LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\' OR r.id LIKE ? ESCAPE '\\')`
+    );
+    bindings.push(like, like, prefix);
+  }
+  if (filters.cursor) {
+    const cursor = decodeRunCursor(filters.cursor);
+    if (cursor) {
+      where.push("(r.updated_at < ? OR (r.updated_at = ? AND r.id < ?))");
+      bindings.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
+    }
+  }
 
   const { results } = await db
     .prepare(
       `SELECT r.id, r.origin, r.status, r.shadow, r.summary, r.channel_id,
-              c.name AS channel_name, c.customer_slug, r.created_at, r.updated_at
+              c.name AS channel_name, c.customer_slug, r.created_at, r.updated_at,
+              COALESCE(u.cost_nano_usd, 0) AS cost_nano_usd,
+              COALESCE(u.turns, 0) AS turns,
+              a.id AS open_approval_id
        FROM runs r
        LEFT JOIN channels c ON c.channel_id = r.channel_id
-       ${where}
-       ORDER BY r.updated_at DESC
+       LEFT JOIN (
+         SELECT run_id, SUM(cost_nano_usd) AS cost_nano_usd,
+                COUNT(DISTINCT agent_turn_id) AS turns
+         FROM agent_model_calls GROUP BY run_id
+       ) u ON u.run_id = r.id
+       LEFT JOIN approvals a ON a.run_id = r.id AND a.decision = 'pending'
+       ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+       ORDER BY r.updated_at DESC, r.id DESC
        LIMIT ?`
     )
-    .bind(...bindings)
+    .bind(...bindings, limit + 1)
     .all<
       Pick<
         RunsRow,
@@ -275,10 +359,15 @@ export async function listRuns(
         // `channels` — even though `channels.name` is NOT NULL in the DDL.
         channel_name: ChannelsRow["name"] | null;
         customer_slug: ChannelsRow["customer_slug"];
+        cost_nano_usd: number;
+        turns: number;
+        open_approval_id: string | null;
       }
     >();
 
-  return (results ?? []).map((row) => ({
+  const rows = results ?? [];
+  const page = rows.slice(0, limit);
+  const runs = page.map((row) => ({
     id: row.id,
     origin: row.origin,
     status: row.status,
@@ -289,7 +378,15 @@ export async function listRuns(
     customerSlug: row.customer_slug,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    costUsd: decimalNanoUsd(row.cost_nano_usd),
+    turns: row.turns,
+    openApprovalId: row.open_approval_id,
   }));
+  const last = runs[runs.length - 1];
+  return {
+    runs,
+    nextCursor: rows.length > limit && last ? encodeRunCursor(last) : null,
+  };
 }
 
 /**

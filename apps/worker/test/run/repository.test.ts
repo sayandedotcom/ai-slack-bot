@@ -4,6 +4,8 @@ import { chatRunKey, slackRunKey } from "../../src/run/keys";
 import {
   createOrGetRun,
   createOrGetRunUnderPolicy,
+  decodeRunCursor,
+  encodeRunCursor,
   findOwnedSlackRun,
   getRunById,
   getRunByKey,
@@ -17,6 +19,13 @@ import {
 // D1 is shared across every suite in this pool (see phase-08-notes.md), so each
 // case works on ids it generated itself and the table is cleared up front.
 beforeEach(async () => {
+  // Both reference `runs.id` with no ON DELETE clause (agent billing history
+  // and approval decisions must not silently vanish in production), so a
+  // wipe here has to clear them BEFORE `runs` or D1 enforces the FK and the
+  // whole beforeEach throws — which then fails every subsequent test in this
+  // file, not just the one that seeded the row.
+  await env.DB.prepare("DELETE FROM agent_model_calls").run();
+  await env.DB.prepare("DELETE FROM approvals").run();
   await env.DB.prepare("DELETE FROM runs").run();
   await env.DB.prepare("DELETE FROM channels").run();
   await env.DB.prepare(
@@ -282,7 +291,7 @@ describe("findOwnedSlackRun", () => {
 
 describe("listRuns", () => {
   it("returns an empty array, not null, on an empty table", async () => {
-    expect(await listRuns(env.DB, {})).toEqual([]);
+    expect((await listRuns(env.DB, {})).runs).toEqual([]);
   });
 
   it("orders by updated_at descending", async () => {
@@ -298,13 +307,13 @@ describe("listRuns", () => {
     await touchRun(env.DB, older.id, 1_000);
     await touchRun(env.DB, newer.id, 2_000);
 
-    const listed = await listRuns(env.DB, {});
+    const listed = (await listRuns(env.DB, {})).runs;
     expect(listed.map((r) => r.id)).toEqual([newer.id, older.id]);
   });
 
   it("joins channel display data for slack runs", async () => {
     const run = await createOrGetRun(env.DB, slackDescriptor());
-    const [item] = await listRuns(env.DB, {});
+    const [item] = (await listRuns(env.DB, {})).runs;
 
     expect(item.id).toBe(run.id);
     expect(item.channelName).toBe("pulsefit-eng");
@@ -313,7 +322,7 @@ describe("listRuns", () => {
 
   it("leaves display data null for chat runs", async () => {
     await createOrGetRun(env.DB, chatDescriptor());
-    const [item] = await listRuns(env.DB, {});
+    const [item] = (await listRuns(env.DB, {})).runs;
 
     expect(item.channelName).toBeNull();
     expect(item.customerSlug).toBeNull();
@@ -331,7 +340,7 @@ describe("listRuns", () => {
     await setRunStatus(env.DB, live.id, "live");
     await setRunStatus(env.DB, done.id, "done");
 
-    const listed = await listRuns(env.DB, { status: "live" });
+    const listed = (await listRuns(env.DB, { status: "live" })).runs;
     expect(listed.map((r) => r.id)).toEqual([live.id]);
   });
 
@@ -339,15 +348,154 @@ describe("listRuns", () => {
     for (let i = 0; i < 5; i++) {
       await createOrGetRun(env.DB, chatDescriptor());
     }
-    expect(await listRuns(env.DB, { limit: 2 })).toHaveLength(2);
-    expect(await listRuns(env.DB, { limit: 10_000 })).toHaveLength(5);
+    expect((await listRuns(env.DB, { limit: 2 })).runs).toHaveLength(2);
+    expect((await listRuns(env.DB, { limit: 10_000 })).runs).toHaveLength(5);
     expect(RUN_LIST_MAX_LIMIT).toBeLessThanOrEqual(200);
   });
 
   it("never exposes the private origin key", async () => {
     await createOrGetRun(env.DB, slackDescriptor());
-    const [item] = await listRuns(env.DB, {});
+    const [item] = (await listRuns(env.DB, {})).runs;
     expect(Object.keys(item)).not.toContain("key");
+  });
+
+  // `idx_agent_model_step` is UNIQUE on (generation_id, attempt, step_index)
+  // with no run_id in it (migration 0006) — it is the model's retry
+  // idempotency key, not scoped per run. The brief's fixture pins attempt and
+  // step_index to 0 for every call; seeding more than one row under the same
+  // generation_id, as the spend test below does, collides on that index
+  // rather than on anything this test is trying to exercise. A per-call
+  // step_index keeps every other column exactly as specified.
+  let seedStepIndex = 0;
+  async function seedModelCall(runId: string, turnId: string, nano: number) {
+    await env.DB.prepare(
+      `INSERT INTO agent_model_calls
+        (id, run_id, generation_id, agent_turn_id, attempt, step_index, provider, model,
+         input_tokens, no_cache_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
+         reasoning_tokens, total_tokens, cost_nano_usd, latency_ms, created_at)
+       VALUES (?, ?, 'gen:1', ?, 0, ?, 'anthropic', 'claude-fable-5',
+               10, 10, 0, 0, 5, 0, 15, ?, 100, 1)`
+    )
+      .bind(
+        `usage:${crypto.randomUUID()}`,
+        runId,
+        turnId,
+        seedStepIndex++,
+        nano
+      )
+      .run();
+  }
+
+  it("carries spend as a decimal string, a distinct-turn count, and the open approval", async () => {
+    const run = await createOrGetRun(env.DB, slackDescriptor());
+    await seedModelCall(run.id, "turn:a", 1_500_000_000);
+    await seedModelCall(run.id, "turn:a", 500_000_000);
+    await seedModelCall(run.id, "turn:b", 1);
+    await env.DB.prepare(
+      `INSERT INTO approvals
+         (id, run_id, generation_id, kind, draft, why, channel_id, thread_ts, created_at, updated_at)
+       VALUES ('apr:list-1', ?, 'gen:1', 'slack_reply', 'd', 'w', 'C1', '1', 1, 1)`
+    )
+      .bind(run.id)
+      .run();
+
+    const [item] = (await listRuns(env.DB, {})).runs;
+    expect(item.costUsd).toBe("2.000000001");
+    expect(item.turns).toBe(2);
+    expect(item.openApprovalId).toBe("apr:list-1");
+  });
+
+  it("reports zero spend and no approval for a run that has neither", async () => {
+    await createOrGetRun(env.DB, chatDescriptor());
+    const [item] = (await listRuns(env.DB, {})).runs;
+    expect(item.costUsd).toBe("0.000000000");
+    expect(item.turns).toBe(0);
+    expect(item.openApprovalId).toBeNull();
+  });
+
+  it("filters by origin, channel and shadow", async () => {
+    const slack = await createOrGetRun(env.DB, slackDescriptor());
+    const chat = await createOrGetRun(env.DB, chatDescriptor());
+    await env.DB.prepare("UPDATE runs SET shadow = 1 WHERE id = ?")
+      .bind(chat.id)
+      .run();
+
+    expect(
+      (await listRuns(env.DB, { origin: "chat" })).runs.map((r) => r.id)
+    ).toEqual([chat.id]);
+    expect(
+      (await listRuns(env.DB, { channelId: "C1" })).runs.map((r) => r.id)
+    ).toEqual([slack.id]);
+    expect(
+      (await listRuns(env.DB, { shadow: true })).runs.map((r) => r.id)
+    ).toEqual([chat.id]);
+    expect(
+      (await listRuns(env.DB, { shadow: false })).runs.map((r) => r.id)
+    ).toEqual([slack.id]);
+  });
+
+  it("searches summary, channel name and id prefix", async () => {
+    const slack = await createOrGetRun(env.DB, slackDescriptor());
+    const chat = await createOrGetRun(env.DB, chatDescriptor());
+    await env.DB.prepare("UPDATE runs SET summary = ? WHERE id = ?")
+      .bind("checkout button does nothing on Android", chat.id)
+      .run();
+
+    expect(
+      (await listRuns(env.DB, { q: "android" })).runs.map((r) => r.id)
+    ).toEqual([chat.id]);
+    expect(
+      (await listRuns(env.DB, { q: "pulsefit-eng" })).runs.map((r) => r.id)
+    ).toEqual([slack.id]);
+    expect(
+      (await listRuns(env.DB, { q: slack.id.slice(0, 8) })).runs.map(
+        (r) => r.id
+      )
+    ).toEqual([slack.id]);
+    // `%` is a literal, not a wildcard.
+    expect((await listRuns(env.DB, { q: "%" })).runs).toEqual([]);
+  });
+
+  it("pages with a keyset cursor and never repeats or skips a row", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const run = await createOrGetRun(
+        env.DB,
+        slackDescriptor(`172000000${i}.000001`)
+      );
+      // Two rows share an updated_at so the (updated_at, id) tiebreak is exercised.
+      await touchRun(env.DB, run.id, i < 2 ? 1_000 : 1_000 + i);
+      ids.push(run.id);
+    }
+
+    const first = await listRuns(env.DB, { limit: 2 });
+    expect(first.runs).toHaveLength(2);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await listRuns(env.DB, {
+      limit: 2,
+      cursor: first.nextCursor ?? undefined,
+    });
+    expect(second.runs).toHaveLength(2);
+    const third = await listRuns(env.DB, {
+      limit: 2,
+      cursor: second.nextCursor ?? undefined,
+    });
+    expect(third.runs).toHaveLength(1);
+    expect(third.nextCursor).toBeNull();
+
+    const seen = [...first.runs, ...second.runs, ...third.runs].map(
+      (r) => r.id
+    );
+    expect(new Set(seen).size).toBe(5);
+    expect(seen.sort()).toEqual([...ids].sort());
+  });
+
+  it("round-trips a cursor and rejects a malformed one", async () => {
+    expect(
+      decodeRunCursor(encodeRunCursor({ updatedAt: 42, id: "abc" }))
+    ).toEqual({ updatedAt: 42, id: "abc" });
+    expect(decodeRunCursor("nonsense")).toBeNull();
+    expect(decodeRunCursor("x_abc")).toBeNull();
   });
 });
 
