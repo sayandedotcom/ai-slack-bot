@@ -373,6 +373,11 @@ through the same audited route. The Vite SPA renders a run inline under the
 runs list; this one gives it a URL at `/runs/:id`. That is the only behavioural
 difference, and it is deliberate.
 
+(`apps/web` itself grew from three routes to six in the 2026-08-28 redesign —
+`/`, `/runs` [+ `/runs/[id]`], `/approvals`, `/team`, `/channels`, `/eval` — but
+that is a routing change, not a new backend surface; every route still reads
+through the same endpoints this document tracks.)
+
 Environment, for the record — there are two Worker-origin variables and they do
 different jobs:
 
