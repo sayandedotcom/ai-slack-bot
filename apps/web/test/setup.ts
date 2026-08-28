@@ -24,3 +24,26 @@ if (!("ResizeObserver" in globalThis)) {
     disconnect() {}
   };
 }
+
+/**
+ * Same shape of gap: jsdom has no media queries, and the sidebar's
+ * `use-mobile` hook calls `window.matchMedia` on mount — so without this the
+ * shell cannot be rendered in a test either.
+ *
+ * It answers "not mobile" for every query. That is the desktop layout, which
+ * is the one these tests are about; a suite that needs the mobile branch
+ * should override this per-test rather than trust a global default.
+ */
+if (typeof window !== "undefined" && !window.matchMedia) {
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}
