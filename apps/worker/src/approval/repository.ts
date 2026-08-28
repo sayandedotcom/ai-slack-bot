@@ -376,6 +376,41 @@ export async function releaseNudge(db: D1Database, id: string): Promise<void> {
     .run();
 }
 
+/** Every approval a run has raised, oldest first — the inspector's history. D1 only. */
+export async function listByRun(
+  db: D1Database,
+  runId: string
+): Promise<ApprovalRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT ${COLUMNS} FROM approvals WHERE run_id = ? ORDER BY created_at ASC`
+    )
+    .bind(runId)
+    .all<ApprovalRowDb>();
+  return (results ?? []).map(toRow);
+}
+
+/**
+ * Decided (approved/edited/rejected/withdrawn) cards whose last change is
+ * inside the window, newest first. `updated_at`, not `decided_at`: a withdrawn
+ * card has no decider and no `decided_at`, but it did leave the queue.
+ */
+export async function listDecided(
+  db: D1Database,
+  sinceMs: number,
+  limit = 50
+): Promise<ApprovalRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT ${COLUMNS} FROM approvals
+       WHERE decision <> 'pending' AND updated_at >= ?
+       ORDER BY updated_at DESC LIMIT ?`
+    )
+    .bind(sinceMs, limit)
+    .all<ApprovalRowDb>();
+  return (results ?? []).map(toRow);
+}
+
 /**
  * The repair key for invariant 9: decided rows whose resolution turn has not
  * yet reached the DO, for the one-minute `scheduled()` sweeper to re-drive.

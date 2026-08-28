@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { listByRun } from "../approval/repository";
 import type { Env } from "../index";
 import { isRunOrigin } from "../run/keys";
 import { decimalNanoUsd } from "../run/money";
@@ -12,6 +13,7 @@ import {
   readRunUsage,
 } from "../run/repository";
 import { createRunFromChat } from "../run/wake";
+import { publicApprovalCard } from "./approvals";
 import { requireTeamMember } from "./identity";
 
 export const runsApi = new Hono<{ Bindings: Env }>();
@@ -268,4 +270,14 @@ runsApi.get("/runs/:id", async (c) => {
   const run = await getRunById(c.env.DB, c.req.param("id"));
   if (!run) return c.json(fail("not_found", "no such run"), 404);
   return c.json({ run: publicRun(run) });
+});
+
+/** Every approval this run raised, oldest first. D1 only. */
+runsApi.get("/runs/:id/approvals", async (c) => {
+  const member = await requireTeamMember(c);
+  if (member instanceof Response) return member;
+  const run = await getRunById(c.env.DB, c.req.param("id"));
+  if (!run) return c.json(fail("not_found", "no such run"), 404);
+  const rows = await listByRun(c.env.DB, run.id);
+  return c.json({ approvals: rows.map(publicApprovalCard) });
 });

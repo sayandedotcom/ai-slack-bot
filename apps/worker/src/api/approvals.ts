@@ -17,6 +17,7 @@ import { makeRunAgentResolutionNotifier } from "../approval/notifier";
 import {
   decideApproval,
   getApproval,
+  listDecided,
   listOpen,
   listUndeliveredResolutions,
   markResolutionDelivered,
@@ -190,7 +191,7 @@ function publicApprovalSummary(row: ApprovalRow) {
  * it is PII the dashboard legitimately needs (constraint 8) — so it crosses
  * here same as every other column on the row.
  */
-function publicApprovalCard(row: ApprovalRow) {
+export function publicApprovalCard(row: ApprovalRow) {
   return {
     ...publicApprovalSummary(row),
     updatedAt: row.updatedAt,
@@ -220,13 +221,31 @@ approvalsApi.get("/approvals", async (c) => {
     );
   }
 
-  const stateParam = c.req.query("state");
-  if (stateParam !== undefined && stateParam !== "open") {
-    return c.json(fail("invalid_state", "state must be 'open'"), 400);
+  const stateParam = c.req.query("state") ?? "open";
+  if (stateParam === "open") {
+    const rows = await listOpen(c.env.DB);
+    return c.json({ approvals: rows.map(publicApprovalSummary) });
   }
-
-  const rows = await listOpen(c.env.DB);
-  return c.json({ approvals: rows.map(publicApprovalSummary) });
+  if (stateParam === "decided") {
+    const sinceParam = c.req.query("since");
+    let since = Date.now() - 86_400_000;
+    if (sinceParam !== undefined) {
+      const parsed = Number(sinceParam);
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        return c.json(
+          fail("invalid_since", "since must be a unix ms timestamp"),
+          400
+        );
+      }
+      since = parsed;
+    }
+    const rows = await listDecided(c.env.DB, since);
+    return c.json({ approvals: rows.map(publicApprovalCard) });
+  }
+  return c.json(
+    fail("invalid_state", "state must be 'open' or 'decided'"),
+    400
+  );
 });
 
 /** One card. Same D1-only reasoning as the list route above. */
@@ -336,6 +355,7 @@ approvalsApi.patch("/approvals/:id", async (c) => {
       {
         ...fail("already_decided", "already decided"),
         decision: result.row.decision,
+        decidedBy: result.row.decidedBy,
       },
       409
     );
