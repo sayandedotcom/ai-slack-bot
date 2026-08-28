@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { MessagesRow } from "../db/schema";
 import type { Env } from "../index";
 import type { MemoryJob } from "../memory/consumer";
+import { requireTeamMember } from "./identity";
 
 /**
  * Re-enqueues messages that predate the memory layer (or fell into the DLQ)
@@ -32,6 +33,8 @@ export async function backfillMemory(
 export const backfillApi = new Hono<{ Bindings: Env }>();
 
 backfillApi.post("/backfill/memory", async (c) => {
+  const member = await requireTeamMember(c);
+  if (member instanceof Response) return member;
   const enqueued = await backfillMemory(c.env.DB, c.env.MEMORY_QUEUE, 200);
   return c.json({ enqueued });
 });

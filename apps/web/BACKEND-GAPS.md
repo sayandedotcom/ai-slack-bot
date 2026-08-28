@@ -221,14 +221,17 @@ One field it returns is always empty; see §13.
 
 ---
 
-## 6. Nothing counts cost per message
+## 6. Nothing counts cost per message — RESOLVED 2026-08-28 (shape); the per-message cost figure remains unbuilt
 
-**Status: degradation, already handled.**
+**Status: degradation, partially closed.**
 
 The prototype's funnel line read `triage ≈ $0.0003/msg`. `GET /api/counters`
-returns `{ seen, triaged, woken, escalated }` and `since`, and nothing else.
-`/api/runs/:id/usage` gives a per-run total, but no endpoint aggregates spend
-over a window or divides it by message count.
+returns `{ counters: { heard, ingested, triaged, woken, dropped, escalated },
+since, window }`. `dropped` is now computed server-side (`triaged - woken`,
+clamped at zero, in `src/db/counters.ts`), and `window` (`24h` or `7d`, via
+`?window=`) is honoured rather than assumed. `/api/runs/:id/usage` gives a
+per-run total, but no endpoint aggregates spend over a window or divides it by
+message count.
 
 **What the front-end does today.** The funnel shows no cost figure. `dropped`
 is derived as `triaged - woken`, clamped at zero, labelled in italics, and its
@@ -298,6 +301,10 @@ run row does not carry the result.
 string; state: string }[]` to the run summary. `ref` is what to render
 (`#1414`, `ZEL-2041`), `url` is where to send the click.
 
+**RESOLVED 2026-08-28:** `GET /api/runs/:id/effects` exposes the effect
+ledger's `safe_result_json`; the UI links a PR/issue/post only when that
+payload carries a URL. Nothing is fabricated.
+
 ---
 
 ## 10. A 409 on an approval never says who won
@@ -320,6 +327,13 @@ That extra request exists only because of this gap. Adding `decidedBy` to the
 409 body removes a network round trip and a whole branch of client state.
 
 **Contract needed:** `{ code: "already_decided", message, decision, decidedBy }`.
+
+**RESOLVED 2026-08-28 (backend):** the 409 body carries `decidedBy`. The
+front-end has not caught up yet — `nameDecider` and the `reconciled` set in
+`lib/store/approvals-overlay.ts` still exist and are still exercised by
+`use-approvals.ts`'s opportunistic detail read. That workaround is now
+provably redundant and a later task (the `apps/web` rewrite) should delete it
+rather than keep both paths.
 
 ---
 
@@ -465,6 +479,27 @@ delete, because the route has neither — registration is the registrar's job,
 and a channel the bot was removed from keeps its row (Slack refuses the post
 with `not_in_channel`, which is a better enforcement point than a row somebody
 has to keep in sync).
+
+---
+
+## 16. Runs list — RESOLVED 2026-08-28
+
+**Status: closed. Recorded because the shape is new since this file's last
+pass and nothing above described it.**
+
+`GET /api/runs` accepts `status, origin, channelId, shadow, q, cursor, limit`
+as query parameters (`src/api/runs.ts`) and returns `{ runs, nextCursor }`
+(`src/run/repository.ts`, `RunListPage`). Each row carries `costUsd` (a
+decimal string, never a float — the same invariant as `/api/runs/:id/usage`),
+`turns`, and `openApprovalId` (`string | null`), alongside the existing `id,
+origin, status, shadow, summary, channelId, threadTs, createdAt, updatedAt`.
+`cursor` is opaque and only ever round-tripped from a previous `nextCursor`;
+an unrecognized value is a 400, not a silent reset to page one.
+
+`GET /api/runs/:id/approvals` returns that run's approval history —
+`src/api/runs.ts`. `GET /api/approvals?state=decided&since=` extends the
+existing queue read (`src/api/approvals.ts`) with a decided-only view bounded
+by a timestamp, alongside the pre-existing `state=open` default.
 
 ---
 

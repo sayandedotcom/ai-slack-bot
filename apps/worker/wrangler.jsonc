@@ -213,7 +213,7 @@
     // no real customer is in it. Point this at a genuinely internal channel
     // before this system sees a real customer workspace.
     "NUDGE_FALLBACK_CHANNEL_ID": "",
-    // Where the nudge's "Review" button points: `${DASHBOARD_BASE_URL}/?approval=${id}`.
+    // Where the nudge's "Review" button points: `${DASHBOARD_BASE_URL}/approvals?approval=${id}`.
     //
     // Cut over to the Next front-end on 2026-08-28. This is NOT the Worker's own
     // origin any more: `apps/web` is served from Vercel on this hostname, while

@@ -196,7 +196,7 @@ describe("sendNudge", () => {
     expect(sent[1]!.body.channel).toBe(DM_CHANNEL);
     expect(Array.isArray(sent[1]!.body.blocks)).toBe(true);
     expect(JSON.stringify(sent[1]!.body.blocks)).toContain(
-      `https://dash.example/?approval=${row.id}`
+      `https://dash.example/approvals?approval=${row.id}`
     );
     // The nudge is a BOT-token DM to an engineer. It must never carry a
     // customer-send credential.
