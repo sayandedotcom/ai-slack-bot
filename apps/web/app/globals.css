@@ -2,9 +2,11 @@
 
 /*
  * `packages/ui` holds a deliberately generic neutral token set — it is shared,
- * and nothing in it should know what Fire-Fighter looks like. The brand lives
- * here instead: one accent (ember), one status ramp, and the two font
- * variables the shared `@theme` block already references but never defines.
+ * and nothing in it should know what Fire-Fighter looks like. This file
+ * carries the app's own palette instead: the tweakcn "vercel" neutral set,
+ * the one chromatic accent (`--attention`, meaning "a human is needed" and
+ * nothing else), the semantic status ramp, and the two font variables the
+ * shared `@theme` block already references but never defines.
  *
  * Only tokens are redefined. No component is restyled from this file.
  */
