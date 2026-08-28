@@ -20,6 +20,12 @@ const PAGES: PaletteItem[] = [
     href: "/",
     keywords: ["home", "dashboard"],
   },
+  {
+    group: "Pages",
+    label: "Chat",
+    href: "/chat",
+    keywords: ["ask", "new run", "start"],
+  },
   { group: "Pages", label: "Runs", href: "/runs", keywords: ["transcript"] },
   {
     group: "Pages",

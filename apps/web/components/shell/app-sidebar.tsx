@@ -21,6 +21,7 @@ import {
   Inbox,
   LayoutDashboard,
   type LucideIcon,
+  MessageSquare,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -49,6 +50,12 @@ const NAV: NavEntry[] = [
     label: "Overview",
     icon: LayoutDashboard,
     tooltip: "What needs you right now",
+  },
+  {
+    href: "/chat",
+    label: "Chat",
+    icon: MessageSquare,
+    tooltip: "Ask the same agent Slack wakes, or hand it work",
   },
   {
     href: "/runs",

@@ -5,12 +5,19 @@ It sits **beside** `apps/dashboard` rather than replacing it: the Worker still
 builds and serves the Vite SPA as its `ASSETS` bundle, and `pnpm run deploy` in
 `apps/worker` is unaffected.
 
-Six routes: `/` the dashboard (attention row, funnel, approvals queue, decided
-list), `/runs` the workbench — a resizable split of the runs list against
-`/runs/[id]`, one run live over its own socket with that run's approval card
-inside the transcript, `/approvals` the full open queue, `/channels` the
-channel-registry panel, `/team` who speaks and why, and `/eval` shadow pairs
-and the triage score.
+Seven routes: `/` the dashboard (attention row, funnel, approvals queue,
+decided list), `/chat` the create form, `/runs` the workbench — a resizable
+split of the runs list against `/runs/[id]`, one run live over its own socket
+with that run's approval card inside the transcript, `/approvals` the full open
+queue, `/channels` the channel-registry panel, `/team` who speaks and why, and
+`/eval` shadow pairs and the triage score.
+
+Starting a run has two doors and one path behind them: the `/chat` page, and
+the New-run dialog on `/runs`. Both call `makeChatStarter`/`startChatRun`, so
+the idempotency rule — one `clientRequestId` per text, reused across retries —
+holds either way, and both land on `/runs/:id` once `POST /api/runs` answers. A
+run is always read in the workbench; neither door builds a second session
+shape.
 
 **It is live at `https://firefighter.sayande.xyz`.** That hostname is a
 Cloudflare-proxied CNAME to Vercel, added to the same Access application that

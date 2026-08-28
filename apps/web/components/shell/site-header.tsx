@@ -16,6 +16,7 @@ import { useApprovals } from "@/lib/hooks/use-approvals";
 
 const TITLE: Record<string, string> = {
   "/": "Overview",
+  "/chat": "Chat",
   "/runs": "Runs",
   "/approvals": "Approvals",
   "/team": "Team",
