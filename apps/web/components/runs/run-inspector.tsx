@@ -86,11 +86,20 @@ export function RunInspector({ run, now }: { run: RunDetail; now: number }) {
               <li key={ns} className="space-y-1">
                 <p className="eyebrow">{ns}</p>
                 <ul className="space-y-1">
-                  {list.map((e) => {
+                  {list.map((e, i) => {
                     const url = effectUrl(e);
                     return (
                       <li
-                        key={`${e.turnId}:${e.method}:${e.createdAt}`}
+                        // The API's effect rows carry no id (invariant 7 keeps
+                        // args/keys server-side), and the Workers runtime only
+                        // advances its clock on I/O — two same-turn,
+                        // same-method claims issued back-to-back can share a
+                        // millisecond, which the demo fixture's hand-spaced
+                        // timestamps never exercise. `i` is a tiebreaker
+                        // alongside the semantic parts, not a replacement for
+                        // them.
+                        // biome-ignore lint/suspicious/noArrayIndexKey: index is a tiebreaker alongside real fields, not the key on its own.
+                        key={`${e.turnId}:${e.method}:${e.createdAt}:${i}`}
                         className="flex items-center gap-2 text-xs"
                       >
                         <span className="machine truncate">{e.method}</span>

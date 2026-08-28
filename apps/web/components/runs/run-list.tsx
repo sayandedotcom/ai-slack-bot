@@ -82,18 +82,35 @@ export function RunList({ selectedId }: { selectedId: string | null }) {
   // Infinite scroll: a sentinel row after "Load more" triggers the same fetch
   // an IntersectionObserver would — the button stays as the floor for a
   // browser or a test environment with no observer.
+  //
+  // RunList re-renders on every runs/now poll (every few seconds), and an
+  // observer is torn down and rebuilt whenever its effect's deps change —
+  // `observe()` then reports the sentinel's CURRENT intersection state
+  // immediately, so a rebuild-happy effect turns "sentinel happens to be
+  // visible" into a fetch every poll with no scrolling at all. Reading
+  // `fetchNext`/`loadingNext` through refs keeps the effect's only dependency
+  // `hasNext`, so the observer is created once per page and only reacts to an
+  // actual crossing of the intersection threshold — at most one fetch per
+  // page in view.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const fetchNextRef = useRef(fetchNext);
+  const loadingNextRef = useRef(loadingNext);
+  useEffect(() => {
+    fetchNextRef.current = fetchNext;
+    loadingNextRef.current = loadingNext;
+  }, [fetchNext, loadingNext]);
   useEffect(() => {
     if (!hasNext) return;
     const node = sentinelRef.current;
     if (!node || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver((entries) => {
       const [entry] = entries;
-      if (entry?.isIntersecting && hasNext && !loadingNext) fetchNext();
+      if (entry?.isIntersecting && !loadingNextRef.current)
+        fetchNextRef.current();
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasNext, loadingNext, fetchNext]);
+  }, [hasNext]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
