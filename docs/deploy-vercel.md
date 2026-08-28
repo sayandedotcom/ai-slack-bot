@@ -142,11 +142,12 @@ None of this is in the repository, so it is written down here instead. Done
 
 7. **OAuth callbacks.** `redirectUri` is derived from the request's own origin
    (`src/oauth/slack.ts`, `github.ts`), not from a var, so each origin needs its
-   callback registered. Slack allows several redirect URLs, so
-   `https://firefighter.sayande.xyz/api/oauth/slack/callback` is **added**
-   alongside the workers.dev one. A GitHub OAuth app allows exactly one, so that
-   is a **move**, and it is why it belongs to the cutover rather than the
-   additive phase.
+   callback registered. **Both providers accept several**, so both are
+   **additions** rather than moves — each app now lists the workers.dev callback
+   and `https://firefighter.sayande.xyz/api/oauth/…/callback` side by side, and
+   Connect-Slack and Connect-GitHub work from either dashboard. (GitHub marks
+   one of its callback URLs *Default*; that only picks which is used when a
+   request omits `redirect_uri`, and this Worker always sends one.)
 
 ### Verified after the fact
 
@@ -169,14 +170,16 @@ OLD  /slack/events  200,                 NOT a redirect             (bypass inta
 
 ## The cutover — DONE 2026-08-28
 
-Everything except the two switches below was additive; while they were
-outstanding both dashboards were fully live. Both have now been made, so
-**`firefighter.sayande.xyz` is the front door.**
+Everything except the switches below was additive, and in the end the OAuth
+half turned out to be additive too — both providers accept multiple callback
+URLs, so both dashboards kept every capability. **`firefighter.sayande.xyz` is
+now the front door**, and the only thing the old one lost is being what Slack
+points at.
 
 | Switch | State | Reverting it |
 | --- | --- | --- |
 | `DASHBOARD_BASE_URL` → `https://firefighter.sayande.xyz` | **done** — every approval DM's Review button now deep-links into the Next app, where `?approval=` rings the named card | one var, then `pnpm run deploy` |
-| GitHub OAuth callback → the new host | **done** — a GitHub OAuth app allows one callback URL, so Connect-GitHub now works on the new dashboard and **not** on the old one. Existing stored connections are unaffected; only the connect flow moved. | repoint it back |
+| GitHub OAuth callback → the new host | **done, and additively** — GitHub accepts several callback URLs, so both hosts are registered and Connect-GitHub works from either. Nothing was taken away. | remove the new URL |
 
 **The Vite SPA at `firefighter.sayandeten.workers.dev` still works and still
 serves from `assets`.** It simply stopped being what Slack sends people to.
