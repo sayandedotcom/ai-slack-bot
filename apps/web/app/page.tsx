@@ -1,38 +1,39 @@
 "use client";
 
-import { ApprovalsQueue } from "@/components/dashboard/approvals-queue";
-import { ChannelsPanel } from "@/components/dashboard/channels-panel";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect } from "react";
+
 import { FunnelStrip } from "@/components/dashboard/funnel-strip";
-import { NudgePreview } from "@/components/dashboard/nudge-preview";
-import { RosterCard } from "@/components/dashboard/roster-card";
 import { RunSheet } from "@/components/dashboard/run-sheet";
 import { RunsFeed } from "@/components/dashboard/runs-feed";
-import { ShadowPanel } from "@/components/dashboard/shadow-panel";
 import { SpeakerHero } from "@/components/dashboard/speaker-hero";
-import { TeamTable } from "@/components/dashboard/team-table";
-import { TokenExplainer } from "@/components/dashboard/token-explainer";
 import { PageHeader } from "@/components/shell/page-header";
-import {
-  useCounters,
-  useIdentityQuery,
-  useRoster,
-} from "@/lib/hooks/use-dashboard-data";
+import { useCounters, useRoster } from "@/lib/hooks/use-dashboard-data";
 
 /**
  * The dashboard, in the order a stranger needs to read it: whose voice the
- * agent uses, how little of what it hears reaches a human, what it is doing,
- * and what is waiting on you.
+ * agent uses, how little of what it hears reaches a human, and what it is
+ * doing.
  *
- * The roster is read here AND inside the team table, deliberately. Both call
- * `useRoster()`, the cache answers once, and neither has to be handed the other
- * one's data — which is what the Vite dashboard has to do, and says so in a
- * comment, because it has no cache to dedupe with.
+ * The approvals queue, team table, channels panel and shadow corpus each have
+ * their own route now (`/approvals`, `/team`, `/channels`, `/eval`) — Task 16
+ * rewrites this page properly; for now it keeps the pieces that have no other
+ * home yet.
  */
 export default function DashboardPage() {
   const roster = useRoster();
   const counters = useCounters("24h");
-  const { identity } = useIdentityQuery();
-  const role = identity?.role ?? "viewer";
+  const router = useRouter();
+  const search = useSearchParams();
+
+  // Slack's Review buttons already point at `/?approval=<id>` in threads that
+  // exist today — this keeps them working by handing the id to the approvals
+  // queue's own route instead of duplicating that queue here.
+  useEffect(() => {
+    const approval = search.get("approval");
+    if (approval)
+      router.replace(`/approvals?approval=${encodeURIComponent(approval)}`);
+  }, [search, router]);
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 p-4 pb-16 sm:p-6">
@@ -42,51 +43,11 @@ export default function DashboardPage() {
         reply without one of you saying yes.
       </PageHeader>
 
-      <div className="grid gap-4 lg:grid-cols-12">
-        <div className="lg:col-span-7">
-          <SpeakerHero state={roster} />
-        </div>
-        <div className="lg:col-span-5">
-          <RosterCard state={roster} />
-        </div>
-      </div>
+      <SpeakerHero state={roster} />
 
       <FunnelStrip state={counters} />
 
-      <div className="grid items-start gap-4 lg:grid-cols-12">
-        <div className="lg:col-span-7">
-          <RunsFeed />
-        </div>
-        {/*
-          Sticky, and that is the point of the two-column split: the run history
-          is long and worth scrolling, and the thing with a human waiting on the
-          other end of it should not scroll away while you do.
-        */}
-        <div className="lg:sticky lg:top-20 lg:col-span-5">
-          <ApprovalsQueue role={role} />
-        </div>
-      </div>
-
-      {/* The nudge and the two tokens are one idea — how a decision reaches a
-          human and comes back — so they sit together rather than the nudge
-          floating beside the queue it describes. */}
-      <div className="grid items-start gap-4 lg:grid-cols-12">
-        <div className="lg:col-span-5">
-          <NudgePreview />
-        </div>
-        <div className="lg:col-span-7">
-          <TokenExplainer />
-        </div>
-      </div>
-
-      <TeamTable state={roster} identity={identity} />
-
-      {/* Above the shadow corpus, because a channel whose customer is still a
-          guess is a live constraint on what the agent may read — not an
-          after-the-fact review. */}
-      <ChannelsPanel role={identity?.role ?? null} />
-
-      <ShadowPanel />
+      <RunsFeed />
 
       <RunSheet />
     </div>

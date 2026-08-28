@@ -13,11 +13,21 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@workspace/ui/components/sidebar";
-import { Flame, Inbox, type LucideIcon, MessageSquare } from "lucide-react";
+import {
+  Activity,
+  Flame,
+  FlaskConical,
+  Hash,
+  Inbox,
+  LayoutDashboard,
+  type LucideIcon,
+  Users,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useApprovals } from "@/lib/hooks/use-approvals";
+import { useRunsPage } from "@/lib/hooks/use-runs-page";
 import { NavUser } from "./nav-user";
 
 type NavEntry = {
@@ -29,29 +39,61 @@ type NavEntry = {
 };
 
 /**
- * Two entries, and that is the whole application. Slack is where customers
- * reach the agent; this dashboard is where a human approves what it says, and
- * chat is the same agent through a second door. Anything else would be a page
- * nobody opens during an incident.
+ * Six entries, one per job: what needs a human right now, the run history,
+ * the decision queue, who the agent speaks as, which channels it listens to,
+ * and how well triage and the drafts are doing.
  */
 const NAV: NavEntry[] = [
   {
     href: "/",
-    label: "Dashboard",
-    icon: Inbox,
-    tooltip: "Who the agent speaks as, and what's waiting on you",
+    label: "Overview",
+    icon: LayoutDashboard,
+    tooltip: "What needs you right now",
   },
   {
-    href: "/chat",
-    label: "Chat",
-    icon: MessageSquare,
-    tooltip: "Ask the same agent Slack wakes, or hand it work",
+    href: "/runs",
+    label: "Runs",
+    icon: Activity,
+    tooltip: "Every run, with its transcript",
+  },
+  {
+    href: "/approvals",
+    label: "Approvals",
+    icon: Inbox,
+    tooltip: "Decide what the agent may send",
+  },
+  {
+    href: "/team",
+    label: "Team",
+    icon: Users,
+    tooltip: "Who the agent speaks as",
+  },
+  {
+    href: "/channels",
+    label: "Channels",
+    icon: Hash,
+    tooltip: "Which channels it listens to, and how",
+  },
+  {
+    href: "/eval",
+    label: "Eval",
+    icon: FlaskConical,
+    tooltip: "How well triage and the drafts are doing",
   },
 ];
 
 export function AppSidebar() {
   const pathname = usePathname();
   const { openCount } = useApprovals();
+  // Shares the cache with the Runs page's own unfiltered list — no second
+  // query for a badge.
+  const { state: runsState } = useRunsPage({});
+  const activeRunCount =
+    runsState.kind === "ready"
+      ? runsState.data.filter(
+          (r) => r.status === "live" || r.status === "awaiting_approval"
+        ).length
+      : 0;
 
   return (
     <Sidebar collapsible="icon">
@@ -82,7 +124,9 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {NAV.map((entry) => {
-                const active = pathname === entry.href;
+                const active =
+                  pathname === entry.href ||
+                  (entry.href !== "/" && pathname.startsWith(entry.href));
                 return (
                   <SidebarMenuItem key={entry.href}>
                     <SidebarMenuButton
@@ -95,9 +139,14 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                     {/* The badge counts what is still waiting, so the rail says
                         "someone needs you" even when this page is not open. */}
-                    {entry.href === "/" && openCount > 0 ? (
-                      <SidebarMenuBadge className="machine text-primary">
+                    {entry.href === "/approvals" && openCount > 0 ? (
+                      <SidebarMenuBadge className="machine text-attention">
                         {openCount}
+                      </SidebarMenuBadge>
+                    ) : null}
+                    {entry.href === "/runs" && activeRunCount > 0 ? (
+                      <SidebarMenuBadge className="machine">
+                        {activeRunCount}
                       </SidebarMenuBadge>
                     ) : null}
                   </SidebarMenuItem>

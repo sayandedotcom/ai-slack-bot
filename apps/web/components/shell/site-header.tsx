@@ -14,13 +14,18 @@ import { isDemo } from "@/lib/api/client";
 import { useApprovals } from "@/lib/hooks/use-approvals";
 
 const TITLE: Record<string, string> = {
-  "/": "Dashboard",
+  "/": "Overview",
+  "/runs": "Runs",
+  "/approvals": "Approvals",
+  "/team": "Team",
+  "/channels": "Channels",
+  "/eval": "Eval",
   "/chat": "Chat",
 };
 
 /** `/runs/<uuid>` is one title, not one per run. */
 function titleFor(pathname: string): string {
-  if (pathname.startsWith("/runs/")) return "Run";
+  if (pathname.startsWith("/runs/")) return "Runs";
   return TITLE[pathname] ?? "Fire-Fighter";
 }
 
@@ -51,10 +56,10 @@ export function SiteHeader() {
           {openCount > 0 ? (
             <span className="inline-flex items-center gap-1.5">
               <span className="relative flex size-1.5" aria-hidden="true">
-                <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-70" />
-                <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-attention opacity-70" />
+                <span className="relative inline-flex size-1.5 rounded-full bg-attention" />
               </span>
-              <span className="machine text-primary">{openCount}</span>
+              <span className="machine text-attention">{openCount}</span>
               <span className="hidden sm:inline">waiting on you</span>
               <span className="sr-only sm:hidden">waiting on you</span>
             </span>
