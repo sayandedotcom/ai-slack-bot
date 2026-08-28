@@ -1,6 +1,7 @@
 "use client";
 
 import { QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "@workspace/ui/components/sonner";
 import { TooltipProvider } from "@workspace/ui/components/tooltip";
 import { ThemeProvider } from "next-themes";
 import { type ReactNode, useState } from "react";
@@ -28,7 +29,10 @@ export function Providers({ children }: { children: ReactNode }) {
       >
         {/* One provider at the root: tooltips are used throughout, and nesting
             a provider per panel would give each its own open/close timing. */}
-        <TooltipProvider delay={250}>{children}</TooltipProvider>
+        <TooltipProvider delay={250}>
+          {children}
+          <Toaster position="bottom-right" />
+        </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );
