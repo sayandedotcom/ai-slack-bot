@@ -6,6 +6,7 @@ import { artifactsApi } from "./api/artifacts";
 import { backfillApi } from "./api/backfill";
 import { channelsApi } from "./api/channels";
 import { countersApi } from "./api/counters";
+import { effectsApi } from "./api/effects";
 import { evalApi } from "./api/eval";
 import { identityApi } from "./api/identity";
 import { proofsApi } from "./api/proofs";
@@ -227,6 +228,9 @@ app.route("/slack", slackEvents);
 app.route("/api", countersApi);
 app.route("/api", backfillApi);
 app.route("/api", runsApi);
+// The effect ledger, read-only. Same /api mount and the same roster gate; the
+// browser sees what a run did, never what it was asked with.
+app.route("/api", effectsApi);
 // The run transport (Phase 26). Mounted on the same `/api` as everything else,
 // which is what gates the socket and the transcript read with the dashboard's
 // own Access application — see `src/api/agents.ts` for why this is not
