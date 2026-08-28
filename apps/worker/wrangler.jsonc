@@ -214,8 +214,18 @@
     // before this system sees a real customer workspace.
     "NUDGE_FALLBACK_CHANNEL_ID": "",
     // Where the nudge's "Review" button points: `${DASHBOARD_BASE_URL}/?approval=${id}`.
-    // The Worker's own origin — the dashboard is served from it (see "assets").
-    "DASHBOARD_BASE_URL": "https://firefighter.sayandeten.workers.dev",
+    //
+    // Cut over to the Next front-end on 2026-08-28. This is NOT the Worker's own
+    // origin any more: `apps/web` is served from Vercel on this hostname, while
+    // the Worker answers `/api/*` on it (see "routes"), so the deep link and the
+    // API the card is decided through are still one origin. `apps/web` reads the
+    // `?approval=` parameter (`lib/hooks/use-selected-approval.ts`) and rings the
+    // named card.
+    //
+    // The Vite SPA at the workers.dev origin still works and still serves from
+    // "assets"; it simply stops being what Slack sends people to. Reverting this
+    // one value makes it the front door again.
+    "DASHBOARD_BASE_URL": "https://firefighter.sayande.xyz",
     // How ingest recognises this app's OWN user-token posts (agent replies sent
     // as the on-duty engineer). Slack stamps bot_id + app_id on every
     // API-posted message, so without these two pins the blanket bot drop erased

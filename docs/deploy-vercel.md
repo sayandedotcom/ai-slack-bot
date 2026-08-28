@@ -167,18 +167,29 @@ OLD  /slack/events  200,                 NOT a redirect             (bypass inta
   `sayandedotcom/ai-slack-bot`, not `Zellify/firefighter`. That is what this
   checkout's `origin` points at.
 
-## The cutover, and how to undo it
+## The cutover — DONE 2026-08-28
 
-Everything except the two switches below is additive: while only those are
-outstanding, both dashboards are live and the Vite SPA is untouched.
+Everything except the two switches below was additive; while they were
+outstanding both dashboards were fully live. Both have now been made, so
+**`firefighter.sayande.xyz` is the front door.**
 
-| Switch | What it does | Reverting it |
+| Switch | State | Reverting it |
 | --- | --- | --- |
-| `DASHBOARD_BASE_URL` → `https://firefighter.sayande.xyz` | points every approval DM's Review button at the new dashboard | one var, then `pnpm run deploy` |
-| GitHub OAuth callback → the new host | moves Connect-GitHub; existing stored connections are unaffected | repoint it back |
+| `DASHBOARD_BASE_URL` → `https://firefighter.sayande.xyz` | **done** — every approval DM's Review button now deep-links into the Next app, where `?approval=` rings the named card | one var, then `pnpm run deploy` |
+| GitHub OAuth callback → the new host | **done** — a GitHub OAuth app allows one callback URL, so Connect-GitHub now works on the new dashboard and **not** on the old one. Existing stored connections are unaffected; only the connect flow moved. | repoint it back |
 
-Reverting both restores the Vite SPA as the front door without undoing anything
-else. Retiring `apps/dashboard` is a separate, deliberate change — and
+**The Vite SPA at `firefighter.sayandeten.workers.dev` still works and still
+serves from `assets`.** It simply stopped being what Slack sends people to.
+Reverting the two rows above makes it the front door again, and nothing else
+needs undoing.
+
+What deliberately did **not** move, and should not be moved casually:
+`PROOFS_BASE_URL` and `/slack/events`. Proof links are already pasted into
+customer Slack threads and resolve against the workers.dev origin, and the
+Slack webhook is HMAC-verified and gains nothing from a prettier hostname.
+Both depend on `workers_dev: true` staying true.
+
+Retiring `apps/dashboard` altogether is a separate, deliberate change — and
 `BACKEND-GAPS.md` §12 is blunt that two dashboards should not be permanent.
 
 ## Was required at merge time — all four are done
