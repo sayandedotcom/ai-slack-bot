@@ -1,16 +1,21 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useState } from "react";
+import { toast } from "sonner";
 
+import { chipsByTurn } from "@/lib/api/effects";
+import { useRunEffects } from "@/lib/hooks/use-dashboard-data";
 import { useRunAgent } from "@/lib/hooks/use-run-agent";
 import { RunView } from "./run-view";
 
 /**
- * The wired run view. Everything it knows comes from the socket.
+ * The wired run view. Everything it knows comes from the socket, plus the
+ * effect ledger for the chip strip — a separate D1 read, never invented from
+ * the transcript.
  *
- * Four lines, and that is the point of the split: `RunView` is pure and holds
- * every state this can be in, so the socket lives in exactly one file and is
- * never in the way of rendering the thing.
+ * `RunView` is pure and holds every state this can be in, so the socket lives
+ * in exactly one file and is never in the way of rendering the thing.
  *
  * Loaded through `next/dynamic({ ssr: false })` by `run-panel.tsx`.
  * `usePartySocket` constructs its socket inside `useState`, which runs during
@@ -26,6 +31,17 @@ export function RunSession({
   approvals?: ReactNode;
 }) {
   const run = useRunAgent(runId);
+  const effects = useRunEffects(runId);
+  const [cancelling, setCancelling] = useState(false);
+
+  const onCancel = () => {
+    setCancelling(true);
+    void run
+      .cancel()
+      .then(() => toast("Cancel sent"))
+      .catch(() => toast.error("Could not cancel"))
+      .finally(() => setCancelling(false));
+  };
 
   return (
     <RunView
@@ -38,6 +54,10 @@ export function RunSession({
       onSend={run.send}
       onDismissError={run.dismissError}
       approvals={approvals}
+      chips={chipsByTurn(effects.kind === "ready" ? effects.data : [])}
+      canCancel={run.status === "live"}
+      onCancel={onCancel}
+      cancelling={cancelling}
     />
   );
 }

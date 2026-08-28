@@ -22,7 +22,9 @@ describe("Transcript", () => {
     expect(
       screen.getByText(/did PulseFit complain about checkout/)
     ).toBeInTheDocument();
-    expect(screen.getAllByText("run_code")).toHaveLength(2);
+    // No `chips` prop: every tool row falls back to the tool name plus the
+    // length of the code it ran.
+    expect(screen.getAllByText(/^run_code · \d+ chars$/)).toHaveLength(2);
   });
 
   it("keeps a tool call collapsed until it is asked for", async () => {
@@ -93,5 +95,55 @@ describe("Transcript", () => {
       />
     );
     expect(container.querySelector("li")?.textContent).toBe("");
+  });
+
+  it("shows a capability chip strip on the tool row that follows a user turn", () => {
+    const messages = [
+      {
+        id: "turn:1",
+        role: "user",
+        parts: [{ type: "text", text: "fix it" }],
+        metadata: { turnId: "turn:1" },
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-run_code",
+            state: "output-available",
+            input: { code: "1" },
+            output: "ok",
+          },
+        ],
+      },
+    ];
+    render(
+      <Transcript
+        messages={messages}
+        chips={new Map([["turn:1", ["slack.post", "supabase.read ×3"]]])}
+      />
+    );
+    expect(screen.getByText("slack.post")).toBeInTheDocument();
+    expect(screen.getByText("supabase.read ×3")).toBeInTheDocument();
+  });
+
+  it("falls back to the code length when no effects match the turn", () => {
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-run_code",
+            state: "output-available",
+            input: { code: "abcdef" },
+            output: "ok",
+          },
+        ],
+      },
+    ];
+    render(<Transcript messages={messages} chips={new Map()} />);
+    expect(screen.getByText("run_code · 6 chars")).toBeInTheDocument();
   });
 });

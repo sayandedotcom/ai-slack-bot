@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import type { ReactNode } from "react";
 
 import { isDemo } from "@/lib/api/client";
+import { chipsByTurn } from "@/lib/api/effects";
+import { demoEffectsFor } from "@/lib/fixtures/effects";
 import { demoTranscriptFor } from "@/lib/fixtures/run-transcript";
 import { RunView } from "./run-view";
 
@@ -45,6 +47,10 @@ export function RunPanel({
         onDismissError={() => {}}
         approvals={approvals}
         steerDisabledReason="Steering is off in demo mode — there is no run behind this transcript."
+        chips={chipsByTurn(demoEffectsFor(runId))}
+        canCancel={false}
+        onCancel={() => {}}
+        cancelling={false}
       />
     );
   }

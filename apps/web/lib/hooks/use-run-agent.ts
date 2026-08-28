@@ -127,6 +127,11 @@ export type RunAgentView = {
   sendError: string | null;
   send: (text: string) => void;
   dismissError: () => void;
+  /**
+   * Stop the turn in flight. A `@callable`, not a chat frame — the run stays
+   * where it is, because a human stopping it is not the run failing.
+   */
+  cancel: () => Promise<void>;
 };
 
 export function useRunAgent(runId: string): RunAgentView {
@@ -192,6 +197,11 @@ export function useRunAgent(runId: string): RunAgentView {
     clearError();
   }, [clearError]);
 
+  const cancel = useCallback(
+    () => agent.call("cancel", []).then(() => undefined),
+    [agent]
+  );
+
   return {
     connection: connected ? "live" : dropped ? "reconnecting" : "connecting",
     connectionError:
@@ -203,5 +213,6 @@ export function useRunAgent(runId: string): RunAgentView {
     sendError,
     send,
     dismissError,
+    cancel,
   };
 }

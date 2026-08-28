@@ -1,5 +1,6 @@
 "use client";
 
+import { StatusBadge } from "@workspace/ui/components/status-badge";
 import { cn } from "@workspace/ui/lib/utils";
 import { ChevronRight, Code2, Flame, User } from "lucide-react";
 import { useState } from "react";
@@ -24,10 +25,25 @@ export type TranscriptMessage = {
   id: string;
   role: string;
   parts: readonly unknown[];
+  metadata?: unknown;
 };
 
 /** How much of a tool payload this pane will show. It is not a JSON viewer. */
 export const PAYLOAD_MAX_CHARS = 5_000;
+
+/**
+ * The turn a message belongs to, as the Worker stamps it: `metadata: {
+ * inputRevision, turnId: messageId }` on the user message that opened the
+ * turn. A message with no metadata (the demo fixture, an older message shape)
+ * has no turn id — callers fall back to the message's own id, which is enough
+ * to key a chip strip even when it can never match the effect ledger's ids.
+ */
+export function turnIdOf(message: TranscriptMessage): string | null {
+  const meta = message.metadata;
+  if (typeof meta !== "object" || meta === null) return null;
+  const id = (meta as { turnId?: unknown }).turnId;
+  return typeof id === "string" && id !== "" ? id : null;
+}
 
 function partType(part: unknown): string {
   if (typeof part !== "object" || part === null) return "";
@@ -78,21 +94,41 @@ function preview(value: unknown): { text: string; truncated: boolean } {
 
 export function Transcript({
   messages,
+  chips,
 }: {
   messages: readonly TranscriptMessage[];
+  /** This turn's capability chips, keyed by `turnIdOf`. From `chipsByTurn`. */
+  chips?: ReadonlyMap<string, readonly string[]>;
 }) {
+  // The turn a row belongs to is whichever user message came before it — so a
+  // tool row is walked in order, tracking the last user turn seen, rather than
+  // looked up independently per row.
+  let currentTurn: string | null = null;
   return (
     <ol className="space-y-5">
-      {messages.map((message) => (
-        <li key={message.id}>
-          <MessageRow message={message} />
-        </li>
-      ))}
+      {messages.map((message) => {
+        if (message.role === "user") {
+          currentTurn = turnIdOf(message) ?? message.id;
+        }
+        const turnChips =
+          currentTurn === null ? null : (chips?.get(currentTurn) ?? null);
+        return (
+          <li key={message.id}>
+            <MessageRow message={message} chips={turnChips} />
+          </li>
+        );
+      })}
     </ol>
   );
 }
 
-function MessageRow({ message }: { message: TranscriptMessage }) {
+function MessageRow({
+  message,
+  chips,
+}: {
+  message: TranscriptMessage;
+  chips: readonly string[] | null;
+}) {
   const isAgent = message.role !== "user";
   const rows: React.ReactNode[] = [];
   let index = 0;
@@ -115,7 +151,7 @@ function MessageRow({ message }: { message: TranscriptMessage }) {
       continue;
     }
     if (isToolPart(part)) {
-      rows.push(<ToolRow key={key} part={part} />);
+      rows.push(<ToolRow key={key} part={part} chips={chips} />);
     }
     // `reasoning` is deliberately not rendered: the provider returns thinking
     // with an empty text field (invariant 17), so there is nothing to show and
@@ -163,7 +199,13 @@ function MessageRow({ message }: { message: TranscriptMessage }) {
  * survive being rendered with no client JS in the test harness and the open
  * state is a single boolean.
  */
-function ToolRow({ part }: { part: unknown }) {
+function ToolRow({
+  part,
+  chips,
+}: {
+  part: unknown;
+  chips: readonly string[] | null;
+}) {
   const [open, setOpen] = useState(false);
   const record = part as { input?: unknown; output?: unknown; state?: unknown };
   const code = (record.input as { code?: unknown } | undefined)?.code;
@@ -191,7 +233,26 @@ function ToolRow({ part }: { part: unknown }) {
           className="size-3.5 shrink-0 text-muted-foreground"
           aria-hidden="true"
         />
-        <span className="machine text-xs">{toolNameOf(part)}</span>
+        {chips && chips.length > 0 ? (
+          <span className="flex min-w-0 flex-wrap gap-1">
+            {chips.map((c) => (
+              <StatusBadge
+                key={c}
+                tone="neutral"
+                variant="outline"
+                size="sm"
+                mono
+              >
+                {c}
+              </StatusBadge>
+            ))}
+          </span>
+        ) : (
+          <span className="machine text-xs">
+            {toolNameOf(part)}
+            {typeof code === "string" ? ` · ${code.length} chars` : ""}
+          </span>
+        )}
         {state === "" ? null : <span className="eyebrow ml-auto">{state}</span>}
       </button>
       {open ? (
