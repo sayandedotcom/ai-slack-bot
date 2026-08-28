@@ -122,8 +122,11 @@ export default function RunPage({
         </div>
       </div>
 
+      {/* `min-h-0` + `overflow-hidden` on the aside so the inspector's own
+          `overflow-y-auto` scrolls WITHIN this column rather than stretching
+          it — a tall effect list must not lengthen the row it sits in. */}
       {inspector && run.data ? (
-        <aside className="hidden w-72 shrink-0 border-l xl:block">
+        <aside className="hidden min-h-0 w-72 shrink-0 overflow-hidden border-l xl:block">
           <RunInspector run={run.data} now={now} />
         </aside>
       ) : null}

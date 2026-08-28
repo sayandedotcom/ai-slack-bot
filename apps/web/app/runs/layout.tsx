@@ -30,7 +30,16 @@ export default function RunsLayout({
   const params = useParams<{ id?: string }>();
   const selectedId = typeof params.id === "string" ? params.id : null;
   return (
-    <div className="h-[calc(100svh-3.5rem)]">
+    /*
+     * Exactly one viewport tall, minus the header, and `overflow-hidden` so it
+     * can never be more. This route must NOT scroll as a page: the list, the
+     * transcript and the inspector each own their own scroll, and a page-level
+     * scrollbar on top of three internal ones moves the wrong thing under a
+     * reader's cursor. The clamp is structural rather than arithmetic — even
+     * if a child later mis-measures, the overflow is contained here instead of
+     * growing the document.
+     */
+    <div className="h-[calc(100svh-3.5rem)] overflow-hidden">
       {/*
         `orientation`, not `direction`, and sizes as PERCENT STRINGS, not bare
         numbers — this is `react-resizable-panels` 4.x's own API (`Group` /
