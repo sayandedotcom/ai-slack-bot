@@ -10,7 +10,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils";
 import { ChevronRight } from "lucide-react";
 
-import { type Counters, deriveFunnel, type Funnel } from "@/lib/api/counters";
+import type { Counters } from "@/lib/api/counters";
 import type { PanelState } from "@/lib/panel-state";
 
 /**
@@ -19,22 +19,25 @@ import type { PanelState } from "@/lib/panel-state";
  * Four stat tiles with big numbers would say "here are four numbers". What is
  * true is an ATTENUATION: a cheap model hears everything the team hears so an
  * expensive one wakes rarely, and a human is interrupted rarer still. So each
- * stage carries a bar scaled against `seen`, and the bars visibly collapse
+ * stage carries a bar scaled against `heard`, and the bars visibly collapse
  * across the row. The ember is spent on exactly one stage — `escalated` — the
  * only one that means a person has to do something.
+ *
+ * This reads `state.data.counters` directly rather than through
+ * `lib/api/counters.ts`'s `funnelStages` — that helper's four-stage output
+ * (heard/triaged/woken/escalated) drops `dropped`, which this row still shows.
+ * Task 16 replaces this component with one built on the new helper.
  */
 type Stage = {
-  key: keyof Funnel;
+  key: keyof Counters["counters"];
   label: string;
   meaning: string;
-  /** Derived stages are not counted by anyone and must say so. */
-  derived?: boolean;
   accent?: boolean;
 };
 
 const STAGES: Stage[] = [
   {
-    key: "seen",
+    key: "heard",
     label: "heard",
     meaning:
       "Every message in a channel the agent watches. Stored verbatim with its permalink.",
@@ -48,9 +51,7 @@ const STAGES: Stage[] = [
   {
     key: "dropped",
     label: "dropped",
-    meaning:
-      "Triaged and judged not worth waking the main agent. Derived as triaged minus woken — the endpoint does not count it.",
-    derived: true,
+    meaning: "Triaged and judged not worth waking the main agent.",
   },
   {
     key: "woken",
@@ -83,10 +84,10 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
     );
   }
 
-  const funnel = deriveFunnel(state.data.counters);
+  const funnel = state.data.counters;
   // Everything is scaled against what came in. A denominator of zero means a
   // quiet day, not a division to guard against downstream.
-  const scale = Math.max(funnel.seen, 1);
+  const scale = Math.max(funnel.heard, 1);
 
   return (
     <Card>
@@ -114,14 +115,7 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
                     >
                       {value}
                     </div>
-                    <div
-                      className={cn(
-                        "pb-1 text-xs",
-                        stage.derived
-                          ? "text-muted-foreground/70 italic"
-                          : "text-muted-foreground"
-                      )}
-                    >
+                    <div className="pb-1 text-muted-foreground text-xs">
                       {stage.label}
                     </div>
                     {/*
@@ -133,11 +127,7 @@ export function FunnelStrip({ state }: { state: PanelState<Counters> }) {
                       <div
                         className={cn(
                           "h-full min-w-[3px] rounded-full",
-                          stage.accent
-                            ? "bg-primary"
-                            : stage.derived
-                              ? "bg-muted-foreground/30"
-                              : "bg-muted-foreground/60"
+                          stage.accent ? "bg-primary" : "bg-muted-foreground/60"
                         )}
                         style={{ width: `${Math.max(ratio * 100, 0.8)}%` }}
                       />

@@ -30,7 +30,7 @@ import {
  */
 export default function DashboardPage() {
   const roster = useRoster();
-  const counters = useCounters();
+  const counters = useCounters("24h");
   const { identity } = useIdentityQuery();
   const role = identity?.role ?? "viewer";
 

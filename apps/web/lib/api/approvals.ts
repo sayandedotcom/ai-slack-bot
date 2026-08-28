@@ -2,6 +2,8 @@ import {
   decideDemoApproval,
   getDemoApproval,
   listDemoApprovals,
+  listDemoApprovalsForRun,
+  listDemoDecided,
 } from "../fixtures/approvals";
 import { fixture, getJson, isDemo, patchJson } from "./client";
 import { ApiError, kindFor } from "./errors";
@@ -53,11 +55,33 @@ export async function getOpenApprovals(): Promise<OpenApproval[]> {
   return body.approvals;
 }
 
+/** Every approval card that belongs to one run, open or decided. */
+export async function getRunApprovals(
+  runId: string
+): Promise<ApprovalDetail[]> {
+  if (isDemo()) return fixture(listDemoApprovalsForRun(runId));
+  const body = await getJson<{ approvals: ApprovalDetail[] }>(
+    `/api/runs/${encodeURIComponent(runId)}/approvals`
+  );
+  return body.approvals;
+}
+
+/** Cards decided since `sinceMs`, across every run. */
+export async function getDecidedApprovals(
+  sinceMs: number
+): Promise<ApprovalDetail[]> {
+  if (isDemo()) return fixture(listDemoDecided());
+  const body = await getJson<{ approvals: ApprovalDetail[] }>(
+    `/api/approvals?state=decided&since=${sinceMs}`
+  );
+  return body.approvals;
+}
+
 /**
- * The full card for one approval. This is the ONLY place `decidedBy` can be
- * learned: the worker's 409 conflict body carries the winning decision but not
- * the winner's name, so a card that lost a race needs this second read to say
- * who won.
+ * The full card for one approval. Kept even though the worker's 409 conflict
+ * body now carries `decidedBy` alongside the winning decision (see `decide`
+ * below): a card reached any other way — a deep link, the run's own approvals
+ * list — still needs a direct read.
  */
 export async function getApproval(id: string): Promise<ApprovalDetail> {
   if (isDemo()) return fixture(getDemoApproval(id));
@@ -105,14 +129,18 @@ export async function decide(
   }
 
   if (response.status === 409) {
-    const body = response.body as { decision?: Decision } | null;
+    const body = response.body as {
+      decision?: Decision;
+      decidedBy?: string | null;
+    } | null;
     const decision = body?.decision;
     if (!decision)
       return { result: "error", error: new ApiError(409, "unavailable", path) };
-    // The worker's conflict body carries `decision` only — there is no
-    // `decidedBy` on this path, so the winner has no name to show. Kept in the
-    // shape as null so callers compile against one `DecideResult`.
-    return { result: "already_decided", decision, decidedBy: null };
+    return {
+      result: "already_decided",
+      decision,
+      decidedBy: body?.decidedBy ?? null,
+    };
   }
 
   return {

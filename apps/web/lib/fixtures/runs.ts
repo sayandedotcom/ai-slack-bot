@@ -21,6 +21,9 @@ export const demoRuns: RunSummary[] = [
     customerSlug: "pulsefit",
     createdAt: minutes(14),
     updatedAt: minutes(12),
+    costUsd: "0.4127",
+    turns: 3,
+    openApprovalId: null,
   },
   {
     id: "a1c9e7d4-32b8-4f10-95aa-7c2e5b8d0446",
@@ -34,6 +37,11 @@ export const demoRuns: RunSummary[] = [
     customerSlug: "lingua",
     createdAt: minutes(29),
     updatedAt: minutes(26),
+    costUsd: "0.1893",
+    turns: 2,
+    // The one open card in `fixtures/approvals.ts` — kept in sync by hand,
+    // there being only one place that fixture's id is minted.
+    openApprovalId: "apr-8f21c05e",
   },
   {
     id: "7b2d5a90-6e1f-4c33-a8d7-90f1b3e6c258",
@@ -47,6 +55,9 @@ export const demoRuns: RunSummary[] = [
     customerSlug: "macrosnap",
     createdAt: minutes(74),
     updatedAt: minutes(61),
+    costUsd: "0.9042",
+    turns: 5,
+    openApprovalId: null,
   },
   {
     id: "c4e8f107-5a23-4b96-8e15-2d7a9c0b4f36",
@@ -60,6 +71,9 @@ export const demoRuns: RunSummary[] = [
     customerSlug: "driftwear",
     createdAt: minutes(196),
     updatedAt: minutes(181),
+    costUsd: "0.2255",
+    turns: 1,
+    openApprovalId: null,
   },
   {
     // The run `/chat` resolves to in demo mode, so the transcript fixture and
@@ -77,6 +91,9 @@ export const demoRuns: RunSummary[] = [
     customerSlug: null,
     createdAt: minutes(21),
     updatedAt: minutes(17),
+    costUsd: "0.1204",
+    turns: 2,
+    openApprovalId: null,
   },
   {
     id: "e0a6b3f8-1d74-49c5-b2e9-6f4c8a105d72",
@@ -89,6 +106,9 @@ export const demoRuns: RunSummary[] = [
     customerSlug: null,
     createdAt: minutes(310),
     updatedAt: minutes(308),
+    costUsd: "0.0310",
+    turns: 1,
+    openApprovalId: null,
   },
 ];
 
