@@ -2,7 +2,7 @@
 
 > One agent that hears every Slack message the team hears, wakes on the ones that matter, reproduces the bug on its own cloud machine, fixes it, records the proof, and opens a PR.
 
-**Live:** https://firefighter.sayandeten.workers.dev · **Loom walkthrough:** _(link)_
+**Live:** https://firefighter.sayande.xyz · **Worker origin:** https://firefighter.sayandeten.workers.dev
 
 ---
 
