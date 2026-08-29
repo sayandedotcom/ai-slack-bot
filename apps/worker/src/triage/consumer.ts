@@ -1,5 +1,8 @@
+import { and, asc, desc, eq, ne, or } from "drizzle-orm";
 import { getChannelPolicy, shouldTriage } from "../db/channels";
-import type { MessagesRow, RunsRow, TriageDecisionsRow } from "../db/schema";
+import { orm } from "../db/client";
+import type { MessagesRow } from "../db/schema";
+import { messages, runs, triageDecisions } from "../db/tables";
 import type { Env } from "../index";
 import { graphIdFor } from "../memory/graphs";
 import type { MemoryStore } from "../memory/store";
@@ -65,11 +68,20 @@ async function loadMessage(
   env: Env,
   eventId: string
 ): Promise<MessageRow | null> {
-  return env.DB.prepare(
-    "SELECT event_id, channel_id, ts, thread_ts, user_id, text, permalink FROM messages WHERE event_id = ?"
-  )
-    .bind(eventId)
-    .first<MessageRow>();
+  const row = await orm(env.DB)
+    .select({
+      event_id: messages.event_id,
+      channel_id: messages.channel_id,
+      ts: messages.ts,
+      thread_ts: messages.thread_ts,
+      user_id: messages.user_id,
+      text: messages.text,
+      permalink: messages.permalink,
+    })
+    .from(messages)
+    .where(eq(messages.event_id, eventId))
+    .get();
+  return row ?? null;
 }
 
 /**
@@ -93,11 +105,14 @@ async function triageOne(
   env: Env,
   deps: TriageDeps
 ): Promise<void> {
-  const decided = await env.DB.prepare(
-    "SELECT wake, opening_prompt FROM triage_decisions WHERE event_id = ?"
-  )
-    .bind(eventId)
-    .first<Pick<TriageDecisionsRow, "wake" | "opening_prompt">>();
+  const decided = await orm(env.DB)
+    .select({
+      wake: triageDecisions.wake,
+      opening_prompt: triageDecisions.opening_prompt,
+    })
+    .from(triageDecisions)
+    .where(eq(triageDecisions.event_id, eventId))
+    .get();
 
   if (decided) {
     if (decided.wake !== 1) return;
@@ -141,13 +156,19 @@ async function triageOne(
     if (routed) return;
   }
 
-  const { results: threadRows } = await env.DB.prepare(
-    `SELECT user_id, text FROM messages
-     WHERE channel_id = ? AND (thread_ts = ? OR ts = ?) AND event_id != ?
-     ORDER BY ts ASC LIMIT 30`
-  )
-    .bind(row.channel_id, threadTs, threadTs, eventId)
-    .all<Pick<MessagesRow, "user_id" | "text">>();
+  const threadRows = await orm(env.DB)
+    .select({ user_id: messages.user_id, text: messages.text })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.channel_id, row.channel_id),
+        or(eq(messages.thread_ts, threadTs), eq(messages.ts, threadTs)),
+        ne(messages.event_id, eventId)
+      )
+    )
+    .orderBy(asc(messages.ts))
+    .limit(30)
+    .all();
 
   // Recall is best-effort: triage must keep working when Zep is down.
   let recall: TriageInput["recall"] = [];
@@ -205,21 +226,19 @@ async function triageOne(
           : "")
       : outcome.opening_prompt;
 
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO triage_decisions
-       (event_id, wake, why, opening_prompt, model, cost_usd, latency_ms, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      eventId,
-      wake ? 1 : 0,
+  await orm(env.DB)
+    .insert(triageDecisions)
+    .values({
+      event_id: eventId,
+      wake: wake ? 1 : 0,
       why,
-      openingPrompt,
-      outcome.model,
-      outcome.cost_usd,
-      outcome.latency_ms,
-      Date.now()
-    )
+      opening_prompt: openingPrompt,
+      model: outcome.model,
+      cost_usd: outcome.cost_usd,
+      latency_ms: outcome.latency_ms,
+      created_at: Date.now(),
+    })
+    .onConflictDoNothing()
     .run();
 
   if (!wake) return;
@@ -251,13 +270,18 @@ async function threadRunFailed(
   channelId: string,
   threadTs: string
 ): Promise<boolean> {
-  const run = await env.DB.prepare(
-    `SELECT status FROM runs
-      WHERE origin = 'slack' AND channel_id = ? AND thread_ts = ?
-      ORDER BY created_at DESC
-      LIMIT 1`
-  )
-    .bind(channelId, threadTs)
-    .first<Pick<RunsRow, "status">>();
+  const run = await orm(env.DB)
+    .select({ status: runs.status })
+    .from(runs)
+    .where(
+      and(
+        eq(runs.origin, "slack"),
+        eq(runs.channel_id, channelId),
+        eq(runs.thread_ts, threadTs)
+      )
+    )
+    .orderBy(desc(runs.created_at))
+    .limit(1)
+    .get();
   return run?.status === "failed";
 }

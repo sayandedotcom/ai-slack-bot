@@ -1,3 +1,4 @@
+import { and, asc, eq, isNull, lte } from "drizzle-orm";
 import type { ApprovalRow } from "../approval/contracts";
 import {
   claimNudge,
@@ -6,7 +7,8 @@ import {
   releaseNudge,
 } from "../approval/repository";
 import { getChannelPolicy } from "../db/channels";
-import type { ApprovalsRow } from "../db/schema";
+import { orm } from "../db/client";
+import { approvals } from "../db/tables";
 import { resolveSpeaker, SPEAKER_POOL } from "../identity/speaker";
 import type { Env } from "../index";
 import { nudgeBlocks, resolvedBlocks } from "./blocks";
@@ -336,17 +338,22 @@ export async function updateNudge(env: Env, row: ApprovalRow): Promise<void> {
  * Returns how many nudges actually went out, for the caller's log line.
  */
 export async function sweepNudges(env: Env, now = Date.now()): Promise<number> {
-  const { results } = await env.DB.prepare(
-    `SELECT id FROM approvals
-     WHERE decision = 'pending' AND nudged_at IS NULL AND created_at <= ?
-     ORDER BY created_at ASC
-     LIMIT ?`
-  )
-    .bind(now - NUDGE_RETRY_AFTER_MS, SWEEP_LIMIT)
-    .all<Pick<ApprovalsRow, "id">>();
+  const results = await orm(env.DB)
+    .select({ id: approvals.id })
+    .from(approvals)
+    .where(
+      and(
+        eq(approvals.decision, "pending"),
+        isNull(approvals.nudged_at),
+        lte(approvals.created_at, now - NUDGE_RETRY_AFTER_MS)
+      )
+    )
+    .orderBy(asc(approvals.created_at))
+    .limit(SWEEP_LIMIT)
+    .all();
 
   let sent = 0;
-  for (const { id } of results ?? []) {
+  for (const { id } of results) {
     try {
       const row = await getApproval(env.DB, id);
       if (row === null || row.decision !== "pending") continue;

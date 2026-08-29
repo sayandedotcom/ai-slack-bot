@@ -1,5 +1,17 @@
+import { and, asc, desc, eq, or, sql } from "drizzle-orm";
+import { orm } from "../db/client";
 import type { MessagesRow } from "../db/schema";
+import { messages } from "../db/tables";
 import type { SlackMessage } from "../gateways/ports";
+
+/** Exactly the columns `MessageRow` names — never the whole row. */
+const MESSAGE_COLUMNS = {
+  event_id: messages.event_id,
+  ts: messages.ts,
+  user_id: messages.user_id,
+  text: messages.text,
+  permalink: messages.permalink,
+} as const;
 
 /**
  * Reads over the ingested message table.
@@ -49,17 +61,19 @@ export async function readThread(
   threadTs: string,
   limit: number
 ): Promise<SlackMessage[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT event_id, ts, user_id, text, permalink
-         FROM messages
-        WHERE channel_id = ? AND (ts = ? OR thread_ts = ?)
-        ORDER BY ts ASC
-        LIMIT ?`
+  const results = await orm(db)
+    .select(MESSAGE_COLUMNS)
+    .from(messages)
+    .where(
+      and(
+        eq(messages.channel_id, channelId),
+        or(eq(messages.ts, threadTs), eq(messages.thread_ts, threadTs))
+      )
     )
-    .bind(channelId, threadTs, threadTs, limit)
-    .all<MessageRow>();
-  return (results ?? []).map(toMessage);
+    .orderBy(asc(messages.ts))
+    .limit(limit)
+    .all();
+  return results.map(toMessage);
 }
 
 /**
@@ -87,15 +101,19 @@ export async function searchStoredMessages(
   db: D1Database,
   input: { customerSlug: string; query: string; limit: number }
 ): Promise<SlackMessage[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT event_id, ts, user_id, text, permalink
-         FROM messages
-        WHERE customer_slug = ? AND text LIKE ? ESCAPE '\\'
-        ORDER BY ts DESC
-        LIMIT ?`
+  const results = await orm(db)
+    .select(MESSAGE_COLUMNS)
+    .from(messages)
+    .where(
+      and(
+        eq(messages.customer_slug, input.customerSlug),
+        // Explicit `ESCAPE`, as everywhere else in this repo: SQLite has no
+        // default escape character and `like()` cannot render the clause.
+        sql`${messages.text} like ${`%${escapeLike(input.query)}%`} escape '\\'`
+      )
     )
-    .bind(input.customerSlug, `%${escapeLike(input.query)}%`, input.limit)
-    .all<MessageRow>();
-  return (results ?? []).map(toMessage);
+    .orderBy(desc(messages.ts))
+    .limit(input.limit)
+    .all();
+  return results.map(toMessage);
 }

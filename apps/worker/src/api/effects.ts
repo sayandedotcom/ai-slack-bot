@@ -1,4 +1,7 @@
+import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { orm } from "../db/client";
+import { codemodeEffects } from "../db/tables";
 import type { Env } from "../index";
 import { getRunById } from "../run/repository";
 import { requireTeamMember } from "./identity";
@@ -15,16 +18,6 @@ import { requireTeamMember } from "./identity";
 export const effectsApi = new Hono<{ Bindings: Env }>();
 
 export const RUN_EFFECTS_MAX = 200;
-
-type EffectRowDb = {
-  turn_id: string;
-  namespace: string;
-  method: string;
-  state: "reserved" | "completed" | "failed" | "in_doubt";
-  safe_result_json: string | null;
-  safe_error: string | null;
-  created_at: number;
-};
 
 function parseSafeResult(json: string | null): unknown {
   if (json === null) return null;
@@ -44,16 +37,24 @@ effectsApi.get("/runs/:id/effects", async (c) => {
   const run = await getRunById(c.env.DB, c.req.param("id"));
   if (!run) return c.json({ code: "not_found", message: "no such run" }, 404);
 
-  const { results } = await c.env.DB.prepare(
-    `SELECT turn_id, namespace, method, state, safe_result_json, safe_error, created_at
-     FROM codemode_effects WHERE run_id = ?
-     ORDER BY created_at DESC LIMIT ?`
-  )
-    .bind(run.id, RUN_EFFECTS_MAX)
-    .all<EffectRowDb>();
+  const results = await orm(c.env.DB)
+    .select({
+      turn_id: codemodeEffects.turn_id,
+      namespace: codemodeEffects.namespace,
+      method: codemodeEffects.method,
+      state: codemodeEffects.state,
+      safe_result_json: codemodeEffects.safe_result_json,
+      safe_error: codemodeEffects.safe_error,
+      created_at: codemodeEffects.created_at,
+    })
+    .from(codemodeEffects)
+    .where(eq(codemodeEffects.run_id, run.id))
+    .orderBy(desc(codemodeEffects.created_at))
+    .limit(RUN_EFFECTS_MAX)
+    .all();
 
   return c.json({
-    effects: (results ?? []).map((row) => ({
+    effects: results.map((row) => ({
       turnId: row.turn_id,
       namespace: row.namespace,
       method: row.method,

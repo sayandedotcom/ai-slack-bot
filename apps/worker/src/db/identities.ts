@@ -1,5 +1,8 @@
+import { and, eq } from "drizzle-orm";
 import { FIREFIGHTERS, VIEWERS } from "../access/roster";
+import { orm } from "./client";
 import type { IdentitiesRow } from "./schema";
+import { identities } from "./tables";
 
 /**
  * D1-only operations on `identities` (`migrations/0008_identities.sql`): which
@@ -40,8 +43,6 @@ export type ConnectStatus = {
 
 type IdentityRowDb = IdentitiesRow;
 
-const COLUMNS = `email, provider, external_id, scopes, token_ciphertext, connected_at, updated_at`;
-
 function toRow(db: IdentityRowDb): IdentityRow {
   return {
     email: db.email,
@@ -66,27 +67,32 @@ export async function upsertIdentity(
   row: Omit<IdentityRow, "updatedAt">,
   now: number
 ): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO identities (${COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(email, provider) DO UPDATE SET
-         external_id = ?, scopes = ?, token_ciphertext = ?, connected_at = ?, updated_at = ?`
-    )
-    .bind(
-      row.email,
-      row.provider,
-      row.externalId,
-      row.scopes,
-      row.tokenCiphertext,
-      row.connectedAt,
-      now,
-      row.externalId,
-      row.scopes,
-      row.tokenCiphertext,
-      row.connectedAt,
-      now
-    )
+  const values = {
+    email: row.email,
+    provider: row.provider,
+    external_id: row.externalId,
+    scopes: row.scopes,
+    token_ciphertext: row.tokenCiphertext,
+    connected_at: row.connectedAt,
+    updated_at: now,
+  };
+  await orm(db)
+    .insert(identities)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [identities.email, identities.provider],
+      // Every column except the conflict target itself, which is what the
+      // hand-written statement bound a second time. `email`/`provider` are
+      // excluded because updating a row's key to the value it already has is
+      // noise, not an update.
+      set: {
+        external_id: values.external_id,
+        scopes: values.scopes,
+        token_ciphertext: values.token_ciphertext,
+        connected_at: values.connected_at,
+        updated_at: values.updated_at,
+      },
+    })
     .run();
 }
 
@@ -95,12 +101,11 @@ export async function getIdentity(
   email: string,
   provider: Provider
 ): Promise<IdentityRow | null> {
-  const row = await db
-    .prepare(
-      `SELECT ${COLUMNS} FROM identities WHERE email = ? AND provider = ?`
-    )
-    .bind(email, provider)
-    .first<IdentityRowDb>();
+  const row = await orm(db)
+    .select()
+    .from(identities)
+    .where(and(eq(identities.email, email), eq(identities.provider, provider)))
+    .get();
   return row ? toRow(row) : null;
 }
 
@@ -120,18 +125,17 @@ export async function listConnected(
   db: D1Database,
   provider: Provider
 ): Promise<ConnectedIdentity[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT email, external_id, connected_at, updated_at FROM identities WHERE provider = ?`
-    )
-    .bind(provider)
-    .all<
-      Pick<
-        IdentitiesRow,
-        "email" | "external_id" | "connected_at" | "updated_at"
-      >
-    >();
-  return (results ?? []).map((r) => ({
+  const results = await orm(db)
+    .select({
+      email: identities.email,
+      external_id: identities.external_id,
+      connected_at: identities.connected_at,
+      updated_at: identities.updated_at,
+    })
+    .from(identities)
+    .where(eq(identities.provider, provider))
+    .all();
+  return results.map((r) => ({
     email: r.email,
     externalId: r.external_id,
     connectedAt: r.connected_at,
@@ -148,12 +152,13 @@ export async function listConnected(
 export async function listConnectStatus(
   db: D1Database
 ): Promise<ConnectStatus[]> {
-  const { results } = await db
-    .prepare(`SELECT email, provider FROM identities`)
-    .all<Pick<IdentitiesRow, "email" | "provider">>();
+  const results = await orm(db)
+    .select({ email: identities.email, provider: identities.provider })
+    .from(identities)
+    .all();
 
   const connected = new Map<string, Set<Provider>>();
-  for (const { email, provider } of results ?? []) {
+  for (const { email, provider } of results) {
     let providers = connected.get(email);
     if (!providers) {
       providers = new Set();

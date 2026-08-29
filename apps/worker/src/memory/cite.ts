@@ -1,4 +1,7 @@
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { orm } from "../db/client";
 import type { MessagesRow } from "../db/schema";
+import { memoryEpisodeSources, messages, zepEpisodes } from "../db/tables";
 import type { MemoryFact } from "./store";
 
 export type Citation = {
@@ -62,14 +65,16 @@ async function resolveEpisode(
   db: D1Database,
   episodeUuid: string
 ): Promise<CitationRow | null> {
-  const message = await db
-    .prepare(
-      `SELECT m.permalink, m.channel_id, m.ts
-         FROM zep_episodes z JOIN messages m ON m.event_id = z.event_id
-        WHERE z.episode_uuid = ?`
-    )
-    .bind(episodeUuid)
-    .first<CitationRow>();
+  const message = await orm(db)
+    .select({
+      permalink: messages.permalink,
+      channel_id: messages.channel_id,
+      ts: messages.ts,
+    })
+    .from(zepEpisodes)
+    .innerJoin(messages, eq(messages.event_id, zepEpisodes.event_id))
+    .where(eq(zepEpisodes.episode_uuid, episodeUuid))
+    .get();
   if (message?.permalink) return message;
 
   // An agent episode. The JOIN is what makes this exact: a source row whose
@@ -89,15 +94,30 @@ async function resolveEpisode(
   // braces: rows written before this fix already carry `run_turn` at index 0,
   // and only a read-side rule can repair them. `= 'run_turn'` yields 1 or 0,
   // so ASC puts real evidence first.
-  const source = await db
-    .prepare(
-      `SELECT m.permalink, m.channel_id, m.ts
-         FROM memory_episode_sources s JOIN messages m ON m.event_id = s.message_event_id
-        WHERE s.episode_uuid = ? AND s.message_event_id IS NOT NULL
-        ORDER BY (s.source_kind = 'run_turn') ASC, s.source_index ASC
-        LIMIT 1`
+  const source = await orm(db)
+    .select({
+      permalink: messages.permalink,
+      channel_id: messages.channel_id,
+      ts: messages.ts,
+    })
+    .from(memoryEpisodeSources)
+    .innerJoin(
+      messages,
+      eq(messages.event_id, memoryEpisodeSources.message_event_id)
     )
-    .bind(episodeUuid)
-    .first<CitationRow>();
+    .where(
+      and(
+        eq(memoryEpisodeSources.episode_uuid, episodeUuid),
+        isNotNull(memoryEpisodeSources.message_event_id)
+      )
+    )
+    // `= 'run_turn'` yields 1 or 0, so ASC puts real evidence first. A boolean
+    // expression in ORDER BY has no builder form and stays a `sql` fragment.
+    .orderBy(
+      asc(sql`(${memoryEpisodeSources.source_kind} = 'run_turn')`),
+      asc(memoryEpisodeSources.source_index)
+    )
+    .limit(1)
+    .get();
   return source ?? null;
 }

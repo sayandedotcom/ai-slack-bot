@@ -32,6 +32,8 @@
  * a better enforcement point than a row we would have to keep in sync.
  */
 import { type ChannelPolicy, getChannelPolicy } from "../db/channels";
+import { orm } from "../db/client";
+import { channels } from "../db/tables";
 import type { Env } from "../index";
 import { getConversationInfo, listBotConversations } from "../slack/client";
 
@@ -116,16 +118,21 @@ async function insertChannel(
   channelId: string,
   name: string
 ): Promise<void> {
-  await db
-    .prepare(
+  await orm(db)
+    .insert(channels)
+    .values({
+      channel_id: channelId,
+      name,
+      customer_slug: deriveSlug(name, channelId),
+      mode: DEFAULT_MODE,
       // `slug_source` is written explicitly rather than left to the column
       // default. This is the ONLY writer of 'derived', and saying so here is
       // what makes `PATCH /api/channels/:id` the only writer of 'human'.
-      `INSERT INTO channels (channel_id, name, customer_slug, mode, slug_source)
-            VALUES (?, ?, ?, ?, 'derived')
-       ON CONFLICT(channel_id) DO NOTHING`
-    )
-    .bind(channelId, name, deriveSlug(name, channelId), DEFAULT_MODE)
+      // Drizzle would omit an unlisted column and let the DDL default apply,
+      // which is the same row by a route this file does not want to depend on.
+      slug_source: "derived",
+    })
+    .onConflictDoNothing({ target: channels.channel_id })
     .run();
 }
 

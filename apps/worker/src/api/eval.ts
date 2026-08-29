@@ -1,9 +1,20 @@
+import {
+  and,
+  asc,
+  between,
+  desc,
+  eq,
+  gt,
+  gte,
+  lte,
+  ne,
+  sql,
+} from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { Hono } from "hono";
-import type {
-  ApprovalsRow,
-  MessagesRow,
-  TriageDecisionsRow,
-} from "../db/schema";
+import { orm } from "../db/client";
+import type { MessagesRow, TriageDecisionsRow } from "../db/schema";
+import { approvals, eventsSeen, messages, triageDecisions } from "../db/tables";
 import { type AiTell, detectAiTells } from "../eval/ai-tells";
 import {
   scoreTriage,
@@ -65,20 +76,38 @@ const BATCH_SIZE = 100;
  * CONSTRUCTION — precision would climb toward 1.0 as a direct function of the
  * agent replying more, which is the one thing an eval must never reward.
  */
-const HUMAN_ENGAGED_SQL = `
--- humanEngaged: did a REAL person reply in this thread within 24h?
--- The e.outcome filter is load-bearing. Without it the agent's own reply
--- counts as engagement and every woken run scores true-positive.
-SELECT 1
-  FROM messages m
-  JOIN events_seen e ON e.event_id = m.event_id
- WHERE e.outcome = 'ingested'
-   AND m.channel_id = ?
-   AND m.thread_ts  = ?
-   AND m.user_id   != ?           -- not the person who triggered it
-   AND m.received_at BETWEEN ? AND ? + 86400000
- LIMIT 1
-`;
+function humanEngagedQuery(
+  db: D1Database,
+  input: {
+    channelId: string;
+    threadTs: string;
+    askerUserId: string;
+    receivedAt: number;
+  }
+) {
+  return orm(db)
+    .select({ present: sql<number>`1` })
+    .from(messages)
+    .innerJoin(eventsSeen, eq(eventsSeen.event_id, messages.event_id))
+    .where(
+      and(
+        // The e.outcome filter is load-bearing. Without it the agent's own
+        // reply counts as engagement and every woken run scores
+        // true-positive.
+        eq(eventsSeen.outcome, "ingested"),
+        eq(messages.channel_id, input.channelId),
+        eq(messages.thread_ts, input.threadTs),
+        // Not the person who triggered it.
+        ne(messages.user_id, input.askerUserId),
+        between(
+          messages.received_at,
+          input.receivedAt,
+          input.receivedAt + DAY_MS
+        )
+      )
+    )
+    .limit(1);
+}
 
 /**
  * Every RIPE decision in the window, with the message it was made about.
@@ -99,16 +128,32 @@ SELECT 1
  * 24 hours have elapsed are scored; the rest are counted and reported as
  * `unripeExcluded` rather than silently dropped.
  */
-const DECISIONS_SQL = `
-SELECT t.event_id, t.wake, t.why,
-       m.text, m.permalink, m.channel_id, m.ts, m.thread_ts, m.user_id, m.received_at
-  FROM triage_decisions t
-  JOIN messages m ON m.event_id = t.event_id
- WHERE t.created_at >= ?
-   AND m.received_at <= ?          -- ripe: its full 24h answer window has elapsed
- ORDER BY t.created_at DESC
- LIMIT ${MAX_DECISIONS}
-`;
+function decisionsQuery(db: D1Database, since: number, ripeBefore: number) {
+  return orm(db)
+    .select({
+      event_id: triageDecisions.event_id,
+      wake: triageDecisions.wake,
+      why: triageDecisions.why,
+      text: messages.text,
+      permalink: messages.permalink,
+      channel_id: messages.channel_id,
+      ts: messages.ts,
+      thread_ts: messages.thread_ts,
+      user_id: messages.user_id,
+      received_at: messages.received_at,
+    })
+    .from(triageDecisions)
+    .innerJoin(messages, eq(messages.event_id, triageDecisions.event_id))
+    .where(
+      and(
+        gte(triageDecisions.created_at, since),
+        // Ripe: its full 24h answer window has elapsed.
+        lte(messages.received_at, ripeBefore)
+      )
+    )
+    .orderBy(desc(triageDecisions.created_at))
+    .limit(MAX_DECISIONS);
+}
 
 /**
  * How many decisions in the same window were left out for being unripe.
@@ -119,22 +164,35 @@ SELECT t.event_id, t.wake, t.why,
  * denominator is exactly the kind of quiet distortion this route exists to
  * avoid.
  */
-const UNRIPE_COUNT_SQL = `
-SELECT COUNT(*) AS unripe
-  FROM triage_decisions t
-  JOIN messages m ON m.event_id = t.event_id
- WHERE t.created_at >= ?
-   AND m.received_at > ?
-`;
+function unripeCountQuery(db: D1Database, since: number, ripeBefore: number) {
+  return orm(db)
+    .select({ unripe: sql<number>`count(*)` })
+    .from(triageDecisions)
+    .innerJoin(messages, eq(messages.event_id, triageDecisions.event_id))
+    .where(
+      and(
+        gte(triageDecisions.created_at, since),
+        gt(messages.received_at, ripeBefore)
+      )
+    );
+}
 
 /** The shadow corpus: drafts a human never saw sent. `suppressed` ONLY. */
-const SUPPRESSED_SQL = `
-SELECT a.id, a.draft, a.why, a.created_at, a.channel_id, a.thread_ts
-  FROM approvals a
- WHERE a.delivery = 'suppressed'
- ORDER BY a.created_at DESC
- LIMIT ?
-`;
+function suppressedQuery(db: D1Database, limit: number) {
+  return orm(db)
+    .select({
+      id: approvals.id,
+      draft: approvals.draft,
+      why: approvals.why,
+      created_at: approvals.created_at,
+      channel_id: approvals.channel_id,
+      thread_ts: approvals.thread_ts,
+    })
+    .from(approvals)
+    .where(eq(approvals.delivery, "suppressed"))
+    .orderBy(desc(approvals.created_at))
+    .limit(limit);
+}
 
 /**
  * The first message a REAL person posted in the thread after the draft was
@@ -144,17 +202,32 @@ SELECT a.id, a.draft, a.why, a.created_at, a.channel_id, a.thread_ts
  * same reason: a shadow draft compared against the agent's own send would be
  * comparing the model to itself.
  */
-const HUMAN_REPLY_SQL = `
-SELECT m.text, m.permalink, m.ts
-  FROM messages m
-  JOIN events_seen e ON e.event_id = m.event_id
- WHERE e.outcome = 'ingested'
-   AND m.channel_id = ?
-   AND m.thread_ts  = ?
-   AND m.received_at >= ?
- ORDER BY m.received_at ASC
- LIMIT 1
-`;
+function humanReplyQuery(
+  db: D1Database,
+  input: { channelId: string; threadTs: string; after: number }
+) {
+  return orm(db)
+    .select({
+      text: messages.text,
+      permalink: messages.permalink,
+      ts: messages.ts,
+    })
+    .from(messages)
+    .innerJoin(eventsSeen, eq(eventsSeen.event_id, messages.event_id))
+    .where(
+      and(
+        // The same `ingested` filter as the ground truth above, for the same
+        // reason: a shadow draft compared against the agent's own send would
+        // be comparing the model to itself.
+        eq(eventsSeen.outcome, "ingested"),
+        eq(messages.channel_id, input.channelId),
+        eq(messages.thread_ts, input.threadTs),
+        gte(messages.received_at, input.after)
+      )
+    )
+    .orderBy(asc(messages.received_at))
+    .limit(1);
+}
 
 /* ------------------------------------------------------------------ util --- */
 
@@ -174,14 +247,24 @@ function clampInt(
   return Math.min(max, Math.max(min, parsed));
 }
 
-/** One `db.batch` per `BATCH_SIZE` statements, results in input order. */
+/**
+ * One `db.batch` per `BATCH_SIZE` statements, results in input order.
+ *
+ * Typed over the row shape now rather than over `D1Result<T>`: a batched
+ * SELECT built by the query builder comes back as the rows themselves, so the
+ * callers below index straight into `T[][]` instead of unwrapping `.results`.
+ */
 async function batched<T>(
   db: D1Database,
-  statements: D1PreparedStatement[]
-): Promise<D1Result<T>[]> {
-  const out: D1Result<T>[] = [];
+  statements: BatchItem<"sqlite">[]
+): Promise<T[][]> {
+  const out: T[][] = [];
   for (let i = 0; i < statements.length; i += BATCH_SIZE) {
-    out.push(...(await db.batch<T>(statements.slice(i, i + BATCH_SIZE))));
+    const chunk = statements.slice(i, i + BATCH_SIZE) as [
+      BatchItem<"sqlite">,
+      ...BatchItem<"sqlite">[],
+    ];
+    out.push(...((await orm(db).batch(chunk)) as unknown as T[][]));
   }
   return out;
 }
@@ -224,15 +307,13 @@ evalApi.get("/eval/triage", async (c) => {
   // about. `<=` on the boundary: at exactly 24h the window has fully elapsed.
   const ripeBefore = now - DAY_MS;
 
-  const [decisions, unripe] = await c.env.DB.batch<
-    DecisionRow | { unripe: number }
-  >([
-    c.env.DB.prepare(DECISIONS_SQL).bind(since, ripeBefore),
-    c.env.DB.prepare(UNRIPE_COUNT_SQL).bind(since, ripeBefore),
+  const d = orm(c.env.DB);
+  const [decisions, unripe] = await d.batch([
+    decisionsQuery(c.env.DB, since, ripeBefore),
+    unripeCountQuery(c.env.DB, since, ripeBefore),
   ]);
-  const rows = (decisions?.results ?? []) as DecisionRow[];
-  const unripeExcluded =
-    ((unripe?.results ?? []) as { unripe: number }[])[0]?.unripe ?? 0;
+  const rows: DecisionRow[] = decisions;
+  const unripeExcluded = unripe[0]?.unripe ?? 0;
 
   /**
    * The engagement lookup runs once per decision, as the ground-truth statement
@@ -254,20 +335,19 @@ evalApi.get("/eval/triage", async (c) => {
    * customer, so excluding them is correct.
    */
   const lookups = rows.map((row) =>
-    c.env.DB.prepare(HUMAN_ENGAGED_SQL).bind(
-      row.channel_id,
-      row.thread_ts ?? row.ts,
-      row.user_id ?? "",
-      row.received_at,
-      row.received_at
-    )
+    humanEngagedQuery(c.env.DB, {
+      channelId: row.channel_id,
+      threadTs: row.thread_ts ?? row.ts,
+      askerUserId: row.user_id ?? "",
+      receivedAt: row.received_at,
+    })
   );
-  const engaged = await batched<{ 1: number }>(c.env.DB, lookups);
+  const engaged = await batched<{ present: number }>(c.env.DB, lookups);
 
   const outcomes: TriageOutcomeRow[] = rows.map((row, i) => ({
     eventId: row.event_id,
     wake: row.wake === 1,
-    humanEngaged: (engaged[i]?.results.length ?? 0) > 0,
+    humanEngaged: (engaged[i]?.length ?? 0) > 0,
     why: row.why,
     text: row.text,
     permalink: row.permalink,
@@ -299,29 +379,21 @@ evalApi.get("/eval/shadow", async (c) => {
 
   const limit = clampInt(c.req.query("limit"), 20, 1, 50);
 
-  const suppressed = await c.env.DB.prepare(SUPPRESSED_SQL)
-    .bind(limit)
-    .all<
-      Pick<
-        ApprovalsRow,
-        "id" | "draft" | "why" | "created_at" | "channel_id" | "thread_ts"
-      >
-    >();
-  const rows = suppressed.results ?? [];
+  const rows = await suppressedQuery(c.env.DB, limit).all();
 
   const replies = await batched<Pick<MessagesRow, "text" | "permalink" | "ts">>(
     c.env.DB,
     rows.map((row) =>
-      c.env.DB.prepare(HUMAN_REPLY_SQL).bind(
-        row.channel_id,
-        row.thread_ts,
-        row.created_at
-      )
+      humanReplyQuery(c.env.DB, {
+        channelId: row.channel_id,
+        threadTs: row.thread_ts,
+        after: row.created_at,
+      })
     )
   );
 
   const pairs = rows.map((row, i) => {
-    const reply = replies[i]?.results[0];
+    const reply = replies[i]?.[0];
     const tells: AiTell[] = detectAiTells(row.draft);
     return {
       approvalId: row.id,

@@ -7,7 +7,10 @@
  * are conditional, and neither may fail a turn: a run that cannot update its
  * index row is still a run.
  */
+
 import type { StepContext } from "@cloudflare/think";
+import { orm } from "../db/client";
+import { agentModelCalls } from "../db/tables";
 
 import { redact } from "../redact";
 import { costBreakdown, FABLE_5_MODEL_ID, normalizeUsage } from "./agent-spend";
@@ -149,52 +152,54 @@ export function usageRowFrom(
 /**
  * Record it, once.
  *
- * `INSERT OR IGNORE` against the unique `(generation_id, attempt, step_index)`
- * index is the idempotency, as a constraint rather than a convention: replaying
- * one step cannot double its cost, while a different attempt lands as the
- * distinct billed call it was.
+ * `ON CONFLICT DO NOTHING` against the unique `(generation_id, attempt,
+ * step_index)` index is the idempotency, as a constraint rather than a
+ * convention: replaying one step cannot double its cost, while a different
+ * attempt lands as the distinct billed call it was.
+ *
+ * This said `INSERT OR IGNORE` before the query builder, and the two are not
+ * the same statement: `OR IGNORE` swallows EVERY constraint violation, this
+ * one only a uniqueness conflict. The difference is reachable — D1 runs with
+ * `PRAGMA foreign_keys = 1`, verified, so an orphan `run_id` used to vanish
+ * silently and now raises. It changes nothing that matters: `#recordStepUsage`
+ * already wraps this call in a catch that only logs, so both versions write no
+ * row for a run that does not exist, and the new one says so in the log
+ * instead of pretending it billed.
  */
 export async function recordUsage(
   db: D1Database,
   row: UsageRow
 ): Promise<void> {
-  await db
-    .prepare(
-      `INSERT OR IGNORE INTO agent_model_calls (
-         id, run_id, generation_id, agent_turn_id, attempt, step_index,
-         provider, model, provider_request_id, gateway_log_id,
-         input_tokens, no_cache_tokens, cache_read_tokens, cache_write_tokens,
-         output_tokens, reasoning_tokens, total_tokens,
-         cost_nano_usd, latency_ms, finish_reason, raw_finish_reason, error_code, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      usageRowId(row),
-      row.runId,
-      row.generationId,
-      row.agentTurnId,
-      row.attempt,
-      row.stepIndex,
-      row.provider,
-      row.model,
-      row.providerRequestId,
-      row.gatewayLogId,
-      row.inputTokens,
-      row.noCacheTokens,
-      row.cacheReadTokens,
-      row.cacheWriteTokens,
-      row.outputTokens,
-      row.reasoningTokens,
-      row.totalTokens,
+  await orm(db)
+    .insert(agentModelCalls)
+    .values({
+      id: usageRowId(row),
+      run_id: row.runId,
+      generation_id: row.generationId,
+      agent_turn_id: row.agentTurnId,
+      attempt: row.attempt,
+      step_index: row.stepIndex,
+      provider: row.provider,
+      model: row.model,
+      provider_request_id: row.providerRequestId,
+      gateway_log_id: row.gatewayLogId,
+      input_tokens: row.inputTokens,
+      no_cache_tokens: row.noCacheTokens,
+      cache_read_tokens: row.cacheReadTokens,
+      cache_write_tokens: row.cacheWriteTokens,
+      output_tokens: row.outputTokens,
+      reasoning_tokens: row.reasoningTokens,
+      total_tokens: row.totalTokens,
       // Integers only. A float here would be a rounding error the first time
       // and a reconciliation ticket the ten-thousandth.
-      Math.trunc(row.costNanoUsd),
-      Math.trunc(row.latencyMs),
-      row.finishReason,
-      row.rawFinishReason,
-      row.errorCode,
-      row.createdAt
-    )
+      cost_nano_usd: Math.trunc(row.costNanoUsd),
+      latency_ms: Math.trunc(row.latencyMs),
+      finish_reason: row.finishReason,
+      raw_finish_reason: row.rawFinishReason,
+      error_code: row.errorCode,
+      created_at: row.createdAt,
+    })
+    .onConflictDoNothing()
     .run();
 }
 

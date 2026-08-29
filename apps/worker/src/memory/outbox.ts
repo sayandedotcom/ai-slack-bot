@@ -1,4 +1,7 @@
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { orm } from "../db/client";
 import type { AgentMemoryOutboxRow } from "../db/schema";
+import { agentMemoryOutbox } from "../db/tables";
 import { ZEP_REQUEST_TIMEOUT_SECONDS } from "./zep";
 
 /**
@@ -86,18 +89,6 @@ export type OutboxClaimOutcome =
   | { outcome: "not_claimable" }
   | { outcome: "unknown_row" };
 
-type ClaimRow = Pick<
-  AgentMemoryOutboxRow,
-  | "id"
-  | "run_id"
-  | "generation_id"
-  | "graph_id"
-  | "episode_json"
-  | "source_json"
-  | "attempts"
-  | "episode_uuid"
->;
-
 /**
  * Create the row if it is not there, and never touch it if it is.
  *
@@ -120,25 +111,22 @@ export async function ensureOutboxRow(
     now: number;
   }
 ): Promise<{ created: boolean }> {
-  const result = await db
-    .prepare(
-      `INSERT INTO agent_memory_outbox
-         (id, run_id, generation_id, graph_id, episode_json, source_json,
-          state, attempts, next_attempt_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
-       ON CONFLICT DO NOTHING`
-    )
-    .bind(
-      row.id,
-      row.runId,
-      row.generationId,
-      row.graphId,
-      row.episodeJson,
-      row.sourceJson,
-      row.now,
-      row.now,
-      row.now
-    )
+  const result = await orm(db)
+    .insert(agentMemoryOutbox)
+    .values({
+      id: row.id,
+      run_id: row.runId,
+      generation_id: row.generationId,
+      graph_id: row.graphId,
+      episode_json: row.episodeJson,
+      source_json: row.sourceJson,
+      state: "pending",
+      attempts: 0,
+      next_attempt_at: row.now,
+      created_at: row.now,
+      updated_at: row.now,
+    })
+    .onConflictDoNothing()
     .run();
   return { created: (result.meta.changes ?? 0) > 0 };
 }
@@ -163,25 +151,50 @@ export async function claimOutboxRow(
   const claimToken = crypto.randomUUID();
   const leaseExpiresAt = input.now + (input.leaseMs ?? OUTBOX_LEASE_MS);
 
-  const claimed = await db
-    .prepare(
-      `UPDATE agent_memory_outbox
-          SET state = 'projecting',
-              claim_token = ?,
-              lease_expires_at = ?,
-              attempts = attempts + 1,
-              updated_at = ?
-        WHERE id = ?
-          AND (
-                (state IN ('pending', 'retry')
-                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
-             OR (state = 'projecting'
-                  AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
-              )
-        RETURNING id, run_id, generation_id, graph_id, episode_json, source_json, attempts, episode_uuid`
+  // STILL ONE STATEMENT. `attempts + 1` is a bound `sql` fragment over the
+  // column, and the compound claimability predicate is the same disjunction
+  // built with `and`/`or`, so the read of `state` and the write of `projecting`
+  // remain inseparable — which is the entire protocol.
+  const [claimed] = await orm(db)
+    .update(agentMemoryOutbox)
+    .set({
+      state: "projecting",
+      claim_token: claimToken,
+      lease_expires_at: leaseExpiresAt,
+      attempts: sql`${agentMemoryOutbox.attempts} + 1`,
+      updated_at: input.now,
+    })
+    .where(
+      and(
+        eq(agentMemoryOutbox.id, input.id),
+        or(
+          and(
+            inArray(agentMemoryOutbox.state, ["pending", "retry"]),
+            or(
+              isNull(agentMemoryOutbox.next_attempt_at),
+              lte(agentMemoryOutbox.next_attempt_at, input.now)
+            )
+          ),
+          and(
+            eq(agentMemoryOutbox.state, "projecting"),
+            or(
+              isNull(agentMemoryOutbox.lease_expires_at),
+              lte(agentMemoryOutbox.lease_expires_at, input.now)
+            )
+          )
+        )
+      )
     )
-    .bind(claimToken, leaseExpiresAt, input.now, input.id, input.now, input.now)
-    .first<ClaimRow>();
+    .returning({
+      id: agentMemoryOutbox.id,
+      run_id: agentMemoryOutbox.run_id,
+      generation_id: agentMemoryOutbox.generation_id,
+      graph_id: agentMemoryOutbox.graph_id,
+      episode_json: agentMemoryOutbox.episode_json,
+      source_json: agentMemoryOutbox.source_json,
+      attempts: agentMemoryOutbox.attempts,
+      episode_uuid: agentMemoryOutbox.episode_uuid,
+    });
 
   if (claimed) {
     return {
@@ -204,14 +217,30 @@ export async function claimOutboxRow(
   // Nothing changed. Distinguishing "somebody else owns it" from "there is no
   // such row" matters to the caller: the first is an ack, the second may be
   // deploy skew worth retrying.
-  const exists = await db
-    .prepare("SELECT 1 AS present FROM agent_memory_outbox WHERE id = ?")
-    .bind(input.id)
-    .first<{ present: number }>();
+  const exists = await orm(db)
+    .select({ present: sql<number>`1` })
+    .from(agentMemoryOutbox)
+    .where(eq(agentMemoryOutbox.id, input.id))
+    .get();
   return exists ? { outcome: "not_claimable" } : { outcome: "unknown_row" };
 }
 
 export type FencedOutcome = { outcome: "applied" } | { outcome: "stale_claim" };
+
+/**
+ * `id = ? AND claim_token = ? AND state = 'projecting'` — the fence, written
+ * once and shared by the three writes that must carry it. Previously it was
+ * three copies of the same WHERE clause in three SQL strings; a builder makes
+ * it a value, so a fence that gets weakened gets weakened in one place, under
+ * review, rather than in two of three statements by accident.
+ */
+function fencedToClaim(id: string, claimToken: string) {
+  return and(
+    eq(agentMemoryOutbox.id, id),
+    eq(agentMemoryOutbox.claim_token, claimToken),
+    eq(agentMemoryOutbox.state, "projecting")
+  );
+}
 
 /**
  * Record the uuid Zep returned, FENCED to the claim token, while the row stays
@@ -234,13 +263,10 @@ export async function recordEpisodeUuid(
   db: D1Database,
   input: { id: string; claimToken: string; episodeUuid: string; now: number }
 ): Promise<FencedOutcome> {
-  const result = await db
-    .prepare(
-      `UPDATE agent_memory_outbox
-          SET episode_uuid = ?, updated_at = ?
-        WHERE id = ? AND claim_token = ? AND state = 'projecting'`
-    )
-    .bind(input.episodeUuid, input.now, input.id, input.claimToken)
+  const result = await orm(db)
+    .update(agentMemoryOutbox)
+    .set({ episode_uuid: input.episodeUuid, updated_at: input.now })
+    .where(fencedToClaim(input.id, input.claimToken))
     .run();
   return (result.meta.changes ?? 0) > 0
     ? { outcome: "applied" }
@@ -270,24 +296,17 @@ export async function retryOutboxRow(
 ): Promise<FencedOutcome> {
   const nextAttemptAt =
     input.now + (input.backoffMs ?? outboxRetryBackoffMs(input.attempts));
-  const result = await db
-    .prepare(
-      `UPDATE agent_memory_outbox
-          SET state = 'retry',
-              claim_token = NULL,
-              lease_expires_at = NULL,
-              next_attempt_at = ?,
-              last_error = ?,
-              updated_at = ?
-        WHERE id = ? AND claim_token = ? AND state = 'projecting'`
-    )
-    .bind(
-      nextAttemptAt,
-      sterileError(input.error),
-      input.now,
-      input.id,
-      input.claimToken
-    )
+  const result = await orm(db)
+    .update(agentMemoryOutbox)
+    .set({
+      state: "retry",
+      claim_token: null,
+      lease_expires_at: null,
+      next_attempt_at: nextAttemptAt,
+      last_error: sterileError(input.error),
+      updated_at: input.now,
+    })
+    .where(fencedToClaim(input.id, input.claimToken))
     .run();
   return (result.meta.changes ?? 0) > 0
     ? { outcome: "applied" }
@@ -304,18 +323,17 @@ export async function poisonOutboxRow(
   db: D1Database,
   input: { id: string; claimToken: string; error: string; now: number }
 ): Promise<FencedOutcome> {
-  const result = await db
-    .prepare(
-      `UPDATE agent_memory_outbox
-          SET state = 'failed',
-              claim_token = NULL,
-              lease_expires_at = NULL,
-              next_attempt_at = NULL,
-              last_error = ?,
-              updated_at = ?
-        WHERE id = ? AND claim_token = ? AND state = 'projecting'`
-    )
-    .bind(sterileError(input.error), input.now, input.id, input.claimToken)
+  const result = await orm(db)
+    .update(agentMemoryOutbox)
+    .set({
+      state: "failed",
+      claim_token: null,
+      lease_expires_at: null,
+      next_attempt_at: null,
+      last_error: sterileError(input.error),
+      updated_at: input.now,
+    })
+    .where(fencedToClaim(input.id, input.claimToken))
     .run();
   return (result.meta.changes ?? 0) > 0
     ? { outcome: "applied" }
@@ -333,18 +351,36 @@ export async function listDueOutboxRows(
   db: D1Database,
   input: { now: number; limit: number }
 ): Promise<{ id: string; state: string; attempts: number }[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT id, state, attempts
-         FROM agent_memory_outbox
-        WHERE (state IN ('pending', 'retry')
-                AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
-           OR (state = 'projecting'
-                AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
-        ORDER BY COALESCE(next_attempt_at, created_at) ASC
-        LIMIT ?`
+  return orm(db)
+    .select({
+      id: agentMemoryOutbox.id,
+      state: agentMemoryOutbox.state,
+      attempts: agentMemoryOutbox.attempts,
+    })
+    .from(agentMemoryOutbox)
+    .where(
+      or(
+        and(
+          inArray(agentMemoryOutbox.state, ["pending", "retry"]),
+          or(
+            isNull(agentMemoryOutbox.next_attempt_at),
+            lte(agentMemoryOutbox.next_attempt_at, input.now)
+          )
+        ),
+        and(
+          eq(agentMemoryOutbox.state, "projecting"),
+          or(
+            isNull(agentMemoryOutbox.lease_expires_at),
+            lte(agentMemoryOutbox.lease_expires_at, input.now)
+          )
+        )
+      )
     )
-    .bind(input.now, input.now, Math.max(1, Math.min(input.limit, 200)))
-    .all<Pick<AgentMemoryOutboxRow, "id" | "state" | "attempts">>();
-  return results ?? [];
+    .orderBy(
+      asc(
+        sql`coalesce(${agentMemoryOutbox.next_attempt_at}, ${agentMemoryOutbox.created_at})`
+      )
+    )
+    .limit(Math.max(1, Math.min(input.limit, 200)))
+    .all();
 }

@@ -280,9 +280,16 @@ describe("sendNudge", () => {
     // go through untouched.
     const realPrepare = env.DB.prepare.bind(env.DB);
     vi.spyOn(env.DB, "prepare").mockImplementation((query: string) => {
-      // `SET`, not a bare column match: `getApproval`'s SELECT list names the
-      // same column and must keep working.
-      if (query.includes("SET nudge_channel_id"))
+      // The `set` clause, not a bare column match: `getApproval`'s SELECT list
+      // names the same column and must keep working.
+      //
+      // The pattern is loose about case and quoting because the statement is
+      // now rendered by Drizzle — `set "nudge_channel_id" = ?` — where it used
+      // to be hand-written as `SET nudge_channel_id = ?`. Injecting the fault
+      // by matching SQL text is coupling to the writer, and this is the one
+      // place in the suite that does it; the assertions below are the contract
+      // and they are unchanged.
+      if (/set\s+"?nudge_channel_id"?/i.test(query))
         throw new Error("d1 write failed");
       return realPrepare(query);
     });

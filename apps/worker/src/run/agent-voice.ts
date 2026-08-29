@@ -36,8 +36,10 @@
  * DATA — `JSON.stringify`d exactly as the static contrasts are — so a message an
  * engineer once typed cannot read as an instruction.
  */
+import { and, desc, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { orm } from "../db/client";
 import { listConnected } from "../db/identities";
-import type { MessagesRow } from "../db/schema";
+import { eventsSeen, messages } from "../db/tables";
 import { pickSpeaker } from "../identity/speaker";
 
 /** At most twenty messages: enough to carry a register, few enough to bound. */
@@ -85,19 +87,27 @@ export type EngineerVoice = {
  * is not a TOTAL order, so two messages sharing a millisecond would leave their
  * position to the query plan — different bytes, same data.
  */
-const SAMPLE_SQL = `
-SELECT m.text, m.ts
-  FROM messages m
-  JOIN events_seen e ON e.event_id = m.event_id
- WHERE e.outcome = 'ingested'        -- NOT 'ingested_self': that is us
-   AND m.user_id = ?                 -- the engineer's Slack external_id
-   AND m.customer_slug IS NOT NULL
-   AND m.subtype IS NULL
-   AND length(m.text) >= 40
-   AND m.received_at < ?             -- the frozen bound: THIS is the freeze
- ORDER BY m.received_at DESC, m.event_id DESC
- LIMIT ${ENGINEER_VOICE_MAX_COUNT}
-`;
+function sampleQuery(db: D1Database, externalId: string, frozenBound: number) {
+  return orm(db)
+    .select({ text: messages.text, ts: messages.ts })
+    .from(messages)
+    .innerJoin(eventsSeen, eq(eventsSeen.event_id, messages.event_id))
+    .where(
+      and(
+        // NOT 'ingested_self': that is us.
+        eq(eventsSeen.outcome, "ingested"),
+        // The engineer's Slack external_id.
+        eq(messages.user_id, externalId),
+        isNotNull(messages.customer_slug),
+        isNull(messages.subtype),
+        sql`length(${messages.text}) >= 40`,
+        // The frozen bound: THIS is the freeze.
+        lt(messages.received_at, frozenBound)
+      )
+    )
+    .orderBy(desc(messages.received_at), desc(messages.event_id))
+    .limit(ENGINEER_VOICE_MAX_COUNT);
+}
 
 /**
  * Per-isolate memo keyed by the window ordinal. The value is frozen for the
@@ -142,13 +152,10 @@ export async function resolveEngineerVoice(
 
   const samples: { text: string; ts: string }[] = [];
   if (externalId !== "") {
-    const { results } = await db
-      .prepare(SAMPLE_SQL)
-      .bind(externalId, frozenBound)
-      .all<Pick<MessagesRow, "text" | "ts">>();
+    const results = await sampleQuery(db, externalId, frozenBound).all();
 
     let total = 0;
-    for (const row of results ?? []) {
+    for (const row of results) {
       const text = row.text.slice(0, ENGINEER_VOICE_SAMPLE_MAX_CHARS);
       // Defence in depth, and dead under today's constants: 20 x 300 is exactly
       // 6,000. Kept so that raising either cap without revisiting the total
