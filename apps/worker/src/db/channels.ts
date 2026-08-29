@@ -1,4 +1,7 @@
+import { and, asc, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { orm } from "./client";
 import type { ChannelsRow } from "./schema";
+import { channels } from "./tables";
 
 export type ChannelMode = "observe" | "live" | "internal";
 
@@ -36,12 +39,17 @@ export async function getChannelPolicy(
   db: D1Database,
   channelId: string
 ): Promise<ChannelPolicy> {
-  const row = await db
-    .prepare(
-      "SELECT channel_id, name, customer_slug, mode, slug_source FROM channels WHERE channel_id = ?"
-    )
-    .bind(channelId)
-    .first<ChannelsRow>();
+  const row = await orm(db)
+    .select({
+      channel_id: channels.channel_id,
+      name: channels.name,
+      customer_slug: channels.customer_slug,
+      mode: channels.mode,
+      slug_source: channels.slug_source,
+    })
+    .from(channels)
+    .where(eq(channels.channel_id, channelId))
+    .get();
 
   if (!row) {
     return {
@@ -132,25 +140,33 @@ export async function searchCustomers(
   const bounded = Math.min(Math.max(1, Math.floor(limit)), CUSTOMER_SEARCH_MAX);
   const escaped = query.replace(/[\\%_]/g, "\\$&");
 
-  const { results } = await db
-    .prepare(
-      `SELECT customer_slug AS slug
-         FROM channels
-        WHERE customer_slug IS NOT NULL
-          AND mode != 'internal'
-          AND customer_slug LIKE ? ESCAPE '\\'
-        GROUP BY customer_slug
-        ORDER BY customer_slug ASC
-        LIMIT ?`
+  // `LIKE ... ESCAPE` has no builder method — SQLite has no default escape
+  // character, so the clause has to be stated. It stays a `sql` fragment with
+  // the pattern still bound as a parameter, not interpolated.
+  const results = await orm(db)
+    .select({
+      // `customer_slug AS slug`, and non-null because the WHERE clause says so.
+      slug: sql<
+        NonNullable<ChannelsRow["customer_slug"]>
+      >`${channels.customer_slug}`,
+    })
+    .from(channels)
+    .where(
+      and(
+        isNotNull(channels.customer_slug),
+        ne(channels.mode, "internal"),
+        sql`${channels.customer_slug} like ${`%${escaped}%`} escape '\\'`
+      )
     )
-    .bind(`%${escaped}%`, bounded)
-    // `customer_slug AS slug`, and non-null because the WHERE clause says so.
-    .all<{ slug: NonNullable<ChannelsRow["customer_slug"]> }>();
+    .groupBy(channels.customer_slug)
+    .orderBy(asc(channels.customer_slug))
+    .limit(bounded)
+    .all();
 
   // The label is the slug, not the channel name. A channel name is a
   // destination identifier and the model is never shown one; the slug is the
   // only human-readable customer-level string the catalog holds.
-  return (results ?? []).map((row) => ({ slug: row.slug, label: row.slug }));
+  return results.map((row) => ({ slug: row.slug, label: row.slug }));
 }
 
 /**

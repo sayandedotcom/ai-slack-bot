@@ -1,4 +1,23 @@
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  lt,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
+import { orm } from "../db/client";
 import type { ChannelsRow, RunsRow } from "../db/schema";
+import {
+  agentModelCalls,
+  approvals,
+  channels,
+  runs as runsTable,
+} from "../db/tables";
 import type { RunOrigin } from "./keys";
 import { decimalNanoUsd } from "./money";
 import { ACTIVE_RUN_STATUSES, type RunStatus } from "./protocol";
@@ -105,7 +124,24 @@ type RunRow = Pick<
   | "updated_at"
 >;
 
-const COLUMNS = `id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at`;
+/**
+ * Exactly the columns `RunRow` names, so a projection stays a stated claim
+ * rather than `SELECT *`. `projection_seq` is deliberately absent: it is the
+ * concurrency token for `projectRunIndex` and nothing outside this file reads
+ * it.
+ */
+const RUN_COLUMNS = {
+  id: runsTable.id,
+  key: runsTable.key,
+  origin: runsTable.origin,
+  channel_id: runsTable.channel_id,
+  thread_ts: runsTable.thread_ts,
+  status: runsTable.status,
+  shadow: runsTable.shadow,
+  summary: runsTable.summary,
+  created_at: runsTable.created_at,
+  updated_at: runsTable.updated_at,
+} as const;
 
 function toRecord(row: RunRow): RunRecord {
   return {
@@ -195,36 +231,50 @@ export async function createOrGetRunUnderPolicy(
   now = Date.now()
 ): Promise<RunRecord> {
   const shadow = options.mustShadow ? 1 : 0;
-  await db.batch([
+  const d = orm(db);
+  // `db.batch` on the Drizzle handle is D1's own `batch()` underneath — the
+  // driver calls `client.batch(...)` with the built statements — so this is
+  // still ONE implicit transaction, which is the whole reason the two
+  // statements are together.
+  await d.batch([
     // Created `idle`, for every origin. A row existing is not the agent working:
     // `live` now means a generation is scheduled, and that transition is made by
     // the input transaction inside the RunDO, then projected here. Phase 08's
     // `live` default is repaired by migration 0006.
-    db
-      .prepare(
-        `INSERT OR IGNORE INTO runs
-           (id, "key", origin, channel_id, thread_ts, status, shadow, summary, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, ?, ?)`
-      )
-      .bind(
-        crypto.randomUUID(),
-        descriptor.key,
-        descriptor.origin,
-        descriptor.channelId,
-        descriptor.threadTs,
+    d
+      .insert(runsTable)
+      .values({
+        id: crypto.randomUUID(),
+        key: descriptor.key,
+        origin: descriptor.origin,
+        channel_id: descriptor.channelId,
+        thread_ts: descriptor.threadTs,
+        status: "idle",
         shadow,
-        now,
-        now
-      ),
+        summary: null,
+        created_at: now,
+        updated_at: now,
+      })
+      .onConflictDoNothing(),
     // `AND shadow = 0` rather than an unconditional SET, so the common case
     // writes no row at all — and so the statement can only ever move the flag
     // in the safe direction, whatever it is handed. There is no companion
     // statement that sets it to 0; see the note above.
-    db
-      .prepare(
-        `UPDATE runs SET shadow = 1 WHERE "key" = ? AND shadow = 0 AND ? = 1`
-      )
-      .bind(descriptor.key, shadow),
+    //
+    // `AND ? = 1` survives the move verbatim as a bound fragment. It is what
+    // makes `mustShadow: false` match zero rows on every input rather than
+    // needing a second statement or a branch in TypeScript — including, and
+    // this is the case that would be a bug, against an already-shadowed row.
+    d
+      .update(runsTable)
+      .set({ shadow: 1 })
+      .where(
+        and(
+          eq(runsTable.key, descriptor.key),
+          eq(runsTable.shadow, 0),
+          sql`${shadow} = 1`
+        )
+      ),
   ]);
 
   const run = await getRunByKey(db, descriptor.key);
@@ -237,10 +287,11 @@ export async function getRunById(
   db: D1Database,
   id: string
 ): Promise<RunRecord | null> {
-  const row = await db
-    .prepare(`SELECT ${COLUMNS} FROM runs WHERE id = ?`)
-    .bind(id)
-    .first<RunRow>();
+  const row = await orm(db)
+    .select(RUN_COLUMNS)
+    .from(runsTable)
+    .where(eq(runsTable.id, id))
+    .get();
   return row ? toRecord(row) : null;
 }
 
@@ -248,10 +299,11 @@ export async function getRunByKey(
   db: D1Database,
   key: string
 ): Promise<RunRecord | null> {
-  const row = await db
-    .prepare(`SELECT ${COLUMNS} FROM runs WHERE "key" = ?`)
-    .bind(key)
-    .first<RunRow>();
+  const row = await orm(db)
+    .select(RUN_COLUMNS)
+    .from(runsTable)
+    .where(eq(runsTable.key, key))
+    .get();
   return row ? toRecord(row) : null;
 }
 
@@ -265,16 +317,19 @@ export async function findOwnedSlackRun(
   channelId: string,
   threadTs: string
 ): Promise<RunRecord | null> {
-  const placeholders = ACTIVE_RUN_STATUSES.map(() => "?").join(", ");
-  const row = await db
-    .prepare(
-      `SELECT ${COLUMNS} FROM runs
-       WHERE origin = 'slack' AND channel_id = ? AND thread_ts = ?
-         AND status IN (${placeholders})
-       LIMIT 1`
+  const row = await orm(db)
+    .select(RUN_COLUMNS)
+    .from(runsTable)
+    .where(
+      and(
+        eq(runsTable.origin, "slack"),
+        eq(runsTable.channel_id, channelId),
+        eq(runsTable.thread_ts, threadTs),
+        inArray(runsTable.status, ACTIVE_RUN_STATUSES)
+      )
     )
-    .bind(channelId, threadTs, ...ACTIVE_RUN_STATUSES)
-    .first<RunRow>();
+    .limit(1)
+    .get();
   return row ? toRecord(row) : null;
 }
 
@@ -287,85 +342,93 @@ export async function listRuns(
     RUN_LIST_MAX_LIMIT
   );
 
-  const where: string[] = [];
-  const bindings: (string | number)[] = [];
+  const d = orm(db);
+  const where: SQL[] = [];
 
-  if (filters.status) {
-    where.push("r.status = ?");
-    bindings.push(filters.status);
-  }
-  if (filters.origin) {
-    where.push("r.origin = ?");
-    bindings.push(filters.origin);
-  }
-  if (filters.channelId) {
-    where.push("r.channel_id = ?");
-    bindings.push(filters.channelId);
-  }
-  if (filters.shadow !== undefined) {
-    where.push("r.shadow = ?");
-    bindings.push(filters.shadow ? 1 : 0);
-  }
+  if (filters.status) where.push(eq(runsTable.status, filters.status));
+  if (filters.origin) where.push(eq(runsTable.origin, filters.origin));
+  if (filters.channelId)
+    where.push(eq(runsTable.channel_id, filters.channelId));
+  if (filters.shadow !== undefined)
+    where.push(eq(runsTable.shadow, filters.shadow ? 1 : 0));
   if (filters.q) {
     const like = `%${escapeLike(filters.q)}%`;
     const prefix = `${escapeLike(filters.q)}%`;
-    where.push(
-      `(r.summary LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\' OR r.id LIKE ? ESCAPE '\\')`
+    // Substring over summary and channel name, PREFIX over id, and each one
+    // keeps its explicit `ESCAPE` — SQLite has no default escape character, and
+    // `like()` cannot render the clause, so these stay bound `sql` fragments.
+    const q = or(
+      sql`${runsTable.summary} like ${like} escape '\\'`,
+      sql`${channels.name} like ${like} escape '\\'`,
+      sql`${runsTable.id} like ${prefix} escape '\\'`
     );
-    bindings.push(like, like, prefix);
+    if (q) where.push(q);
   }
   if (filters.cursor) {
     const cursor = decodeRunCursor(filters.cursor);
     if (cursor) {
-      where.push("(r.updated_at < ? OR (r.updated_at = ? AND r.id < ?))");
-      bindings.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
+      const page = or(
+        lt(runsTable.updated_at, cursor.updatedAt),
+        and(
+          eq(runsTable.updated_at, cursor.updatedAt),
+          lt(runsTable.id, cursor.id)
+        )
+      );
+      if (page) where.push(page);
     }
   }
 
-  const { results } = await db
-    .prepare(
-      `SELECT r.id, r.origin, r.status, r.shadow, r.summary, r.channel_id,
-              c.name AS channel_name, c.customer_slug, r.created_at, r.updated_at,
-              COALESCE(u.cost_nano_usd, 0) AS cost_nano_usd,
-              COALESCE(u.turns, 0) AS turns,
-              a.id AS open_approval_id
-       FROM runs r
-       LEFT JOIN channels c ON c.channel_id = r.channel_id
-       LEFT JOIN (
-         SELECT run_id, SUM(cost_nano_usd) AS cost_nano_usd,
-                COUNT(DISTINCT agent_turn_id) AS turns
-         FROM agent_model_calls GROUP BY run_id
-       ) u ON u.run_id = r.id
-       LEFT JOIN approvals a ON a.run_id = r.id AND a.decision = 'pending'
-       ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
-       ORDER BY r.updated_at DESC, r.id DESC
-       LIMIT ?`
-    )
-    .bind(...bindings, limit + 1)
-    .all<
-      Pick<
-        RunsRow,
-        | "id"
-        | "origin"
-        | "status"
-        | "shadow"
-        | "summary"
-        | "channel_id"
-        | "created_at"
-        | "updated_at"
-      > & {
-        // Widened at the call site, not in the schema: this is a LEFT JOIN, so
-        // both columns come back NULL for a run whose channel is absent from
-        // `channels` — even though `channels.name` is NOT NULL in the DDL.
-        channel_name: ChannelsRow["name"] | null;
-        customer_slug: ChannelsRow["customer_slug"];
-        cost_nano_usd: number;
-        turns: number;
-        open_approval_id: string | null;
-      }
-    >();
+  // The per-run spend rollup, joined rather than correlated so one pass over
+  // `agent_model_calls` serves the whole page.
+  const usage = d
+    .select({
+      run_id: agentModelCalls.run_id,
+      cost_nano_usd: sql<number>`sum(${agentModelCalls.cost_nano_usd})`.as(
+        "cost_nano_usd"
+      ),
+      turns: sql<number>`count(distinct ${agentModelCalls.agent_turn_id})`.as(
+        "turns"
+      ),
+    })
+    .from(agentModelCalls)
+    .groupBy(agentModelCalls.run_id)
+    .as("u");
 
-  const rows = results ?? [];
+  const rows = await d
+    .select({
+      id: runsTable.id,
+      origin: runsTable.origin,
+      status: runsTable.status,
+      shadow: runsTable.shadow,
+      summary: runsTable.summary,
+      channel_id: runsTable.channel_id,
+      // Widened here, not in the schema: this is a LEFT JOIN, so both columns
+      // come back NULL for a run whose channel is absent from `channels` —
+      // even though `channels.name` is NOT NULL in the DDL. Drizzle infers
+      // that widening for a left-joined TABLE automatically, but these are
+      // aliased projections, so the claim is stated.
+      channel_name: sql<ChannelsRow["name"] | null>`${channels.name}`,
+      customer_slug: sql<
+        ChannelsRow["customer_slug"]
+      >`${channels.customer_slug}`,
+      created_at: runsTable.created_at,
+      updated_at: runsTable.updated_at,
+      cost_nano_usd: sql<number>`coalesce(${usage.cost_nano_usd}, 0)`,
+      turns: sql<number>`coalesce(${usage.turns}, 0)`,
+      open_approval_id: sql<string | null>`${approvals.id}`,
+    })
+    .from(runsTable)
+    .leftJoin(channels, eq(channels.channel_id, runsTable.channel_id))
+    .leftJoin(usage, eq(usage.run_id, runsTable.id))
+    .leftJoin(
+      approvals,
+      and(eq(approvals.run_id, runsTable.id), eq(approvals.decision, "pending"))
+    )
+    .where(where.length > 0 ? and(...where) : undefined)
+    .orderBy(desc(runsTable.updated_at), desc(runsTable.id))
+    .limit(limit + 1)
+    .all();
+
   const page = rows.slice(0, limit);
   const runs = page.map((row) => ({
     id: row.id,
@@ -418,32 +481,23 @@ export async function readRunUsage(
   db: D1Database,
   runId: string
 ): Promise<RunUsageAggregate[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT model,
-              COUNT(*)                       AS calls,
-              COALESCE(SUM(input_tokens), 0)       AS input_tokens,
-              COALESCE(SUM(cache_read_tokens), 0)  AS cache_read_tokens,
-              COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-              COALESCE(SUM(output_tokens), 0)      AS output_tokens,
-              COALESCE(SUM(cost_nano_usd), 0)      AS cost_nano_usd
-         FROM agent_model_calls
-        WHERE run_id = ?
-        GROUP BY model
-        ORDER BY model ASC`
-    )
-    .bind(runId)
-    .all<{
-      model: string;
-      calls: number;
-      input_tokens: number;
-      cache_read_tokens: number;
-      cache_write_tokens: number;
-      output_tokens: number;
-      cost_nano_usd: number;
-    }>();
+  const results = await orm(db)
+    .select({
+      model: agentModelCalls.model,
+      calls: sql<number>`count(*)`,
+      input_tokens: sql<number>`coalesce(sum(${agentModelCalls.input_tokens}), 0)`,
+      cache_read_tokens: sql<number>`coalesce(sum(${agentModelCalls.cache_read_tokens}), 0)`,
+      cache_write_tokens: sql<number>`coalesce(sum(${agentModelCalls.cache_write_tokens}), 0)`,
+      output_tokens: sql<number>`coalesce(sum(${agentModelCalls.output_tokens}), 0)`,
+      cost_nano_usd: sql<number>`coalesce(sum(${agentModelCalls.cost_nano_usd}), 0)`,
+    })
+    .from(agentModelCalls)
+    .where(eq(agentModelCalls.run_id, runId))
+    .groupBy(agentModelCalls.model)
+    .orderBy(asc(agentModelCalls.model))
+    .all();
 
-  return (results ?? []).map((row) => ({
+  return results.map((row) => ({
     model: row.model,
     calls: row.calls,
     inputTokens: row.input_tokens,
@@ -478,20 +532,18 @@ export async function projectRunIndex(
   revision: number,
   snapshot: { status: RunStatus; summary: string | null; updatedAt: number }
 ): Promise<{ applied: boolean }> {
-  const result = await db
-    .prepare(
-      `UPDATE runs SET
-         status = ?, summary = ?, updated_at = MAX(updated_at, ?), projection_seq = ?
-       WHERE id = ? AND projection_seq < ?`
-    )
-    .bind(
-      snapshot.status,
-      snapshot.summary,
-      snapshot.updatedAt,
-      revision,
-      id,
-      revision
-    )
+  const result = await orm(db)
+    .update(runsTable)
+    .set({
+      status: snapshot.status,
+      summary: snapshot.summary,
+      // Scalar `max()`, not the aggregate — SQLite's two-argument form. It has
+      // no builder equivalent and stays a bound `sql` fragment, which is what
+      // keeps a replayed older revision from making a live run look stale.
+      updated_at: sql`max(${runsTable.updated_at}, ${snapshot.updatedAt})`,
+      projection_seq: revision,
+    })
+    .where(and(eq(runsTable.id, id), lt(runsTable.projection_seq, revision)))
     .run();
   return { applied: (result.meta.changes ?? 0) > 0 };
 }
@@ -508,9 +560,10 @@ export async function touchRun(
   id: string,
   at: number
 ): Promise<void> {
-  await db
-    .prepare("UPDATE runs SET updated_at = ? WHERE id = ? AND updated_at < ?")
-    .bind(at, id, at)
+  await orm(db)
+    .update(runsTable)
+    .set({ updated_at: at })
+    .where(and(eq(runsTable.id, id), lt(runsTable.updated_at, at)))
     .run();
 }
 
@@ -520,11 +573,10 @@ export async function setRunStatus(
   status: RunStatus,
   at = Date.now()
 ): Promise<void> {
-  await db
-    .prepare(
-      "UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ?"
-    )
-    .bind(status, at, id)
+  await orm(db)
+    .update(runsTable)
+    .set({ status, updated_at: sql`max(${runsTable.updated_at}, ${at})` })
+    .where(eq(runsTable.id, id))
     .run();
 }
 
@@ -546,11 +598,13 @@ export async function casRunStatus(
   to: RunStatus,
   at = Date.now()
 ): Promise<{ applied: boolean }> {
-  const result = await db
-    .prepare(
-      "UPDATE runs SET status = ?, updated_at = MAX(updated_at, ?) WHERE id = ? AND status = ?"
-    )
-    .bind(to, at, id, from)
+  const result = await orm(db)
+    .update(runsTable)
+    .set({
+      status: to,
+      updated_at: sql`max(${runsTable.updated_at}, ${at})`,
+    })
+    .where(and(eq(runsTable.id, id), eq(runsTable.status, from)))
     .run();
   return { applied: (result.meta.changes ?? 0) > 0 };
 }
@@ -578,9 +632,10 @@ export async function setRunSummaryIfAbsent(
   id: string,
   summary: string
 ): Promise<{ applied: boolean }> {
-  const result = await db
-    .prepare("UPDATE runs SET summary = ? WHERE id = ? AND summary IS NULL")
-    .bind(summary, id)
+  const result = await orm(db)
+    .update(runsTable)
+    .set({ summary })
+    .where(and(eq(runsTable.id, id), isNull(runsTable.summary)))
     .run();
   return { applied: (result.meta.changes ?? 0) > 0 };
 }

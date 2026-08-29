@@ -1,5 +1,7 @@
+import { asc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
-import type { MessagesRow } from "../db/schema";
+import { orm } from "../db/client";
+import { messages, zepEpisodes } from "../db/tables";
 import type { Env } from "../index";
 import type { MemoryJob } from "../memory/consumer";
 import { requireTeamMember } from "./identity";
@@ -14,15 +16,14 @@ export async function backfillMemory(
   queue: Queue<MemoryJob>,
   limit: number
 ): Promise<number> {
-  const { results } = await db
-    .prepare(
-      `SELECT m.event_id FROM messages m
-       LEFT JOIN zep_episodes z ON z.event_id = m.event_id
-       WHERE z.event_id IS NULL
-       ORDER BY m.received_at ASC LIMIT ?`
-    )
-    .bind(limit)
-    .all<Pick<MessagesRow, "event_id">>();
+  const results = await orm(db)
+    .select({ event_id: messages.event_id })
+    .from(messages)
+    .leftJoin(zepEpisodes, eq(zepEpisodes.event_id, messages.event_id))
+    .where(isNull(zepEpisodes.event_id))
+    .orderBy(asc(messages.received_at))
+    .limit(limit)
+    .all();
 
   for (const row of results) {
     await queue.send({ event_id: row.event_id });

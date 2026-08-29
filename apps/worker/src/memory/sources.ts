@@ -1,4 +1,6 @@
-import type { MessagesRow } from "../db/schema";
+import { eq } from "drizzle-orm";
+import { orm } from "../db/client";
+import { messages, zepEpisodes } from "../db/tables";
 import type { EpisodeSourceDescriptor } from "./episode";
 
 /**
@@ -21,8 +23,6 @@ export type ResolvedSource = {
   permalink: string | null;
 };
 
-type MessageRow = Pick<MessagesRow, "event_id" | "permalink">;
-
 /**
  * Resolve one descriptor against D1's system of record.
  *
@@ -38,14 +38,12 @@ async function resolveOne(
   runId: string
 ): Promise<ResolvedSource | null> {
   if (source.kind === "zep_episode") {
-    const row = await db
-      .prepare(
-        `SELECT m.event_id, m.permalink
-           FROM zep_episodes z JOIN messages m ON m.event_id = z.event_id
-          WHERE z.episode_uuid = ?`
-      )
-      .bind(source.ref)
-      .first<MessageRow>();
+    const row = await orm(db)
+      .select({ event_id: messages.event_id, permalink: messages.permalink })
+      .from(zepEpisodes)
+      .innerJoin(messages, eq(messages.event_id, zepEpisodes.event_id))
+      .where(eq(zepEpisodes.episode_uuid, source.ref))
+      .get();
     if (!row) return null;
     return {
       sourceKind: "slack_message",
@@ -59,10 +57,11 @@ async function resolveOne(
   // Both remaining kinds carry a stored message event id. They differ only in
   // what the row MEANS — evidence the agent searched for, versus the turn it
   // was answering — and that distinction is worth keeping in the column.
-  const row = await db
-    .prepare("SELECT event_id, permalink FROM messages WHERE event_id = ?")
-    .bind(source.ref)
-    .first<MessageRow>();
+  const row = await orm(db)
+    .select({ event_id: messages.event_id, permalink: messages.permalink })
+    .from(messages)
+    .where(eq(messages.event_id, source.ref))
+    .get();
   if (!row) return null;
   return {
     sourceKind: source.kind === "run_turn" ? "run_turn" : "slack_message",

@@ -15,7 +15,9 @@
  * eviction, while the process itself is the only thing that actually knows.
  */
 import { getSandbox } from "@cloudflare/sandbox";
-import type { RunsRow } from "../db/schema";
+import { and, desc, gte, inArray } from "drizzle-orm";
+import { orm } from "../db/client";
+import { runs } from "../db/tables";
 import type { Env } from "../index";
 import { TERMINAL_RUN_STATUSES } from "../run/protocol";
 import {
@@ -519,19 +521,18 @@ export async function sweepSandboxes(
   if (!sandboxContainersAvailable(env)) return { destroyed: 0 };
 
   const lifecycle = makeSandboxLifecycle(env, deps);
-  const placeholders = TERMINAL_RUN_STATUSES.map(() => "?").join(", ");
-  const { results } = await env.DB.prepare(
-    `SELECT id FROM runs
-      WHERE status IN (${placeholders}) AND updated_at >= ?
-      ORDER BY updated_at DESC
-      LIMIT ?`
-  )
-    .bind(
-      ...TERMINAL_RUN_STATUSES,
-      Date.now() - SWEEP_WINDOW_MS,
-      SWEEP_MAX_RUNS
+  const results = await orm(env.DB)
+    .select({ id: runs.id })
+    .from(runs)
+    .where(
+      and(
+        inArray(runs.status, TERMINAL_RUN_STATUSES),
+        gte(runs.updated_at, Date.now() - SWEEP_WINDOW_MS)
+      )
     )
-    .all<Pick<RunsRow, "id">>();
+    .orderBy(desc(runs.updated_at))
+    .limit(SWEEP_MAX_RUNS)
+    .all();
 
   let destroyed = 0;
   for (const row of results ?? []) {

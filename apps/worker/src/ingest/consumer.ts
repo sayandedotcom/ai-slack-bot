@@ -1,6 +1,9 @@
+import { eq } from "drizzle-orm";
 import { registerChannel } from "../channels/registry";
 import { getChannelPolicy, shouldTriage } from "../db/channels";
+import { orm } from "../db/client";
 import { insertMessage, recordEvent } from "../db/messages";
+import { messages } from "../db/tables";
 import type { Env } from "../index";
 import { getPermalink } from "../slack/client";
 import type { QueuedEvent } from "../slack/types";
@@ -89,10 +92,10 @@ export async function handleIngestBatch(
       event.ts
     );
     if (permalink) {
-      await env.DB.prepare(
-        "UPDATE messages SET permalink = ? WHERE event_id = ?"
-      )
-        .bind(permalink, event_id)
+      await orm(env.DB)
+        .update(messages)
+        .set({ permalink })
+        .where(eq(messages.event_id, event_id))
         .run();
     }
   }

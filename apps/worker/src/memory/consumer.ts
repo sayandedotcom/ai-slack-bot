@@ -1,5 +1,13 @@
+import { and, eq, sql } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { getChannelPolicy } from "../db/channels";
-import type { MessagesRow } from "../db/schema";
+import { orm } from "../db/client";
+import {
+  agentMemoryOutbox,
+  memoryEpisodeSources,
+  messages,
+  zepEpisodes,
+} from "../db/tables";
 import type { Env } from "../index";
 import {
   type AgentEpisode,
@@ -168,18 +176,23 @@ async function projectOne(
   env: Env,
   store: MemoryStore
 ): Promise<void> {
-  const mapped = await env.DB.prepare(
-    "SELECT 1 FROM zep_episodes WHERE event_id = ?"
-  )
-    .bind(eventId)
-    .first();
+  const mapped = await orm(env.DB)
+    .select({ present: sql<number>`1` })
+    .from(zepEpisodes)
+    .where(eq(zepEpisodes.event_id, eventId))
+    .get();
   if (mapped) return;
 
-  const row = await env.DB.prepare(
-    "SELECT event_id, channel_id, user_id, text FROM messages WHERE event_id = ?"
-  )
-    .bind(eventId)
-    .first<MessageRow>();
+  const row = await orm(env.DB)
+    .select({
+      event_id: messages.event_id,
+      channel_id: messages.channel_id,
+      user_id: messages.user_id,
+      text: messages.text,
+    })
+    .from(messages)
+    .where(eq(messages.event_id, eventId))
+    .get();
   if (!row) return; // Nothing in D1 means nothing to project.
 
   const policy = await getChannelPolicy(env.DB, row.channel_id);
@@ -190,17 +203,17 @@ async function projectOne(
     graphId,
     `${row.user_id ?? "unknown"}: ${row.text}`
   );
-  await env.DB.prepare(
-    "INSERT OR IGNORE INTO zep_episodes (episode_uuid, event_id, graph_id, created_at) VALUES (?, ?, ?, ?)"
-  )
-    .bind(episodeUuid, eventId, graphId, Date.now())
+  await orm(env.DB)
+    .insert(zepEpisodes)
+    .values({
+      episode_uuid: episodeUuid,
+      event_id: eventId,
+      graph_id: graphId,
+      created_at: Date.now(),
+    })
+    .onConflictDoNothing()
     .run();
 }
-
-type MessageRow = Pick<
-  MessagesRow,
-  "event_id" | "channel_id" | "user_id" | "text"
->;
 
 /* ------------------------------------------------- the agent projector -- */
 
@@ -375,51 +388,64 @@ async function finishProjection(
   const descriptors = parseSourceDescriptors(claim.sourceJson);
   const resolved = await resolveSources(db, descriptors, claim.runId);
 
-  const statements: D1PreparedStatement[] = resolved.map((source) =>
-    db
-      .prepare(
-        `INSERT OR IGNORE INTO memory_episode_sources
-           (episode_uuid, source_index, source_kind, message_event_id, run_id, turn_id, permalink, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?
-          WHERE EXISTS (
-            SELECT 1 FROM agent_memory_outbox
-             WHERE id = ? AND claim_token = ? AND state = 'projecting'
-          )`
+  const d = orm(db);
+
+  // The same fence as the completion below, as a subquery: a source row is
+  // written only while the claim still holds. `INSERT ... SELECT ... WHERE
+  // EXISTS` is what makes that one statement rather than a check and a write.
+  // The column list is now rendered from the table definition instead of being
+  // spelled out beside a matching row of `?`s, so a renamed column is a build
+  // error rather than a positional mismatch.
+  const sourceRows = resolved.map((source) =>
+    d
+      .insert(memoryEpisodeSources)
+      .select(
+        sql`select ${episodeUuid}, ${source.sourceIndex}, ${source.sourceKind}, ${source.messageEventId}, ${source.runId}, ${source.turnId}, ${source.permalink}, ${now}
+             where exists (
+               select 1 from ${agentMemoryOutbox}
+                where ${agentMemoryOutbox.id} = ${claim.id}
+                  and ${agentMemoryOutbox.claim_token} = ${claim.claimToken}
+                  and ${agentMemoryOutbox.state} = 'projecting'
+             )`
       )
-      .bind(
-        episodeUuid,
-        source.sourceIndex,
-        source.sourceKind,
-        source.messageEventId,
-        source.runId,
-        source.turnId,
-        source.permalink,
-        now,
-        claim.id,
-        claim.claimToken
-      )
+      .onConflictDoNothing()
   );
 
-  statements.push(
-    db
-      .prepare(
-        `UPDATE agent_memory_outbox
-            SET state = 'projected',
-                episode_uuid = ?,
-                projected_at = ?,
-                claim_token = NULL,
-                lease_expires_at = NULL,
-                next_attempt_at = NULL,
-                last_error = NULL,
-                updated_at = ?
-          WHERE id = ? AND claim_token = ? AND state = 'projecting'`
+  const completion = d
+    .update(agentMemoryOutbox)
+    .set({
+      state: "projected",
+      episode_uuid: episodeUuid,
+      projected_at: now,
+      claim_token: null,
+      lease_expires_at: null,
+      next_attempt_at: null,
+      last_error: null,
+      updated_at: now,
+    })
+    .where(
+      and(
+        eq(agentMemoryOutbox.id, claim.id),
+        eq(agentMemoryOutbox.claim_token, claim.claimToken),
+        eq(agentMemoryOutbox.state, "projecting")
       )
-      .bind(episodeUuid, now, now, claim.id, claim.claimToken)
-  );
+    )
+    // `RETURNING` rather than `meta.changes`, for the same reason as
+    // `decideApproval`: it is the signal that survives the batch's result
+    // mapping, and for a fenced update on the primary key it is the same claim.
+    .returning({ id: agentMemoryOutbox.id });
 
-  const results = await db.batch(statements);
-  const completion = results[results.length - 1];
-  return (completion?.meta.changes ?? 0) > 0
+  // Sources first, completion last, and the order is load-bearing: the
+  // completion flips `state` off `projecting`, which is the very predicate the
+  // source inserts are fenced on. Non-empty by construction — `completion` is
+  // always appended — which the tuple type cannot see for itself.
+  const statements = [...sourceRows, completion] as unknown as [
+    BatchItem<"sqlite">,
+    ...BatchItem<"sqlite">[],
+  ];
+  const results = await d.batch(statements);
+  const applied = results[results.length - 1] as { id: string }[];
+  return applied.length > 0
     ? { outcome: "applied" }
     : { outcome: "stale_claim" };
 }

@@ -24,6 +24,29 @@ Re-measure after Wave 2, when eleven namespaces and their vendor clients
 (Zep, Linear, Supabase, LangSmith, Better Stack, GitHub, `@cloudflare/sandbox`)
 are all reachable from the entry.
 
+**2026-08-30 — re-measured, same method, for the Drizzle branch.** Both figures
+taken back to back on one machine, `main` versus `feat/drizzle-d1`, so the
+delta is the ORM and nothing else:
+
+| Figure | `main` | `feat/drizzle-d1` | Delta |
+| --- | --- | --- | --- |
+| Bundle, uncompressed | 9234.27 KiB | 9427.04 KiB | +192.77 KiB (+2.09%) |
+| Bundle, gzip | 1802.24 KiB | 1838.31 KiB | **+36.07 KiB (+2.00%)** |
+
+Against the 10 MB gzip ceiling that is 17.6% → **18.0%**, leaving 8402 KiB of
+headroom. `drizzle-orm` is tree-shakeable and only the `d1` driver and
+`sqlite-core` builders are reachable, which is what keeps a full query builder
+down to 36 KiB compressed. This was the cost the deferral worried about; it is
+not a constraint.
+
+**The startup time is still the open question, and it is the pass/fail one.**
+The 1 s limit is enforced at upload, `wrangler` reports the figure only on a
+real deploy, and the last recorded number (81 ms, `phase-11-notes.md`) predates
+the Think/Codemode rebuild. A dry run cannot answer it. 36 KiB of additional
+gzip on a 1.8 MB bundle is not a plausible way to cross that limit, but "not
+plausible" is not a measurement, and this branch should not merge on the
+strength of it.
+
 ### Not measured — and why
 
 **Nothing is deployed.** The startup time and the webhook p95 both need a live
@@ -166,10 +189,63 @@ of one big-bang diff.
 **2026-08-28.** Re-counted: 77 `.prepare()` sites across 22 files, 12 tables /
 18 indexes. Decision re-affirmed after a second look at Drizzle, Prisma and
 Kysely: stay raw. `src/db/schema.ts` already is the one-per-table type layer an
-ORM would generate, and the load-bearing statements (batch CAS, `RETURNING`
-lease claims, scalar `MAX`, the error-string match on `idx_approvals_one_open`)
-would stay raw under any of them. Drizzle remains the choice if that ever
-changes.
+ORM would generate. Verified against `drizzle-orm` source (sqlite-core
+`insert.ts`/`update.ts`, `d1/session.ts`) that Drizzle CAN express the
+load-bearing statements — `db.batch()` maps to D1's native batch, SQLite
+`.returning()` on insert/update, `onConflictDoNothing({ target, where })`
+reaches a partial unique index, `set()`/`.where()` take `sql` fragments for
+scalar `MAX` and the `? = 1` predicate switch. The case against it is therefore
+not capability but cost: a third schema declaration beside the SQL migrations
+and `schema.ts`, ~22 files of churn with the suite as the only oracle, and an
+unmeasured startup budget, for 77 statements whose types are already declared
+once. Drizzle remains the choice if that ever changes.
+
+**2026-08-30 — it changed. Drizzle is in, on `feat/drizzle-d1`.** The operator
+took the cost, so the entry above is now history rather than a decision. What
+landed, and what it cost:
+
+- `drizzle-orm@0.45.2`, exact-pinned like the agent packages. **No
+  `drizzle-kit`, no `drizzle.config.ts`** — `migrations/*.sql` stays the source
+  of truth, append-only and hand-commented.
+- `src/db/tables.ts` is the schema; `src/db/client.ts` exposes `orm(db)`, one
+  handle per binding per isolate via a `WeakMap`, so **every exported function
+  keeps its `(db: D1Database, …)` signature** and nothing outside the D1 modules
+  changed. That is the migration path this section prescribed, followed exactly.
+- The predicted "third schema declaration" did **not** materialise.
+  `src/db/schema.ts` now derives every row type from `$inferSelect` (−170 lines,
+  +41), so the columns are described once, not twice. `tsc` accepted the derived
+  types at all ~70 `Pick<…>` call sites unchanged, which is the evidence they
+  are structurally identical.
+- The drift risk that argued against an ORM is now **checked, not trusted**:
+  `test/db/tables.test.ts` reads `PRAGMA table_info` from the migrated test
+  database and compares names, order, types, NOT NULL and defaults per table,
+  plus `sqlite_master` for coverage in both directions. 25 assertions.
+- All 77 statements converted; **zero `.prepare()` call sites remain in
+  `src/`.** Every load-bearing statement survived as predicted — `db.batch()` is
+  D1's own batch underneath, the shadow ratchet's `AND ? = 1` is a bound `sql`
+  fragment, scalar `max()` likewise, `RETURNING` is native.
+
+Two things the earlier analysis got wrong, both found by the suite:
+
+1. **Drizzle wraps errors.** `insertApproval` detected the
+   `idx_approvals_one_open` violation by matching `err.message`; Drizzle
+   rethrows a `DrizzleQueryError` (`Failed query: …`) with the D1 error on
+   `cause`, and workerd adds a `D1_ERROR:` layer between. Three tests went red
+   together. `isOneOpenViolation` now walks the cause chain, which is strictly
+   more robust than what it replaced.
+2. **`INSERT OR IGNORE` is not `ON CONFLICT DO NOTHING`.** `OR IGNORE` swallows
+   every constraint violation; the builder only offers the uniqueness one. This
+   is reachable — D1 runs with `PRAGMA foreign_keys = 1`, measured — so
+   `recordUsage` on an orphan `run_id` now raises where it used to vanish. It is
+   harmless here because `#recordStepUsage` already catches and logs, so no row
+   is written either way; it is written down because the next `OR IGNORE`
+   conversion might not be so lucky.
+
+One test changed: `test/notify/nudge.test.ts` injects a fault by matching SQL
+text (`SET nudge_channel_id`), and Drizzle renders `set "nudge_channel_id"`.
+The matcher is now case- and quote-insensitive; the assertions are untouched.
+It is the only test in the suite coupled to the SQL writer, which is worth
+knowing.
 
 ## Test-harness noise, not a defect
 

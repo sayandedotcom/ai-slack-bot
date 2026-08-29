@@ -1,4 +1,7 @@
+import { and, eq } from "drizzle-orm";
+import { orm } from "../db/client";
 import type { CodemodeEffectsRow } from "../db/schema";
+import { codemodeEffects } from "../db/tables";
 import type { CapabilityErrorCode } from "../gateways/errors";
 import {
   CapabilityError,
@@ -249,12 +252,15 @@ async function readEffect(
   deps: EffectDeps,
   key: string
 ): Promise<EffectRow | null> {
-  return deps.db
-    .prepare(
-      "SELECT state, safe_result_json FROM codemode_effects WHERE effect_key = ?"
-    )
-    .bind(key)
-    .first<EffectRow>();
+  const row = await orm(deps.db)
+    .select({
+      state: codemodeEffects.state,
+      safe_result_json: codemodeEffects.safe_result_json,
+    })
+    .from(codemodeEffects)
+    .where(eq(codemodeEffects.effect_key, key))
+    .get();
+  return row ?? null;
 }
 
 /** Insert the reservation. Returns false when someone else got there first. */
@@ -267,18 +273,22 @@ async function claim(
   argsHash: string
 ): Promise<boolean> {
   const now = deps.clock();
-  const row = await deps.db
-    .prepare(
-      `INSERT INTO codemode_effects
-         (effect_key, run_id, turn_id, namespace, method, args_hash,
-          state, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
-       ON CONFLICT(effect_key) DO NOTHING
-       RETURNING effect_key`
-    )
-    .bind(key, scope.runId, scope.turnId, namespace, method, argsHash, now, now)
-    .first<Pick<CodemodeEffectsRow, "effect_key">>();
-  return row !== null;
+  const [row] = await orm(deps.db)
+    .insert(codemodeEffects)
+    .values({
+      effect_key: key,
+      run_id: scope.runId,
+      turn_id: scope.turnId,
+      namespace,
+      method,
+      args_hash: argsHash,
+      state: "reserved",
+      created_at: now,
+      updated_at: now,
+    })
+    .onConflictDoNothing({ target: codemodeEffects.effect_key })
+    .returning({ effect_key: codemodeEffects.effect_key });
+  return row !== undefined;
 }
 
 /**
@@ -287,16 +297,17 @@ async function claim(
  * one caller's UPDATE matches.
  */
 async function reclaim(deps: EffectDeps, key: string): Promise<boolean> {
-  const row = await deps.db
-    .prepare(
-      `UPDATE codemode_effects
-          SET state = 'reserved', safe_error = NULL, updated_at = ?
-        WHERE effect_key = ? AND state = 'failed'
-        RETURNING effect_key`
+  const [row] = await orm(deps.db)
+    .update(codemodeEffects)
+    .set({ state: "reserved", safe_error: null, updated_at: deps.clock() })
+    .where(
+      and(
+        eq(codemodeEffects.effect_key, key),
+        eq(codemodeEffects.state, "failed")
+      )
     )
-    .bind(deps.clock(), key)
-    .first<Pick<CodemodeEffectsRow, "effect_key">>();
-  return row !== null;
+    .returning({ effect_key: codemodeEffects.effect_key });
+  return row !== undefined;
 }
 
 async function mark(
@@ -306,13 +317,15 @@ async function mark(
   resultJson: string | null,
   error: string | null
 ): Promise<void> {
-  await deps.db
-    .prepare(
-      `UPDATE codemode_effects
-          SET state = ?, safe_result_json = ?, safe_error = ?, updated_at = ?
-        WHERE effect_key = ?`
-    )
-    .bind(state, resultJson, error, deps.clock(), key)
+  await orm(deps.db)
+    .update(codemodeEffects)
+    .set({
+      state,
+      safe_result_json: resultJson,
+      safe_error: error,
+      updated_at: deps.clock(),
+    })
+    .where(eq(codemodeEffects.effect_key, key))
     .run();
 }
 

@@ -25,9 +25,12 @@
  * Both gates are the INNER half; Cloudflare Access is the outer one, and
  * neither is skippable.
  */
+import { asc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { ChannelMode } from "../db/channels";
+import { orm } from "../db/client";
 import type { ChannelsRow } from "../db/schema";
+import { channels } from "../db/tables";
 import type { Env } from "../index";
 import { requireTeamMember } from "./identity";
 
@@ -68,16 +71,20 @@ channelsApi.get("/channels", async (c) => {
   const member = await requireTeamMember(c);
   if (member instanceof Response) return member;
 
-  const { results } = await c.env.DB.prepare(
-    `SELECT channel_id, name, customer_slug, mode, slug_source
-       FROM channels
-      ORDER BY name ASC
-      LIMIT ?`
-  )
-    .bind(LIST_LIMIT)
-    .all<ChannelsRow>();
+  const results = await orm(c.env.DB)
+    .select({
+      channel_id: channels.channel_id,
+      name: channels.name,
+      customer_slug: channels.customer_slug,
+      mode: channels.mode,
+      slug_source: channels.slug_source,
+    })
+    .from(channels)
+    .orderBy(asc(channels.name))
+    .limit(LIST_LIMIT)
+    .all();
 
-  return c.json({ channels: (results ?? []).map(publicChannel) });
+  return c.json({ channels: results.map(publicChannel) });
 });
 
 /**
@@ -179,33 +186,36 @@ channelsApi.patch("/channels/:id", async (c) => {
     );
   }
 
-  const sets: string[] = [];
-  const binds: (string | null)[] = [];
-  if (patch.mode !== undefined) {
-    sets.push("mode = ?");
-    binds.push(patch.mode);
-  }
+  // A partial update, built as an object rather than as a `SET` fragment list
+  // and a parallel bind array. The two used to be kept in step by hand, and
+  // `slug_source` is exactly the column where that going wrong is a security
+  // bug rather than a rendering one.
+  const sets: Partial<typeof channels.$inferInsert> = {};
+  if (patch.mode !== undefined) sets.mode = patch.mode;
   if (patch.customerSlug !== undefined) {
     // The slug and its provenance move together, always. Splitting them into
     // two statements would leave a window where an unconfirmed slug is already
     // being spent as a tenant key.
-    sets.push("customer_slug = ?", "slug_source = ?");
-    binds.push(patch.customerSlug);
-    binds.push(patch.customerSlug === null ? "derived" : "human");
+    sets.customer_slug = patch.customerSlug;
+    sets.slug_source = patch.customerSlug === null ? "derived" : "human";
   }
 
-  const updated = await c.env.DB.prepare(
-    `UPDATE channels SET ${sets.join(", ")}
-      WHERE channel_id = ?
-      RETURNING channel_id, name, customer_slug, mode, slug_source`
-  )
-    .bind(...binds, c.req.param("id"))
-    .first<ChannelsRow>();
+  const [updated] = await orm(c.env.DB)
+    .update(channels)
+    .set(sets)
+    .where(eq(channels.channel_id, c.req.param("id")))
+    .returning({
+      channel_id: channels.channel_id,
+      name: channels.name,
+      customer_slug: channels.customer_slug,
+      mode: channels.mode,
+      slug_source: channels.slug_source,
+    });
 
   // No row means the channel has never been seen. Deliberately NOT an upsert:
   // registration derives the name from Slack, and inventing a row here would
   // mint a channel whose `name` nobody has confirmed exists.
-  if (updated === null) {
+  if (updated === undefined) {
     return c.json(
       fail(
         "unknown_channel",

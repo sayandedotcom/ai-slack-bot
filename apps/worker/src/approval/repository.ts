@@ -1,4 +1,7 @@
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { orm } from "../db/client";
 import type { ApprovalsRow } from "../db/schema";
+import { approvals } from "../db/tables";
 import {
   type ApprovalDecision,
   type ApprovalDelivery,
@@ -69,9 +72,32 @@ type ApprovalRowDb = Pick<
   | "nudge_ts"
 >;
 
-const COLUMNS = `id, run_id, generation_id, draft, why, channel_id, thread_ts, shadow,
-  decision, decided_by, decided_at, edited_text, reject_reason, delivery, created_at, updated_at,
-  nudged_at, nudge_channel_id, nudge_ts`;
+/**
+ * Exactly the columns `ApprovalRowDb` names — note `delivery_error` is not one.
+ * A projection stated as a column map rather than `SELECT *`, so a column added
+ * to the table does not silently start travelling to every reader.
+ */
+const APPROVAL_COLUMNS = {
+  id: approvals.id,
+  run_id: approvals.run_id,
+  generation_id: approvals.generation_id,
+  draft: approvals.draft,
+  why: approvals.why,
+  channel_id: approvals.channel_id,
+  thread_ts: approvals.thread_ts,
+  shadow: approvals.shadow,
+  decision: approvals.decision,
+  decided_by: approvals.decided_by,
+  decided_at: approvals.decided_at,
+  edited_text: approvals.edited_text,
+  reject_reason: approvals.reject_reason,
+  delivery: approvals.delivery,
+  created_at: approvals.created_at,
+  updated_at: approvals.updated_at,
+  nudged_at: approvals.nudged_at,
+  nudge_channel_id: approvals.nudge_channel_id,
+  nudge_ts: approvals.nudge_ts,
+} as const;
 
 function toRow(db: ApprovalRowDb): ApprovalRow {
   return {
@@ -116,6 +142,36 @@ function toRow(db: ApprovalRowDb): ApprovalRow {
 const ONE_OPEN_INDEX_ERROR = "UNIQUE constraint failed: approvals.run_id";
 
 /**
+ * Does this thrown value carry the one-open violation ANYWHERE in its cause
+ * chain?
+ *
+ * The chain is why this is a function rather than one `.includes()`. D1 raises
+ * `UNIQUE constraint failed: approvals.run_id`; Drizzle catches that and
+ * rethrows a `DrizzleQueryError` whose own message is `Failed query: insert
+ * into "approvals" ...` with the original hung off `cause` — and workerd adds a
+ * `D1_ERROR:` wrapper of its own in between. Matching only the top-level
+ * message therefore stopped seeing the violation the moment the statement moved
+ * to the query builder, which is exactly how it was found: two repository tests
+ * and one port test went red together, reporting a raw throw where they
+ * expected `duplicate_open`.
+ *
+ * Walking the chain is the fix, and it is strictly more robust than what it
+ * replaces: it matches whether the driver wraps, double-wraps, or stops
+ * wrapping. The depth bound is a cycle guard, not a limit anyone should need.
+ */
+function isOneOpenViolation(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e && depth < 8; depth++) {
+    if (e instanceof Error) {
+      if (e.message.includes(ONE_OPEN_INDEX_ERROR)) return true;
+      e = e.cause;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
  * Insert a new approval card. `id` is minted DO-side and only ever accepted
  * here, never generated — see `NewApprovalCard.id`'s doc comment.
  *
@@ -132,29 +188,27 @@ export async function insertApproval(
   card: NewApprovalCard
 ): Promise<"created" | "duplicate_open"> {
   try {
-    await db
-      .prepare(
-        `INSERT INTO approvals
-           (id, run_id, generation_id, kind, draft, why, channel_id, thread_ts, shadow,
-            decision, delivery, created_at, updated_at)
-         VALUES (?, ?, ?, 'slack_reply', ?, ?, ?, ?, ?, 'pending', 'none', ?, ?)`
-      )
-      .bind(
-        card.id,
-        card.runId,
-        card.generationId,
-        card.draft,
-        card.why,
-        card.channelId,
-        card.threadTs,
-        card.shadow ? 1 : 0,
-        card.now,
-        card.now
-      )
+    await orm(db)
+      .insert(approvals)
+      .values({
+        id: card.id,
+        run_id: card.runId,
+        generation_id: card.generationId,
+        kind: "slack_reply",
+        draft: card.draft,
+        why: card.why,
+        channel_id: card.channelId,
+        thread_ts: card.threadTs,
+        shadow: card.shadow ? 1 : 0,
+        decision: "pending",
+        delivery: "none",
+        created_at: card.now,
+        updated_at: card.now,
+      })
       .run();
     return "created";
   } catch (err) {
-    if (err instanceof Error && err.message.includes(ONE_OPEN_INDEX_ERROR)) {
+    if (isOneOpenViolation(err)) {
       return "duplicate_open";
     }
     throw err;
@@ -165,10 +219,11 @@ export async function getApproval(
   db: D1Database,
   id: string
 ): Promise<ApprovalRow | null> {
-  const row = await db
-    .prepare(`SELECT ${COLUMNS} FROM approvals WHERE id = ?`)
-    .bind(id)
-    .first<ApprovalRowDb>();
+  const row = await orm(db)
+    .select(APPROVAL_COLUMNS)
+    .from(approvals)
+    .where(eq(approvals.id, id))
+    .get();
   return row ? toRow(row) : null;
 }
 
@@ -205,26 +260,39 @@ export async function decideApproval(
   const editedText = input.action === "edit" ? input.text : null;
   const rejectReason = input.action === "reject" ? input.reason : null;
 
-  const [updateResult, selectResult] = await db.batch<ApprovalRowDb>([
-    db
-      .prepare(
-        `UPDATE approvals SET
-           decision = ?, decided_by = ?, decided_at = ?,
-           edited_text = ?, reject_reason = ?, updated_at = ?
-         WHERE id = ? AND decision = 'pending'`
-      )
-      .bind(decision, decidedBy, now, editedText, rejectReason, now, id),
-    db.prepare(`SELECT ${COLUMNS} FROM approvals WHERE id = ?`).bind(id),
+  const d = orm(db);
+  // Still ONE `db.batch()`, and therefore still one implicit transaction: the
+  // Drizzle D1 driver calls `client.batch(...)` with the built statements.
+  //
+  // The winner is now decided by `RETURNING` rather than by `meta.changes`.
+  // The two are the same claim for an update keyed on the primary key — a row
+  // comes back exactly when the WHERE matched — and `RETURNING` is the form
+  // that survives the batch's result mapping without depending on the driver
+  // passing `meta` through.
+  const [updated, selected] = await d.batch([
+    d
+      .update(approvals)
+      .set({
+        decision,
+        decided_by: decidedBy,
+        decided_at: now,
+        edited_text: editedText,
+        reject_reason: rejectReason,
+        updated_at: now,
+      })
+      .where(and(eq(approvals.id, id), eq(approvals.decision, "pending")))
+      .returning({ id: approvals.id }),
+    d.select(APPROVAL_COLUMNS).from(approvals).where(eq(approvals.id, id)),
   ]);
 
-  const selected = selectResult.results?.[0];
-  if (!selected) {
+  const row = selected[0];
+  if (!row) {
     return { result: "not_found" };
   }
-  if ((updateResult.meta.changes ?? 0) > 0) {
-    return { result: "decided", row: toRow(selected) };
+  if (updated.length > 0) {
+    return { result: "decided", row: toRow(row) };
   }
-  return { result: "already_decided", row: toRow(selected) };
+  return { result: "already_decided", row: toRow(row) };
 }
 
 /**
@@ -238,23 +306,24 @@ export async function withdrawApproval(
   id: string,
   now: number
 ): Promise<WithdrawApprovalResult> {
-  const [updateResult, selectResult] = await db.batch<ApprovalRowDb>([
-    db
-      .prepare(
-        `UPDATE approvals SET decision = 'withdrawn', updated_at = ? WHERE id = ? AND decision = 'pending'`
-      )
-      .bind(now, id),
-    db.prepare(`SELECT ${COLUMNS} FROM approvals WHERE id = ?`).bind(id),
+  const d = orm(db);
+  const [updated, selected] = await d.batch([
+    d
+      .update(approvals)
+      .set({ decision: "withdrawn", updated_at: now })
+      .where(and(eq(approvals.id, id), eq(approvals.decision, "pending")))
+      .returning({ id: approvals.id }),
+    d.select(APPROVAL_COLUMNS).from(approvals).where(eq(approvals.id, id)),
   ]);
 
-  const selected = selectResult.results?.[0];
-  if (!selected) {
+  const row = selected[0];
+  if (!row) {
     return { result: "not_found" };
   }
-  if ((updateResult.meta.changes ?? 0) > 0) {
+  if (updated.length > 0) {
     return { result: "withdrawn" };
   }
-  return { result: "already_decided", row: toRow(selected) };
+  return { result: "already_decided", row: toRow(row) };
 }
 
 /**
@@ -274,13 +343,10 @@ export async function setDelivery(
   now: number
 ): Promise<boolean> {
   if (from.length === 0) return false;
-  const placeholders = from.map(() => "?").join(", ");
-  const result = await db
-    .prepare(
-      `UPDATE approvals SET delivery = ?, delivery_error = ?, updated_at = ?
-       WHERE id = ? AND delivery IN (${placeholders})`
-    )
-    .bind(to, error, now, id, ...from)
+  const result = await orm(db)
+    .update(approvals)
+    .set({ delivery: to, delivery_error: error, updated_at: now })
+    .where(and(eq(approvals.id, id), inArray(approvals.delivery, from)))
     .run();
   return (result.meta.changes ?? 0) > 0;
 }
@@ -296,9 +362,10 @@ export async function markResolutionDelivered(
   id: string,
   now: number
 ): Promise<void> {
-  await db
-    .prepare(`UPDATE approvals SET resolution_delivered_at = ? WHERE id = ?`)
-    .bind(now, id)
+  await orm(db)
+    .update(approvals)
+    .set({ resolution_delivered_at: now })
+    .where(eq(approvals.id, id))
     .run();
 }
 
@@ -310,13 +377,14 @@ export async function listOpen(
   db: D1Database,
   limit = 50
 ): Promise<ApprovalRow[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT ${COLUMNS} FROM approvals WHERE decision = 'pending' ORDER BY created_at ASC LIMIT ?`
-    )
-    .bind(limit)
-    .all<ApprovalRowDb>();
-  return (results ?? []).map(toRow);
+  const results = await orm(db)
+    .select(APPROVAL_COLUMNS)
+    .from(approvals)
+    .where(eq(approvals.decision, "pending"))
+    .orderBy(asc(approvals.created_at))
+    .limit(limit)
+    .all();
+  return results.map(toRow);
 }
 
 /**
@@ -332,11 +400,10 @@ export async function claimNudge(
   id: string,
   now: number
 ): Promise<boolean> {
-  const result = await db
-    .prepare(
-      `UPDATE approvals SET nudged_at = ? WHERE id = ? AND nudged_at IS NULL`
-    )
-    .bind(now, id)
+  const result = await orm(db)
+    .update(approvals)
+    .set({ nudged_at: now })
+    .where(and(eq(approvals.id, id), isNull(approvals.nudged_at)))
     .run();
   return (result.meta.changes ?? 0) > 0;
 }
@@ -352,11 +419,10 @@ export async function recordNudgeMessage(
   channelId: string,
   ts: string
 ): Promise<void> {
-  await db
-    .prepare(
-      `UPDATE approvals SET nudge_channel_id = ?, nudge_ts = ? WHERE id = ?`
-    )
-    .bind(channelId, ts, id)
+  await orm(db)
+    .update(approvals)
+    .set({ nudge_channel_id: channelId, nudge_ts: ts })
+    .where(eq(approvals.id, id))
     .run();
 }
 
@@ -370,9 +436,10 @@ export async function recordNudgeMessage(
  * that won the claim ever reaches it.
  */
 export async function releaseNudge(db: D1Database, id: string): Promise<void> {
-  await db
-    .prepare(`UPDATE approvals SET nudged_at = NULL WHERE id = ?`)
-    .bind(id)
+  await orm(db)
+    .update(approvals)
+    .set({ nudged_at: null })
+    .where(eq(approvals.id, id))
     .run();
 }
 
@@ -381,13 +448,13 @@ export async function listByRun(
   db: D1Database,
   runId: string
 ): Promise<ApprovalRow[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT ${COLUMNS} FROM approvals WHERE run_id = ? ORDER BY created_at ASC`
-    )
-    .bind(runId)
-    .all<ApprovalRowDb>();
-  return (results ?? []).map(toRow);
+  const results = await orm(db)
+    .select(APPROVAL_COLUMNS)
+    .from(approvals)
+    .where(eq(approvals.run_id, runId))
+    .orderBy(asc(approvals.created_at))
+    .all();
+  return results.map(toRow);
 }
 
 /**
@@ -400,15 +467,19 @@ export async function listDecided(
   sinceMs: number,
   limit = 50
 ): Promise<ApprovalRow[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT ${COLUMNS} FROM approvals
-       WHERE decision <> 'pending' AND updated_at >= ?
-       ORDER BY updated_at DESC LIMIT ?`
+  const results = await orm(db)
+    .select(APPROVAL_COLUMNS)
+    .from(approvals)
+    .where(
+      and(
+        ne(approvals.decision, "pending"),
+        sql`${approvals.updated_at} >= ${sinceMs}`
+      )
     )
-    .bind(sinceMs, limit)
-    .all<ApprovalRowDb>();
-  return (results ?? []).map(toRow);
+    .orderBy(desc(approvals.updated_at))
+    .limit(limit)
+    .all();
+  return results.map(toRow);
 }
 
 /**
@@ -420,14 +491,17 @@ export async function listUndeliveredResolutions(
   db: D1Database,
   limit: number
 ): Promise<ApprovalRow[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT ${COLUMNS} FROM approvals
-       WHERE decision IN ('approved', 'edited', 'rejected') AND resolution_delivered_at IS NULL
-       ORDER BY decided_at ASC
-       LIMIT ?`
+  const results = await orm(db)
+    .select(APPROVAL_COLUMNS)
+    .from(approvals)
+    .where(
+      and(
+        inArray(approvals.decision, ["approved", "edited", "rejected"]),
+        isNull(approvals.resolution_delivered_at)
+      )
     )
-    .bind(limit)
-    .all<ApprovalRowDb>();
-  return (results ?? []).map(toRow);
+    .orderBy(asc(approvals.decided_at))
+    .limit(limit)
+    .all();
+  return results.map(toRow);
 }

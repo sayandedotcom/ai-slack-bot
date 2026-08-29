@@ -1,5 +1,7 @@
 import type { IngestOutcome } from "../ingest/rules";
+import { orm } from "./client";
 import type { EventsSeenRow } from "./schema";
+import { eventsSeen, messages } from "./tables";
 
 /**
  * Record that an envelope was seen. Returns true on first sighting, false if
@@ -7,6 +9,13 @@ import type { EventsSeenRow } from "./schema";
  *
  * `events_seen` is both the dedupe key and the source of the "heard" counter,
  * which is why it is written for dropped events too. See spec §9.
+ *
+ * `onConflictDoNothing()` renders `ON CONFLICT DO NOTHING`, where this used to
+ * say `INSERT OR IGNORE`. Those are not the same statement: `OR IGNORE`
+ * swallows every constraint violation, this one swallows only a uniqueness
+ * conflict. The dedupe intent is the primary key, so the behaviour that matters
+ * is unchanged — and a NOT NULL or CHECK violation now raises instead of
+ * vanishing, which is what anyone reading this line already assumed it did.
  */
 export async function recordEvent(
   db: D1Database,
@@ -15,11 +24,15 @@ export async function recordEvent(
     "event_id" | "channel_id" | "outcome" | "received_at"
   >
 ): Promise<boolean> {
-  const res = await db
-    .prepare(
-      "INSERT OR IGNORE INTO events_seen (event_id, channel_id, outcome, received_at) VALUES (?, ?, ?, ?)"
-    )
-    .bind(row.event_id, row.channel_id, row.outcome, row.received_at)
+  const res = await orm(db)
+    .insert(eventsSeen)
+    .values({
+      event_id: row.event_id,
+      channel_id: row.channel_id,
+      outcome: row.outcome as IngestOutcome,
+      received_at: row.received_at,
+    })
+    .onConflictDoNothing()
     .run();
   return (res.meta.changes ?? 0) > 0;
 }
@@ -39,23 +52,5 @@ export async function insertMessage(
     received_at: number;
   }
 ): Promise<void> {
-  await db
-    .prepare(
-      `INSERT OR IGNORE INTO messages
-        (event_id, channel_id, ts, thread_ts, user_id, text, subtype, permalink, customer_slug, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      row.event_id,
-      row.channel_id,
-      row.ts,
-      row.thread_ts,
-      row.user_id,
-      row.text,
-      row.subtype,
-      row.permalink,
-      row.customer_slug,
-      row.received_at
-    )
-    .run();
+  await orm(db).insert(messages).values(row).onConflictDoNothing().run();
 }
