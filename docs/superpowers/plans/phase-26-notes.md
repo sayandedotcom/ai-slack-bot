@@ -24,6 +24,29 @@ Re-measure after Wave 2, when eleven namespaces and their vendor clients
 (Zep, Linear, Supabase, LangSmith, Better Stack, GitHub, `@cloudflare/sandbox`)
 are all reachable from the entry.
 
+**2026-08-30 — re-measured, same method, for the Drizzle branch.** Both figures
+taken back to back on one machine, `main` versus `feat/drizzle-d1`, so the
+delta is the ORM and nothing else:
+
+| Figure | `main` | `feat/drizzle-d1` | Delta |
+| --- | --- | --- | --- |
+| Bundle, uncompressed | 9234.27 KiB | 9427.04 KiB | +192.77 KiB (+2.09%) |
+| Bundle, gzip | 1802.24 KiB | 1838.31 KiB | **+36.07 KiB (+2.00%)** |
+
+Against the 10 MB gzip ceiling that is 17.6% → **18.0%**, leaving 8402 KiB of
+headroom. `drizzle-orm` is tree-shakeable and only the `d1` driver and
+`sqlite-core` builders are reachable, which is what keeps a full query builder
+down to 36 KiB compressed. This was the cost the deferral worried about; it is
+not a constraint.
+
+**The startup time is still the open question, and it is the pass/fail one.**
+The 1 s limit is enforced at upload, `wrangler` reports the figure only on a
+real deploy, and the last recorded number (81 ms, `phase-11-notes.md`) predates
+the Think/Codemode rebuild. A dry run cannot answer it. 36 KiB of additional
+gzip on a 1.8 MB bundle is not a plausible way to cross that limit, but "not
+plausible" is not a measurement, and this branch should not merge on the
+strength of it.
+
 ### Not measured — and why
 
 **Nothing is deployed.** The startup time and the webhook p95 both need a live
