@@ -113,13 +113,32 @@ measures an Access redirect instead of an edge 404, and is just as meaningless.
 Assert on a Worker-set header or a body the Worker produces, and send a real
 Access token, before trusting any timing.
 
-**The startup time is still unmeasured, and is now the only item outstanding
-from Task 2.** Wrangler reports it on upload; no deploy since has recorded it
-here. It matters more than it did: `main` acquired the Drizzle conversion on
-2026-08-29 (`b74f3d3`), which is **after** the last deploy, so what is running
-in production is the raw-SQL Worker and the next deploy will be the first to
-carry the query builder. Its measured bundle cost is +36.07 KiB gzip; see the
-2026-08-30 row in "Measured" above.
+### Startup time — measured, and Task 2 is closed
+
+**2026-08-29 22:14 UTC.** Deployed `main` at `a9c8480` (carrying the Drizzle
+conversion, `b74f3d3`) through `deploy-worker.yml`; run
+[33277675385](https://github.com/sayandedotcom/ai-slack-bot/actions/runs/33277675385),
+all three jobs green, version `4e9599e1-40c5-4a8b-88ad-ba9e447fbc31`.
+
+| Figure | Value | Limit | Verdict |
+| --- | --- | --- | --- |
+| **Worker startup time** | **214 ms** | **1 s, enforced at upload** | **21% of ceiling — fine** |
+| Bundle, uncompressed | 9427.04 KiB | 64 MB | fine |
+| Bundle, gzip | 1838.31 KiB | 10 MB | 18% of ceiling |
+
+This is the last open item from Task 2, and the first startup figure since the
+Phase 26 rebuild — the only prior number, 81 ms (`phase-11-notes.md`), predates
+it and was never a valid baseline for this Worker. 214 ms is the real cost of
+the eager graph as it stands: Think, Codemode, eleven capability namespaces and
+their vendor clients, and now Drizzle.
+
+The contingency in the design spec — split the DO into a second Worker behind a
+service binding if the startup gate failed — is therefore **not needed** and can
+be treated as closed rather than pending.
+
+Note the deploy's own figures match the local `--dry-run` exactly (9427.04 KiB /
+1838.31 KiB), which is worth knowing: the dry run is a trustworthy proxy for
+bundle size, and only the startup time requires a real upload.
 
 ### Auth
 
