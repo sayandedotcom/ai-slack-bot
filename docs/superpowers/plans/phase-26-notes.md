@@ -49,6 +49,11 @@ strength of it.
 
 ### Not measured — and why
 
+> **Superseded on 2026-08-30 for everything except the startup time.** The
+> Worker was created on 2026-08-27 and the D1 migrations have been applied; see
+> "Deployed state, corrected" below. The observations in this section and the
+> next are kept as the dated record they are — they were true on 2026-08-24.
+
 **Nothing is deployed.** The startup time and the webhook p95 both need a live
 Worker, and there is not one.
 
@@ -80,6 +85,41 @@ So the deployed state that `README.md` and `CLAUDE.md` describe does not
 currently exist. This is not a consequence of the rebuild — the agent layer was
 removed on 2026-08-23 and nothing has been deployed since, and the empty D1
 predates that.
+
+### Deployed state, corrected
+
+**2026-08-30.** The two sections above are four days stale. What is actually
+true, verified against the Cloudflare API and by probing the origin:
+
+| Resource | State on 2026-08-24 | State on 2026-08-30 |
+| --- | --- | --- |
+| Workers | none | **`firefighter`** — created `2026-08-27T07:56:14Z`, last modified `2026-08-28T19:42:39Z` |
+| D1 `firefighter` tables | 0, migrations never applied | **all 12, plus `d1_migrations`** |
+
+So the deployed state `README.md` and `CLAUDE.md` describe **does** exist, and
+has since 2026-08-27. That also settles a question those documents raised
+implicitly: `apps/web` went live on Vercel on 2026-08-28 with
+`DASHBOARD_BASE_URL` pointed at it and `wrangler.jsonc` routing
+`firefighter.sayande.xyz/api/*` to the Worker, which is only coherent because
+the Worker was already there.
+
+**`/api/health` now answers `302`, not `404`, and the difference matters to the
+probe.** The old 404 was the bare `workers.dev` subdomain with nothing behind
+it. The 302 is Cloudflare Access redirecting to its login page, which is the
+correct behaviour for a gated `/api/*` route reached without a token — the
+Worker is running and never sees the request. **This strengthens rather than
+retires the amendment above**: a probe that reads only `%{time_total}` now
+measures an Access redirect instead of an edge 404, and is just as meaningless.
+Assert on a Worker-set header or a body the Worker produces, and send a real
+Access token, before trusting any timing.
+
+**The startup time is still unmeasured, and is now the only item outstanding
+from Task 2.** Wrangler reports it on upload; no deploy since has recorded it
+here. It matters more than it did: `main` acquired the Drizzle conversion on
+2026-08-29 (`b74f3d3`), which is **after** the last deploy, so what is running
+in production is the raw-SQL Worker and the next deploy will be the first to
+carry the query builder. Its measured bundle cost is +36.07 KiB gzip; see the
+2026-08-30 row in "Measured" above.
 
 ### Auth
 
