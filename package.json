@@ -20,7 +20,7 @@
     "@biomejs/biome": "2.5.10",
     "@workspace/typescript-config": "workspace:*",
     "husky": "^9.1.7",
-    "turbo": "^2.9.18",
+    "turbo": "^2.10.12",
     "typescript": "^5"
   },
   "packageManager": "pnpm@10.33.4",
