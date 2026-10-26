@@ -24,7 +24,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@turbo/gen": "^2.9.15",
+    "@turbo/gen": "^2.11.9",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
